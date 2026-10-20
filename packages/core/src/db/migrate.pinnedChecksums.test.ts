@@ -42,6 +42,7 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '033_review_findings': '391ac0ed280b31d448c4b0f69f4320b184e7e0a218ae38c54a170d67889ce5b9',
   '034_review_step_skips': '2dafa3c4cebabf34e8d096b3d025c7f282fc7e56d53e06bca472668ab6dc172d',
   '035_manager_profile': 'd90c5269005ac81b1434bf09c704b03befe60e88928df56052f61f383b71a4bb',
+  '036_governance_laws': '5cb9c76d0c4968c782e1107ed35187b1590c34ee408d36b7eac567f983359a6d',
 };
 
 const migrationVersionsOnDisk = () =>

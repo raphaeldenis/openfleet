@@ -18,8 +18,12 @@ function requiredText({ field, value, maxChars }: TextField): string {
   return visibleText;
 }
 
-/** Written text is stored visible and with its secrets masked: the human reads what is stored. */
-const storedText = (textField: TextField) => maskedSecrets(requiredText(textField));
+/** Written text is stored visible and with its secrets masked: the human reads what is stored, and the bound holds for that stored text. */
+function storedText(textField: TextField): string {
+  const masked = maskedSecrets(requiredText(textField));
+  if (masked.length > textField.maxChars) throw invalidBody(`${textField.field} must not exceed ${textField.maxChars} characters.`);
+  return masked;
+}
 
 const isOneOf = <T extends string>(values: readonly T[], value: string): value is T => values.includes(value as T);
 

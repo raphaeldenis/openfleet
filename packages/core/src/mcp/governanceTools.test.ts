@@ -173,11 +173,12 @@ describe('propose_law then get_argus_governance', () => {
     expect(await (await fixture.api(`/api/notes/${missionNoteId}`)).text()).toBe(noteBefore);
   });
 
-  it('says where the laws in force live and returns none', async () => {
+  it('lists no law before any is approved and says where the laws in force are', async () => {
     const governance = await governanceOf(lead);
 
-    expect(governance.note).toContain('mission note');
-    expect(Object.keys(governance).sort()).toEqual(['denied', 'governanceEvictedDenials', 'history', 'note', 'pending', 'resourceGrants']);
+    expect(governance.note).toContain('`laws`');
+    expect(governance.laws).toEqual([]);
+    expect(Object.keys(governance).sort()).toEqual(['denied', 'governanceEvictedDenials', 'history', 'laws', 'note', 'pending', 'resourceGrants']);
   });
 
   it('answers the same pending proposal with its id, flagged deduplicated, and lists it once', async () => {

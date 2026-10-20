@@ -1,16 +1,27 @@
-import type { GovernanceProposalView, Session } from '@openfleet/shared';
+import { MAX_LAWS_RESPONSE_BYTES, type GovernanceProposalView, type LawView, type ManagerLawView, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GovernanceQueueService, ProposalFiled } from '../governance/governanceQueueService.js';
-import { ok } from './toolResults.js';
+import { ok, truncateToByteBudget } from './toolResults.js';
 
 export interface RegisterGovernanceToolsDeps {
   governanceQueue: GovernanceQueueService;
   caller: Session;
 }
 
-const PENDING_NOTE = 'Pending: this grants nothing until a human approves it. Laws and permissions in force are the prose of your mission note.';
-const GOVERNANCE_NOTE = 'Laws and permissions in force are the prose of your mission note; this tool never returns them. A pending proposal grants nothing. Resource grants are informative: the server does not enforce them yet. Do not re-propose a denied proposal on the same incident.';
+const PENDING_NOTE = 'Pending: this grants nothing until a human approves it. Once approved, a law appears in the laws of get_argus_governance.';
+const GOVERNANCE_NOTE = 'Your active laws are in `laws` (the approved law text is the rule in force); history only audits decisions. If `lawsTruncated` is true, `laws` holds the first laws only and `lawsTotal` counts them all. A pending proposal grants nothing. Resource grants are informative: the server does not enforce them yet. Do not re-propose a denied proposal on the same incident.';
+
+const JSON_ARRAY_BRACKET_BYTES = 2;
+
+/** The active laws of the manager within the response budget: whole laws only, and a flag with the total when some are left out. */
+function lawsReadout(laws: LawView[]) {
+  const activeLaws: ManagerLawView[] = laws
+    .filter((law) => law.status === 'active')
+    .map(({ id, text, revision, createdAt, updatedAt, source }) => ({ id, text, revision, createdAt, updatedAt, source }));
+  const { items: shown, truncated } = truncateToByteBudget(activeLaws, MAX_LAWS_RESPONSE_BYTES - JSON_ARRAY_BRACKET_BYTES, { bytesBetweenItems: 1 });
+  return truncated ? { laws: shown, lawsTruncated: true, lawsTotal: activeLaws.length } : { laws: shown };
+}
 
 const LAW_INCIDENT_FIELD = z.string().describe('REQUIRED. The triggering incident: a log-table row reference, ticket key, or a one-line description of what went wrong.');
 const PERMISSION_INCIDENT_FIELD = z.string().describe('REQUIRED. The triggering incident: log-table row reference, ticket key, or one-line description.');
@@ -27,7 +38,7 @@ export function registerGovernanceTools(server: McpServer, deps: RegisterGoverna
   const managerId = caller.id;
 
   server.registerTool('propose_law', {
-    description: 'Propose a new LAW — a fixed invariant that CONSTRAINS how you work (e.g. “never repurpose a session to a new branch — close it, open a fresh one”). The human approves or denies it. A pending proposal grants NOTHING: it is awaiting review, not in force. Laws in force are the prose in the mission note. Every proposal must cite its triggering incident — a proposal with no evidence is speculation. Pending queue is capped; if full, withdraw one of your own pending proposals (withdraw_proposal) or wait. Only available to an Argus manager session.',
+    description: 'Propose a new LAW — a fixed invariant that CONSTRAINS how you work (e.g. “never repurpose a session to a new branch — close it, open a fresh one”). The human approves or denies it. A pending proposal grants NOTHING: it is awaiting review, not in force. Once the human approves it, it becomes an active law, listed in get_argus_governance. Every proposal must cite its triggering incident — a proposal with no evidence is speculation. Pending queue is capped; if full, withdraw one of your own pending proposals (withdraw_proposal) or wait. Only available to an Argus manager session.',
     inputSchema: { body: z.string().describe('The proposed law, phrased as a standing rule (“every time you do X it must be Y”).'), incident: LAW_INCIDENT_FIELD },
   }, async ({ body, incident }) => acknowledgement(governanceQueue.proposeLaw({ managerId, text: body, incident })));
 
@@ -63,7 +74,7 @@ export function registerGovernanceTools(server: McpServer, deps: RegisterGoverna
   });
 
   server.registerTool('get_argus_governance', {
-    description: 'Read back your governance state with DISTINCT statuses — never conflate them: (1) resource GRANTS recorded (resource + role + access level; informative, not enforced by the server yet); (2) PENDING proposals (awaiting human review — a pending proposal grants nothing); (3) DENIED proposals with the denial reason (do not re-propose these on the same incident); (4) approval/withdrawal history (AUDIT records only — an approved law/permission lives on as prose in your mission note, which is the ONLY live rule set; this tool never returns laws in force). Also discloses if any old denials were evicted from history. Only available to an Argus manager session.',
+    description: 'Read back your governance state with DISTINCT statuses — never conflate them: (1) resource GRANTS recorded (resource + role + access level; informative, not enforced by the server yet); (2) PENDING proposals (awaiting human review — a pending proposal grants nothing); (3) DENIED proposals with the denial reason (do not re-propose these on the same incident); (4) approval/withdrawal history (AUDIT records only — never a rule in force); (5) your active LAWS (`laws`: the rules in force, the approved text; if `lawsTruncated` is true only the first are listed and `lawsTotal` counts them all). Also discloses if any old denials were evicted from history. Only available to an Argus manager session.',
     inputSchema: {},
   }, async () => {
     const view = governanceQueue.viewOf(managerId);
@@ -73,6 +84,7 @@ export function registerGovernanceTools(server: McpServer, deps: RegisterGoverna
       denied: view.denied.map((proposal) => ({ ...proposalSummary(proposal), reason: proposal.denialReason, decidedAt: proposal.decidedAt })),
       history: view.history.map((proposal) => ({ ...proposalSummary(proposal), status: proposal.status, decidedAt: proposal.decidedAt })),
       governanceEvictedDenials: view.governanceEvictedDenials,
+      ...lawsReadout(view.laws),
       note: GOVERNANCE_NOTE,
     });
   });
