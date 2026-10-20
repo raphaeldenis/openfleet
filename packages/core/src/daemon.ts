@@ -38,6 +38,7 @@ import { loadPowerSettings } from './power/powerSettings.js';
 import { SleepGuard } from './power/sleepGuard.js';
 import { DAEMON_VERSION } from './version.js';
 import { scapeImportStatusOfManager } from './import/scape/scapeManagerEditStatus.js';
+import { profileRecallOf } from './managers/managerProfileRecall.js';
 import { ManagerRepository } from './managers/managerRepository.js';
 import { ManagerService } from './managers/managerService.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
@@ -140,7 +141,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     const { document, unattended } = commandPolicyService.settings();
     return document.mode !== 'off' || unattended.askBecomesDeny;
   };
-  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, isCommandPolicyActive });
+  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}), isCommandPolicyActive });
   const approvals = new ApprovalService({ db, bus });
   // A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
   // process that would have decided it is gone with the old daemon.
