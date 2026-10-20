@@ -16,6 +16,9 @@ export interface ManagerBaseIdentity {
 
 export function toManagerView(record: ManagerRecord, childrenCount: number, deniedCommands: DeniedCommandCounts = NO_DENIED_COMMANDS, currentBase?: ManagerBaseIdentity): ManagerView {
   return {
+    expertise: record.expertise ?? '',
+    pulseActions: record.pulseActions ?? [],
+    profileRev: record.profileRev ?? 1,
     sessionId: record.sessionId,
     pulseSeconds: record.pulseSeconds,
     pulseEnabled: isPulseEnabled(record),

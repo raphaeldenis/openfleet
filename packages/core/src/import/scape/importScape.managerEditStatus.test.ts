@@ -35,6 +35,28 @@ describe('where an imported manager stands against a Scape re-import', () => {
     expect(statusOf(LEAD_ARGUS_ID)).toBe('as_imported');
   });
 
+  it('keeps historical hashes compatible while preserving a locally enriched profile on re-import', () => {
+    const repository = new ManagerRepository(openTarget());
+    repository.update(LEAD_ARGUS_ID, { expertise: 'Release engineering', pulseActions: ['Check CI'] });
+    expect(statusOf(LEAD_ARGUS_ID)).toBe('edited_in_openfleet');
+    const before = repository.get(LEAD_ARGUS_ID)!;
+    writeArguses(fixture, [anArgus({ pulseInterval: 900, childrenCap: 8 })]);
+
+    runImport();
+
+    expect(new ManagerRepository(openTarget()).get(LEAD_ARGUS_ID)).toEqual(before);
+    expect(statusOf(LEAD_ARGUS_ID)).toBe('edited_in_openfleet');
+  });
+
+  it('applies a Scape change to a historical profile without treating its new empty fields as local edits', () => {
+    writeArguses(fixture, [anArgus({ pulseInterval: 900, childrenCap: 8 })]);
+
+    runImport();
+
+    expect(new ManagerRepository(openTarget()).get(LEAD_ARGUS_ID)).toMatchObject({ pulseSeconds: 900, childrenCap: 8 });
+    expect(statusOf(LEAD_ARGUS_ID)).toBe('as_imported');
+  });
+
   it('is edited in OpenFleet once its mission, pulse or cap changes', () => {
     new ManagerRepository(openTarget()).update(LEAD_ARGUS_ID, { missionText: 'A mission written in OpenFleet.' });
 

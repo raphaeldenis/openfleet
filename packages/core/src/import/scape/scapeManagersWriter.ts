@@ -48,9 +48,16 @@ export function storedValuesOf(repositories: Repositories, id: string): RecordVa
   return isTheImportedManager ? ownedValuesOf({ ...storedManager, model: storedSession.model ?? null }) : undefined;
 }
 
+export function hasLocalProfileFields(managers: ManagerRepository, id: string): boolean {
+  const manager = managers.get(id);
+  const hasExpertise = (manager?.expertise ?? '') !== '';
+  const hasPulseActions = (manager?.pulseActions ?? []).length > 0;
+  return hasExpertise || hasPulseActions;
+}
+
 function updateManager(db: DatabaseSync, planned: PlannedManager): void {
   const { manager, session } = planned;
-  db.prepare('UPDATE managers SET mission_text = ?, pulse_seconds = ?, children_cap = ? WHERE session_id = ?').run(manager.missionText, manager.pulseSeconds, manager.childrenCap, planned.id);
+  db.prepare('UPDATE managers SET mission_text = ?, pulse_seconds = ?, children_cap = ?, profile_rev = profile_rev + 1 WHERE session_id = ?').run(manager.missionText, manager.pulseSeconds, manager.childrenCap, planned.id);
   db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run(session.model, planned.id);
 }
 
@@ -59,7 +66,8 @@ function writeManager(input: { db: DatabaseSync; ledger: ImportLedger; repositor
   const isSessionOfAnotherKind = repositories.sessions.get(planned.id) !== undefined && storedValuesOf(repositories, planned.id) === undefined;
   if (isSessionOfAnotherKind) return 'conflict';
   return reconcileRecord({
-    ledger, kind: 'manager', id: planned.id, planned: plannedValuesOf(planned), policy: {},
+    ledger, kind: 'manager', id: planned.id, planned: plannedValuesOf(planned),
+    policy: { canUpdate: () => !hasLocalProfileFields(repositories.managers, planned.id) },
     gateway: {
       readStored: () => storedValuesOf(repositories, planned.id),
       insert: () => insertManager(db, repositories, planned),
