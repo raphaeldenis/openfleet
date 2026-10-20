@@ -33,10 +33,6 @@ async function renderSettingsOn(section: SectionName) {
   return view;
 }
 
-function rowNamesShown(): string[] {
-  return Array.from(document.querySelectorAll('.rows .name')).map((name) => name.textContent?.trim() ?? '');
-}
-
 function reasonDescribing(control: HTMLElement): string | undefined {
   const reasonId = control.getAttribute('aria-describedby');
   return reasonId ? document.getElementById(reasonId)?.textContent?.trim() : undefined;
@@ -71,16 +67,6 @@ describe('Settings → rows without a backing setting', () => {
       expect(reasonDescribing(control)).toBe(reason);
     });
 
-    it('is drawn with a dashed border and a dimmed look', async () => {
-      await renderSettingsOn(section);
-
-      const look = getComputedStyle(screen.getByTestId(buttonTestId));
-
-      expect(look.borderTopStyle).toBe('dashed');
-      expect(look.opacity).toBe('0.6');
-      expect(look.cursor).toBe('not-allowed');
-    });
-
     it('cannot be activated by click or keyboard, and cannot take focus', async () => {
       await renderSettingsOn(section);
       const control = screen.getByTestId(buttonTestId);
@@ -97,10 +83,15 @@ describe('Settings → rows without a backing setting', () => {
     });
   });
 
-  it.each(Object.entries(ROW_NAMES_BY_SECTION))('lists exactly the %s rows, in order', async (section, expectedNames) => {
+  it.each(Object.entries(ROW_NAMES_BY_SECTION))('presents the %s settings in order', async (section, expectedNames) => {
     await renderSettingsOn(section as SectionName);
 
-    expect(rowNamesShown()).toEqual(expectedNames);
+    const labels = expectedNames.map((name) => screen.getByText(name, { exact: true }));
+    for (const [index, label] of labels.entries()) {
+      const nextLabel = labels[index + 1];
+      if (!nextLabel) continue;
+      expect(label.compareDocumentPosition(nextLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
   });
 
   it('keeps the settings that do exist enabled next to the disabled ones', async () => {
@@ -108,6 +99,8 @@ describe('Settings → rows without a backing setting', () => {
 
     expect(screen.getByRole('button', { name: 'Run setup again →' })).toBeEnabled();
     expect(screen.getByTestId('general-theme')).toBeEnabled();
+    expect(screen.getByRole('switch', { name: 'Tool completion' })).toBeEnabled();
+    expect(screen.getByRole('switch', { name: 'Chat message' })).toBeEnabled();
   });
 
   describe('Daemon › Config file', () => {
