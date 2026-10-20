@@ -9,6 +9,7 @@ import { describeError } from './errors/describeError.js';
 import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
 import { GovernanceQueueService } from './governance/governanceQueueService.js';
+import { decisionNotification } from './governance/decisionNotification.js';
 import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
 import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
@@ -170,6 +171,16 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   });
   const governanceQueue = new GovernanceQueueService({
     db, bus, clock: () => new Date().toISOString(), newId,
+    notifyDecision: (input) => {
+      const sessionId = input.proposal.managerId;
+      const isOpen = sessions.get(sessionId)?.state !== 'closed';
+      if (!isOpen) return;
+      try {
+        sessions.sendMessage({ sessionId, messageId: `governance-${input.proposal.id}`, body: decisionNotification(input) });
+      } catch (error) {
+        log('warn', `governance: the manager could not be told: ${describeError(error).error}`, sessionId);
+      }
+    },
     managers: { isManager: (sessionId) => managerRepository.get(sessionId) !== undefined, projectIdOf: (sessionId) => sessions.get(sessionId)?.projectId },
     linkTargets: { noteProjectId: (noteId) => noteRepo.getProjectId(noteId), storeProjectId: (storeId) => storeRepo.findStore(storeId)?.projectId },
   });

@@ -25,6 +25,7 @@ export interface GovernanceQueueDeps {
   newId: () => string;
   managers: ManagerDirectory;
   linkTargets: ManagerLinkTargets;
+  notifyDecision?: (input: { proposal: GovernanceProposalView; reason?: string }) => void;
 }
 
 export interface ProposalFiled {
@@ -33,7 +34,7 @@ export interface ProposalFiled {
   deduplicated: boolean;
 }
 
-export type Decision = { proposalId: string; decision: 'approve' } | { proposalId: string; decision: 'deny'; reason?: string };
+export type Decision = { proposalId: string; decision: 'approve' | 'deny'; reason?: string };
 
 /**
  * The proposals a manager files and a human answers. A pending proposal grants nothing; the laws and permissions in force
@@ -81,8 +82,10 @@ export class GovernanceQueueService {
 
   /** A human approves or denies a pending proposal; approving a resource access records its grant in the same transaction. */
   decide(decision: Decision): GovernanceProposalView {
+    const reason = decision.reason === undefined ? undefined : storedDenialReason(decision.reason);
     const answered = this.recordDecision(decision);
     this.deps.bus.emit({ type: 'governance.resolved', proposal: answered });
+    this.deps.notifyDecision?.({ proposal: answered, reason });
     return answered;
   }
 

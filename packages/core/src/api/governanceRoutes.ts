@@ -6,7 +6,7 @@ import { json, queryParams, type Router } from './router.js';
 const ListProposalsQuerySchema = z.object({ status: z.enum(PROPOSAL_STATUSES).default('pending') });
 
 const DecisionBodySchema = z.discriminatedUnion('decision', [
-  z.object({ decision: z.literal('approve') }),
+  z.object({ decision: z.literal('approve'), reason: z.string().optional() }),
   z.object({ decision: z.literal('deny'), reason: z.string().optional() }),
 ]);
 
