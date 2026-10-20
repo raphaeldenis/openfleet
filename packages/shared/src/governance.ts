@@ -73,6 +73,45 @@ export interface ResourceGrantView {
   proposalId?: string;
 }
 
+export const MAX_LAWS_RESPONSE_BYTES = 256 * 1024;
+
+/** The human the daemon records as the author of a decision: the holder of the admin token. */
+export const HUMAN_ACTOR = 'admin';
+
+export const LAW_STATUSES = ['active', 'withdrawn'] as const;
+export type LawStatus = (typeof LAW_STATUSES)[number];
+
+export const LAW_SOURCE_KINDS = ['proposal', 'legacy', 'import'] as const;
+export type LawSourceKind = (typeof LAW_SOURCE_KINDS)[number];
+
+/** A standing rule of one manager. */
+export interface LawView {
+  id: string;
+  managerId: string;
+  text: string;
+  status: LawStatus;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  withdrawnAt?: string;
+  approvedBy?: string;
+  updatedBy?: string;
+  withdrawnBy?: string;
+  source: LawSourceKind;
+  sourceCreatedAt?: string;
+  proposalId?: string;
+}
+
+/** A law as the manager reads it. */
+export interface ManagerLawView {
+  id: string;
+  text: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  source: LawSourceKind;
+}
+
 /** What a manager sees of its own governance: grants are informative until the server enforces them. */
 export interface ManagerGovernanceView {
   resourceGrants: ResourceGrantView[];
@@ -81,4 +120,9 @@ export interface ManagerGovernanceView {
   /** Approved and withdrawn proposals, newest first. */
   history: GovernanceProposalView[];
   governanceEvictedDenials: number;
+}
+
+/** The governance of a manager together with its laws, active and withdrawn, oldest first. */
+export interface ManagerGovernanceWithLawsView extends ManagerGovernanceView {
+  laws: LawView[];
 }

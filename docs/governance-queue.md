@@ -1,6 +1,6 @@
 # Governance queue: the human API
 
-A manager files proposals (a law, a standing permission, a resource access) through its MCP tools. A proposal grants nothing while it is pending. The laws and permissions in force stay the prose of the mission note, which the daemon never writes.
+A manager files proposals (a law, a standing permission, a resource access) through its MCP tools. A proposal grants nothing while it is pending. The daemon never writes the mission note. The laws in force are the approved laws stored in the daemon (table `laws`, see [Laws](#laws)); standing permissions in force stay the prose of the mission note.
 
 Only the human decides, with the daemon admin token. Every route below sits under `/api`: the MCP token of a session is answered `401 unauthorized`, and no decision route exists under `/mcp`.
 
@@ -9,12 +9,25 @@ Only the human decides, with the daemon admin token. Every route below sits unde
 | Route | Answer | Errors |
 |---|---|---|
 | `GET /api/governance/proposals?status=` | The proposals of every manager in that status. `status` is `pending` (default), `approved`, `denied` or `withdrawn`. Pending ones come oldest first, answered ones newest answer first. | `invalid_body` (400) for another status |
-| `GET /api/managers/:id/governance` | The governance view of one manager: `resourceGrants`, `pending`, `denied`, `history`, `governanceEvictedDenials`. | `manager_not_found` (404) for an unknown id or a session that is not a manager |
+| `GET /api/managers/:id/governance` | The governance view of one manager: `resourceGrants`, `pending`, `denied`, `history`, `governanceEvictedDenials`, and `laws` (every law of that manager, active and withdrawn, oldest first, each with its `status`). | `manager_not_found` (404) for an unknown id or a session that is not a manager |
 | `POST /api/governance/proposals/:id/decide` | The answered proposal. Body: `{ "decision": "approve" }` or `{ "decision": "deny", "reason": "…" }`. | `invalid_body` (400): unknown decision, or a denial whose `reason` is missing, blank or longer than 500 characters; `proposal_not_found` (404); `already_resolved` (409); `not_found` (404) when approving an access whose resource no longer exists |
 
 An invalid decision body (for example a denial without a reason) is refused with 400 `invalid_body` before the proposal is looked up, so an unknown or already resolved id with an invalid body answers 400, not 404 or 409.
 
-Approving a `resourceAccess` records exactly one grant (a new approval for the same manager and resource replaces the role and the access). Approving a `law` or a `permission` changes the proposal status only. Grants are informative: the server does not enforce them yet.
+Approving a `resourceAccess` records exactly one grant (a new approval for the same manager and resource replaces the role and the access). Approving a `permission` changes the proposal status only. Approving a `law` records exactly one law in the same transaction as the decision (see [Laws](#laws)). Grants are informative: the server does not enforce them yet.
+
+## Laws
+
+A law is a standing rule of one manager, stored in the table `laws` (migration `036_governance_laws.sql`). A pending, denied or withdrawn proposal is never a law.
+
+- **Born from approval.** Approving a law proposal inserts the law in the decision transaction: `approved_by = 'admin'` (the holder of the admin token is the human), `revision = 1`, `source_kind = 'proposal'`, the text of the proposal. The proposal stays an immutable audit record; `laws.text` is the current text. A failed insert undoes the decision, and the unique `proposal_id` guarantees one law per proposal, also under concurrent approvals (the second answers `already_resolved`).
+- **No eviction.** The audit history of proposals keeps the newest 50 approved and withdrawn ones; a law is never evicted with its proposal (`proposal_id` becomes NULL). A law goes away only with its manager (cascade).
+- **Scope.** A law belongs to one manager and is never visible to another.
+- **Provenance.** `source_kind` is `proposal`, `legacy` or `import`. The migration turned every approved law proposal still held in the history into a `legacy` law: author unknown (`approved_by` NULL), dated at its decision, `source_created_at` set to the filing date. An approved law proposal already evicted from the history before the migration is not recovered, and one whose stored text is blank or longer than 2000 characters is skipped. No semantic deduplication: two proposals with the same text make two laws.
+- **Bounds.** A law text is 1 to 2000 characters (checked by the database; secrets are masked before the bound is applied).
+- **What the manager reads.** `get_argus_governance` returns `laws: [{ id, text, revision, createdAt, updatedAt, source }]`, the active laws of the calling manager only, oldest first, besides the previous keys. The laws of the response weigh at most 256 KiB: beyond that the response carries only whole laws from the oldest, with `lawsTruncated: true` and `lawsTotal` (the number of active laws). `history` remains an audit trail, not the rule set.
+- **What the admin reads.** `GET /api/managers/:id/governance` returns every law of the manager with `status` (`active` or `withdrawn`), `revision`, authors and dates, untruncated.
+- **Not here yet.** No MCP tool creates, edits or withdraws a law: a manager only proposes. Editing, withdrawing and importing laws are separate work.
 
 After a human approves or denies a proposal, its manager receives one queued governance message: `Proposal <id> approved` or `Proposal <id> denied: <reason>`. Approval accepts an optional reason of 1–500 visible characters, included in the message. The message uses the existing untrusted agent envelope, masks known secret formats and bounds its text to 700 characters. Delivery waits behind an unsent human draft. Withdrawing sends nothing; a closed manager receives nothing and stays closed. Repeated decisions return `already_resolved` and send no duplicate. Notification failure does not undo the recorded human decision.
 

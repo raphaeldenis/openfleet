@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  MAX_AUDIT_HISTORY_PER_MANAGER, MAX_DENIED_HISTORY_PER_MANAGER, MAX_PENDING_PROPOSALS_PER_MANAGER, OpenFleetError,
-  type GovernanceProposalView, type ManagerGovernanceView, type ProposalKind, type ProposalPayload, type ProposalStatus, type ResourceAccessPayload,
+  HUMAN_ACTOR, MAX_AUDIT_HISTORY_PER_MANAGER, MAX_DENIED_HISTORY_PER_MANAGER, MAX_PENDING_PROPOSALS_PER_MANAGER, OpenFleetError,
+  type GovernanceProposalView, type LawPayload, type ManagerGovernanceWithLawsView, type ProposalKind, type ProposalPayload, type ProposalStatus, type ResourceAccessPayload,
 } from '@openfleet/shared';
 import { inTransaction } from '../db/transaction.js';
 import type { EventBus } from '../events/eventBus.js';
@@ -9,6 +9,7 @@ import type { ManagerLinkTargets } from '../managers/managerService.js';
 import { NoteNotFoundError } from '../notes/noteService.js';
 import { StoreNotFoundError } from '../stores/dataStoreRepository.js';
 import { GovernanceQueueFullError, ProposalNotFoundError } from './governanceErrors.js';
+import { LawRepository } from './lawRepository.js';
 import { lawPayloadOf, permissionPayloadOf, resourceAccessPayloadOf, storedDenialReason, storedIncident } from './proposalInput.js';
 import { ProposalRepository } from './proposalRepository.js';
 
@@ -37,14 +38,16 @@ export interface ProposalFiled {
 export type Decision = { proposalId: string; decision: 'approve' | 'deny'; reason?: string };
 
 /**
- * The proposals a manager files and a human answers. A pending proposal grants nothing; the laws and permissions in force
- * stay the prose of the mission note, which this service never writes.
+ * The proposals a manager files and a human answers. A pending proposal grants nothing; approving a law proposal enacts a
+ * law in the same transaction. This service never writes the mission note.
  */
 export class GovernanceQueueService {
   private readonly proposals: ProposalRepository;
+  private readonly laws: LawRepository;
 
   constructor(private readonly deps: GovernanceQueueDeps) {
     this.proposals = new ProposalRepository(deps.db);
+    this.laws = new LawRepository(deps.db);
   }
 
   proposeLaw({ managerId, text, incident }: { managerId: string; text: string; incident: string }): ProposalFiled {
@@ -111,14 +114,16 @@ export class GovernanceQueueService {
         return answered;
       }
       this.recordGrantOfApproved(answered);
+      this.recordLawOfApproved(answered);
       this.evictOldestAudit(answered.managerId);
       return answered;
     });
   }
 
-  viewOf(managerId: string): ManagerGovernanceView {
+  viewOf(managerId: string): ManagerGovernanceWithLawsView {
     this.requireManager(managerId);
     return {
+      laws: this.laws.allOf(managerId),
       resourceGrants: this.proposals.grantsOf(managerId),
       pending: this.proposals.pendingOf(managerId),
       denied: this.proposals.deniedOf(managerId),
@@ -160,6 +165,15 @@ export class GovernanceQueueService {
     const payload = approved.payload as ResourceAccessPayload;
     this.requireResourceOfManagerProject({ managerId: approved.managerId, payload });
     this.proposals.upsertGrant({ id: this.deps.newId(), managerId: approved.managerId, ...payload, proposalId: approved.id, grantedAt: this.deps.clock() });
+  }
+
+  /** An approved law proposal enacts one law; its text is the proposal text. */
+  private recordLawOfApproved(approved: GovernanceProposalView): void {
+    if (approved.kind !== 'law') return;
+    const { text } = approved.payload as LawPayload;
+    this.laws.insertOfApprovedProposal({
+      id: this.deps.newId(), managerId: approved.managerId, text, approvedBy: HUMAN_ACTOR, proposalId: approved.id, approvedAt: approved.decidedAt!,
+    });
   }
 
   private evictOldestAudit(managerId: string): void {
