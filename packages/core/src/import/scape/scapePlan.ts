@@ -10,6 +10,7 @@ import { planPlaybookArchive, type PlannedPlaybookArchive } from './playbookArch
 import { planMemories, type MemorySource, type PlannedMemory } from './scapeMemories.js';
 import { planWorkingStates, type PlannedWorkingState } from './scapeWorkingStates.js';
 import { emptySourceLosses, type SourceLosses } from './importReport.js';
+import { emptyLawsReport, planLaws, type LawsReport, type PlannedLaw } from './scapeLaws.js';
 
 export interface PlannedRecord<Extra = object> { id: string; record: RecordValues; extra: Extra }
 
@@ -30,6 +31,9 @@ export interface ImportPlan {
   managers: PlannedManager[];
   skippedManagerCount: number;
   workingStates: PlannedWorkingState[];
+  laws: PlannedLaw[];
+  /** What planning the laws left out, counted; the writer adds what each manager's laws came to. */
+  lawsReport: LawsReport;
   /** Undefined when the run does not cover the Claude memory. */
   memories: PlannedMemory[] | undefined;
 }
@@ -55,7 +59,7 @@ function selectProjects(source: ScapeSource, projectName: string | undefined): S
   return selected;
 }
 
-const emptyPlan = (): ImportPlan => ({ sourceLosses: emptySourceLosses(), playbookArchives: [], projects: [], notes: [], noteVersions: [], dataStores: [], columns: [], views: [], skippedViewCount: 0, rows: [], history: [], skippedHistoryCount: 0, managers: [], skippedManagerCount: 0, workingStates: [], memories: undefined });
+const emptyPlan = (): ImportPlan => ({ sourceLosses: emptySourceLosses(), playbookArchives: [], projects: [], notes: [], noteVersions: [], dataStores: [], columns: [], views: [], skippedViewCount: 0, rows: [], history: [], skippedHistoryCount: 0, managers: [], skippedManagerCount: 0, workingStates: [], laws: [], lawsReport: emptyLawsReport(), memories: undefined });
 
 function planNotes(plan: ImportPlan, source: ScapeSource, project: ScapeProject): void {
   for (const note of source.notesOf(project.id)) {
@@ -137,9 +141,13 @@ export function buildImportPlan(source: ScapeSource, options: PlanOptions): Impo
     planStores(plan, source, project);
   }
   const availableResources = { noteIds: new Set(plan.notes.map((note) => note.id)), tableIds: new Set(plan.dataStores.map((store) => store.id)) };
-  const managersPlan = planManagers({ arguses: source.arguses(), notes: plan.notes, availableResources, managersRoot: options.managersRoot });
+  const arguses = source.arguses();
+  const managersPlan = planManagers({ arguses, notes: plan.notes, availableResources, managersRoot: options.managersRoot });
   plan.managers = managersPlan.managers;
   plan.skippedManagerCount = managersPlan.skippedCount;
+  const lawsPlan = planLaws({ arguses, managers: plan.managers });
+  plan.laws = lawsPlan.laws;
+  plan.lawsReport = lawsPlan.report;
   plan.workingStates = planWorkingStates({ stateDir: options.stateDir, stateRoot: options.stateRoot, managers: plan.managers });
   if (options.memorySource !== undefined) plan.memories = planMemories({ managers: plan.managers, source: options.memorySource });
   return plan;

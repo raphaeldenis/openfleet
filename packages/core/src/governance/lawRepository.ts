@@ -43,6 +43,25 @@ export class LawRepository {
       .run(law.id, law.managerId, law.text, law.approvedAt, law.approvedAt, law.approvedBy, law.approvedBy, law.proposalId);
   }
 
+  /** Records a law the Scape import brings in; the unique source key refuses a second law for the same Scape request. */
+  insertFromImport(law: { id: string; managerId: string; text: string; sourceKey: string; importedBy: string; createdAt: string; sourceCreatedAt: string }): void {
+    this.db.prepare(`INSERT INTO laws (id, manager_id, text, status, revision, created_at, updated_at, approved_by, updated_by, source_kind, source_key, source_created_at)
+      VALUES (?, ?, ?, 'active', 1, ?, ?, ?, ?, 'import', ?, ?)`)
+      .run(law.id, law.managerId, law.text, law.createdAt, law.createdAt, law.importedBy, law.importedBy, law.sourceKey, law.sourceCreatedAt);
+  }
+
+  findBySourceKey(sourceKey: string): LawView | undefined {
+    const row = this.db.prepare('SELECT * FROM laws WHERE source_key = ?').get(sourceKey) as unknown as LawRow | undefined;
+    return row && toView(row);
+  }
+
+  /** Replaces the text of an active law the import itself last wrote; false when the law was withdrawn or edited since. */
+  replaceTextFromImport({ lawId, text, importedBy, updatedAt }: { lawId: string; text: string; importedBy: string; updatedAt: string }): boolean {
+    const { changes } = this.db.prepare(`UPDATE laws SET text = ?, revision = revision + 1, updated_at = ?, updated_by = ?
+      WHERE id = ? AND status = 'active' AND updated_by = ?`).run(text, updatedAt, importedBy, lawId, importedBy);
+    return changes > 0;
+  }
+
   find(lawId: string): LawView | undefined {
     const row = this.db.prepare('SELECT * FROM laws WHERE id = ?').get(lawId) as unknown as LawRow | undefined;
     return row && toView(row);

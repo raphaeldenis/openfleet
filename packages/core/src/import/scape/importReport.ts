@@ -1,6 +1,7 @@
 import type { ManagerMissionReport } from './managerMissionReport.js';
+import { emptyLawsReport, type LawsReport } from './scapeLaws.js';
 
-export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'playbooks', 'dataStores', 'columns', 'views', 'rows', 'history', 'managers', 'workingStates', 'memories'] as const;
+export const ENTITY_NAMES = ['projects', 'notes', 'noteVersions', 'playbooks', 'dataStores', 'columns', 'views', 'rows', 'history', 'managers', 'workingStates', 'memories', 'laws'] as const;
 export type EntityName = (typeof ENTITY_NAMES)[number];
 
 export interface EntityCounts {
@@ -41,6 +42,8 @@ export interface ImportReport extends SourceLosses {
   mergedStateSections: number;
   /** One line per imported manager: what its mission holds that the shared manager base owns. Read-only: no mission is rewritten. */
   managerMissions: ManagerMissionReport[];
+  /** What the Scape laws came to: counts only, never a law text. */
+  laws: LawsReport;
   reportPath?: string;
 }
 
@@ -65,6 +68,7 @@ export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
   missionToolReferences: { renamed: 0, pointedAtPlaybookShims: 0, withoutEquivalent: {} },
   mergedStateSections: 0,
   managerMissions: [],
+  laws: emptyLawsReport(),
 });
 
 const countsRow = (name: EntityName, counts: EntityCounts) =>
@@ -84,6 +88,20 @@ function missionFindingsOf(mission: ManagerMissionReport): string[] {
     ...mission.exactModelIds.map((modelId) => `${name} — exact model id: ${modelId}`),
     ...mission.humanQaPhrases.map((line) => `${name} — QA for the human: ${line}`),
     ...mission.baseSectionDuplicates.map(({ sectionId, heading }) => `${name} — repeats ${sectionId} of the base: ${heading}`),
+  ];
+}
+
+function lawsSection({ laws }: ImportReport): string[] {
+  const perManagerRows = laws.perManager.map((entry) => `| ${entry.argus} | ${entry.approved} | ${entry.inserted} | ${entry.updated} | ${entry.conflict} | ${entry.alreadyPresent} |`);
+  return [
+    '## Laws',
+    'Approved Scape laws of the imported managers, written to the laws table (the mission still holds them). An edited, withdrawn or deleted law is never overwritten, reactivated or written again.',
+    `${laws.approvedInSource} approved; ignored: ${laws.skippedNotApproved.denied} denied, ${laws.skippedNotApproved.pending} pending, ${laws.invalidText} with a blank or too long text; ${laws.exactDuplicates} exact duplicate(s); keyed by request id: ${laws.keyedBy.requestId}, by text fingerprint: ${laws.keyedBy.fingerprint}.`,
+    '',
+    '| manager | approved | inserted | updated | conflict | already present |',
+    '| --- | --- | --- | --- | --- | --- |',
+    ...perManagerRows,
+    '',
   ];
 }
 
@@ -149,6 +167,7 @@ export function renderImportReport(report: ImportReport): string {
     ...bulletList(toolsWithoutEquivalent),
     '',
     ...managerMissionsSection(report.managerMissions),
+    ...lawsSection(report),
     '## Working states',
     `${report.mergedStateSections} section(s) of the state files were merged into a working state section under a line carrying their heading. Not converted: a state file with an item cut, items dropped for the item limit or the size cap, or a manager whose own record was left as it is.`,
     '',
