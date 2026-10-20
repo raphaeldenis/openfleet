@@ -31,6 +31,8 @@ export type DescribeError = (error: unknown, scope: { sessionId?: string; where?
 export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError; env?: NodeJS.ProcessEnv;
   /** The mission of a manager session (none for another session): handed over as the first prompt of a conversation the manager starts from nothing. */
   missionOf?: (sessionId: string) => string | undefined;
+  /** The bounded recall of the expertise and pulse actions a manager wrote; empty when it wrote none. Placed before the mission in the first prompt. */
+  profileRecallOf?: (sessionId: string) => string;
   /** False when the command policy neither judges commands nor converts permission dialogs: the sessions then report no enforcement at all. */
   isCommandPolicyActive?: () => boolean }
 
@@ -2095,8 +2097,10 @@ export class SessionService {
       log('warn', `session ${sessionId}: the mission is above ${MAX_MISSION_BYTES} bytes, it is not given as the first prompt`);
       return undefined;
     }
-    this.seededPromptBySessionId.set(sessionId, mission);
-    return mission;
+    const profileRecall = this.deps.profileRecallOf?.(sessionId) ?? '';
+    const firstPrompt = profileRecall === '' ? mission : `${profileRecall}\n\n${mission}`;
+    this.seededPromptBySessionId.set(sessionId, firstPrompt);
+    return firstPrompt;
   }
 
   // Only a manager that starts a conversation from nothing is handed a prompt again: a plain resume never replays the brief of any other session.

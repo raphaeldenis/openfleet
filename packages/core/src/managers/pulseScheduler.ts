@@ -1,6 +1,7 @@
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import type { DescribeError, SessionService } from '../sessions/sessionService.js';
+import { profileRecallOf } from './managerProfileRecall.js';
 import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
 import { nextPulseAt } from './pulseTiming.js';
@@ -17,17 +18,19 @@ const BASE_SHA_PREFIX_LENGTH = 8;
 
 const baseLineOf = ({ version, sha }: ManagerBaseIdentity): string => `Base v${version} (${sha.slice(0, BASE_SHA_PREFIX_LENGTH)}).`;
 
-/** The pulse text of a manager: the plain pulse, where to re-read the mission when it lives in a note, the manager base it follows, and how many command refusals it has not looked at. */
+/** The pulse text of a manager: the plain pulse, where to re-read the mission when it lives in a note, the expertise and pulse actions it wrote, the manager base it follows, and how many command refusals it has not looked at. */
 export const pulseMessageOf = (
-  record: Pick<ManagerRecord, 'missionNoteId'>,
+  record: Pick<ManagerRecord, 'missionNoteId' | 'expertise' | 'pulseActions'>,
   { unseenRefusalCount = 0, managerBase }: { unseenRefusalCount?: number; managerBase?: ManagerBaseIdentity } = {},
 ): string => {
   const hasMissionNote = record.missionNoteId !== undefined;
   const hasUnseenRefusals = unseenRefusalCount > 0;
+  const profileRecall = profileRecallOf(record);
   const missionLine = hasMissionNote ? ` Your mission note id is ${record.missionNoteId}; read it every time you wake with get_note.` : '';
+  const profileLine = profileRecall === '' ? '' : ` ${profileRecall}`;
   const baseLine = managerBase ? ` ${baseLineOf(managerBase)}` : '';
   const refusalsLine = hasUnseenRefusals ? ` ${unseenRefusalsLineOf(unseenRefusalCount)}` : '';
-  return `${PULSE_MESSAGE}${missionLine}${baseLine}${refusalsLine}`;
+  return `${PULSE_MESSAGE}${missionLine}${profileLine}${baseLine}${refusalsLine}`;
 };
 
 /** The pulse as the manager reads it: the pulse text, then why it wakes, strongest reason first. */
@@ -106,6 +109,7 @@ export class PulseScheduler {
       if (event.type === 'session.state') this.restartHeartbeatOfManager(event.sessionId);
       if (event.type === 'session.closed') this.wakeManagerOfClosedChild(event.sessionId, event.exitCode);
       if (event.type === 'session.attention') this.wakeManagerOfRuntimeAttention(event.sessionId, event.runtimeAttention);
+      if (event.type === 'manager.updated') this.refreshQueuedPulse(event.manager.sessionId);
     });
   }
 
@@ -379,6 +383,20 @@ export class PulseScheduler {
     const { messageId } = this.deps.sessions.sendMessage({ sessionId: managerId, body: pulseBodyOf({ pulseText, wakeReasons }) });
     this.queuedPulses.set(managerId, { messageId, pulseText, wakeReasons });
     return false;
+  }
+
+  // A profile edit never re-arms the timer; it only rewrites the text of the pulse still queued, so the manager reads what it wrote last.
+  private refreshQueuedPulse(sessionId: string): void {
+    if (this.isStopped) return;
+    const queued = this.queuedPulses.get(sessionId);
+    const record = this.deps.managers.getWithinBounds(sessionId);
+    if (!queued || !record) return;
+    const unseenRefusalCount = this.deps.deniedCommandCountsOf?.(sessionId).deniedCommandCount ?? 0;
+    const pulseText = pulseMessageOf(record, { unseenRefusalCount, managerBase: this.deps.managerBase });
+    if (pulseText === queued.pulseText) return;
+    const body = pulseBodyOf({ pulseText, wakeReasons: queued.wakeReasons });
+    const isRewritten = this.deps.sessions.replaceQueuedMessageBody({ sessionId, messageId: queued.messageId, body });
+    if (isRewritten) this.queuedPulses.set(sessionId, { ...queued, pulseText });
   }
 
   private clearTimer(sessionId: string): void {

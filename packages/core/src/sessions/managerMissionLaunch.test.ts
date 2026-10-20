@@ -8,6 +8,7 @@ import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { newToken } from '../ids.js';
+import { profileRecallOf } from '../managers/managerProfileRecall.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
 import { SessionRepository } from './sessionRepository.js';
 import { SessionService } from './sessionService.js';
@@ -54,6 +55,7 @@ beforeEach(() => {
   sessions = new SessionService({
     db, bus: new EventBus(), harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: join(managerDirectory, 'worktrees'),
     missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText,
+    profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}),
   });
 });
 afterEach(() => {
@@ -91,6 +93,21 @@ describe('an imported manager receives its whole mission when it starts a fresh 
 
     expect(lastLaunch().resuming).toBe(true);
     expect(lastLaunch().seededPrompt).toBeUndefined();
+  });
+
+  it('recalls the expertise and the pulse actions of the manager before its mission', () => {
+    const mission = aMissionOfSize(2_000);
+    insertImportedManager({ id: 'imported-manager', mission });
+    managerRepository.update('imported-manager', { expertise: 'Release trains', pulseActions: ['Check CI'] });
+    harness.missingConversations.add('imported-manager');
+
+    sessions.reopen('imported-manager');
+
+    const firstPrompt = lastLaunch().seededPrompt!;
+    expect(firstPrompt.endsWith(mission)).toBe(true);
+    expect(firstPrompt.indexOf('"Release trains"')).toBeGreaterThanOrEqual(0);
+    expect(firstPrompt.indexOf('"Check CI"')).toBeLessThan(firstPrompt.indexOf(mission));
+    expect(sessions.isSeededPrompt('imported-manager', firstPrompt)).toBe(true);
   });
 
   it('gives a session that is no manager no prompt', () => {

@@ -22,10 +22,18 @@ export function parseManagerProfile(payload: unknown): ManagerProfile | undefine
     ...(typeof pinMissionNote === 'boolean' && { pinMissionNote }),
     ...(isText(logStoreId) && { logStoreId }),
   };
-  const { baseVersion, baseRead, legacyMission } = manager as Record<string, unknown>;
+  const { baseVersion, baseRead, legacyMission, expertise, pulseActions, profileRev } = manager as Record<string, unknown>;
   const base = { ...(isCount(baseVersion) && { baseVersion }), ...(isBaseRead(baseRead) && { baseRead: { version: baseRead.version, sha: baseRead.sha, readAt: baseRead.readAt } }) };
-  return { manager: { sessionId, pulseSeconds, pulseEnabled: pulseEnabled !== false, childrenCap, missionText, nextPulseAt, childrenCount, ...(typeof legacyMission === 'boolean' && { legacyMission }), ...lastPulse, ...links, ...base }, scapeImport: scapeImport as ScapeImportStatus };
+  const notes = {
+    ...(isText(expertise) && { expertise }),
+    ...(isListOfText(pulseActions) && { pulseActions: [...pulseActions] }),
+    ...(isRevision(profileRev) && { profileRev }),
+  };
+  return { manager: { sessionId, pulseSeconds, pulseEnabled: pulseEnabled !== false, childrenCap, missionText, nextPulseAt, childrenCount, ...(typeof legacyMission === 'boolean' && { legacyMission }), ...lastPulse, ...links, ...base, ...notes }, scapeImport: scapeImport as ScapeImportStatus };
 }
+
+const isListOfText = (value: unknown): value is string[] => Array.isArray(value) && value.every(isText);
+const isRevision = (value: unknown): value is number => isCount(value) && Number.isInteger(value) && value > 0;
 
 function isBaseRead(value: unknown): value is ManagerBaseRead {
   if (typeof value !== 'object' || value === null) return false;
