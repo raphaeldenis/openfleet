@@ -1,4 +1,4 @@
-import { isMissionWritable, MANAGER_ROLE, MAX_MISSION_DELTA_BYTES, OpenFleetError, type ManagerProfile, type ManagerSpec, type ManagerView, type ScapeImportStatus, type Session, type SessionSpec, type UpdateManager } from '@openfleet/shared';
+import { isMissionWritable, MANAGER_ROLE, MAX_MISSION_DELTA_BYTES, OpenFleetError, UpdateManagerSchema, type ManagerProfile, type ManagerSpec, type ManagerView, type ScapeImportStatus, type Session, type SessionSpec, type UpdateManager } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { NoteNotFoundError } from '../notes/noteService.js';
 import type { SessionService } from '../sessions/sessionService.js';
@@ -70,28 +70,53 @@ export class ManagerService {
   }
 
   /**
-   * Changes the pulse, cap, mission, model, mission note, its pin or the pause of a manager; undefined when the session has no manager row.
+   * Changes the given profile fields atomically; undefined when the session has no manager row.
    * Throws NoteNotFoundError, before changing anything, for a mission note outside the manager's project.
    */
   update(sessionId: string, patch: UpdateManager): ManagerView | undefined {
-    const stored = this.deps.managers.get(sessionId);
-    if (!stored) return undefined;
-    const { mission, model, missionNoteId, pinMissionNote, pulseEnabled, ...cadenceAndCap } = patch;
+    const validated = UpdateManagerSchema.parse(patch);
+    const { expectedProfileRev } = validated;
+    let isPulseEnabledChanged = false;
+    const updated = this.deps.managers.changeProfile({
+      sessionId, expectedProfileRev,
+      apply: (stored) => {
+        isPulseEnabledChanged = validated.pulseEnabled !== undefined && validated.pulseEnabled !== isPulseEnabled(stored);
+        return this.applyProfilePatch(stored, validated);
+      },
+      committed: (record) => {
+        this.announceUpdated(record);
+        const changesExistingFields = Object.entries(validated).some(([key, value]) =>
+          value !== undefined && !['expertise', 'pulseActions', 'expectedProfileRev'].includes(key));
+        if (changesExistingFields) this.deps.scheduler.onManagerUpdated(record);
+        if (isPulseEnabledChanged) this.deps.scheduler.onPulseEnabledChanged(record);
+      },
+    });
+    return updated ? this.view(updated) : undefined;
+  }
+
+  private applyProfilePatch(stored: ManagerRecord, patch: UpdateManager): boolean {
+    const sessionId = stored.sessionId;
+    const { mission, model, missionNoteId, pinMissionNote, pulseEnabled, expertise, pulseActions } = patch;
     if (mission !== undefined) this.requireMissionWritable({ mission, storedMission: stored.missionText });
     const isLinkingNote = typeof missionNoteId === 'string';
     if (isLinkingNote) this.requireNoteOfManagerProject({ managerId: sessionId, noteId: missionNoteId });
-    if (model !== undefined) this.deps.sessions.changeModel(sessionId, model);
-    this.deps.managers.update(sessionId, { ...cadenceAndCap, missionText: mission });
+    const currentFields = {
+      pulseSeconds: stored.pulseSeconds, childrenCap: stored.childrenCap, mission: stored.missionText,
+      model: this.deps.sessions.get(sessionId)?.model, missionNoteId: stored.missionNoteId ?? null,
+      pinMissionNote: stored.pinMissionNote === true, pulseEnabled: isPulseEnabled(stored),
+      expertise: stored.expertise ?? '', pulseActions: stored.pulseActions ?? [],
+    };
+    const hasChanges = Object.entries(currentFields).some(([key, value]) => {
+      const requested = patch[key as keyof typeof currentFields];
+      return requested !== undefined && JSON.stringify(requested) !== JSON.stringify(value);
+    });
+    if (!hasChanges) return false;
+    if (model !== undefined && model !== currentFields.model) this.deps.sessions.changeModel(sessionId, model);
+    this.deps.managers.update(sessionId, { pulseSeconds: patch.pulseSeconds, childrenCap: patch.childrenCap, missionText: mission, expertise, pulseActions });
     if (missionNoteId !== undefined) this.deps.managers.setMissionNote(sessionId, missionNoteId);
     if (pinMissionNote !== undefined) this.deps.managers.setMissionNotePinned(sessionId, pinMissionNote);
-    const wasPulseEnabled = isPulseEnabled(this.deps.managers.get(sessionId)!);
     if (pulseEnabled !== undefined) this.deps.managers.setPulseEnabled(sessionId, pulseEnabled);
-    const updated = this.deps.managers.get(sessionId)!;
-    const view = this.announceUpdated(updated);
-    this.deps.scheduler.onManagerUpdated(updated);
-    const isPulseEnabledChanged = pulseEnabled !== undefined && pulseEnabled !== wasPulseEnabled;
-    if (isPulseEnabledChanged) this.deps.scheduler.onPulseEnabledChanged(updated);
-    return view;
+    return true;
   }
 
   /**

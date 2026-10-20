@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
+import { inTransaction } from '../db/transaction.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { makeRepo } from '../git/testRepo.js';
@@ -137,6 +138,35 @@ describe('ManagerService.update', () => {
 
     expect(scheduler.onManagerUpdated).toHaveBeenCalledWith(expect.objectContaining({ sessionId: managerId, pulseSeconds: 300 }));
     expect(managerRepo.get(managerId)?.pulseSeconds).toBe(300);
+  });
+
+  it('keeps the pulse schedule when only expertise and actions change', async () => {
+    const { service, scheduler, managerId } = await aManager();
+
+    service.update(managerId, { expertise: 'Release engineering', pulseActions: ['Read CI'] });
+
+    expect(scheduler.onManagerUpdated).not.toHaveBeenCalled();
+    expect(scheduler.onPulseEnabledChanged).not.toHaveBeenCalled();
+  });
+
+  it('announces a profile only after the outer commit and drops announcements on rollback', async () => {
+    const { db, service, bus, managerRepo, managerId } = await aManager();
+    const events: unknown[] = [];
+    bus.subscribe((event) => events.push(event));
+
+    expect(() => inTransaction(db, 'rejectProfile', () => {
+      service.update(managerId, { expertise: 'discarded', expectedProfileRev: 1 });
+      expect(events).toEqual([]);
+      throw new Error('rollback');
+    })).toThrow('rollback');
+
+    expect(events).toEqual([]);
+    expect(managerRepo.get(managerId)).toMatchObject({ expertise: '', profileRev: 1 });
+    inTransaction(db, 'acceptProfile', () => {
+      service.update(managerId, { expertise: 'committed', expectedProfileRev: 1 });
+      expect(events).toEqual([]);
+    });
+    expect(events).toEqual([{ type: 'manager.updated', manager: expect.objectContaining({ expertise: 'committed', profileRev: 2 }) }]);
   });
 
   it('answers nothing for a session that is no manager', () => {

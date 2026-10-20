@@ -1,0 +1,3 @@
+ALTER TABLE managers ADD COLUMN expertise TEXT;
+ALTER TABLE managers ADD COLUMN pulse_actions TEXT;
+ALTER TABLE managers ADD COLUMN profile_rev INTEGER NOT NULL DEFAULT 1;

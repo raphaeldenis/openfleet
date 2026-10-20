@@ -1,8 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { ManagerRecordBoundsSchema, type ManagerBaseRead } from '@openfleet/shared';
+import { ManagerExpertiseSchema, ManagerPulseActionsSchema, ManagerRecordBoundsSchema, OpenFleetError, type ManagerBaseRead } from '@openfleet/shared';
+import { afterCommit, inTransaction } from '../db/transaction.js';
 import { log } from '../logger.js';
 
 export interface ManagerRecord {
+  expertise?: string;
+  pulseActions?: string[];
+  profileRev?: number;
   sessionId: string;
   pulseSeconds: number;
   childrenCap: number;
@@ -19,10 +23,29 @@ export interface ManagerRecord {
 }
 
 interface Row {
+  expertise: string | null; pulse_actions: string | null; profile_rev: number;
   session_id: string; pulse_seconds: number; children_cap: number; mission_text: string; last_pulse_at: string | null; created_at: string;
   mission_note_id: string | null; pin_mission_note: number; log_store_id: string | null; pulse_enabled: number;
   base_version_read: number | null; base_sha_read: string | null; base_read_at: string | null;
 }
+
+const pulseActionsOf = (row: Row): string[] => {
+  if (row.pulse_actions === null) return [];
+  try {
+    const validation = ManagerPulseActionsSchema.safeParse(JSON.parse(row.pulse_actions));
+    if (validation.success) return validation.data;
+  } catch { /* Invalid JSON follows the same empty-profile fallback as invalid actions. */ }
+  log('warn', `ManagerRepository: invalid pulse actions for session ${row.session_id}`);
+  return [];
+};
+
+const expertiseOf = (row: Row): string => {
+  if (row.expertise === null) return '';
+  const validation = ManagerExpertiseSchema.safeParse(row.expertise);
+  if (validation.success) return validation.data;
+  log('warn', `ManagerRepository: invalid expertise for session ${row.session_id}`);
+  return '';
+};
 
 const baseReadOf = (r: Row): ManagerBaseRead | undefined => {
   const hasRead = r.base_version_read !== null && r.base_sha_read !== null && r.base_read_at !== null;
@@ -30,6 +53,7 @@ const baseReadOf = (r: Row): ManagerBaseRead | undefined => {
 };
 
 const toManager = (r: Row): ManagerRecord => ({
+  expertise: expertiseOf(r), pulseActions: pulseActionsOf(r), profileRev: r.profile_rev,
   sessionId: r.session_id, pulseSeconds: r.pulse_seconds, childrenCap: r.children_cap,
   missionText: r.mission_text, lastPulseAt: r.last_pulse_at ?? undefined, createdAt: r.created_at,
   missionNoteId: r.mission_note_id ?? undefined, pinMissionNote: r.pin_mission_note === 1, logStoreId: r.log_store_id ?? undefined,
@@ -72,12 +96,35 @@ export class ManagerRepository {
     return false;
   }
   /** Changes the given fields of an existing manager row; the others stay as they are. */
-  update(sessionId: string, fields: Partial<Pick<ManagerRecord, 'pulseSeconds' | 'childrenCap' | 'missionText'>>): void {
+  update(sessionId: string, fields: Partial<Pick<ManagerRecord, 'pulseSeconds' | 'childrenCap' | 'missionText' | 'expertise' | 'pulseActions'>>): void {
     const current = this.get(sessionId);
     if (!current) return;
     const next = { ...current, ...definedFieldsOf(fields) };
-    this.db.prepare('UPDATE managers SET pulse_seconds = ?, children_cap = ?, mission_text = ? WHERE session_id = ?')
-      .run(next.pulseSeconds, next.childrenCap, next.missionText, sessionId);
+    this.db.prepare('UPDATE managers SET pulse_seconds = ?, children_cap = ?, mission_text = ?, expertise = ?, pulse_actions = ? WHERE session_id = ?')
+      .run(next.pulseSeconds, next.childrenCap, next.missionText, next.expertise ?? null, JSON.stringify(next.pulseActions ?? []), sessionId);
+  }
+
+  changeProfile(input: {
+    sessionId: string;
+    expectedProfileRev?: number;
+    apply: (stored: ManagerRecord) => boolean;
+    committed: (updated: ManagerRecord) => void;
+  }): ManagerRecord | undefined {
+    return inTransaction(this.db, 'changeManagerProfile', () => {
+      const stored = this.get(input.sessionId);
+      if (!stored) return undefined;
+      const isStale = input.expectedProfileRev !== undefined && input.expectedProfileRev !== stored.profileRev;
+      if (isStale) throw new OpenFleetError('stale_revision', 'the manager profile has changed since the revision you read.', {
+        hint: 'reload the manager profile, then write again.',
+        detail: { resource: 'manager_profile', currentRev: stored.profileRev },
+      });
+      const hasChanges = input.apply(stored);
+      if (!hasChanges) return stored;
+      this.db.prepare('UPDATE managers SET profile_rev = profile_rev + 1 WHERE session_id = ?').run(input.sessionId);
+      const updated = this.get(input.sessionId)!;
+      afterCommit(this.db, () => input.committed(updated));
+      return updated;
+    });
   }
   setLastPulseAt(sessionId: string, at: string): void {
     this.db.prepare('UPDATE managers SET last_pulse_at = ? WHERE session_id = ?').run(at, sessionId);

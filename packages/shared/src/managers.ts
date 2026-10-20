@@ -35,15 +35,24 @@ export const ManagerRecordBoundsSchema = z.object(managerFieldsWithMissionUpTo(M
 export const ManagerSpecSchema = z.object(managerFieldsWithMissionUpTo(MAX_MISSION_BYTES));
 export type ManagerSpec = z.infer<typeof ManagerSpecSchema>;
 
+export const ManagerExpertiseSchema = z.string().trim().max(500);
+export const ManagerPulseActionsSchema = z.array(z.string().trim().min(1).max(280)).max(12).refine(
+  (actions) => new Set(actions).size === actions.length,
+  { message: 'pulse actions must be unique' },
+);
+
 /** The fields of a manager that can be edited after it is created: at least one is given. The model belongs to its session; a null missionNoteId unlinks the mission note. */
 export const UpdateManagerSchema = ManagerSpecSchema.partial().extend({
   model: ModelIdSchema.optional(),
   missionNoteId: z.string().min(1).nullable().optional(),
   pinMissionNote: z.boolean().optional(),
   pulseEnabled: z.boolean().optional(),
+  expertise: ManagerExpertiseSchema.optional(),
+  pulseActions: ManagerPulseActionsSchema.optional(),
+  expectedProfileRev: z.number().int().positive().optional(),
 }).refine(
-  (update) => Object.values(update).some((value) => value !== undefined),
-  { message: 'pulseSeconds, childrenCap, mission, model, missionNoteId, pinMissionNote or pulseEnabled is required' },
+  ({ expectedProfileRev: _revision, ...fields }) => Object.values(fields).some((value) => value !== undefined),
+  { message: 'at least one manager profile field is required' },
 );
 export type UpdateManager = z.infer<typeof UpdateManagerSchema>;
 
@@ -72,6 +81,9 @@ export interface ManagerBaseRead {
 }
 
 export interface ManagerView {
+  expertise?: string;
+  pulseActions?: string[];
+  profileRev?: number;
   sessionId: string;
   pulseSeconds: number;
   /** False while the manager is paused: it receives no pulse until it is resumed. */

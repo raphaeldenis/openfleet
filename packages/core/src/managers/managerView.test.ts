@@ -15,6 +15,7 @@ describe('toManagerView', () => {
     const view = toManagerView(record, 3);
 
     expect(view).toEqual({
+      expertise: '', pulseActions: [], profileRev: 1,
       sessionId: 'session-1',
       pulseSeconds: 60,
       pulseEnabled: true,
