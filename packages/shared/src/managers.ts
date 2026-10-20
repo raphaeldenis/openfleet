@@ -35,8 +35,12 @@ export const ManagerRecordBoundsSchema = z.object(managerFieldsWithMissionUpTo(M
 export const ManagerSpecSchema = z.object(managerFieldsWithMissionUpTo(MAX_MISSION_BYTES));
 export type ManagerSpec = z.infer<typeof ManagerSpecSchema>;
 
-export const ManagerExpertiseSchema = z.string().trim().max(500);
-export const ManagerPulseActionsSchema = z.array(z.string().trim().min(1).max(280)).max(12).refine(
+export const MAX_EXPERTISE_LENGTH = 500;
+export const MAX_PULSE_ACTIONS = 12;
+export const MAX_PULSE_ACTION_LENGTH = 280;
+
+export const ManagerExpertiseSchema = z.string().trim().max(MAX_EXPERTISE_LENGTH);
+export const ManagerPulseActionsSchema = z.array(z.string().trim().min(1).max(MAX_PULSE_ACTION_LENGTH)).max(MAX_PULSE_ACTIONS).refine(
   (actions) => new Set(actions).size === actions.length,
   { message: 'pulse actions must be unique' },
 );

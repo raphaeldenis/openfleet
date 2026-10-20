@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import type { ManagerProfile, ManagerView, ScapeImportStatus, Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
+import { FleetEventsService } from '../core/fleet-events.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { compactElapsedLabel } from '../design/elapsed-time';
 import { MarkdownViewComponent } from '../notes/markdown-view.component';
@@ -74,7 +75,7 @@ const IMPORT_LINE_BY_STATUS: Record<ScapeImportStatus, string | undefined> = {
               <span class="card-hint">only changed fields are sent</span>
             </div>
             <div class="card-body">
-              <of-manager-profile-editor [sessionId]="session().id" [manager]="current.manager" [currentModel]="session().model" (saved)="applySaved($event)" />
+              <of-manager-profile-editor [sessionId]="session().id" [manager]="current.manager" [currentModel]="session().model" (saved)="applySaved($event)" (reloaded)="profile.set($event)" />
             </div>
           </section>
         }
@@ -118,12 +119,26 @@ export class ManagerProfileComponent {
   });
 
   private readonly sessionId = computed(() => this.session().id);
+  private readonly events = inject(FleetEventsService);
+  private readonly announcedManager = computed(() => this.events.managers().find((manager) => manager.sessionId === this.sessionId()));
 
   constructor() {
     effect(() => {
       this.sessionId();
       untracked(() => void this.load());
     });
+    effect(() => {
+      const announced = this.announcedManager();
+      untracked(() => this.adoptAnnouncedManager(announced));
+    });
+  }
+
+  // A pulse announces the manager again with the same profile: only a newer profile revision replaces what the page shows.
+  private adoptAnnouncedManager(announced: ManagerView | undefined): void {
+    const shown = this.profile();
+    if (!announced || !shown) return;
+    const isNewerProfile = (announced.profileRev ?? 0) > (shown.manager.profileRev ?? 0);
+    if (isNewerProfile) this.profile.set({ ...shown, manager: announced });
   }
 
   protected async load(): Promise<void> {

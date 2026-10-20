@@ -17,6 +17,35 @@ describe('parseManagerProfile: the legacy mission flag', () => {
   });
 });
 
+describe('parseManagerProfile: the expertise and the pulse actions', () => {
+  it('keeps the expertise, the pulse actions and the profile revision a daemon reports', () => {
+    const profile = parseManagerProfile(aProfile({ expertise: 'Release trains', pulseActions: ['Check CI', 'Unblock reviews'], profileRev: 3 }));
+
+    expect(profile?.manager).toMatchObject({ expertise: 'Release trains', pulseActions: ['Check CI', 'Unblock reviews'], profileRev: 3 });
+  });
+
+  it('reports none of them for an older daemon', () => {
+    const profile = parseManagerProfile(aProfile());
+
+    expect(profile?.manager.expertise).toBeUndefined();
+    expect(profile?.manager.pulseActions).toBeUndefined();
+    expect(profile?.manager.profileRev).toBeUndefined();
+  });
+
+  it('drops each value that has the wrong shape and keeps the rest of the profile', () => {
+    const profile = parseManagerProfile(aProfile({ expertise: 42, pulseActions: ['Check CI', 7], profileRev: 'three' }));
+
+    expect(profile?.manager.expertise).toBeUndefined();
+    expect(profile?.manager.pulseActions).toBeUndefined();
+    expect(profile?.manager.profileRev).toBeUndefined();
+    expect(profile?.manager.missionText).toBe('Ship');
+  });
+
+  it.each([0, -1, 1.5])('drops the profile revision %s, which is no revision', (profileRev) => {
+    expect(parseManagerProfile(aProfile({ profileRev }))?.manager.profileRev).toBeUndefined();
+  });
+});
+
 describe('parseManagerProfile: the manager base', () => {
   it('keeps the version of the shipped base and the read of the manager', () => {
     const baseRead = { version: 2, sha: 'abc', readAt: '2026-10-15T12:00:00.000Z' };
