@@ -144,6 +144,8 @@ describe('FleetEventsService', () => {
 
   describe('notification triggers', () => {
     const needsInput = { category: 'needsInput', sessionId: 's1', kind: 'permission', promptKey: 's1@t', toolName: 'Bash' };
+    const toolCompletion = { category: 'toolCompletion', sessionId: 's1', toolUseId: 'tool1', toolName: 'Read' };
+    const chatMessage = { category: 'chatMessage', sessionId: 's1', questionKey: 'q1', questionCount: 2 };
 
     async function connectedSocket() {
       const service = new FleetEventsService();
@@ -158,8 +160,10 @@ describe('FleetEventsService', () => {
 
       socket.dispatchMessage({ type: 'notification.trigger', category: 'agentFinished', sessionId: 's1' });
       socket.dispatchMessage({ type: 'notification.trigger', ...needsInput });
+      socket.dispatchMessage({ type: 'notification.trigger', ...toolCompletion });
+      socket.dispatchMessage({ type: 'notification.trigger', ...chatMessage });
 
-      expect(received).toEqual([{ category: 'agentFinished', sessionId: 's1' }, needsInput]);
+      expect(received).toEqual([{ category: 'agentFinished', sessionId: 's1' }, needsInput, toolCompletion, chatMessage]);
     });
 
     it('hands over nothing when a snapshot arrives, on connect or on reconnect', async () => {

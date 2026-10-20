@@ -114,11 +114,25 @@ describe('Settings → General → notifications', () => {
     expect(screen.getByRole('switch', { name: 'Notifications' })).not.toBeChecked();
   });
 
-  it('shows tool completion and chat message as unavailable', async () => {
+  it('offers tool completion off and chat message on as active switches', async () => {
     await renderGeneralSection();
 
-    expect(screen.getByTestId('general-notify-tool-completion')).toBeDisabled();
-    expect(screen.getByTestId('general-notify-chat-message')).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'Tool completion' })).not.toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Chat message' })).toBeChecked();
+    expect(screen.getByText('Can be frequent: one run of many tools shows one banner per 15 seconds')).toBeVisible();
+  });
+
+  it('remembers both new category choices when Settings reopens', async () => {
+    const first = await renderGeneralSection();
+    await userEvent.click(screen.getByRole('switch', { name: 'Tool completion' }));
+    await userEvent.click(screen.getByRole('switch', { name: 'Chat message' }));
+    first.fixture.destroy();
+    TestBed.resetTestingModule();
+
+    await renderGeneralSection();
+
+    expect(screen.getByRole('switch', { name: 'Tool completion' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Chat message' })).not.toBeChecked();
   });
 
   it('says where to allow notifications once the system refused them', async () => {
