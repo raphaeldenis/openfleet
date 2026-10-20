@@ -9,6 +9,7 @@ export const ARGUSES_FILE_NAME = 'arguses.json';
 const SAFE_ID = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
 
 const GovernanceRequestSchema = z.object({
+  id: z.string().optional(),
   kind: z.string(),
   status: z.string(),
   text: z.string().default(''),
@@ -16,6 +17,7 @@ const GovernanceRequestSchema = z.object({
   condition: z.string().default(''),
   exclusions: z.string().default(''),
   createdAt: z.number().default(0),
+  resolvedAt: z.number().optional(),
 });
 
 const ResourceGrantSchema = z.object({

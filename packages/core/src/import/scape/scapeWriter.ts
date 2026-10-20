@@ -4,6 +4,7 @@ import { countOutcome, type EntityName, type ImportReport } from './importReport
 import { ACTOR_LABEL_PREFIX, IMPORT_AUTHOR } from './scapeMappers.js';
 import type { ImportPlan, PlannedRecord } from './scapePlan.js';
 import { writeManagers } from './scapeManagersWriter.js';
+import { writeLaws } from './scapeLawsWriter.js';
 import { writeMemories, type MemoryWriteContext } from './scapeMemoriesWriter.js';
 import { writeWorkingStates } from './scapeWorkingStatesWriter.js';
 import { ImportLedger, type LedgerKind } from './scapeLedger.js';
@@ -182,6 +183,7 @@ export function writePlan(db: DatabaseSync, plan: ImportPlan, report: ImportRepo
     const rowOutcomes = inTransaction(db, 'importScapeRows', () => writeRows({ db, ledger, plan, report, blockedStores }));
     inTransaction(db, 'importScapeHistory', () => writeHistory({ db, ledger, plan, report, blockedStores, rowOutcomes }));
     const managerOutcomes = inTransaction(db, 'importScapeManagers', () => writeManagers(db, plan, report));
+    inTransaction(db, 'importScapeLaws', () => writeLaws(db, plan, report));
     inTransaction(db, 'importScapeWorkingStates', () => writeWorkingStates(db, plan, report, managerOutcomes));
     if (options.memories !== undefined) {
       const context = options.memories;

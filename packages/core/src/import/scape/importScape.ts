@@ -87,7 +87,7 @@ function managerMissionsOf(plan: ImportPlan): ManagerMissionReport[] {
 function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportReport {
   const dryRun = options.dryRun ?? false;
   const scratchRoot = options.scratchRoot ?? tmpdir();
-  const report = { ...emptyReport({ dryRun }), ...plan.sourceLosses, managerMissions: managerMissionsOf(plan) };
+  const report = { ...emptyReport({ dryRun }), ...plan.sourceLosses, managerMissions: managerMissionsOf(plan), laws: { ...plan.lawsReport, perManager: [] } };
   const databaseExistedBefore = existsSync(join(options.home, DATABASE_FILE_NAME));
   const mustBackUpBeforeCommit = () => {
     const isOverwritingAnExistingDatabase = !dryRun && databaseExistedBefore && hasChanges(report);

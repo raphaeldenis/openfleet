@@ -19,6 +19,7 @@ function plannedIdsByKind(plan: ImportPlan): Record<LedgerKind, Set<string>> {
     manager: ids(plan.managers),
     working_state: new Set(plan.workingStates.map((state) => state.managerId)),
     memory_file: new Set((plan.memories ?? []).flatMap((memory) => memory.files.map((file) => memoryFileIdOf({ managerId: memory.managerId, fileName: file.name })))),
+    law: new Set(plan.laws.map((law) => law.key)),
   };
 }
 
