@@ -16,6 +16,8 @@ An invalid decision body (for example a denial without a reason) is refused with
 
 Approving a `resourceAccess` records exactly one grant (a new approval for the same manager and resource replaces the role and the access). Approving a `law` or a `permission` changes the proposal status only. Grants are informative: the server does not enforce them yet.
 
+After a human approves or denies a proposal, its manager receives one queued governance message: `Proposal <id> approved` or `Proposal <id> denied: <reason>`. Approval accepts an optional reason of 1–500 visible characters, included in the message. The message uses the existing untrusted agent envelope, masks known secret formats and bounds its text to 700 characters. Delivery waits behind an unsent human draft. Withdrawing sends nothing; a closed manager receives nothing and stays closed. Repeated decisions return `already_resolved` and send no duplicate. Notification failure does not undo the recorded human decision.
+
 ## Events
 
 The WebSocket carries two events, each with the full `GovernanceProposalView`:
