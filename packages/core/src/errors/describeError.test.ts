@@ -194,6 +194,14 @@ describe('describeError: T3 domain classes', () => {
     expect(describeError(new TooManyPendingMessagesError('s1')).retry).toBe('later');
   });
 
+  it('explains a full governance queue as 10 pending + 50 waiting proposals', () => {
+    const envelope = describeError(new GovernanceQueueFullError());
+
+    expect(envelope.message).toContain('10 pending + 50 waiting');
+    expect(envelope.hint).toContain('10 pending + 50 waiting');
+    expect(envelope.hint).toContain('withdraw_proposal');
+  });
+
   it('carries an OpenFleetError message, hint and detail through', () => {
     const envelope = describeError(new OpenFleetError('row_cap', 'the store is full.', { hint: 'delete rows', detail: { cap: 100 } }));
     expect(envelope).toMatchObject({ error: 'row_cap', message: 'the store is full.', hint: 'delete rows', detail: { cap: 100 } });

@@ -74,7 +74,7 @@ describe('approving a proposal of a law', () => {
 
     const governance = await governanceOf(lead);
 
-    expect(Object.keys(governance).sort()).toEqual(['denied', 'governanceEvictedDenials', 'history', 'laws', 'note', 'pending', 'resourceGrants']);
+    expect(Object.keys(governance).sort()).toEqual(['denied', 'governanceEvictedDenials', 'history', 'laws', 'note', 'pending', 'queued', 'queuedCount', 'resourceGrants']);
     expect(governance.history).toEqual([expect.objectContaining({ kind: 'law', status: 'approved', text: 'A law' })]);
   });
 

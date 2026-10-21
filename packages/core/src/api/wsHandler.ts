@@ -158,7 +158,7 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
     // baseline to upsert onto — a session created in the connect/open race just arrives twice, harmlessly.
     send(socket, {
       type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: deps.managers.listViews(),
-      ...(deps.governanceQueue && { proposals: deps.governanceQueue.listByStatus('pending') }),
+      ...(deps.governanceQueue && { proposals: deps.governanceQueue.listByStatus('pending'), queuedCounts: deps.governanceQueue.queuedCounts() }),
       ...workingStateSnapshotFields(),
       ...(deps.degraded && { daemonIssues: deps.degraded.list() }),
       ...(deps.todos ? { todoSummaries: deps.todos.summaries() } : {}),

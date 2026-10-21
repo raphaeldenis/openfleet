@@ -1,8 +1,10 @@
-import { MAX_PENDING_PROPOSALS_PER_MANAGER } from '@openfleet/shared';
+import { MAX_PENDING_PROPOSALS_PER_MANAGER, MAX_QUEUED_PROPOSALS_PER_MANAGER } from '@openfleet/shared';
+
+export const GOVERNANCE_QUEUE_CAPACITY = `${MAX_PENDING_PROPOSALS_PER_MANAGER} pending + ${MAX_QUEUED_PROPOSALS_PER_MANAGER} waiting`;
 
 export class GovernanceQueueFullError extends Error {
   constructor() {
-    super(`the governance queue already holds ${MAX_PENDING_PROPOSALS_PER_MANAGER} pending proposals.`);
+    super(`the governance queue is full: it holds ${GOVERNANCE_QUEUE_CAPACITY} proposals.`);
   }
 }
 

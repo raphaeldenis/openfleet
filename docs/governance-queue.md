@@ -9,7 +9,7 @@ Only the human decides, with the daemon admin token. Every route below sits unde
 | Route | Answer | Errors |
 |---|---|---|
 | `GET /api/governance/proposals?status=` | The proposals of every manager in that status. `status` is `pending` (default), `approved`, `denied` or `withdrawn`. Pending ones come oldest first, answered ones newest answer first. | `invalid_body` (400) for another status |
-| `GET /api/managers/:id/governance` | The governance view of one manager: `resourceGrants`, `pending`, `denied`, `history`, `governanceEvictedDenials`, and `laws` (every law of that manager, active and withdrawn, oldest first, each with its `status`). | `manager_not_found` (404) for an unknown id or a session that is not a manager |
+| `GET /api/managers/:id/governance` | The governance view of one manager: `resourceGrants`, `pending`, `queued` (the waiting list, see [Waiting list](#waiting-list)), `denied`, `history`, `governanceEvictedDenials`, and `laws` (every law of that manager, active and withdrawn, oldest first, each with its `status`). | `manager_not_found` (404) for an unknown id or a session that is not a manager |
 | `POST /api/governance/proposals/:id/decide` | The answered proposal. Body: `{ "decision": "approve" }` or `{ "decision": "deny", "reason": "…" }`. | `invalid_body` (400): unknown decision, or a denial whose `reason` is missing, blank or longer than 500 characters; `proposal_not_found` (404); `already_resolved` (409); `not_found` (404) when approving an access whose resource no longer exists |
 | `PATCH /api/governance/laws/:id` | The edited `LawView`. Body: `{ "text": "…", "expectedRevision": 1 }`. The text is 1 to 2000 visible characters, its secrets are masked, `revision` goes up by one and `updated_by` / `updated_at` record the human and the time. | `invalid_body` (400): blank or too long text, `expectedRevision` that is not an integer from 1; `law_not_found` (404); `law_revision_conflict` (409, `detail: { currentRev }`); `law_withdrawn` (409) |
 | `POST /api/governance/laws/:id/withdraw` | The withdrawn `LawView` (`status: "withdrawn"`, `withdrawn_at`, `withdrawn_by`, `revision` up by one). Body: `{ "expectedRevision": 1 }`. | `invalid_body` (400); `law_not_found` (404); `law_revision_conflict` (409, `detail: { currentRev }`); `law_withdrawn` (409) |
@@ -17,6 +17,18 @@ Only the human decides, with the daemon admin token. Every route below sits unde
 An invalid decision body (for example a denial without a reason) is refused with 400 `invalid_body` before the proposal is looked up, so an unknown or already resolved id with an invalid body answers 400, not 404 or 409.
 
 Approving a `resourceAccess` records exactly one grant (a new approval for the same manager and resource replaces the role and the access). Approving a `permission` changes the proposal status only. Approving a `law` records exactly one law in the same transaction as the decision (see [Laws](#laws)). Grants are informative: the server does not enforce them yet.
+
+## Waiting list
+
+A manager has 10 pending places (`MAX_PENDING_PROPOSALS_PER_MANAGER`) and a waiting list of 50 (`MAX_QUEUED_PROPOSALS_PER_MANAGER`), stored in the table `governance_waiting_proposals` (migration `037_governance_waiting_proposals.sql`). The waiting proposals are not in `governance_proposals`, so `ProposalStatus` is unchanged and the provenance of laws and grants (`proposal_id`) is untouched. Waiting proposals are outside the history and the human cannot see or decide them.
+
+- **Filing.** In one transaction: an identical proposal (same kind and payload) that is pending or waiting is returned as it is (same `request_id`, `deduplicated: true`, no row, no event). Otherwise, if the waiting list is not empty or the manager already has 10 pending, the proposal is parked at the end of the waiting list; when 50 already wait, the call is refused with `governance_queue_full` (`10 pending + 50 waiting`). Otherwise it is pending. A non-empty waiting list always parks the newcomer, which keeps the order of filing.
+- **Release.** In the transaction of every human decision and of every withdrawal of a pending proposal, once the answer is recorded, the oldest waiting proposals (filing date, then insertion order) move into `governance_proposals` while the manager has fewer than 10 pending: one released proposal per freed place, with the same id and its original `created_at`. Nothing is revalidated at release (the resource was checked at filing and is checked again at approval). Everything is synchronous SQLite inside the transaction, so the order survives a restart and concurrent answers never release more proposals than there are free places.
+- **Withdrawing a waiting proposal** erases it: it frees no pending place, releases nothing and leaves no history. Deciding a waiting proposal answers `proposal_not_found` (404) until it is released. Another manager's id reads as not found.
+- **Closed or deleted manager.** A closed manager keeps its waiting proposals and every decision keeps releasing them; deleting the manager removes them (cascade).
+- **MCP.** `propose_law`, `propose_permission` and `request_resource_access` answer `{ request_id, status: "pending" | "queued", position?, queuedCount, note, deduplicated? }` (`position` is 1-based, only when queued). `get_argus_governance` adds `queued: [{ request_id, kind, …payload, incident, position, createdAt }]` and `queuedCount`; the other keys are unchanged. `withdraw_proposal` also takes a waiting proposal.
+- **REST.** `GET /api/managers/:id/governance` adds `queued` (the waiting proposals with their `position`, oldest first).
+- **Message to the manager.** When a decision released proposals, the queued governance message adds `Queued proposal <id> is now pending` for each of them, within the same 700 characters. A withdrawal stays silent.
 
 ## Laws
 
@@ -42,7 +54,7 @@ After a human approves or denies a proposal, its manager receives one queued gov
 
 The WebSocket carries two events with the full `GovernanceProposalView`:
 
-- `governance.proposed { proposal }`: a proposal is filed. A duplicate of an identical pending proposal (returned with `deduplicated: true` to the manager) announces nothing.
+- `governance.proposed { proposal }`: a proposal becomes pending, filed directly or released from the waiting list (one event per released proposal). A duplicate of an identical pending or waiting proposal (returned with `deduplicated: true` to the manager) announces nothing; a proposal that is parked announces nothing here.
 - `governance.resolved { proposal }`: a proposal leaves `pending`, whether a human approved or denied it or its manager withdrew it.
 
 and three with the full `LawView`, sent to every connected client (the admin feed sees every manager):
@@ -53,7 +65,9 @@ and three with the full `LawView`, sent to every connected client (the admin fee
 
 A refused edit or withdrawal announces nothing.
 
-The `snapshot` event carries `proposals`: the pending proposals of every manager. The desktop holds them in `FleetEventsService.proposals`.
+One more event concerns the waiting list: `governance.queue_changed { managerId, queuedCount }` is sent when a proposal is parked, when waiting proposals are released and when a waiting proposal is withdrawn. Clients that do not know it ignore it.
+
+The `snapshot` event carries `proposals`: the pending proposals of every manager, and `queuedCounts`: the number of waiting proposals per manager id (managers with none are omitted). The desktop holds the proposals in `FleetEventsService.proposals` and ignores `queuedCounts` for now.
 
 ## Desktop UI
 

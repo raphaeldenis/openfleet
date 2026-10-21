@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { MAX_PENDING_PROPOSALS_PER_MANAGER, MAX_QUEUED_PROPOSALS_PER_MANAGER } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../config.js';
 import { startDaemon } from '../daemon.js';
@@ -178,7 +179,7 @@ describe('propose_law then get_argus_governance', () => {
 
     expect(governance.note).toContain('`laws`');
     expect(governance.laws).toEqual([]);
-    expect(Object.keys(governance).sort()).toEqual(['denied', 'governanceEvictedDenials', 'history', 'laws', 'note', 'pending', 'resourceGrants']);
+    expect(Object.keys(governance).sort()).toEqual(['denied', 'governanceEvictedDenials', 'history', 'laws', 'note', 'pending', 'queued', 'queuedCount', 'resourceGrants']);
   });
 
   it('answers the same pending proposal with its id, flagged deduplicated, and lists it once', async () => {
@@ -197,13 +198,13 @@ describe('propose_law then get_argus_governance', () => {
     expect((await governanceOf(siblingLead)).pending).toEqual([]);
   });
 
-  it('refuses a proposal past the cap with governance_queue_full, retry later', async () => {
-    for (let index = 0; index < 10; index++) await call(lead, 'propose_law', { ...law, body: `Law ${index}` });
+  it('refuses a proposal past the pending places and the waiting list with governance_queue_full, retry later', async () => {
+    for (let index = 0; index < MAX_PENDING_PROPOSALS_PER_MANAGER + MAX_QUEUED_PROPOSALS_PER_MANAGER; index++) await call(lead, 'propose_law', { ...law, body: `Law ${index}` });
 
     const result = await call(lead, 'propose_law', { ...law, body: 'One too many' });
 
     expect(isError(result)).toBe(true);
-    expect(textOf(result)).toMatch(/^error governance_queue_full: .*withdraw_proposal.* \(retry: later\)$/);
+    expect(textOf(result)).toMatch(/^error governance_queue_full: .*10 pending \+ 50 waiting.*withdraw_proposal.* \(retry: later\)$/s);
   });
 
   it('answers the existing id of a duplicate when the queue is full, without governance_queue_full', async () => {

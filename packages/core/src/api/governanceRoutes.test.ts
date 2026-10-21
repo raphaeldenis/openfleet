@@ -392,7 +392,7 @@ describe('governance events over the WebSocket', () => {
   });
 
   it('broadcasts nothing when the queue is full', async () => {
-    for (let index = 0; index < 10; index += 1) await proposeLaw(lead, `Law ${index}`);
+    for (let index = 0; index < 60; index += 1) await proposeLaw(lead, `Law ${index}`);
     const { frames } = await openClient();
 
     const refusal = await lead.callTool({ name: 'propose_law', arguments: { body: 'One too many', incident: 'x' } }) as { isError?: boolean };
