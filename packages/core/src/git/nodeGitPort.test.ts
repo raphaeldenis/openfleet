@@ -21,6 +21,8 @@ function git(directory: string, args: string[]): string {
 function makeRepoWithCommittedFile(fileName = 'tracked.txt'): string {
   const repo = tempDirs.make('of-gitport-');
   git(repo, ['init', '-b', 'main']);
+  git(repo, ['config', 'gc.auto', '0']);
+  git(repo, ['config', 'maintenance.auto', 'false']);
   writeFileSync(join(repo, fileName), 'one\n');
   git(repo, ['add', '--', fileName]);
   git(repo, ['commit', '-m', 'init']);
