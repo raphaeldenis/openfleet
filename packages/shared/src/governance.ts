@@ -1,6 +1,7 @@
 import * as z from 'zod';
 
 export const MAX_PENDING_PROPOSALS_PER_MANAGER = 10;
+export const MAX_QUEUED_PROPOSALS_PER_MANAGER = 50;
 export const MAX_DENIED_HISTORY_PER_MANAGER = 20;
 export const MAX_AUDIT_HISTORY_PER_MANAGER = 50;
 
@@ -63,6 +64,18 @@ export interface GovernanceProposalView {
   decidedAt?: string;
 }
 
+/** A proposal filed beyond the pending places: it waits, in filing order, until a place frees up and is then released as a pending proposal with the same id. */
+export interface WaitingProposalView {
+  id: string;
+  managerId: string;
+  kind: ProposalKind;
+  incident: string;
+  payload: ProposalPayload;
+  createdAt: string;
+  /** Rank in the waiting list of the manager, starting at 1. */
+  position: number;
+}
+
 export interface ResourceGrantView {
   id: string;
   resourceType: ResourceType;
@@ -116,6 +129,8 @@ export interface ManagerLawView {
 export interface ManagerGovernanceView {
   resourceGrants: ResourceGrantView[];
   pending: GovernanceProposalView[];
+  /** Proposals waiting for a pending place, oldest first; absent from a daemon that predates the waiting list. */
+  queued?: WaitingProposalView[];
   denied: GovernanceProposalView[];
   /** Approved and withdrawn proposals, newest first. */
   history: GovernanceProposalView[];

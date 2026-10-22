@@ -74,7 +74,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   config_read_only: { what: 'The configuration is read-only', fix: 'make the file writable' },
   message_id_reused: { what: 'That message id was already used with another text' },
   too_many_pending: { what: 'Too many messages are waiting for this session' },
-  governance_queue_full: { what: 'This manager already has as many pending proposals as allowed', fix: 'answer or withdraw one first' },
+  governance_queue_full: { what: 'This manager already has as many proposals as allowed (10 pending + 50 waiting)', fix: 'answer or withdraw one first' },
   law_revision_conflict: { what: 'This law changed since you opened it' },
   law_withdrawn: { what: 'This law was withdrawn' },
   children_cap: { what: 'This manager already runs as many sessions as allowed' },

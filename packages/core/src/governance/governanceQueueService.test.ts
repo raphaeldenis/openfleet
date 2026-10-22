@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MAX_AUDIT_HISTORY_PER_MANAGER, MAX_DENIED_HISTORY_PER_MANAGER, MAX_PENDING_PROPOSALS_PER_MANAGER } from '@openfleet/shared';
+import { MAX_AUDIT_HISTORY_PER_MANAGER, MAX_DENIED_HISTORY_PER_MANAGER, MAX_PENDING_PROPOSALS_PER_MANAGER, MAX_QUEUED_PROPOSALS_PER_MANAGER } from '@openfleet/shared';
 import { describeToolError } from '../mcp/toolResults.js';
 import { startGovernanceFixture, OTHER_PROJECT_ID, OWN_PROJECT_ID, type GovernanceFixture } from './governanceQueue.testkit.js';
 
@@ -54,9 +54,11 @@ describe('a pending proposal', () => {
   });
 });
 
-describe('the pending cap', () => {
-  it('refuses the proposal past the cap with governance_queue_full, and takes it again once one is withdrawn', () => {
-    const proposals = Array.from({ length: MAX_PENDING_PROPOSALS_PER_MANAGER }, (_, index) => proposeLaw(`Law number ${index}`).proposal);
+const CAPACITY = MAX_PENDING_PROPOSALS_PER_MANAGER + MAX_QUEUED_PROPOSALS_PER_MANAGER;
+
+describe('the pending cap and the waiting list', () => {
+  it('refuses the proposal past the waiting list with governance_queue_full, and takes it again once one is withdrawn', () => {
+    const proposals = Array.from({ length: CAPACITY }, (_, index) => proposeLaw(`Law number ${index}`).proposal);
 
     const refusal = refusalCodeOf(() => proposeLaw('One law too many'));
     fixture.governanceQueue.withdraw({ managerId: leadId(), proposalId: proposals[0]!.id });
@@ -68,7 +70,7 @@ describe('the pending cap', () => {
 
   it('counts every kind of proposal together', async () => {
     const noteId = await fixture.createNote(OWN_PROJECT_ID, 'Runbook');
-    for (let index = 0; index < MAX_PENDING_PROPOSALS_PER_MANAGER - 1; index++) proposeLaw(`Law number ${index}`);
+    for (let index = 0; index < CAPACITY - 1; index++) proposeLaw(`Law number ${index}`);
     fixture.governanceQueue.proposePermission({ managerId: leadId(), action: 'deploy', scope: 'staging', condition: 'green CI', exclusions: 'friday', incident: 'late deploy' });
 
     expect(refusalCodeOf(() => proposeAccess(noteId, { resourceType: 'note' }))).toBe('governance_queue_full');

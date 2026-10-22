@@ -46,7 +46,7 @@ export type NotificationTrigger =
   | { category: 'chatMessage'; sessionId: string; questionKey: string; questionCount: number };
 
 export type ServerEvent =
-  | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; proposals?: GovernanceProposalView[]; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }
+  | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; proposals?: GovernanceProposalView[]; queuedCounts?: Record<string, number>; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }
   | { type: 'session.created'; session: Session }
   | { type: 'session.state'; sessionId: string; state: SessionState; stateSince: string }
   | { type: 'session.attention'; sessionId: string; runtimeAttention: RuntimeAttention | null }
@@ -65,6 +65,7 @@ export type ServerEvent =
   | { type: 'approval.resolved'; approval: Approval }
   | { type: 'governance.proposed'; proposal: GovernanceProposalView }
   | { type: 'governance.resolved'; proposal: GovernanceProposalView }
+  | { type: 'governance.queue_changed'; managerId: string; queuedCount: number }
   | { type: 'law.created'; law: LawView }
   | { type: 'law.updated'; law: LawView }
   | { type: 'law.withdrawn'; law: LawView }
