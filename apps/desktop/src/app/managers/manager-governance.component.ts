@@ -10,7 +10,7 @@ import { FleetEventsService } from '../core/fleet-events.service';
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { tickingNow } from '../working-state/working-state-freshness';
-import { STATUS_LABELS, accessLabelOf, proposalDetailsOf } from '../inbox/governance-details';
+import { PROPOSAL_TYPE_LABELS, STATUS_LABELS, accessLabelOf, proposalDetailsOf, waitingBlockTitleOf } from '../inbox/governance-details';
 import { GovernanceResourceNames } from '../inbox/governance-resource-names.service';
 import { ManagerLawsComponent } from './manager-laws.component';
 
@@ -42,6 +42,16 @@ const COLLAPSED_ENTRY_COUNT = 5;
             <ul class="entries">
               @for (entry of pending(); track entry.id) {
                 <li class="entry"><span class="summary">{{ entry.summary }}</span><span class="incident">Incident: {{ entry.incident }}</span></li>
+              }
+            </ul>
+          </div>
+        }
+        @if (waiting().length > 0) {
+          <div data-testid="manager-governance-waiting">
+            <h3 class="subtitle">{{ waitingTitle() }}</h3>
+            <ul class="entries">
+              @for (entry of waiting(); track entry.id) {
+                <li class="entry"><span class="status">{{ entry.position }} · {{ entry.typeLabel }}</span><span class="summary">{{ entry.summary }}</span><span class="incident">Incident: {{ entry.incident }}</span></li>
               }
             </ul>
           </div>
@@ -137,6 +147,9 @@ export class ManagerGovernanceComponent {
     this.events.proposals().filter((proposal) => proposal.managerId === this.managerId()).map((proposal) => proposal.id).join(','),
   );
 
+  /** Changes only when the waiting list of this very manager changes in size. */
+  private readonly queuedCountOfManager = computed(() => this.events.queuedCountOf(this.managerId()));
+
   constructor() {
     effect(() => {
       this.managerId();
@@ -145,6 +158,8 @@ export class ManagerGovernanceComponent {
     effect(() => {
       const managerId = this.managerId();
       this.pendingProposalIdsOfManager();
+      this.queuedCountOfManager();
+      this.events.reconnectCount();
       untracked(() => void this.load(managerId));
     });
     this.events.lawChanges.pipe(
@@ -180,12 +195,12 @@ export class ManagerGovernanceComponent {
   private requestResourceNamesOf(view: ManagerGovernanceWithLawsView): void {
     const projectId = this.projectId();
     view.resourceGrants.forEach((grant) => this.resourceNames.request({ projectId, ...grant }));
-    [...view.pending, ...view.denied, ...view.history]
+    [...view.pending, ...(view.queued ?? []), ...view.denied, ...view.history]
       .filter((proposal) => proposal.kind === 'resourceAccess')
       .forEach((proposal) => this.resourceNames.request({ projectId, ...(proposal.payload as ResourceAccessPayload) }));
   }
 
-  private summaryOf(proposal: GovernanceProposalView): string {
+  private summaryOf(proposal: Pick<GovernanceProposalView, 'kind' | 'payload'>): string {
     const details = proposalDetailsOf(proposal, (access) => this.resourceNames.nameOf({ projectId: this.projectId(), ...access }));
     return proposal.kind === 'law' ? details[0].value : details.map(({ label, value }) => `${label}: ${value}`).join(' · ');
   }
@@ -202,9 +217,19 @@ export class ManagerGovernanceComponent {
     };
   }
 
-  /** A daemon that predates laws sends none: the section then shows no law. */
+  /** A daemon that predates laws sends none: the section then shows no law. The same holds for the waiting list. */
   protected readonly laws = computed(() => this.view()?.laws ?? []);
   protected readonly pending = computed(() => (this.view()?.pending ?? []).map((proposal) => this.entryOf(proposal)));
+  protected readonly waiting = computed(() =>
+    (this.view()?.queued ?? []).map((proposal) => ({
+      id: proposal.id,
+      position: proposal.position,
+      typeLabel: PROPOSAL_TYPE_LABELS[proposal.kind],
+      summary: this.summaryOf(proposal),
+      incident: showBidiControlsAsEscapes(proposal.incident),
+    })),
+  );
+  protected readonly waitingTitle = computed(() => waitingBlockTitleOf(this.waiting().length));
   protected readonly denied = computed(() => (this.view()?.denied ?? []).map((proposal) => this.entryOf(proposal)));
   protected readonly history = computed(() => (this.view()?.history ?? []).map((proposal) => this.entryOf(proposal)));
   protected readonly shownDenied = computed(() => (this.isDeniedExpanded() ? this.denied() : this.denied().slice(0, COLLAPSED_ENTRY_COUNT)));
@@ -220,7 +245,7 @@ export class ManagerGovernanceComponent {
 
   protected readonly isEmpty = computed(() => {
     const view = this.view();
-    const hasNothingToShow = view !== undefined && [this.laws(), view.pending, view.denied, view.history, view.resourceGrants].every((list) => list.length === 0);
+    const hasNothingToShow = view !== undefined && [this.laws(), view.pending, this.waiting(), view.denied, view.history, view.resourceGrants].every((list) => list.length === 0);
     return hasNothingToShow && view.governanceEvictedDenials === 0;
   });
 }

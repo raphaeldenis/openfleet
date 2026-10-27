@@ -9,7 +9,7 @@ import { ManagerDashboardComponent } from './manager-dashboard.component';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 
-const emptyGovernance = { resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
+const emptyGovernance = { resourceGrants: [], pending: [], queued: [], denied: [], history: [], governanceEvictedDenials: 0 };
 const governanceApi = { getManagerGovernance: () => Promise.resolve(emptyGovernance) };
 
 const MANAGER_SESSION = { id: 'm1', name: 'Lead', emoji: '🧭', role: 'manager', state: 'idle', harness: 'claude-cli' };
@@ -56,7 +56,7 @@ async function renderDashboard({ session = MANAGER_SESSION, getHandoffPreview = 
       {
         provide: FleetEventsService,
         useValue: {
-          sessions, approvals: signal([]), proposals: signal([]), lawChanges: EMPTY, managers: signal([MANAGER_VIEW]), snapshotReceived: signal(true), workingStates: signal(new Map()),
+          sessions, approvals: signal([]), proposals: signal([]), queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: signal([MANAGER_VIEW]), snapshotReceived: signal(true), workingStates: signal(new Map()),
           workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
         },
       },

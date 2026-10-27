@@ -129,8 +129,8 @@ export interface ManagerLawView {
 export interface ManagerGovernanceView {
   resourceGrants: ResourceGrantView[];
   pending: GovernanceProposalView[];
-  /** Proposals waiting for a pending place, oldest first; absent from a daemon that predates the waiting list. */
-  queued?: WaitingProposalView[];
+  /** Proposals waiting for a pending place, oldest first. */
+  queued: WaitingProposalView[];
   denied: GovernanceProposalView[];
   /** Approved and withdrawn proposals, newest first. */
   history: GovernanceProposalView[];

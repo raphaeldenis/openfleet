@@ -10,7 +10,7 @@ import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent, type InboxKind } from '../design/kind-badge.component';
 import { tickingNow } from '../working-state/working-state-freshness';
 import { GovernanceApprovedTexts, type ApprovedKind } from './governance-approved-texts.store';
-import { PROPOSAL_TYPE_LABELS, excerptOf, proposalDetailsOf, type Detail } from './governance-details';
+import { PROPOSAL_TYPE_LABELS, excerptOf, proposalDetailsOf, waitingCountLabelOf, type Detail } from './governance-details';
 import { GovernanceResourceNames } from './governance-resource-names.service';
 
 const REASON_REQUIRED_HINT = `A reason is required (1 to ${MAX_DENIAL_REASON_CHARS} characters).`;
@@ -194,7 +194,9 @@ export class GovernanceProposalsComponent {
   protected readonly announcement = computed(() => {
     const count = this.events.proposals().length;
     if (count === 0) return '';
-    return count === 1 ? '1 governance proposal needs you' : `${count} governance proposals need you`;
+    const needYou = count === 1 ? '1 governance proposal needs you' : `${count} governance proposals need you`;
+    const waitingTotal = this.events.queuedTotal();
+    return waitingTotal > 0 ? `${needYou}, ${waitingCountLabelOf(waitingTotal)}` : needYou;
   });
 
   private readonly cardContents = computed(() => {

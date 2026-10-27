@@ -17,7 +17,7 @@ const law = (patch: Partial<LawView> = {}): LawView => ({
   createdAt: '2026-10-13T10:00:00.000Z', updatedAt: '2026-10-13T10:00:00.000Z', approvedBy: 'admin', source: 'proposal', proposalId: 'prop-1', ...patch,
 });
 
-const viewWith = (laws: LawView[]): ManagerGovernanceWithLawsView => ({ laws, resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 });
+const viewWith = (laws: LawView[]): ManagerGovernanceWithLawsView => ({ laws, resourceGrants: [], pending: [], queued: [], denied: [], history: [], governanceEvictedDenials: 0 });
 
 const lawConflict = () => new ApiError(409, 'PATCH → 409', 'law_revision_conflict', {
   error: 'law_revision_conflict', kind: 'conflict', retry: 'after_refresh', message: 'the law changed since it was read.', detail: { currentRev: 2 },

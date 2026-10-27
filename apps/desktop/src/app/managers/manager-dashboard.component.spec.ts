@@ -9,7 +9,7 @@ import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { EMPTY } from 'rxjs';
 import { FleetEventsService } from '../core/fleet-events.service';
 
-const emptyGovernance = { resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
+const emptyGovernance = { resourceGrants: [], pending: [], queued: [], denied: [], history: [], governanceEvictedDenials: 0 };
 const governanceApi = { getManagerGovernance: () => Promise.resolve(emptyGovernance) };
 
 function activatedRouteFor(id: string) {
@@ -21,6 +21,8 @@ function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[]; sna
     sessions: signal(overrides.sessions ?? []),
     approvals: signal([]),
     proposals: signal([]),
+    queuedCountOf: () => 0,
+    reconnectCount: signal(0),
     lawChanges: EMPTY,
     managers: signal(overrides.managers ?? []),
     snapshotReceived: signal(overrides.snapshotReceived ?? true),

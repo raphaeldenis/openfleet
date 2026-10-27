@@ -52,8 +52,6 @@ interface Releases {
   queuedCount: number;
 }
 
-export type ManagerGovernanceFullView = ManagerGovernanceWithLawsView & { queued: WaitingProposalView[] };
-
 export interface LawEdit {
   lawId: string;
   text: string;
@@ -194,7 +192,7 @@ export class GovernanceQueueService {
     });
   }
 
-  viewOf(managerId: string): ManagerGovernanceFullView {
+  viewOf(managerId: string): ManagerGovernanceWithLawsView {
     this.requireManager(managerId);
     return {
       laws: this.laws.allOf(managerId),

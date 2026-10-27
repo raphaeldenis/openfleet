@@ -38,8 +38,11 @@ export const PROPOSAL_TYPE_LABELS: Record<ProposalKind, string> = {
 
 export const accessLabelOf = (access: ResourceAccess): string => ACCESS_LABELS[access];
 
+export const waitingCountLabelOf = (count: number): string => `${count} waiting`;
+export const waitingBlockTitleOf = (count: number): string => `Waiting (${count})`;
+
 /** The labelled lines a proposal is read from; every value is plain text with bidirectional controls shown as escapes. */
-export function proposalDetailsOf(proposal: GovernanceProposalView, nameOfResource: (access: ResourceAccessPayload) => string): Detail[] {
+export function proposalDetailsOf(proposal: Pick<GovernanceProposalView, 'kind' | 'payload'>, nameOfResource: (access: ResourceAccessPayload) => string): Detail[] {
   const plain = showBidiControlsAsEscapes;
   if (proposal.kind === 'law') return [{ label: 'Law', value: plain((proposal.payload as LawPayload).text) }];
   if (proposal.kind === 'permission') {

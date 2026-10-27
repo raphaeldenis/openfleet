@@ -22,6 +22,10 @@ class FakeWebSocket {
 
   close(): void {}
 
+  open(): void {
+    for (const listener of this.listeners['open'] ?? []) listener({ data: '' });
+  }
+
   dispatchMessage(payload: unknown): void {
     for (const listener of this.listeners['message'] ?? []) listener({ data: JSON.stringify(payload) });
   }
@@ -31,6 +35,7 @@ export interface DaemonSnapshot {
   readonly sessions?: readonly Session[];
   readonly managers?: readonly ManagerView[];
   readonly proposals?: readonly GovernanceProposalView[];
+  readonly queuedCounts?: Readonly<Record<string, number>>;
 }
 
 /** The real FleetEventsService fed by a scripted daemon: specs drive it with the events the daemon sends, never by writing its signals. */
@@ -40,13 +45,19 @@ export async function connectToScriptedDaemon(initial: DaemonSnapshot = {}) {
   const events = new FleetEventsService();
   await events.connect();
   const dispatch = (event: unknown) => FakeWebSocket.current!.dispatchMessage(event);
-  const sendSnapshot = ({ sessions = [], managers = [], proposals = [] }: DaemonSnapshot) =>
-    dispatch({ type: 'snapshot', sessions, approvals: [], managers, proposals });
+  const sendSnapshot = ({ sessions = [], managers = [], proposals = [], queuedCounts }: DaemonSnapshot) =>
+    dispatch({ type: 'snapshot', sessions, approvals: [], managers, proposals, queuedCounts });
+  FakeWebSocket.current!.open();
   sendSnapshot(initial);
   return {
+    reconnectOnDaemon: (snapshot: DaemonSnapshot = {}) => {
+      FakeWebSocket.current!.open();
+      sendSnapshot(snapshot);
+    },
     events,
     sendSnapshot,
     proposeOnDaemon: (proposal: GovernanceProposalView) => dispatch({ type: 'governance.proposed', proposal }),
+    queueChangedOnDaemon: (managerId: string, queuedCount: number) => dispatch({ type: 'governance.queue_changed', managerId, queuedCount }),
     lawEventOnDaemon: (type: 'law.created' | 'law.updated' | 'law.withdrawn', law: LawView) => dispatch({ type, law }),
     resolveOnDaemon: (proposal: GovernanceProposalView, status: 'approved' | 'denied' | 'withdrawn' = 'approved') =>
       dispatch({ type: 'governance.resolved', proposal: { ...proposal, status, decidedAt: new Date().toISOString() } }),

@@ -39,6 +39,9 @@ export function silentWorkingStateSignals() {
   return {
     daemonIssues: signal<DaemonIssue[]>([]),
     proposals: signal<GovernanceProposalView[]>([]),
+    queuedTotal: () => 0,
+    queuedCountOf: () => 0,
+    reconnectCount: signal(0),
     backgroundFailures: signal<unknown[]>([]),
     dismissBackgroundFailure: () => undefined,
     silentBlocks: signal<SilentBlock[]>([]),

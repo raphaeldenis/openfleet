@@ -17,6 +17,7 @@ import { answeredItemsOf, attentionItemsOf, itemsNeedingYouOf } from '../working
 import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
 import { AttentionCardComponent } from './attention-card.component';
 import { GovernanceApprovedTexts } from './governance-approved-texts.store';
+import { waitingCountLabelOf } from './governance-details';
 import { GovernanceProposalsComponent } from './governance-proposals.component';
 import { InboxNeedingYou } from './inbox-needing-you';
 import { minutesWaiting, silentBlockCopyOf, silentBlockDetailsMessageOf } from './silent-block-copy';
@@ -81,7 +82,7 @@ function formatInput(toolInput: unknown): FormattedInput {
               [attr.aria-pressed]="filter.key === activeFilterKey()"
               [attr.data-testid]="'inbox-filter-' + filter.key"
               (click)="activeFilterKey.set(filter.key)"
-            >{{ filter.label }} <span class="filter-count">{{ filterCounts()[filter.key] }}</span></button>
+            >{{ filter.label }} <span class="filter-count">{{ filterCounts()[filter.key] }}</span>@if (filter.key === 'governance' && waitingLabel(); as waiting) { · {{ waiting }}}</button>
           }
         </div>
       </header>
@@ -431,6 +432,10 @@ export class InboxComponent {
   }
 
   protected readonly pendingCount = inject(InboxNeedingYou).label;
+  protected readonly waitingLabel = computed(() => {
+    const waitingTotal = this.events.queuedTotal();
+    return waitingTotal > 0 ? waitingCountLabelOf(waitingTotal) : '';
+  });
 
   protected focusGovernanceFilter(): void {
     this.host.nativeElement.querySelector<HTMLElement>('[data-testid="inbox-filter-governance"]')?.focus();
