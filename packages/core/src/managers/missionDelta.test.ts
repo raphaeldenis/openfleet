@@ -48,7 +48,9 @@ const spawnManagerThroughMcp = async (parentId: string, mission: string) => {
   const name = `Child-${Math.random()}`;
   const directory = join(config.worktreesRoot, name);
   mkdirSync(directory, { recursive: true });
-  const result = await (await mcpClientOf(parentId)).callTool({ name: 'create_session', arguments: { directory, name, manager: { pulse_seconds: 3600, children_cap: 2, mission } } });
+  const parent = await mcpClientOf(parentId);
+  await parent.callTool({ name: 'get_manager_base', arguments: {} });
+  const result = await parent.callTool({ name: 'create_session', arguments: { directory, name, manager: { pulse_seconds: 3600, children_cap: 2, mission } } });
   return { isError: result.isError as boolean | undefined, text: textOf(result) };
 };
 

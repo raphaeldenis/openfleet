@@ -92,6 +92,7 @@ async function aSceneWithAMissionNote(): Promise<Scene> {
   const root = await connect(rootId);
   const managerId = await spawnManager(root);
   const manager = await connect(managerId);
+  await manager.callTool({ name: 'get_manager_base', arguments: {} });
   const child = await connect(await spawn(manager));
   const missionNoteId = await aNote('Mission');
   await reviseThroughAdminApi(missionNoteId, '# Mission\n\n## Scope\n\nrevised scope', 1);

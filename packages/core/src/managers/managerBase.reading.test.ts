@@ -7,7 +7,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
-import { recentLogLines } from '../logger.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 import { loadManagerBase } from './managerBase.js';
 
@@ -168,38 +167,30 @@ describe('the pulse text of a manager', () => {
   });
 });
 
-describe('the base_not_read guard on spawning a child (warn only during the first week)', () => {
-  it('lets a manager that never read the base spawn, and warns it in the answer', async () => {
+describe('the base_not_read guard on spawning a child (refuses by default)', () => {
+  const childCountOf = (managerId: string) => (daemon.db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE parent_id = ?').get(managerId) as { count: number }).count;
+
+  it('refuses a manager that never read the base, tells it to read it with get_manager_base, and creates no child', async () => {
     const manager = await aManager('Unread-spawner');
     const client = await mcpClientOf(manager.id);
 
-    const { isError, answer } = await spawnChild(client, 'unread-child-a');
+    const { isError, text } = await spawnChild(client, 'unread-child-a');
 
-    expect(isError).toBeUndefined();
-    expect(answer.id).toBeTruthy();
-    expect(answer.warnings).toEqual([expect.objectContaining({ code: 'base_not_read', message: expect.stringContaining('get_manager_base') })]);
-    expect(daemon.db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE parent_id = ?').get(manager.id)).toEqual({ count: 1 });
+    expect(isError).toBe(true);
+    expect(text).toContain('base_not_read');
+    expect(text).toContain('get_manager_base');
+    expect(childCountOf(manager.id)).toBe(0);
   });
 
-  it('logs a warning naming the manager that spawned without reading the base', async () => {
-    const manager = await aManager('Unread-logged');
-    const client = await mcpClientOf(manager.id);
-
-    await spawnChild(client, 'unread-child-b');
-
-    const warnLines = recentLogLines().filter((line) => line.includes('base_not_read') && line.includes(manager.id));
-    expect(warnLines).toHaveLength(1);
-    expect(warnLines[0]).toMatch(/warn/i);
-  });
-
-  it('warns a manager that only skimmed one section', async () => {
+  it('refuses a manager that only skimmed one section', async () => {
     const manager = await aManager('Skimmer-spawner');
     const client = await mcpClientOf(manager.id);
     await readOneSection(client);
 
-    const { answer } = await spawnChild(client, 'skimmed-child');
+    const { isError, text } = await spawnChild(client, 'skimmed-child');
 
-    expect(answer.warnings?.map((warning) => warning.code)).toEqual(['base_not_read']);
+    expect(isError).toBe(true);
+    expect(text).toContain('base_not_read');
   });
 
   it('spawns without a warning once the whole base is read', async () => {
@@ -213,16 +204,17 @@ describe('the base_not_read guard on spawning a child (warn only during the firs
     expect(answer.warnings).toBeUndefined();
   });
 
-  it('warns again, and still spawns, when the base it read is an older version', async () => {
+  it('refuses a manager whose read base is an older version, and creates no child', async () => {
     const manager = await aManager('Outdated-spawner');
     const client = await mcpClientOf(manager.id);
     await readWholeBase(client);
     daemon.db.prepare('UPDATE managers SET base_version_read = ?, base_sha_read = ? WHERE session_id = ?').run(shippedBase.version - 1, 'f'.repeat(64), manager.id);
 
-    const { isError, answer } = await spawnChild(client, 'outdated-child');
+    const { isError, text } = await spawnChild(client, 'outdated-child');
 
-    expect(isError).toBeUndefined();
-    expect(answer.warnings?.map((warning) => warning.code)).toEqual(['base_not_read']);
+    expect(isError).toBe(true);
+    expect(text).toContain('base_not_read');
+    expect(childCountOf(manager.id)).toBe(0);
   });
 
   it('gives a child spawned by a root session that is no manager no warning', async () => {

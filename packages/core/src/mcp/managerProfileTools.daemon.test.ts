@@ -71,6 +71,7 @@ async function aSceneWithTwoManagers(): Promise<Scene> {
   const managerA = await spawnManager();
   const managerB = await spawnManager();
   const a = await connect(managerA);
+  await a.callTool({ name: 'get_manager_base', arguments: {} });
   const childOfA = await connect(await spawn(a));
   const reviewerId = await spawn(a, { role: 'reviewer' });
   return { managerA, managerB, a, b: await connect(managerB), childOfA, reviewerOfA: await connect(reviewerId) };

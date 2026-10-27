@@ -60,6 +60,7 @@ export async function startKnowledgeFixture() {
   }
   const manager = await createSession({ directory: home, manager: { childrenCap: 5, mission: 'Read curated facts', pulseSeconds: 3600 } });
   const managerClient = await connect(tokenOf(manager.id));
+  await managerClient.callTool({ name: 'get_manager_base', arguments: {} });
   const childDirectory = join(config.worktreesRoot, 'reader');
   mkdirSync(childDirectory);
   const spawned = await managerClient.callTool({ name: 'create_session', arguments: { directory: childDirectory, name: 'Child' } });

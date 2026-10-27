@@ -52,7 +52,9 @@ async function bootLead() {
   daemon.db.prepare('UPDATE sessions SET project_id = ? WHERE id = ?').run('p1', created.id);
   const root = await connectAs(created.id);
   const lead = parsed(await root.callTool({ name: 'create_session', arguments: { directory: emptyDirectory('lead'), name: 'Lead', manager: { pulse_seconds: 3600, children_cap: 8, mission: 'm' } } }));
-  return { lead, leadClient: await connectAs(lead.id) };
+  const leadClient = await connectAs(lead.id);
+  await leadClient.callTool({ name: 'get_manager_base', arguments: {} });
+  return { lead, leadClient };
 }
 
 /** The lead spawns, in the DEV's worktree, a child of the given role; `runnerId` is the DEV that runs gh pr create under the lead. */

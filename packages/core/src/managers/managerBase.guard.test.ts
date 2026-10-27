@@ -124,28 +124,28 @@ describe('the SessionStart reset of the manager base read', () => {
     expect(answer.warnings).toBeUndefined();
   });
 
-  it('warns a manager that spawns after a reset, and still spawns (warn only)', async () => {
-    const manager = await rig.aManager('Reset-warned');
+  it('refuses a manager that spawns after a reset', async () => {
+    const manager = await rig.aManager('Reset-refused-by-default');
     const client = await rig.mcpClientOf(manager.id);
     await rig.readWholeBase(client);
     await rig.sessionStart(manager.id, 'compact');
 
-    const { isError, answer } = await rig.spawnChild(client, 'reset-warned-child');
+    const { isError, text } = await rig.spawnChild(client, 'reset-refused-child');
 
-    expect(isError).toBeUndefined();
-    expect(answer.warnings?.map((warning) => warning.code)).toEqual(['base_not_read']);
+    expect(isError).toBe(true);
+    expect(text).toContain('base_not_read');
   });
 
-  it('warns a manager that spawns after a version bump, and still spawns (warn only)', async () => {
-    const manager = await rig.aManager('Bump-warned');
+  it('refuses a manager that spawns after a version bump', async () => {
+    const manager = await rig.aManager('Bump-refused-by-default');
     const client = await rig.mcpClientOf(manager.id);
     await rig.readWholeBase(client);
     rig.bumpTheShippedBase(manager.id);
 
-    const { isError, answer } = await rig.spawnChild(client, 'bump-warned-child');
+    const { isError, text } = await rig.spawnChild(client, 'bump-refused-child');
 
-    expect(isError).toBeUndefined();
-    expect(answer.warnings?.map((warning) => warning.code)).toEqual(['base_not_read']);
+    expect(isError).toBe(true);
+    expect(text).toContain('base_not_read');
   });
 });
 
@@ -244,6 +244,7 @@ describe('childrenHeadroom in get_argus_status', () => {
   });
 
   const spawnMany = async (client: Client, prefix: string, count: number) => {
+    await rig.readWholeBase(client);
     for (let index = 0; index < count; index += 1) await rig.spawnChild(client, `${prefix}-${index}`);
   };
 
@@ -268,6 +269,7 @@ describe('childrenHeadroom in get_argus_status', () => {
   it('gives a closed child back to the headroom', async () => {
     const manager = await rig.aManager('Headroom-closed');
     const client = await rig.mcpClientOf(manager.id);
+    await rig.readWholeBase(client);
     const { answer } = await rig.spawnChild(client, 'headroom-closed-0');
     await client.callTool({ name: 'close_session', arguments: { session_id: answer.id } });
 

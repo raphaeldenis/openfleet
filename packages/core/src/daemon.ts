@@ -103,7 +103,7 @@ export interface DaemonOptions {
   /** The registry the process guards already mark; the daemon makes its own when none is handed over. */
   degraded?: DegradedRegistry;
   claudeConfigPath?: string;
-  /** Overrides BASE_NOT_READ_ENFORCEMENT: 'refuse' turns the base_not_read warning of a spawn into a refusal. */
+  /** Overrides BASE_NOT_READ_ENFORCEMENT: 'warn_only' turns the base_not_read refusal of a spawn into a warning. */
   baseNotReadEnforcement?: BaseNotReadEnforcement;
   /** Overrides FINDINGS_GATE_ENFORCEMENT and the findingsGate.enforcement setting: 'observe' journals the findings_required refusal of gh pr create and lets the command pass. */
   findingsGateEnforcement?: FindingsGateEnforcement;

@@ -155,6 +155,24 @@ class Fleet {
 
 const textOf = (result: unknown): string => (result as { content: { text: string }[] }).content[0]!.text;
 
+describe('a daemon restart on the same base', () => {
+  it('keeps the base read of a manager: its next spawn is accepted without a warning', async () => {
+    const config = loadConfig({ OPENFLEET_HOME: tempDirs.make('of-restart-same-base-'), OPENFLEET_PORT: '0', [E2E_FLAG_ENV]: E2E_FLAG_ON });
+    const fleet = new Fleet(config, 'refuse');
+    await fleet.boot();
+    const manager = await fleet.createManagerInItsOwnProject(FIRST_MANAGER);
+    await fleet.readWholeBase(manager);
+    await fleet.shutDown();
+    await fleet.boot();
+    const restartedManager = { ...manager, client: await fleet.mcpClientOf(manager.id) };
+
+    const spawn = await fleet.spawnChildOf(restartedManager);
+
+    expect(spawn).toMatchObject({ refusedWith: undefined, warningCodes: [] });
+    await fleet.shutDown();
+  }, RESTART_TEST_TIMEOUT_MS);
+});
+
 describe.each<BaseNotReadEnforcement>(['refuse', 'warn_only'])('two managers of different projects follow one shared base (enforcement %s)', (enforcement) => {
   const isRefusing = enforcement === 'refuse';
   let fleet: Fleet;
