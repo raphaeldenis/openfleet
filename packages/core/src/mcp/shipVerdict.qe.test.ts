@@ -59,7 +59,9 @@ async function bootLead() {
   const rootId = await bootRootSession();
   const root = await connectAs(rootId);
   const lead = parsed(await root.callTool({ name: 'create_session', arguments: { directory: emptyDirectory('lead'), name: 'Lead', manager: { pulse_seconds: 3600, children_cap: 4, mission: 'm' } } }));
-  return { root, lead, leadClient: await connectAs(lead.id) };
+  const leadClient = await connectAs(lead.id);
+  await leadClient.callTool({ name: 'get_manager_base', arguments: {} });
+  return { root, lead, leadClient };
 }
 
 /** A reviewer the lead spawns inside the DEV's worktree, the normal case. */

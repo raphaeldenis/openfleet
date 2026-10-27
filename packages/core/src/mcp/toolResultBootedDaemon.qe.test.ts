@@ -86,6 +86,7 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
     const root = await connectAs(rootId);
     const lead = parsed(await root.callTool({ name: 'create_session', arguments: { directory: childDirectory('lead'), name: 'Lead', manager: { pulse_seconds: 3600, children_cap: 2, mission: 'm' } } }));
     const leadClient = await connectAs(lead.id);
+    await leadClient.callTool({ name: 'get_manager_base', arguments: {} });
     const child = parsed(await leadClient.callTool({ name: 'create_session', arguments: { directory: childDirectory('worker'), name: 'Worker' } }));
     const childHookToken = (daemon.db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(child.id) as { hook_token: string }).hook_token;
     const hook = (body: object) => fetch(`${daemon.server.url}/hooks/${childHookToken}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'c', ...body }) });
