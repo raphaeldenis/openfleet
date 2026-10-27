@@ -1126,6 +1126,54 @@ describe('FleetEventsService daemon issues and background failures', () => {
       expect(service.proposals()).toEqual([]);
     });
 
+    describe('the waiting list', () => {
+      const snapshotWithQueuedCounts = (queuedCounts?: Record<string, number>) => ({ ...snapshotWith(), ...(queuedCounts && { queuedCounts }) });
+
+      it('counts nothing waiting before any snapshot', () => {
+        expect(service.queuedTotal()).toBe(0);
+      });
+
+      it('adds up the waiting proposals of every manager from the snapshot', () => {
+        socket.dispatchMessage(snapshotWithQueuedCounts({ m1: 2, m2: 3 }));
+
+        expect(service.queuedTotal()).toBe(5);
+      });
+
+      it('counts nothing waiting for a daemon whose snapshot reports no waiting list', () => {
+        socket.dispatchMessage(snapshotWithQueuedCounts({ m1: 2 }));
+
+        socket.dispatchMessage(snapshotWithQueuedCounts());
+
+        expect(service.queuedTotal()).toBe(0);
+      });
+
+      it('follows governance.queue_changed for one manager without touching the others', () => {
+        socket.dispatchMessage(snapshotWithQueuedCounts({ m1: 2, m2: 3 }));
+
+        socket.dispatchMessage({ type: 'governance.queue_changed', managerId: 'm1', queuedCount: 4 });
+
+        expect(service.queuedTotal()).toBe(7);
+        expect(service.queuedCountOf('m1')).toBe(4);
+      });
+
+      it('stops counting a manager whose waiting list empties', () => {
+        socket.dispatchMessage(snapshotWithQueuedCounts({ m1: 2 }));
+
+        socket.dispatchMessage({ type: 'governance.queue_changed', managerId: 'm1', queuedCount: 0 });
+
+        expect(service.queuedTotal()).toBe(0);
+      });
+
+      it('replaces the counts on a later snapshot instead of merging them', () => {
+        socket.dispatchMessage(snapshotWithQueuedCounts({ m1: 2 }));
+
+        socket.dispatchMessage(snapshotWithQueuedCounts({ m2: 1 }));
+
+        expect(service.queuedCountOf('m1')).toBe(0);
+        expect(service.queuedTotal()).toBe(1);
+      });
+    });
+
     it('seeds the pending proposals from the snapshot', () => {
       socket.dispatchMessage(snapshotWith([proposal('p1'), proposal('p2')]));
 

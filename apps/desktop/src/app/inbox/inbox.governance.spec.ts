@@ -23,14 +23,14 @@ const COPY_INSTRUCTION = 'Copy this into the mission note, where your standing p
 @Component({ selector: 'stub-elsewhere', template: '<span data-testid="stub-elsewhere">elsewhere</span>' })
 class StubElsewhereComponent {}
 
-async function connect(proposals: GovernanceProposalView[]) {
-  const daemon = await connectToScriptedDaemon({ sessions: [manager], proposals });
+async function connect(proposals: GovernanceProposalView[], queuedCounts?: Record<string, number>) {
+  const daemon = await connectToScriptedDaemon({ sessions: [manager], proposals, queuedCounts });
   const api = { decide: vi.fn(), decideProposal: vi.fn().mockResolvedValue({}) };
   return { ...daemon, api, providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: daemon.events }] };
 }
 
-async function renderInbox(proposals: GovernanceProposalView[]) {
-  const connected = await connect(proposals);
+async function renderInbox(proposals: GovernanceProposalView[], queuedCounts?: Record<string, number>) {
+  const connected = await connect(proposals, queuedCounts);
   await render(InboxComponent, { providers: [provideRouter([]), ...connected.providers] });
   return connected;
 }
@@ -48,6 +48,53 @@ describe('InboxComponent governance proposals', () => {
 
     expect(screen.getByText('Incident of p1')).toBeVisible();
     expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+  });
+
+  describe('the waiting list', () => {
+    const governanceChip = () => screen.getByTestId('inbox-filter-governance');
+
+    it('user sees how many proposals wait on the Governance chip while its to-decide count stays the same', async () => {
+      await renderInbox([proposal('p1'), proposal('p2')], { m1: 2, m2: 1 });
+
+      expect(governanceChip()).toHaveTextContent('Governance 2 · 3 waiting');
+      expect(screen.getByTestId('inbox-count')).toHaveTextContent('2');
+      expect(screen.getByTestId('inbox-filter-all')).toHaveTextContent('All 2');
+    });
+
+    it('user sees no waiting suffix when nothing waits', async () => {
+      await renderInbox([proposal('p1')]);
+
+      expect(governanceChip()).toHaveTextContent(/^Governance 1$/);
+    });
+
+    it('user sees the waiting suffix follow the daemon as proposals are parked and released', async () => {
+      const { queueChangedOnDaemon, proposeOnDaemon } = await renderInbox([proposal('p1')], { m1: 1 });
+      expect(governanceChip()).toHaveTextContent('Governance 1 · 1 waiting');
+
+      queueChangedOnDaemon('m1', 4);
+      await waitFor(() => expect(governanceChip()).toHaveTextContent('Governance 1 · 4 waiting'));
+
+      proposeOnDaemon(proposal('released'));
+      queueChangedOnDaemon('m1', 3);
+      await waitFor(() => expect(governanceChip()).toHaveTextContent('Governance 2 · 3 waiting'));
+
+      queueChangedOnDaemon('m1', 0);
+      await waitFor(() => expect(governanceChip()).toHaveTextContent(/^Governance 2$/));
+    });
+
+    it('user sees the waiting proposals announced with the proposals to decide', async () => {
+      await renderInbox([proposal('p1')], { m1: 3 });
+
+      expect(screen.getByRole('status', { name: 'Governance queue' })).toHaveTextContent('1 governance proposal needs you, 3 waiting');
+    });
+
+    it('user still sees an empty Inbox with no count when proposals only wait', async () => {
+      await renderInbox([], { m1: 2 });
+
+      expect(governanceChip()).toHaveTextContent('Governance 0 · 2 waiting');
+      expect(screen.queryByTestId('inbox-count')).toBeNull();
+      expect(screen.getByTestId('inbox-empty')).toBeVisible();
+    });
   });
 
   it('user sees pending proposals add up with the approvals in the Inbox count', async () => {

@@ -73,6 +73,9 @@ export class FleetEventsService {
   readonly managers = signal<ManagerView[]>([]);
   /** The governance proposals still awaiting a human decision; empty for a daemon that reports none. */
   readonly proposals = signal<GovernanceProposalView[]>([]);
+  private readonly queuedCounts = signal<Readonly<Record<string, number>>>({});
+  /** How many proposals wait for a pending place across all managers; zero for a daemon that reports no waiting list. */
+  readonly queuedTotal = computed(() => Object.values(this.queuedCounts()).reduce((sum, count) => sum + count, 0));
   readonly workingStates = signal<ReadonlyMap<string, WorkingState>>(new Map());
   // A daemon that predates working states sends no list: a missing state then means "not reported", never "overdue".
   readonly workingStatesReported = signal(false);
@@ -249,6 +252,7 @@ export class FleetEventsService {
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
         this.proposals.set(event.proposals ?? []);
+        this.queuedCounts.set(event.queuedCounts ?? {});
         this.workingStates.set(new Map((event.workingStates ?? []).map((state) => [state.sessionId, state])));
         this.workingStatesReported.set(event.workingStates !== undefined);
         this.workingStateMaxAgeMinutes.set(event.workingStateMaxAgeMinutes);
@@ -285,6 +289,7 @@ export class FleetEventsService {
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
       case 'governance.proposed': return this.upsertProposal(event.proposal);
       case 'governance.resolved': return this.proposals.update((all) => all.filter((p) => p.id !== event.proposal.id));
+      case 'governance.queue_changed': return this.queuedCounts.update((all) => ({ ...all, [event.managerId]: event.queuedCount }));
       case 'law.created':
       case 'law.updated':
       case 'law.withdrawn': return this.lawChanges.next(event);
@@ -366,6 +371,11 @@ export class FleetEventsService {
 
   private upsertApproval(approval: Approval): void {
     this.approvals.update((all) => (all.some((a) => a.id === approval.id) ? all.map((a) => (a.id === approval.id ? approval : a)) : [...all, approval]));
+  }
+
+  /** How many proposals of one manager wait for a pending place. */
+  queuedCountOf(managerId: string): number {
+    return this.queuedCounts()[managerId] ?? 0;
   }
 
   private upsertProposal(proposal: GovernanceProposalView): void {

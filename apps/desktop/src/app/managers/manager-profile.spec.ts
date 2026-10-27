@@ -10,7 +10,7 @@ import { EMPTY } from 'rxjs';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { ManagerDashboardComponent } from './manager-dashboard.component';
 
-const emptyGovernance = { resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
+const emptyGovernance = { resourceGrants: [], pending: [], queued: [], denied: [], history: [], governanceEvictedDenials: 0 };
 const governanceApi = { getManagerGovernance: () => Promise.resolve(emptyGovernance) };
 
 const FLEET: Project = { id: 'p-fleet', name: 'Fleet', docsFolderPath: null };
@@ -51,7 +51,7 @@ function fakeApi(overrides: ApiOverrides = {}) {
 
 async function openProfile({ api = fakeApi(), session = sessionOf() } = {}) {
   const events = {
-    sessions: signal([session]), approvals: signal([]), proposals: signal([]), lawChanges: EMPTY, managers: signal([managerViewOf()]), snapshotReceived: signal(true),
+    sessions: signal([session]), approvals: signal([]), proposals: signal([]), queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: signal([managerViewOf()]), snapshotReceived: signal(true),
     workingStates: signal(new Map()), workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
   };
   await render(ManagerDashboardComponent, {

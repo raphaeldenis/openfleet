@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/angular/zonele
 import { inputBinding, signal } from '@angular/core';
 import userEvent from '@testing-library/user-event';
 import { provideRouter } from '@angular/router';
-import type { GovernanceProposalView, ManagerGovernanceWithLawsView, ResourceGrantView } from '@openfleet/shared';
+import type { GovernanceProposalView, ManagerGovernanceWithLawsView, ResourceGrantView, WaitingProposalView } from '@openfleet/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
@@ -17,7 +17,10 @@ const proposal = (patch: Partial<GovernanceProposalView>): GovernanceProposalVie
   id: 'p', managerId: 'm1', kind: 'law', status: 'pending', incident: 'An incident', payload: { text: 'A law' }, createdAt: '2026-10-13T10:00:00.000Z', ...patch,
 });
 
-const emptyView: ManagerGovernanceWithLawsView = { laws: [], resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 };
+const emptyView: ManagerGovernanceWithLawsView = { laws: [], resourceGrants: [], pending: [], queued: [], denied: [], history: [], governanceEvictedDenials: 0 };
+const waiting = (patch: Partial<WaitingProposalView>): WaitingProposalView => ({
+  id: 'w', managerId: 'm1', kind: 'law', incident: 'A waiting incident', payload: { text: 'A waiting law' }, createdAt: '2026-10-13T10:00:00.000Z', position: 1, ...patch,
+});
 const grant = (patch: Partial<ResourceGrantView> = {}): ResourceGrantView => ({ id: 'g1', resourceType: 'note', resourceId: 'n-1', role: 'reader', access: 'read', grantedAt: 't', ...patch });
 
 async function renderSection(view: Partial<ManagerGovernanceWithLawsView>, apiPatch: Record<string, unknown> = {}) {
@@ -59,6 +62,99 @@ describe('ManagerGovernanceComponent', () => {
     expect(within(pending).getByText('Pending law')).toBeVisible();
     expect(within(pending).getByRole('heading', { name: 'Pending' })).toBeVisible();
     expect(within(pending).getByRole('link', { name: 'Decide in the Inbox' })).toBeVisible();
+  });
+
+  describe('the waiting list', () => {
+    it('shows the waiting proposals in their order, each with its position, type, text and incident', async () => {
+      await renderSection({
+        queued: [
+          waiting({ id: 'w1', position: 1, payload: { text: 'First in line' }, incident: 'Incident one' }),
+          waiting({ id: 'w2', position: 2, kind: 'permission', payload: { action: 'Deploy', scope: 'staging', condition: 'Green CI', exclusions: 'None' }, incident: 'Incident two' }),
+        ],
+      });
+
+      const block = await screen.findByTestId('manager-governance-waiting');
+      expect(within(block).getByRole('heading', { name: 'Waiting (2)' })).toBeVisible();
+      const [first, second] = within(block).getAllByRole('listitem');
+      expect(first).toHaveTextContent('1');
+      expect(first).toHaveTextContent('law');
+      expect(first).toHaveTextContent('First in line');
+      expect(first).toHaveTextContent('Incident: Incident one');
+      expect(second).toHaveTextContent('2');
+      expect(second).toHaveTextContent('permission');
+      expect(second).toHaveTextContent('Green CI');
+    });
+
+    it('offers no action on a waiting proposal', async () => {
+      await renderSection({ queued: [waiting({ id: 'w1' })] });
+
+      const block = await screen.findByTestId('manager-governance-waiting');
+      expect(within(block).queryAllByRole('button')).toHaveLength(0);
+      expect(within(block).queryAllByRole('link')).toHaveLength(0);
+    });
+
+    it('shows a waiting proposal text as inert text, never as markup', async () => {
+      await renderSection({ queued: [waiting({ id: 'w1', payload: { text: HOSTILE_MARKUP } })] });
+
+      const block = await screen.findByTestId('manager-governance-waiting');
+      expect(within(block).getByText(HOSTILE_MARKUP)).toBeVisible();
+      expect(block.querySelector('img')).toBeNull();
+    });
+
+    it('shows no waiting block when nothing waits', async () => {
+      await renderSection({ pending: [proposal({ id: 'p1' })], queued: [] });
+      await screen.findByTestId('manager-governance-pending');
+
+      expect(screen.queryByTestId('manager-governance-waiting')).toBeNull();
+    });
+
+    it('shows no waiting block for a daemon that predates the waiting list', async () => {
+      await renderSection({ pending: [proposal({ id: 'p1' })], queued: undefined });
+      await screen.findByTestId('manager-governance-pending');
+
+      expect(screen.queryByTestId('manager-governance-waiting')).toBeNull();
+    });
+
+    it('does not say that no proposal exists while proposals wait', async () => {
+      await renderSection({ queued: [waiting({ id: 'w1' })] });
+      await screen.findByTestId('manager-governance-waiting');
+
+      expect(screen.queryByText('No proposal yet.')).toBeNull();
+    });
+
+    it('reads again when the waiting list of this manager changes, not when another one does', async () => {
+      const { queueChangedOnDaemon, api } = await renderSection({});
+      await waitFor(() => expect(api.getManagerGovernance).toHaveBeenCalledTimes(1));
+
+      queueChangedOnDaemon('m2', 3);
+      await new Promise((resolve) => setTimeout(resolve, ASYNC_SETTLE_MS));
+      expect(api.getManagerGovernance).toHaveBeenCalledTimes(1);
+
+      queueChangedOnDaemon('m1', 1);
+
+      await waitFor(() => expect(api.getManagerGovernance).toHaveBeenCalledTimes(2));
+    });
+
+    it('shows the list again after a release moves the first waiting proposal to pending', async () => {
+      const queuedBefore = [waiting({ id: 'w1', position: 1, payload: { text: 'Goes first' } }), waiting({ id: 'w2', position: 2, payload: { text: 'Stays' } })];
+      const { proposeOnDaemon, queueChangedOnDaemon, api } = await renderSection({ queued: queuedBefore });
+      await screen.findByRole('heading', { name: 'Waiting (2)' });
+      api.getManagerGovernance.mockResolvedValue({ ...emptyView, pending: [proposal({ id: 'w1', payload: { text: 'Goes first' } })], queued: [waiting({ id: 'w2', position: 1, payload: { text: 'Stays' } })] });
+
+      proposeOnDaemon(proposal({ id: 'w1', payload: { text: 'Goes first' } }));
+      queueChangedOnDaemon('m1', 1);
+
+      expect(await screen.findByRole('heading', { name: 'Waiting (1)' })).toBeVisible();
+    });
+
+    it('reads again after a reconnect even when the counts did not move', async () => {
+      const { reconnectOnDaemon, api } = await renderSection({});
+      await waitFor(() => expect(api.getManagerGovernance).toHaveBeenCalledTimes(1));
+
+      reconnectOnDaemon();
+
+      await waitFor(() => expect(api.getManagerGovernance).toHaveBeenCalledTimes(2));
+    });
   });
 
   it('shows approved and withdrawn proposals in the history with readable statuses', async () => {

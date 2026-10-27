@@ -29,7 +29,7 @@ function fakeApi({ profile = profileOf(), updateManager = vi.fn().mockResolvedVa
   return {
     getManagerProfile: vi.fn().mockResolvedValue(profile),
     updateManager,
-    getManagerGovernance: () => Promise.resolve({ resourceGrants: [], pending: [], denied: [], history: [], governanceEvictedDenials: 0 }),
+    getManagerGovernance: () => Promise.resolve({ resourceGrants: [], pending: [], queued: [], denied: [], history: [], governanceEvictedDenials: 0 }),
     reopenSession: vi.fn().mockResolvedValue({}),
     listProjects: vi.fn().mockResolvedValue(pageOf([FLEET])),
     pulseNow: vi.fn().mockResolvedValue({ pulsed: true }),
@@ -40,7 +40,7 @@ function fakeApi({ profile = profileOf(), updateManager = vi.fn().mockResolvedVa
 async function openProfile(api = fakeApi()) {
   const liveManagers = signal<ManagerView[]>([managerViewOf()]);
   const events = {
-    sessions: signal([sessionOf()]), approvals: signal([]), proposals: signal([]), lawChanges: EMPTY, managers: liveManagers, snapshotReceived: signal(true),
+    sessions: signal([sessionOf()]), approvals: signal([]), proposals: signal([]), queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: liveManagers, snapshotReceived: signal(true),
     workingStates: signal(new Map()), workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
   };
   await render(ManagerDashboardComponent, {
