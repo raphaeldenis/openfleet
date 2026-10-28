@@ -130,6 +130,27 @@ export function notRemovableReasonOf(worktree: RepoWorktree & { isInUse?: boolea
   return undefined;
 }
 
+const REMOTE_TRACKING_REF_PREFIX = 'refs/remotes/';
+
+/** Whether every commit of the worktree branch is on its remote upstream, judged on the remote-tracking ref as last fetched. A local, missing or vanished upstream counts as none. */
+export async function pushStateOf(worktree: RepoWorktree, env?: NodeJS.ProcessEnv): Promise<'fully_pushed' | 'unpushed_commits' | 'no_upstream'> {
+  if (worktree.branch === null) return 'no_upstream';
+  const branchRef = `refs/heads/${worktree.branch}`;
+  const gitOptions = { cwd: worktree.repoPath, env: gitEnvironment(env), timeoutMs: STATUS_TIMEOUT_MS };
+  try {
+    const { stdout } = await run(['for-each-ref', '--format=%(upstream)', '--', branchRef], gitOptions);
+    const upstreamRef = stdout.trim();
+    const hasRemoteUpstream = upstreamRef.startsWith(REMOTE_TRACKING_REF_PREFIX);
+    if (!hasRemoteUpstream) return 'no_upstream';
+    await run(['rev-parse', '--verify', '--quiet', `${upstreamRef}^{commit}`], gitOptions);
+    const { stdout: unpushedCount } = await run(['rev-list', '--count', `${upstreamRef}..${branchRef}`], gitOptions);
+    return unpushedCount.trim() === '0' ? 'fully_pushed' : 'unpushed_commits';
+  } catch (error) {
+    if ((error as { code?: unknown }).code === 'git_unavailable') throw error;
+    return 'no_upstream';
+  }
+}
+
 const REFUSAL_TEXT: Record<Exclude<WorktreeRefusalReason, 'in_use'>, { message: string; hint: string }> = {
   main: { message: 'the main worktree cannot be removed.', hint: 'Remove a linked worktree instead.' },
   outside_root: { message: 'only worktrees that OpenFleet created can be removed.', hint: 'Remove it with git, from its repository.' },

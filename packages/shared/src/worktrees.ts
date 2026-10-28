@@ -47,6 +47,29 @@ export interface WorktreeList {
   total: number;
 }
 
+/** Why a linked worktree is, or is not, proposed for removal; `fully_pushed` is the only reason that makes it eligible. */
+export const STALE_WORKTREE_PUSH_REASONS = ['fully_pushed', 'unpushed_commits', 'no_upstream'] as const;
+export type StaleWorktreeReason = (typeof STALE_WORKTREE_PUSH_REASONS)[number] | WorktreeRefusalReason;
+
+/** `proposed`: eligible, dry run. `removed`: eligible and removed. `kept`: not removed (not eligible, or git refused at the last moment). */
+export type StaleWorktreeOutcome = 'proposed' | 'removed' | 'kept';
+
+export interface StaleWorktreeItem {
+  repoPath: string;
+  path: string;
+  branch: string | null;
+  reason: StaleWorktreeReason;
+  eligible: boolean;
+  outcome: StaleWorktreeOutcome;
+}
+
+export interface StaleWorktreeCleanup {
+  /** False for a dry run: nothing was removed. */
+  applied: boolean;
+  items: StaleWorktreeItem[];
+  removed: RemovedWorktree[];
+}
+
 export interface RemovedWorktree {
   removed: string;
   /** The branch is kept: removing a worktree never deletes it. */
