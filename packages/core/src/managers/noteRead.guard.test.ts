@@ -357,6 +357,61 @@ describe('the note_not_read warning when the enforcement is the default', () => 
     });
   });
 
+  describe('a mission note whose mentions chain deeper than the expansion depth', () => {
+    /** mission → first → second → a third-level mention, which the expansion cuts by depth. */
+    async function aManagerWithMissionChainEndingWith(rig: Rig, { name, thirdLevelMentionId }: { name: string; thirdLevelMentionId: string }) {
+      const second = await rig.aNote(`${name} second`, `@note:${thirdLevelMentionId}`);
+      const first = await rig.aNote(`${name} first`, `@note:${second.id}`);
+      return aManagerWithMissionNote(rig, { name, bodyMd: `# Mission\n\n@note:${first.id}` });
+    }
+
+    it('lets a spawn pass without a warning when the mention cut by depth is a note that does not exist', async () => {
+      const { client, note } = await aManagerWithMissionChainEndingWith(rig, { name: 'Dead-fourth-level', thirdLevelMentionId: randomUUID() });
+
+      const missionRead = await rig.getNote(client, note.id);
+      const { isError, answer } = await rig.spawnChild(client, 'dead-fourth-level-child');
+
+      expect(missionRead.expandedBody).toContain('not expanded (depth)');
+      expect(missionRead.complete).toBeUndefined();
+      expect(isError).toBeUndefined();
+      expect(noteWarningOf(answer)).toBeUndefined();
+    });
+
+    it('lets a spawn pass without a warning when the mention cut by depth is a readable note', async () => {
+      const readable = await rig.aNote('Readable fourth level', 'a readable note');
+      const { client, note } = await aManagerWithMissionChainEndingWith(rig, { name: 'Readable-fourth-level', thirdLevelMentionId: readable.id });
+
+      const missionRead = await rig.getNote(client, note.id);
+      const { isError, answer } = await rig.spawnChild(client, 'readable-fourth-level-child');
+
+      expect(missionRead.expandedBody).toContain(`@note:${readable.id}: not expanded (depth)`);
+      expect(isError).toBeUndefined();
+      expect(noteWarningOf(answer)).toBeUndefined();
+    });
+
+    it('does not count a warning in the 48 hours count for a mention cut by depth', async () => {
+      const { manager, client, note } = await aManagerWithMissionChainEndingWith(rig, { name: 'Depth-not-counted', thirdLevelMentionId: randomUUID() });
+      await rig.getNote(client, note.id);
+
+      await rig.spawnChild(client, 'depth-not-counted-child');
+
+      expect((await rig.managerViewOf(manager.id)).noteNotReadWarningCount).toBe(0);
+    });
+
+    it('still warns a manager that did not read a mention written in the mission note', async () => {
+      const { annex } = await aNestedAnnex(rig, 'Direct-mention-with-chain');
+      const { client, note } = await aManagerWithMissionNote(rig, { name: 'Direct-mention-with-chain', bodyMd: `# Mission\n\n@note:${annex.id}` });
+      await rig.getNote(client, note.id);
+
+      const beforeReadingAnnex = await rig.spawnChild(client, 'direct-before-child');
+      await rig.getNote(client, annex.id);
+      const afterReadingAnnex = await rig.spawnChild(client, 'direct-after-child');
+
+      expect(noteWarningOf(beforeReadingAnnex.answer)).toBeDefined();
+      expect(noteWarningOf(afterReadingAnnex.answer)).toBeUndefined();
+    });
+  });
+
   it('counts the pages read from the last to the first as a full read of the mission note', async () => {
     const reader = await aManagerWithMissionMentioning(rig, { name: 'Backwards-reader', mentionLines: '' });
     const scout = await aManagerWithMissionNote(rig, { name: 'Backwards-scout' });

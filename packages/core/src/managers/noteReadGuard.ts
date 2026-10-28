@@ -38,7 +38,7 @@ export interface NoteReadEvent {
   isPage: boolean;
 }
 
-const NOT_EXPANDED_MENTION = /@note:([^\s:]+): not expanded \((?:budget|depth)\)/g;
+const NOT_EXPANDED_MENTION = /@note:([^\s:]+): not expanded \(budget\)/g;
 
 interface MentionsIndexEntry { id: string; type: string; readWith?: string }
 
@@ -49,7 +49,8 @@ const mentionIdsOf = (mentionsIndex: unknown): string[] => {
   return readableNotes.map(({ id }) => id);
 };
 
-const notExpandedMentionIdsOf = (expandedBody: unknown): string[] =>
+/** The mentions an expanded body leaves unexpanded for want of budget; a mention cut by depth is not listed, since the expansion cuts it before resolving it and no get_note could read it as the mission note's own. */
+export const notExpandedMentionIdsOf = (expandedBody: unknown): string[] =>
   typeof expandedBody === 'string' ? [...expandedBody.matchAll(NOT_EXPANDED_MENTION)].map((match) => match[1]!) : [];
 
 /** Reads a get_note response as a read event; undefined when it carries no note body. */
