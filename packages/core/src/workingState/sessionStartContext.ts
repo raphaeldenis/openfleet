@@ -2,6 +2,7 @@ import { WORKING_STATE_SECTIONS, type ContextHookOutput, type WorkingState, type
 import type { DatabaseSync } from 'node:sqlite';
 import { log } from '../logger.js';
 import { buildMissionBlock, MISSION_PREVIEW_BYTES } from './missionBlock.js';
+import { buildProcessBlock } from './processBlock.js';
 import { renderWorkingState } from './renderWorkingState.js';
 import { ageInWholeMinutes, ageMsOf, isOlderThanLimit, isWrittenBeforeFleetChanged, minutesLabel } from './stateFreshness.js';
 import type { WorkingStateService } from './workingStateService.js';
@@ -33,7 +34,7 @@ const BASE_SHA_PREFIX_LENGTH = 8;
 
 export interface SessionStartRequest { sessionId: string; source: string | undefined; previousTranscriptPath: string | undefined }
 
-interface FixedBlocks { firstLine: string; baseLine: string | undefined; missionBlock: string | undefined; stateBlock: string; transcriptBlock: string | undefined }
+interface FixedBlocks { firstLine: string; baseLine: string | undefined; missionBlock: string | undefined; processBlock: string | undefined; stateBlock: string; transcriptBlock: string | undefined }
 
 interface LiveChildRow { name: string; state: string; model: string | null; directory: string; branch: string | null }
 
@@ -75,6 +76,7 @@ export class SessionStartContext {
       firstLine: [this.firstLine(source, state), fullPreviewMission?.oversizeWarning].filter((part) => part !== undefined).join(' '),
       baseLine: isManager ? this.baseLine() : undefined,
       missionBlock: fullPreviewMission?.text,
+      processBlock: isManager ? buildProcessBlock(this.missionNoteBodyOf(sessionId)) : undefined,
       stateBlock: this.stateBlock(state),
       transcriptBlock: hasPreviousTranscript ? `# Previous transcript (path only)\n${toSingleLine(previousTranscriptPath)}` : undefined,
     };
@@ -92,6 +94,11 @@ export class SessionStartContext {
   private missionTextOf(sessionId: string): string | undefined {
     const row = this.deps.db.prepare('SELECT mission_text FROM managers WHERE session_id = ?').get(sessionId) as { mission_text: string } | undefined;
     return row?.mission_text;
+  }
+
+  private missionNoteBodyOf(sessionId: string): string | undefined {
+    const row = this.deps.db.prepare('SELECT n.body_md FROM managers m JOIN notes n ON n.id = m.mission_note_id WHERE m.session_id = ?').get(sessionId) as { body_md: string } | undefined;
+    return row?.body_md;
   }
 
   private firstLine(source: string, state: WorkingState | undefined): string {
@@ -153,6 +160,7 @@ export class SessionStartContext {
       fixedBlocks.firstLine,
       fixedBlocks.baseLine,
       fixedBlocks.missionBlock,
+      fixedBlocks.processBlock,
       PRECEDENCE_LINE,
       DATA_STATEMENT_LINE,
       `# Live children\n${listing.join('\n')}`,
