@@ -187,6 +187,8 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
   load_handoff: {},
   save_handoff: {
     docs_folder_not_writable: { what: 'The handoff was not written: the docs folder is not writable', fix: 'fix the folder permissions' },
+    no_docs_folder: { what: 'The handoff was not written: this project has no docs folder yet', fix: 'set one' },
+    path_escapes_docs_folder: { what: 'The handoff was not written: a link in the docs folder leads outside it', fix: 'remove the link' },
   },
   save_project: {
     invalid_body: { what: 'That folder cannot be used: use an existing absolute folder path' },

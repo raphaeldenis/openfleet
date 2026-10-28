@@ -116,14 +116,14 @@ describe('HandoffPreviewStore', () => {
   });
 
   it('shows the copy the adapter supplies when the save fails', async () => {
-    const save = vi.fn().mockRejectedValue(new HandoffPreviewApiError('Saving handoffs is not available yet.'));
+    const save = vi.fn().mockRejectedValue(new HandoffPreviewApiError('The handoff was not written — try again.'));
     const store = new HandoffPreviewStore(apiWith({ save }));
     await store.open(SESSION_ID);
 
     await store.save();
 
     expect(store.state()).toBe('error');
-    expect(store.error()).toBe('Saving handoffs is not available yet.');
+    expect(store.error()).toBe('The handoff was not written — try again.');
   });
 
   it('collects the preview again when retrying after a load failure', async () => {

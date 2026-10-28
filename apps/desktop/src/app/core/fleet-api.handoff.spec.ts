@@ -55,6 +55,24 @@ describe('FleetApiService handoff routes', () => {
     expect(String(fetchMock.mock.calls[0]![0])).toMatch(/\/api\/sessions\/s1\/handoff-target$/);
   });
 
+  it('posts the sections of the handoff as the body and returns the path the daemon wrote', async () => {
+    answerWith({ note: { id: 'n1' }, relativePath: 'handoffs/2026-10-04-gimli.md' });
+
+    const saved = await api.saveHandoff('a/b', PREVIEW.sections);
+
+    expect(saved).toEqual({ relativePath: 'handoffs/2026-10-04-gimli.md' });
+    const [url, init] = fetchMock.mock.calls[0]! as [unknown, RequestInit];
+    expect(String(url)).toMatch(/\/api\/sessions\/a%2Fb\/handoff$/);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual(PREVIEW.sections);
+  });
+
+  it('rejects a save answer that names no written path', async () => {
+    answerWith({ note: { id: 'n1' } });
+
+    await expect(api.saveHandoff('s1', PREVIEW.sections)).rejects.toBeInstanceOf(ApiError);
+  });
+
   it.each([
     ['a body that is not an object', 'nope'],
     ['sections with a missing field', { ...PREVIEW, sections: { goal: 'x' } }],

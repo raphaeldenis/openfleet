@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, GovernanceProposalView, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
+  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, GovernanceProposalView, HandoffContent, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
   LawView, ManagerGovernanceWithLawsView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   RemovedWorktree, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
@@ -169,6 +169,14 @@ export class FleetApiService {
     const preview = parseHandoffPreview(await this.call<unknown>(path));
     if (!preview) throw new ApiError(200, `GET ${path} → unreadable handoff preview`);
     return preview;
+  }
+  /** Writes the handoff file of the session from the given sections; returns where the daemon wrote it, relative to the docs folder. */
+  async saveHandoff(id: string, sections: HandoffContent): Promise<{ relativePath: string }> {
+    const path = `/api/sessions/${encodeURIComponent(id)}/handoff`;
+    const answer = await this.post<{ relativePath?: unknown } | null>(path, sections);
+    const relativePath = answer?.relativePath;
+    if (typeof relativePath !== 'string') throw new ApiError(200, `POST ${path} → unreadable handoff save answer`);
+    return { relativePath };
   }
   async getHandoffTarget(id: string): Promise<HandoffTarget> {
     const path = `/api/sessions/${encodeURIComponent(id)}/handoff-target`;
