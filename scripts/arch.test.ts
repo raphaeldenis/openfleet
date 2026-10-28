@@ -11,6 +11,7 @@ const CONFIG = join(REPO_ROOT, '.dependency-cruiser.cjs');
 const KNOWN_VIOLATIONS = join(REPO_ROOT, '.dependency-cruiser-known-violations.json');
 const SOURCE_ROOTS = ['packages/core/src', 'packages/shared/src', 'apps/desktop/src'];
 const SUBPROCESS_TIMEOUT_MS = 60_000;
+const SPAWNING_TEST_TIMEOUT_MS = SUBPROCESS_TIMEOUT_MS + 5_000;
 
 const FIXTURE_FILES: Record<string, string> = {
   'node_modules/zod/package.json': '{"name":"zod","main":"index.js"}',
@@ -107,7 +108,7 @@ describe('architecture guard (dependency-cruiser)', () => {
       writeFileSync(absolutePath, content);
     }
     fixtureViolations = runDepcruise({ cwd: fixtureDir });
-  });
+  }, SPAWNING_TEST_TIMEOUT_MS);
 
   afterAll(() => {
     rmSync(fixtureDir, { recursive: true, force: true });
@@ -134,5 +135,5 @@ describe('architecture guard (dependency-cruiser)', () => {
 
     const ignoredViolations = realRepoViolations.filter(({ rule }) => rule.severity === 'ignore');
     expect(ignoredViolations).toHaveLength(knownViolations.length);
-  });
+  }, SPAWNING_TEST_TIMEOUT_MS);
 });
