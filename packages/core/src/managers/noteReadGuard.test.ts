@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  NOTE_NOT_READ_ENFORCEMENT, isNoteReadInFull, noteReadEventOf, noteReadVerdictOf, progressAfterMentionPage, progressAfterOwedMentionRead, progressAfterMentionRead, progressAfterRead, type NoteReadEvent, type NoteReadProgress,
+  NOTE_NOT_READ_ENFORCEMENT, isNoteReadInFull, noteReadEventOf, notExpandedMentionIdsOf, noteReadVerdictOf, progressAfterMentionPage, progressAfterOwedMentionRead, progressAfterMentionRead, progressAfterRead, type NoteReadEvent, type NoteReadProgress,
 } from './noteReadGuard.js';
 
 const MISSION_NOTE = { noteId: 'mission', rev: 3 };
@@ -14,6 +14,23 @@ const readOf = (response: Record<string, unknown>): NoteReadEvent => noteReadEve
 const readingPages = (pages: Record<string, unknown>[]): NoteReadProgress | undefined =>
   pages.reduce<NoteReadProgress | undefined>((previous, page) => progressAfterRead({ previous, ...MISSION_NOTE, event: readOf(page) }), undefined);
 
+describe('notExpandedMentionIdsOf', () => {
+  it('lists the mentions cut by the budget', () => {
+    expect(notExpandedMentionIdsOf('see\n\n--- @note:big: not expanded (budget) ---')).toEqual(['big']);
+  });
+
+  it('ignores the mentions cut by the depth, since no get_note can read what the expansion never resolved', () => {
+    expect(notExpandedMentionIdsOf('see\n\n--- @note:deep: not expanded (depth) ---')).toEqual([]);
+  });
+
+  it('ignores the other skip lines and a body that is not text', () => {
+    const skipLines = '--- @note:twice: not expanded (already expanded) ---\n--- @note:ghost → not resolved (not available yet) ---\n--- and 3 more mentions not expanded ---';
+
+    expect(notExpandedMentionIdsOf(skipLines)).toEqual([]);
+    expect(notExpandedMentionIdsOf(undefined)).toEqual([]);
+  });
+});
+
 describe('noteReadEventOf', () => {
   it('sees a response without complete false as a whole read of its body', () => {
     const event = readOf({ id: 'mission', rev: 3, bodyMd: 'héllo' });
@@ -21,10 +38,16 @@ describe('noteReadEventOf', () => {
     expect(event).toEqual({ start: 0, end: 6, totalBytes: 6, mentionIdsToRead: [], isWhole: true, isPage: false });
   });
 
-  it('asks to read the mentions whose expansion was cut by the budget or the depth', () => {
+  it('asks to read the mentions whose expansion was cut by the budget, not those cut by the depth', () => {
     const event = readOf({ bodyMd: 'see', expandedBody: 'see\n\n--- @note:big: not expanded (budget) ---\n\n--- @note:deep: not expanded (depth) ---' });
 
-    expect(event).toMatchObject({ isWhole: false, mentionIdsToRead: ['big', 'deep'] });
+    expect(event).toMatchObject({ isWhole: false, mentionIdsToRead: ['big'] });
+  });
+
+  it('sees a response whose only cut mentions are cut by the depth as a whole read', () => {
+    const event = readOf({ bodyMd: 'see', expandedBody: 'see\n\n--- @note:deep: not expanded (depth) ---' });
+
+    expect(event).toMatchObject({ isWhole: true, mentionIdsToRead: [] });
   });
 
   it('sees a page by its offset and its bytes, and carries the mentions index of the first page', () => {
