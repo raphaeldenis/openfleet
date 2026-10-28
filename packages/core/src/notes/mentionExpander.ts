@@ -79,6 +79,24 @@ export function expandMentionBlocks(bodyMd: string, lookup: MentionLookup, opts:
   return blocks;
 }
 
+/** One body mention with the size of what it points to; `bytes` is 0 for a mention the lookup cannot resolve. */
+export interface MentionIndexEntry {
+  id: string;
+  kind: MentionKind;
+  bytes: number;
+  isResolved: boolean;
+}
+
+/** Returns one entry per distinct mention written in the body (not the mentions of the mentioned notes), without expanding anything. */
+export function indexMentions(bodyMd: string, lookup: MentionLookup): MentionIndexEntry[] {
+  return findMentions(bodyMd).map(({ kind, id }) => {
+    const mentionedNote = kind === 'note' ? lookup.getNote(id) : undefined;
+    return mentionedNote
+      ? { id, kind, bytes: utf8Bytes(mentionedNote.bodyMd), isResolved: true }
+      : { id, kind, bytes: 0, isResolved: false };
+  });
+}
+
 function renderMention(mention: MentionRef, level: number, walk: Walk): string | undefined {
   const tag = mentionTag(mention.kind, mention.id);
 

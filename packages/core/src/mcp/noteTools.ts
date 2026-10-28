@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { MAX_QUERY_CHARS, MAX_QUERY_TERMS, MAX_SEARCH_RESULTS, buildFtsQuery } from '../notes/ftsQuery.js';
 import { FileBackedNoteError } from '../notes/noteService.js';
+import { bodyPageView, bodyWithMentionsIndexView, mentionsIndexEntryOf, NOTE_READ_SAFE_BYTES, readLimitBytes, serializedBytes } from './noteReadPaging.js';
 import { createNoteToolSupport, type NoteToolDeps } from './noteToolSupport.js';
 import { guardedFor, refuse } from './toolResults.js';
 
@@ -13,7 +14,7 @@ export type RegisterNoteToolsDeps = NoteToolDeps;
 export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps): void {
   const { notes, noteRepo } = deps;
   const guarded = guardedFor(deps.caller);
-  const { author, requireProject, requireOwnNote, requireWritableNote, writeBody, noteSummary, noteView, noteMentionBlocksView } =createNoteToolSupport(deps);
+  const { author, requireProject, requireOwnNote, requireWritableNote, writeBody, noteSummary, noteView, noteMentionBlocksView, noteHeader } = createNoteToolSupport(deps);
 
   server.registerTool('create_note', {
     description: 'Create a note in your project; returns id, title, folder, rev, shared and fileBacked, not the body',
@@ -26,20 +27,38 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
 
   server.registerTool('get_note', {
     description: 'A note\'s full body; expandedBody (its @-mentions expanded after it, depth 2, 64 KiB budget) is present only when mentions were expanded, otherwise bodyMd is the full text. '
-      + 'With mentions_only true the body is not repeated: the result holds bodyMd once plus mentionBlocks, the array of expanded mention blocks (including the "not expanded" lines), present only when the body has mentions; the body still counts against the 64 KiB budget',
-    inputSchema: { note: z.string().min(1), mentions_only: z.boolean().optional() },
-  }, async ({ note, mentions_only }) => {
+      + 'With mentions_only true the body is not repeated: the result holds bodyMd once plus mentionBlocks, the array of expanded mention blocks (including the "not expanded" lines), present only when the body has mentions; the body still counts against the 64 KiB budget. '
+      + `A response never exceeds ${NOTE_READ_SAFE_BYTES / 1024} KiB (max_bytes can only lower that): when the body plus its mentions would, the result holds the body and mentionsIndex ([{id, type, bytes, readWith}]) with complete false, and you read each mention with get_note; when the body alone would, it is paged with offset (bytes) and the result carries truncated, offset, bytes, totalBytes, nextOffset, nextAction and complete false. A result without complete false is a whole read`,
+    inputSchema: { note: z.string().min(1), mentions_only: z.boolean().optional(), max_bytes: z.number().int().positive().optional(), offset: z.number().int().min(0).optional() },
+  }, async ({ note, mentions_only, max_bytes, offset }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
-      requireOwnNote(scope.projectId, note);
+      const ownNote = requireOwnNote(scope.projectId, note);
       const viewerScope = { viewerProjectId: scope.projectId };
-      if (mentions_only) {
-        const { note: mentioningNote, mentionBlocks } = notes.getMentionBlocks(note, viewerScope);
-        return noteMentionBlocksView(mentioningNote, mentionBlocks);
+      const limitBytes = readLimitBytes(max_bytes);
+      const isReadingFromOffset = offset !== undefined && offset > 0;
+
+      const readFullView = () => {
+        if (mentions_only) {
+          const { note: mentioningNote, mentionBlocks } = notes.getMentionBlocks(note, viewerScope);
+          return noteMentionBlocksView(mentioningNote, mentionBlocks);
+        }
+        const { note: expandedNote, expandedBody } = notes.getExpanded(note, viewerScope);
+        return noteView(expandedNote, expandedBody);
+      };
+
+      if (!isReadingFromOffset) {
+        const fullView = readFullView();
+        if (serializedBytes(fullView) <= limitBytes) return fullView;
       }
-      const { note: expandedNote, expandedBody } = notes.getExpanded(note, viewerScope);
-      return noteView(expandedNote, expandedBody);
+
+      const mentionsIndex = notes.getMentionIndex(note, viewerScope).map(mentionsIndexEntryOf);
+      const framing = { header: noteHeader(ownNote), bodyMd: ownNote.bodyMd, mentionsIndex };
+      const bodyWithIndex = bodyWithMentionsIndexView(framing);
+      if (!isReadingFromOffset && serializedBytes(bodyWithIndex) <= limitBytes) return bodyWithIndex;
+
+      return bodyPageView({ noteId: ownNote.id, ...framing, offset: offset ?? 0, limitBytes });
     });
   });
 
