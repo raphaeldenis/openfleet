@@ -16,7 +16,7 @@ describe('NotificationPrefsStore', () => {
     vi.restoreAllMocks();
   });
 
-  it('starts with banners for finished agents, needed input and chat on, tool completion, sound and mute off, Dock badge on', () => {
+  it('starts with banners for finished agents, needed input and chat on, tool completion and mute off, Dock badge on', () => {
     const store = openStore();
 
     expect(store.prefs()).toEqual({
@@ -25,11 +25,36 @@ describe('NotificationPrefsStore', () => {
       toolCompletion: false,
       needsInput: true,
       chatMessage: true,
-      sound: false,
-      visual: true,
       muted: false,
       dockBadge: true,
     });
+  });
+
+  it('ignores the sound and visual choices an older version stored, and keeps the other stored choices', () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sound: true, visual: false, muted: true }));
+
+    const store = openStore();
+
+    expect(store.prefs()).toEqual({
+      enabled: true,
+      agentFinished: true,
+      toolCompletion: false,
+      needsInput: true,
+      chatMessage: true,
+      muted: true,
+      dockBadge: true,
+    });
+  });
+
+  it('stops remembering the sound and visual choices of an older version once a preference changes', () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sound: true, visual: false }));
+
+    openStore().set('muted', true);
+
+    const remembered = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Record<string, unknown>;
+    expect(remembered).not.toHaveProperty('sound');
+    expect(remembered).not.toHaveProperty('visual');
+    expect(remembered['muted']).toBe(true);
   });
 
   it('remembers a changed preference after a reload', () => {
