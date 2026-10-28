@@ -84,6 +84,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   mission_missing: { what: 'This manager has no mission to start from', fix: 'write its mission, then reopen it fresh' },
   mission_too_large: { what: 'This manager’s mission is too large to start from', fix: 'shorten its mission, then reopen it fresh' },
   base_not_read: { what: 'This manager has not read the current manager base', fix: 'it must read the whole base before it spawns' },
+  note_not_read: { what: 'This manager has not read its whole mission note', fix: 'it must read the note and its mentions in full before it spawns' },
   findings_required: { what: 'The review findings of this ticket are missing', fix: 'record them first' },
   verdict_stale: { what: 'That verdict is for a commit that is no longer the latest', fix: 'review the latest commit' },
   directory_in_use: { what: 'Another session already uses this directory', fix: 'pick another directory' },

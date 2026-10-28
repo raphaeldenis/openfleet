@@ -38,10 +38,10 @@ function trackTodosFailingOpen(todos: TodoTracker | undefined, sessionId: string
   }
 }
 
-/** A conversation that starts, restarts or resumes has the base only if it reads it again; a manager that never read it is unaffected. */
-const SESSION_START_SOURCES_THAT_RESET_THE_BASE_READ = ['startup', 'compact', 'clear', 'resume'];
+/** A conversation that starts, restarts or resumes has the base and the mission note only if it reads them again; a manager that never read them is unaffected. */
+const SESSION_START_SOURCES_THAT_RESET_THE_BASE_AND_NOTE_READS = ['startup', 'compact', 'clear', 'resume'];
 
-export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
+export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead' | 'forgetNoteRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
   const decideStopRefusalFailingOpen = (sessionId: string, stopHookActive: boolean): StopHookOutput | undefined =>
     failingOpen(deps.degraded, 'stop refusal check failed, letting the turn end', () => deps.stopRefusal?.decide({ sessionId, stopHookActive }));
 
@@ -50,8 +50,9 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
 
   const forgetBaseReadFailingOpen = (sessionId: string, source: string | undefined): void =>
     failingOpen(deps.degraded, 'manager base read reset failed, changing nothing', () => {
-      const startsFreshContext = source !== undefined && SESSION_START_SOURCES_THAT_RESET_THE_BASE_READ.includes(source);
+      const startsFreshContext = source !== undefined && SESSION_START_SOURCES_THAT_RESET_THE_BASE_AND_NOTE_READS.includes(source);
       if (startsFreshContext) deps.managers?.forgetBaseRead(sessionId);
+      if (startsFreshContext) deps.managers?.forgetNoteRead(sessionId);
     });
 
   const recordHandoversFailingOpen = (request: { sessionId: string; prompt: string | undefined }): ContextHookOutput | undefined =>
