@@ -69,6 +69,17 @@ Re-import enriches intact views imported by older versions; local edits remain c
 Without showUngrouped, core omits ungrouped rows and desktop displays them,
 preserving each surface's historical default. Explicit true/false overrides both.
 
+## Cleaning the laws copied into the missions
+
+An earlier import wrote the approved laws into each manager mission, under `## Laws` / `### Standing laws`. The import never removes them by itself. A separate command does, and only when a human confirms:
+
+```sh
+pnpm --filter @openfleet/core import:scape clean-laws --home "$HOME/.openfleet"
+pnpm --filter @openfleet/core import:scape clean-laws --home "$HOME/.openfleet" --apply --confirm <fingerprint>
+```
+
+The first call is a plan: counts (managers to clean, removable copies, bytes saved, conflicts, copies to review by hand) and a fingerprint, and nothing is written. `--apply` refuses without `--confirm`, or with a fingerprint that is not the one of the current plan, and then asks to read the plan again; it also refuses while the daemon runs. An applied cleanup backs the database up first and removes only a block that matches the active laws exactly; a mission edited in OpenFleet is a conflict and kept. Laws or Guardrails sections written by hand in the notes are never touched, only counted. A second run removes nothing. `--json` prints `{ mode, report, fingerprint? }`; the output never holds a law text.
+
 ## Claude memory of the managers
 
 Each imported manager boots with the Claude auto-memory of its Scape Argus. The
