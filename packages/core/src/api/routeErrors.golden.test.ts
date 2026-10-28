@@ -179,6 +179,7 @@ const THROWN_ERROR_SCENARIOS: { name: string; thrown: () => unknown; expected: E
   { name: 'a daemon that shuts down', thrown: () => new DaemonShuttingDownError(), expected: { status: 503, error: 'daemon_shutting_down' } },
   { name: 'a fresh reopen of a manager whose mission is too large', thrown: () => new SessionReopenError('mission_too_large', 'mission too large'), expected: { status: 409, error: 'mission_too_large' } },
   { name: 'a spawn by a manager that has not read the base', thrown: () => new OpenFleetError('base_not_read', 'read the manager base first.'), expected: { status: 409, error: 'base_not_read' } },
+  { name: 'a spawn by a manager that has not read its mission note in full', thrown: () => new OpenFleetError('note_not_read', 'read the mission note first.'), expected: { status: 409, error: 'note_not_read' } },
   { name: 'a pull request without the findings of its ticket', thrown: () => new OpenFleetError('findings_required', 'the findings are missing.'), expected: { status: 409, error: 'findings_required' } },
   { name: 'a verdict on a commit that is no longer the head', thrown: () => new OpenFleetError('verdict_stale', 'the verdict is for an older commit.'), expected: { status: 409, error: 'verdict_stale' } },
 ];

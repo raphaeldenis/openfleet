@@ -4,6 +4,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { OpenFleetError, type Session } from '@openfleet/shared';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { BaseNotReadEnforcement } from '../managers/baseReadGuard.js';
+import type { NoteNotReadEnforcement } from '../managers/noteReadGuard.js';
 import type { ManagerBase } from '../managers/managerBase.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
@@ -20,6 +21,7 @@ import { DAEMON_VERSION } from '../version.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import type { GovernanceQueueService } from '../governance/governanceQueueService.js';
 import type { ManagerDenials } from '../policy/managerDenials.js';
+import type { DenialJournal } from '../policy/ports.js';
 import { registerDeniedCommandTools } from './deniedCommandTools.js';
 import { registerGovernanceTools } from './governanceTools.js';
 import { registerManagerBaseTools } from './managerBaseTools.js';
@@ -63,7 +65,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
+export function createMcpHandler(deps: { projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -87,7 +89,9 @@ export function createMcpHandler(deps: { projectProfile?: ProjectProfileBootstra
     registerTableTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerTableViewTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     const noteToolDeps = { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs, caller, isMissionNote: (noteId: string) => deps.managers.isMissionNote(noteId) };
-    registerNoteTools(toolServer, noteToolDeps);
+    const missionNoteReadingDeps = { ...noteToolDeps, onNoteRead: ({ noteId, noteRev, response }: { noteId: string; noteRev: number; response: object }) =>
+      deps.managers.recordNoteRead({ sessionId: caller.id, noteId, noteRev, response: response as Record<string, unknown> }) };
+    registerNoteTools(toolServer, missionNoteReadingDeps);
     registerNoteVersionTools(toolServer, noteToolDeps);
     registerProjectTools(toolServer, { projects: deps.projects, noteRepo: deps.noteRepo, caller });
     registerWorktreeTools(toolServer, { worktrees: new WorktreeService({ projects: deps.projects, sessions: deps.sessions, worktreesRoot: deps.worktreesRoot }), caller });

@@ -10,6 +10,8 @@ export interface NoteToolDeps {
   caller: Session;
   /** Tells whether a manager links the note as its mission. */
   isMissionNote: (noteId: string) => boolean;
+  /** Told, after get_note answered, which note was read at which revision and what the response held. */
+  onNoteRead?: (read: { noteId: string; noteRev: number; response: object }) => void;
 }
 
 const MISSION_NOTE_WRITE_REFUSAL = 'this note is linked as the mission of a manager: agents cannot write it.';

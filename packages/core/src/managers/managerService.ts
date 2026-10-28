@@ -7,6 +7,7 @@ import { managerFirstPromptOf } from './managerFirstPrompt.js';
 import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { DEFAULT_HEARTBEAT_SECONDS } from '../workingState/workingStateSettings.js';
 import { toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
+import { isNoteReadInFull, noteReadEventOf, progressAfterOwedMentionRead, progressAfterRead } from './noteReadGuard.js';
 
 export interface PulseSchedulerLike {
   onManagerCreated(record: ManagerRecord): void;
@@ -146,6 +147,34 @@ export class ManagerService {
     if (!hadRead) return undefined;
     this.deps.managers.clearBaseRead(sessionId);
     return this.announceUpdated(this.deps.managers.get(sessionId)!);
+  }
+
+  /**
+   * Counts a get_note response toward the manager reading its mission note in full: the response of the mission note itself,
+   * or the whole response of one of the mentions the mission note still owes. Any other note changes nothing.
+   */
+  recordNoteRead({ sessionId, noteId, noteRev, response }: { sessionId: string; noteId: string; noteRev: number; response: Record<string, unknown> }): void {
+    const record = this.deps.managers.get(sessionId);
+    const event = noteReadEventOf(response);
+    if (!record || !event) return;
+
+    const isMissionNoteRead = noteId === record.missionNoteId;
+    const previous = record.noteRead;
+    const isOwedMention = previous !== undefined && previous.mentionIdsToRead.includes(noteId);
+    const progress = isMissionNoteRead
+      ? progressAfterRead({ previous, noteId, rev: noteRev, event })
+      : isOwedMention ? progressAfterOwedMentionRead({ previous, mentionId: noteId, event }) : undefined;
+    if (!progress) return;
+
+    this.deps.managers.setNoteRead(sessionId, progress);
+    if (isNoteReadInFull(progress, { noteId: progress.noteId, rev: progress.rev })) this.deps.managers.clearNoteReadReset(sessionId);
+  }
+
+  /** Forgets what the manager read of its mission note, because its context was reset; nothing changes for a manager without a mission note. */
+  forgetNoteRead(sessionId: string): void {
+    const { clock = () => new Date().toISOString() } = this.deps;
+    const hasMissionNote = this.deps.managers.get(sessionId)?.missionNoteId !== undefined;
+    if (hasMissionNote) this.deps.managers.resetNoteRead(sessionId, clock());
   }
 
   /** The manager as the profile page shows it: its view, and where it stands against a Scape re-import. */

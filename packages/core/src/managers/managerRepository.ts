@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { ManagerExpertiseSchema, ManagerPulseActionsSchema, ManagerRecordBoundsSchema, OpenFleetError, type ManagerBaseRead } from '@openfleet/shared';
 import { afterCommit, inTransaction } from '../db/transaction.js';
 import { log } from '../logger.js';
+import type { NoteReadProgress } from './noteReadGuard.js';
 
 export interface ManagerRecord {
   expertise?: string;
@@ -20,6 +21,10 @@ export interface ManagerRecord {
   pulseEnabled?: boolean;
   /** The whole manager base the manager last read; absent while it never read it. */
   baseRead?: ManagerBaseRead;
+  /** What the manager has read of its mission note since its context was last reset; absent while it read nothing. */
+  noteRead?: NoteReadProgress;
+  /** When the manager's context was last reset while it had a mission note to read; absent once it read the note in full again. */
+  noteReadResetAt?: string;
 }
 
 interface Row {
@@ -27,6 +32,7 @@ interface Row {
   session_id: string; pulse_seconds: number; children_cap: number; mission_text: string; last_pulse_at: string | null; created_at: string;
   mission_note_id: string | null; pin_mission_note: number; log_store_id: string | null; pulse_enabled: number;
   base_version_read: number | null; base_sha_read: string | null; base_read_at: string | null;
+  note_read: string | null; note_read_reset_at: string | null;
 }
 
 const pulseActionsOf = (row: Row): string[] => {
@@ -52,6 +58,16 @@ const baseReadOf = (r: Row): ManagerBaseRead | undefined => {
   return hasRead ? { version: r.base_version_read!, sha: r.base_sha_read!, readAt: r.base_read_at! } : undefined;
 };
 
+const noteReadOf = (r: Row): NoteReadProgress | undefined => {
+  if (r.note_read === null) return undefined;
+  try {
+    return JSON.parse(r.note_read) as NoteReadProgress;
+  } catch {
+    log('warn', `ManagerRepository: invalid note read for session ${r.session_id}`);
+    return undefined;
+  }
+};
+
 const toManager = (r: Row): ManagerRecord => ({
   expertise: expertiseOf(r), pulseActions: pulseActionsOf(r), profileRev: r.profile_rev,
   sessionId: r.session_id, pulseSeconds: r.pulse_seconds, childrenCap: r.children_cap,
@@ -59,6 +75,7 @@ const toManager = (r: Row): ManagerRecord => ({
   missionNoteId: r.mission_note_id ?? undefined, pinMissionNote: r.pin_mission_note === 1, logStoreId: r.log_store_id ?? undefined,
   pulseEnabled: r.pulse_enabled === 1,
   baseRead: baseReadOf(r),
+  noteRead: noteReadOf(r), noteReadResetAt: r.note_read_reset_at ?? undefined,
 });
 
 /** Whether the manager receives pulses: only an explicit false pauses it. */
@@ -150,6 +167,18 @@ export class ManagerRepository {
   /** Forgets the manager base the manager read: it has not read any since. */
   clearBaseRead(sessionId: string): void {
     this.db.prepare('UPDATE managers SET base_version_read = NULL, base_sha_read = NULL, base_read_at = NULL WHERE session_id = ?').run(sessionId);
+  }
+  /** Remembers what the manager has read of its mission note. */
+  setNoteRead(sessionId: string, progress: NoteReadProgress): void {
+    this.db.prepare('UPDATE managers SET note_read = ? WHERE session_id = ?').run(JSON.stringify(progress), sessionId);
+  }
+  /** Forgets what the manager read of its mission note, and dates the reset. */
+  resetNoteRead(sessionId: string, resetAt: string): void {
+    this.db.prepare('UPDATE managers SET note_read = NULL, note_read_reset_at = ? WHERE session_id = ?').run(resetAt, sessionId);
+  }
+  /** Stops reminding the manager that its context was reset: it read the mission note in full again. */
+  clearNoteReadReset(sessionId: string): void {
+    this.db.prepare('UPDATE managers SET note_read_reset_at = NULL WHERE session_id = ?').run(sessionId);
   }
   /** Binds the table the manager logs its actions in; null unbinds it. */
   setLogStore(sessionId: string, storeId: string | null): void {

@@ -1,7 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { DeniedCommand } from '@openfleet/shared';
 import type { DeniedCommandCounts } from '../managers/managerView.js';
+import { NOTE_NOT_READ_RULE_ID, NOTE_NOT_READ_WARNING_WINDOW_HOURS } from '../managers/noteReadGuard.js';
 import { denialOf, type DenialRow } from './sqliteDenialJournal.js';
+
+const MILLISECONDS_PER_HOUR = 3_600_000;
 
 export interface ManagerDenialRead {
   managerId: string;
@@ -21,7 +24,7 @@ export interface ManagerDenialPage {
 
 /** What a manager knows of the refusals of its lineage: a count of those it has not looked at, and the list. */
 export class ManagerDenials {
-  constructor(private readonly deps: { db: DatabaseSync; lineageSessionIdsOf: (managerId: string) => string[] }) {}
+  constructor(private readonly deps: { db: DatabaseSync; lineageSessionIdsOf: (managerId: string) => string[]; clock?: () => Date }) {}
 
   /** `deniedCommandCount` is the refusals not looked at since the last unfiltered read; observed commands count for nothing. */
   countsOf(managerId: string): DeniedCommandCounts {
@@ -29,7 +32,15 @@ export class ManagerDenials {
     const lastSeenRowid = this.lastSeenRowidOf(managerId);
     const counts = this.deps.db.prepare(`SELECT count(*) AS total, coalesce(sum(rowid > ?), 0) AS unseen FROM denied_commands
       WHERE outcome = 'denied' AND session_id IN (SELECT value FROM json_each(?))`).get(lastSeenRowid, lineageSessionIds) as { total: number; unseen: number };
-    return { deniedCommandCount: counts.unseen, deniedCommandTotal: counts.total };
+    return { deniedCommandCount: counts.unseen, deniedCommandTotal: counts.total, noteNotReadWarningCount: this.noteNotReadWarningCountOf(managerId) };
+  }
+
+  private noteNotReadWarningCountOf(managerId: string): number {
+    const { clock = () => new Date() } = this.deps;
+    const windowStart = new Date(clock().getTime() - NOTE_NOT_READ_WARNING_WINDOW_HOURS * MILLISECONDS_PER_HOUR).toISOString();
+    const { warningCount } = this.deps.db.prepare(`SELECT count(*) AS warningCount FROM denied_commands
+      WHERE manager_id = ? AND rule_id = ? AND outcome = 'observed' AND created_at >= ?`).get(managerId, NOTE_NOT_READ_RULE_ID, windowStart) as { warningCount: number };
+    return warningCount;
   }
 
   read({ managerId, lineageSessionIds, since, limit, marksAsSeen }: ManagerDenialRead): ManagerDenialPage {

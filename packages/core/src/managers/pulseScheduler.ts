@@ -16,17 +16,21 @@ const unseenRefusalsLineOf = (unseenRefusalCount: number): string => {
 
 const BASE_SHA_PREFIX_LENGTH = 8;
 
+const MISSION_NOTE_REREAD_REMINDER = 'context compacted: re-read your mission note in full with get_note.';
+
 const baseLineOf = ({ version, sha }: ManagerBaseIdentity): string => `Base v${version} (${sha.slice(0, BASE_SHA_PREFIX_LENGTH)}).`;
 
 /** The pulse text of a manager: the plain pulse, where to re-read the mission when it lives in a note, the expertise and pulse actions it wrote, the manager base it follows, and how many command refusals it has not looked at. */
 export const pulseMessageOf = (
-  record: Pick<ManagerRecord, 'missionNoteId' | 'expertise' | 'pulseActions'>,
+  record: Pick<ManagerRecord, 'missionNoteId' | 'expertise' | 'pulseActions' | 'noteReadResetAt'>,
   { unseenRefusalCount = 0, managerBase }: { unseenRefusalCount?: number; managerBase?: ManagerBaseIdentity } = {},
 ): string => {
   const hasMissionNote = record.missionNoteId !== undefined;
   const hasUnseenRefusals = unseenRefusalCount > 0;
+  const mustReadMissionNoteAgain = hasMissionNote && record.noteReadResetAt !== undefined;
   const profileRecall = profileRecallOf(record);
-  const missionLine = hasMissionNote ? ` Your mission note id is ${record.missionNoteId}; read it every time you wake with get_note.` : '';
+  const rereadLine = mustReadMissionNoteAgain ? ` ${MISSION_NOTE_REREAD_REMINDER}` : '';
+  const missionLine = hasMissionNote ? ` Your mission note id is ${record.missionNoteId}; read it every time you wake with get_note.${rereadLine}` : '';
   const profileLine = profileRecall === '' ? '' : ` ${profileRecall}`;
   const baseLine = managerBase ? ` ${baseLineOf(managerBase)}` : '';
   const refusalsLine = hasUnseenRefusals ? ` ${unseenRefusalsLineOf(unseenRefusalCount)}` : '';

@@ -5,9 +5,11 @@ import { nextPulseAt } from './pulseTiming.js';
 export interface DeniedCommandCounts {
   deniedCommandCount: number;
   deniedCommandTotal: number;
+  /** The note_not_read warnings the manager received over the last NOTE_NOT_READ_WARNING_WINDOW_HOURS. */
+  noteNotReadWarningCount: number;
 }
 
-export const NO_DENIED_COMMANDS: DeniedCommandCounts = { deniedCommandCount: 0, deniedCommandTotal: 0 };
+export const NO_DENIED_COMMANDS: DeniedCommandCounts = { deniedCommandCount: 0, deniedCommandTotal: 0, noteNotReadWarningCount: 0 };
 
 export interface ManagerBaseIdentity {
   version: number;

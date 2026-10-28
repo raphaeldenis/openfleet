@@ -9,6 +9,9 @@ import { resolveModel, type ModelTable } from '../models.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { ManagerService } from '../managers/managerService.js';
 import { baseReadVerdictOf, type BaseNotReadEnforcement } from '../managers/baseReadGuard.js';
+import { NOTE_NOT_READ_RULE_ID, noteReadVerdictOf, type NoteNotReadEnforcement } from '../managers/noteReadGuard.js';
+import type { DenialJournal } from '../policy/ports.js';
+import type { NoteRepository } from '../notes/noteRepository.js';
 import { toManagerView, type ManagerBaseIdentity } from '../managers/managerView.js';
 import { log } from '../logger.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
@@ -63,12 +66,39 @@ export interface RegisterToolsDeps {
   managerBase?: ManagerBaseIdentity;
   /** Whether a spawn without the current base is refused or only warned; absent, BASE_NOT_READ_ENFORCEMENT (refuse) applies. */
   baseNotReadEnforcement?: BaseNotReadEnforcement;
+  /** Where the revision of a manager's mission note is read; absent, a spawn is not checked against that note. */
+  noteRepo?: Pick<NoteRepository, 'get'>;
+  /** Whether a spawn without the mission note read in full is refused or only warned; absent, NOTE_NOT_READ_ENFORCEMENT (warn_only) applies. */
+  noteNotReadEnforcement?: NoteNotReadEnforcement;
+  /** Where a note_not_read warning is recorded for the count of a manager's warnings; absent, the warning is not counted. */
+  denialJournal?: Pick<DenialJournal, 'record'>;
 }
 
 const BASE_NOT_READ_MESSAGE = 'You have not read the current manager base (get_manager_base, whole), so no child is spawned.';
 const BASE_NOT_READ_HINT = 'Call get_manager_base without section, then spawn again.';
 
 const baseNotReadWarning = { code: 'base_not_read', message: `${BASE_NOT_READ_MESSAGE} ${BASE_NOT_READ_HINT}` } as const;
+
+const NOTE_NOT_READ_MESSAGE = 'You have not read your mission note in full (get_note, every page and every mention), so no child is spawned.';
+const NOTE_NOT_READ_HINT = 'Call get_note on your mission note, follow nextOffset and each mentionsIndex entry that has readWith until no answer says complete false, then spawn again.';
+
+const NOTE_NOT_READ_WARNING_MESSAGE = 'You have not read your mission note in full (get_note, every page and every mention), but the child is created anyway.';
+const NOTE_NOT_READ_WARNING_HINT = 'Call get_note on your mission note, follow nextOffset and each mentionsIndex entry that has readWith until no answer says complete false; do not spawn this child again.';
+
+const noteNotReadWarning = { code: 'note_not_read', message: `${NOTE_NOT_READ_WARNING_MESSAGE} ${NOTE_NOT_READ_WARNING_HINT}` } as const;
+
+/** Records the warning in the denial journal, where the per-manager count over 48 hours reads it; a journal that fails never stops the spawn. */
+function journalNoteNotReadWarning(journal: Pick<DenialJournal, 'record'> | undefined, manager: Session): void {
+  try {
+    journal?.record({
+      sessionId: manager.id, managerId: manager.id, role: manager.role, profile: MANAGER_ROLE, harness: manager.harness,
+      ruleId: NOTE_NOT_READ_RULE_ID, decisionSource: 'policy', outcome: 'observed', toolName: 'create_session', command: 'create_session',
+      alternative: NOTE_NOT_READ_WARNING_HINT, actor: 'session',
+    });
+  } catch (error) {
+    log('warn', `note_not_read warning could not be journaled: ${error instanceof Error ? error.message : String(error)}`, manager.id);
+  }
+}
 
 export function registerTools(server: McpServer, deps: RegisterToolsDeps): void {
   const { sessions, caller, approvals, managers, pulseScheduler, modelTable, managerBase } = deps;
@@ -267,7 +297,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const lateDuplicateRefusal = refuseLiveDuplicate();
     if (lateDuplicateRefusal) return lateDuplicateRefusal;
 
-    const warnings: (typeof baseNotReadWarning)[] = [];
+    const warnings: (typeof baseNotReadWarning | typeof noteNotReadWarning)[] = [];
     if (caller.role === MANAGER_ROLE) {
       const record = managers.get(caller.id);
       // Synchronous check against a synchronous DB read, with no `await` between here and the insert
@@ -285,6 +315,15 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       if (baseReadVerdict === 'warn') {
         log('warn', `manager ${caller.id} spawns a session without having read the current manager base`, undefined, { code: 'base_not_read', sessionId: caller.id });
         warnings.push(baseNotReadWarning);
+      }
+
+      const currentNoteRev = record?.missionNoteId === undefined ? undefined : deps.noteRepo?.get(record.missionNoteId)?.rev;
+      const noteReadVerdict = record ? noteReadVerdictOf({ record, currentNoteRev, enforcement: deps.noteNotReadEnforcement }) : 'allow';
+      if (noteReadVerdict === 'refuse') return refuse('note_not_read', NOTE_NOT_READ_MESSAGE, NOTE_NOT_READ_HINT);
+      if (noteReadVerdict === 'warn') {
+        log('warn', `manager ${caller.id} spawns a session without having read its mission note in full`, undefined, { code: 'note_not_read', sessionId: caller.id });
+        journalNoteNotReadWarning(deps.denialJournal, caller);
+        warnings.push(noteNotReadWarning);
       }
     }
 

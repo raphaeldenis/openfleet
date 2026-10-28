@@ -114,4 +114,6 @@ export interface ManagerView {
   deniedCommandCount?: number;
   /** All the refusals recorded in the manager's lineage. */
   deniedCommandTotal?: number;
+  /** The note_not_read warnings the manager received over the last 48 hours: spawns made without its whole mission note read. */
+  noteNotReadWarningCount?: number;
 }

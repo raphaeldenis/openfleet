@@ -38,6 +38,10 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
       const viewerScope = { viewerProjectId: scope.projectId };
       const limitBytes = readLimitBytes(max_bytes);
       const isReadingFromOffset = offset !== undefined && offset > 0;
+      const answeredAndRecorded = <View extends object>(view: View): View => {
+        deps.onNoteRead?.({ noteId: ownNote.id, noteRev: ownNote.rev, response: view });
+        return view;
+      };
 
       const readFullView = () => {
         if (mentions_only) {
@@ -50,15 +54,15 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
 
       if (!isReadingFromOffset) {
         const fullView = readFullView();
-        if (serializedBytes(fullView) <= limitBytes) return fullView;
+        if (serializedBytes(fullView) <= limitBytes) return answeredAndRecorded(fullView);
       }
 
       const mentionsIndex = notes.getMentionIndex(note, viewerScope).map(mentionsIndexEntryOf);
       const framing = { header: noteHeader(ownNote), bodyMd: ownNote.bodyMd, mentionsIndex };
       const bodyWithIndex = bodyWithMentionsIndexView(framing);
-      if (!isReadingFromOffset && serializedBytes(bodyWithIndex) <= limitBytes) return bodyWithIndex;
+      if (!isReadingFromOffset && serializedBytes(bodyWithIndex) <= limitBytes) return answeredAndRecorded(bodyWithIndex);
 
-      return bodyPageView({ noteId: ownNote.id, ...framing, offset: offset ?? 0, limitBytes });
+      return answeredAndRecorded(bodyPageView({ noteId: ownNote.id, ...framing, offset: offset ?? 0, limitBytes }));
     });
   });
 

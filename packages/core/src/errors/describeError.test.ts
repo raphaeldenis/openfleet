@@ -62,6 +62,7 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['SessionReopenError mission_missing', () => new SessionReopenError('mission_missing', 'x'), 'mission_missing'],
   ['SessionReopenError mission_too_large', () => new SessionReopenError('mission_too_large', 'x'), 'mission_too_large'],
   ['an OpenFleetError base_not_read', () => new OpenFleetError('base_not_read', 'read the base.'), 'base_not_read'],
+  ['an OpenFleetError note_not_read', () => new OpenFleetError('note_not_read', 'read the mission note.'), 'note_not_read'],
   ['an OpenFleetError findings_required', () => new OpenFleetError('findings_required', 'findings are missing.'), 'findings_required'],
   ['an OpenFleetError verdict_stale', () => new OpenFleetError('verdict_stale', 'the head moved.'), 'verdict_stale'],
   ['ApprovalError not_found', () => new ApprovalError('not_found', 'x'), 'not_found'],
