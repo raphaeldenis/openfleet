@@ -28,6 +28,7 @@ interface Rig {
   daemon: Daemon;
   aManager: (name: string) => Promise<{ id: string }>;
   aNote: (title: string, bodyMd: string) => Promise<{ id: string; rev: number }>;
+  aNoteOfAnotherProject: (title: string, bodyMd: string) => Promise<{ id: string }>;
   linkMissionNote: (managerId: string, noteId: string) => Promise<void>;
   reviseNote: (note: { id: string; rev: number }, bodyMd: string) => Promise<void>;
   mcpClientOf: (sessionId: string) => Promise<Client>;
@@ -57,6 +58,12 @@ async function startRig(options: DaemonOptions): Promise<Rig> {
     aNote: async (title, bodyMd) => {
       const created = (await (await api('/api/notes', { method: 'POST', body: JSON.stringify({ projectId: PROJECT_ID, title, bodyMd }) })).json()) as { id?: string; rev?: number; data?: { id: string; rev: number } };
       return { id: created.id ?? created.data!.id, rev: created.rev ?? created.data!.rev };
+    },
+    aNoteOfAnotherProject: async (title, bodyMd) => {
+      const otherProjectId = randomUUID();
+      new ProjectRepository(daemon.db).insert({ id: otherProjectId, name: 'Elsewhere', docsFolderPath: null, createdAt: 't0' });
+      const created = (await (await api('/api/notes', { method: 'POST', body: JSON.stringify({ projectId: otherProjectId, title, bodyMd }) })).json()) as { id?: string; data?: { id: string } };
+      return { id: created.id ?? created.data!.id };
     },
     linkMissionNote: async (managerId, noteId) => {
       const response = await api(`/api/managers/${managerId}`, { method: 'PATCH', body: JSON.stringify({ missionNoteId: noteId }) });
@@ -128,6 +135,21 @@ async function aManagerWithNoteAnnexAndTableMentions(rig: Rig, { name, annexBody
   const annex = await rig.aNote(`${name} annex`, annexBodyMd);
   const body = `@note:${annex.id} @table:${name}-store\n${linesOfBytes(BODY_BYTES_NEEDING_PAGES / 2)}`;
   return { ...(await aManagerWithMissionNote(rig, { name, bodyMd: body })), annexId: annex.id };
+}
+
+/** A mission note over the read cap whose first lines are `mentionLines`, so a full read is its pages plus what the lines mention. */
+async function aManagerWithMissionMentioning(rig: Rig, { name, mentionLines }: { name: string; mentionLines: string }) {
+  const bodyMd = `${mentionLines}\n${linesOfBytes(BODY_BYTES_NEEDING_PAGES)}`;
+  return aManagerWithMissionNote(rig, { name, bodyMd });
+}
+
+const ANNEX_BYTES_FITTING_THE_READ_CAP = 14 * 1024;
+
+/** A note annex that fits the read cap alone but not with its own mentioned note expanded after it, so get_note answers it as a body with a mentions index. */
+async function aNestedAnnex(rig: Rig, name: string) {
+  const inner = await rig.aNote(`${name} inner`, linesOfBytes(ANNEX_BYTES_FITTING_THE_READ_CAP));
+  const annex = await rig.aNote(`${name} annex`, `@note:${inner.id}\n${linesOfBytes(ANNEX_BYTES_FITTING_THE_READ_CAP)}`);
+  return { inner, annex };
 }
 
 const closeRig = async (rig: Rig | undefined) => { await Promise.all(openClients.splice(0).map((client) => client.close())); await rig?.daemon.close(); };
@@ -247,6 +269,114 @@ describe('the note_not_read warning when the enforcement is the default', () => 
     await rig.getNote(client, annexId);
 
     const { answer } = await rig.spawnChild(client, 'one-page-annex-child');
+
+    expect(noteWarningOf(answer)).toBeDefined();
+  });
+
+  describe('a note annex that mentions a note itself', () => {
+    it('lets a spawn pass without a warning after every page and the annex were read, though the annex answers as a body with a mentions index', async () => {
+      const { annex } = await aNestedAnnex(rig, 'Nested-annex-reader');
+      const { client, note } = await aManagerWithMissionMentioning(rig, { name: 'Nested-annex-reader', mentionLines: `@note:${annex.id}` });
+      await rig.readAllPagesOf(client, note.id);
+      const annexAnswer = await rig.getNote(client, annex.id);
+
+      const { isError, answer } = await rig.spawnChild(client, 'nested-annex-child');
+
+      expect(annexAnswer).toMatchObject({ complete: false });
+      expect(annexAnswer.offset).toBeUndefined();
+      expect(isError).toBeUndefined();
+      expect(noteWarningOf(answer)).toBeUndefined();
+    });
+
+    it('warns a manager that read every page but not the annex', async () => {
+      const { annex } = await aNestedAnnex(rig, 'Nested-annex-skipper');
+      const { client, note } = await aManagerWithMissionMentioning(rig, { name: 'Nested-annex-skipper', mentionLines: `@note:${annex.id}` });
+      await rig.readAllPagesOf(client, note.id);
+
+      const { answer } = await rig.spawnChild(client, 'nested-skipper-child');
+
+      expect(noteWarningOf(answer)?.message).toContain('Call get_note on your mission note');
+      expect(noteWarningOf(answer)?.message).toContain('child is created');
+    });
+
+    it('does not owe the note the annex mentions, since only the mentions written in the mission note are owed', async () => {
+      const { annex, inner } = await aNestedAnnex(rig, 'Inner-not-owed');
+      const { client, note, manager } = await aManagerWithMissionMentioning(rig, { name: 'Inner-not-owed', mentionLines: `@note:${annex.id}` });
+      await rig.readAllPagesOf(client, note.id);
+      await rig.getNote(client, annex.id);
+
+      await rig.spawnChild(client, 'inner-not-owed-child');
+
+      expect(inner.id).not.toBe(annex.id);
+      expect((await rig.managerViewOf(manager.id)).noteNotReadWarningCount).toBe(0);
+    });
+  });
+
+  describe('the mentions of the mission note that need care', () => {
+    it('owes one read for a note mentioned twice in the mission note', async () => {
+      const annex = await rig.aNote('Twice annex', 'annex');
+      const { client, note } = await aManagerWithMissionMentioning(rig, { name: 'Twice-mentioned', mentionLines: `@note:${annex.id} and again @note:${annex.id}` });
+      await rig.readAllPagesOf(client, note.id);
+      await rig.getNote(client, annex.id);
+
+      const { answer } = await rig.spawnChild(client, 'twice-mentioned-child');
+
+      expect(noteWarningOf(answer)).toBeUndefined();
+    });
+
+    it('does not owe a mention of a note that does not exist', async () => {
+      const { client, note } = await aManagerWithMissionMentioning(rig, { name: 'Ghost-mention', mentionLines: `@note:${randomUUID()}` });
+      await rig.readAllPagesOf(client, note.id);
+
+      const { answer } = await rig.spawnChild(client, 'ghost-mention-child');
+
+      expect(noteWarningOf(answer)).toBeUndefined();
+    });
+
+    it('does not owe a mention of a note of another project', async () => {
+      const foreign = await rig.aNoteOfAnotherProject('Foreign annex', 'foreign');
+      const { client, note } = await aManagerWithMissionMentioning(rig, { name: 'Foreign-mention', mentionLines: `@note:${foreign.id}` });
+      await rig.readAllPagesOf(client, note.id);
+
+      const { answer } = await rig.spawnChild(client, 'foreign-mention-child');
+
+      expect(noteWarningOf(answer)).toBeUndefined();
+    });
+
+    it('owes a mention written in a code block, because the mentions index lists it like any other', async () => {
+      const annex = await rig.aNote('Fenced annex', 'annex');
+      const fencedMention = '```\n@note:' + annex.id + '\n```';
+      const { client, note } = await aManagerWithMissionMentioning(rig, { name: 'Fenced-mention', mentionLines: fencedMention });
+      await rig.readAllPagesOf(client, note.id);
+      const beforeReadingAnnex = await rig.spawnChild(client, 'fenced-before-child');
+      await rig.getNote(client, annex.id);
+      const afterReadingAnnex = await rig.spawnChild(client, 'fenced-after-child');
+
+      expect(noteWarningOf(beforeReadingAnnex.answer)).toBeDefined();
+      expect(noteWarningOf(afterReadingAnnex.answer)).toBeUndefined();
+    });
+  });
+
+  it('counts the pages read from the last to the first as a full read of the mission note', async () => {
+    const reader = await aManagerWithMissionMentioning(rig, { name: 'Backwards-reader', mentionLines: '' });
+    const scout = await aManagerWithMissionNote(rig, { name: 'Backwards-scout' });
+    const pagesInOrder = await rig.readAllPagesOf(scout.client, reader.note.id);
+    const offsets = pagesInOrder.map((page) => page.offset as number);
+
+    for (const offset of offsets.toReversed()) await rig.getNote(reader.client, reader.note.id, { offset });
+    const { answer } = await rig.spawnChild(reader.client, 'backwards-child');
+
+    expect(offsets.length).toBeGreaterThan(1);
+    expect(noteWarningOf(answer)).toBeUndefined();
+  });
+
+  it('warns a manager that read the pages from the last to the first but left one out', async () => {
+    const reader = await aManagerWithMissionMentioning(rig, { name: 'Backwards-gap', mentionLines: '' });
+    const scout = await aManagerWithMissionNote(rig, { name: 'Backwards-gap-scout' });
+    const offsets = (await rig.readAllPagesOf(scout.client, reader.note.id)).map((page) => page.offset as number);
+
+    for (const offset of offsets.slice(1).toReversed()) await rig.getNote(reader.client, reader.note.id, { offset });
+    const { answer } = await rig.spawnChild(reader.client, 'backwards-gap-child');
 
     expect(noteWarningOf(answer)).toBeDefined();
   });

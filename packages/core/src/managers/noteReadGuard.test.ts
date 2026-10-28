@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  NOTE_NOT_READ_ENFORCEMENT, isNoteReadInFull, noteReadEventOf, noteReadVerdictOf, progressAfterMentionPage, progressAfterMentionRead, progressAfterRead, type NoteReadEvent, type NoteReadProgress,
+  NOTE_NOT_READ_ENFORCEMENT, isNoteReadInFull, noteReadEventOf, noteReadVerdictOf, progressAfterMentionPage, progressAfterOwedMentionRead, progressAfterMentionRead, progressAfterRead, type NoteReadEvent, type NoteReadProgress,
 } from './noteReadGuard.js';
 
 const MISSION_NOTE = { noteId: 'mission', rev: 3 };
@@ -141,6 +141,20 @@ describe('isNoteReadInFull', () => {
 
     it('does not count as read while a page is missing', () => {
       const progress = afterAnnexPages([{ offset: 0, bytes: 4 }, { offset: 6, bytes: 4 }]);
+
+      expect(isNoteReadInFull(progress, MISSION_NOTE)).toBe(false);
+    });
+
+    it('counts as read after a body delivered entire with its own mentions index, since the mentions of a mention are not owed', () => {
+      const entireBody = readOf({ bodyMd: 'x'.repeat(10), complete: false, mentionsIndex: [noteEntry('inner')] });
+
+      const progress = progressAfterOwedMentionRead({ previous: missionWithAnnex, mentionId: 'annex', event: entireBody });
+
+      expect(isNoteReadInFull(progress, MISSION_NOTE)).toBe(true);
+    });
+
+    it('does not count a page as a body delivered entire', () => {
+      const progress = progressAfterOwedMentionRead({ previous: missionWithAnnex, mentionId: 'annex', event: annexPage({ offset: 0, bytes: 4 }) });
 
       expect(isNoteReadInFull(progress, MISSION_NOTE)).toBe(false);
     });

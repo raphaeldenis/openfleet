@@ -110,11 +110,10 @@ export function progressAfterMentionPage({ previous, mentionId, event }: { previ
   return coversMention ? progressAfterMentionRead({ previous: withPages, mentionId }) : withPages;
 }
 
-/** The progress after a get_note response of a mention the mission note owes: a whole response reads it, a page counts toward its pages, anything else changes nothing. */
-export function progressAfterOwedMentionRead({ previous, mentionId, event }: { previous: NoteReadProgress; mentionId: string; event: NoteReadEvent }): NoteReadProgress | undefined {
-  if (event.isWhole) return progressAfterMentionRead({ previous, mentionId });
+/** The progress after a get_note response of a mention the mission note owes: a page counts toward its pages, a response that delivers the entire body reads it (the mentions of the mention are not owed). */
+export function progressAfterOwedMentionRead({ previous, mentionId, event }: { previous: NoteReadProgress; mentionId: string; event: NoteReadEvent }): NoteReadProgress {
   if (event.isPage) return progressAfterMentionPage({ previous, mentionId, event });
-  return undefined;
+  return progressAfterMentionRead({ previous, mentionId });
 }
 
 /** Whether the progress covers every body byte of the note at this revision and every mention it names. */
