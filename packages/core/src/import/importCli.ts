@@ -1,5 +1,6 @@
 import { join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
+import { runCleanLaws, type CleanLawsRequest } from './cleanLawsCommand.js';
 import { renderImportReport } from './scape/importReport.js';
 import { importScape, type ImportScapeOptions } from './scape/importScape.js';
 import { ScapeImportError } from './scape/scapeImportError.js';
@@ -22,8 +23,12 @@ const FLAGS = {
   'scape-claude-dir': { type: 'string' },
   'allow-reimport': { type: 'boolean' },
   json: { type: 'boolean' },
+  apply: { type: 'boolean' },
+  confirm: { type: 'string' },
   help: { type: 'boolean' },
 } as const;
+
+const CLEAN_LAWS_COMMAND = 'clean-laws';
 
 const REIMPORT_NOTE =
   'A re-import compares each record with what the last import wrote: a Scape change is applied to a record OpenFleet left alone; a record edited or deleted in OpenFleet is a conflict and is kept (a deleted one is never written again); a record removed in Scape is reported and kept. The approved Scape laws are written to the laws table the same way: a law edited, withdrawn or deleted in OpenFleet is never overwritten, reactivated or written again. The laws are no longer copied into the manager mission, so an imported manager whose mission is intact has it rewritten without them (updated) and one edited in OpenFleet is a conflict and keeps its text. Run --dry-run first to see the outcome per entity.';
@@ -41,6 +46,13 @@ const USAGE = [
   '  --scape-claude-dir  the Claude config folder that holds the Scape managers\' memory (default: --claude-dir)',
   '  --json            prints the report as JSON instead of text (a dry run: nothing is written)',
   '  --allow-reimport  runs a real import although the target already holds imported projects (a dry run never needs it)',
+  '',
+  'usage: import scape clean-laws --home <OPENFLEET_HOME> [--apply --confirm <fingerprint>] [--json]',
+  '',
+  '  Removes from the imported managers\' missions the Standing laws copies that the laws table already holds. Without --apply it prints the plan (counts and a fingerprint) and writes nothing.',
+  '  --apply           writes the cleanup, after a backup of the database; refused while the OpenFleet daemon runs',
+  '  --confirm         the fingerprint printed by the plan; without it, or with a stale one, --apply is refused: read the plan again',
+  '  Copies written by hand in the notes are never touched; they are only counted.',
   '',
   REIMPORT_NOTE,
   '',
@@ -65,10 +77,24 @@ function stateFolderOptionsOf(stateDirFlag: string | undefined, homeDirectory: s
   return { stateDir, stateRoot: isInsideHome ? homeDirectory : undefined };
 }
 
-function importOptionsFrom({ values, positionals }: ParsedFlags, environment: CliEnvironment) {
-  if (positionals.join(' ') !== 'scape') throw invalidArguments(USAGE);
+function homeFrom({ values }: ParsedFlags, environment: CliEnvironment): string {
   const home = values.home ?? environment.env.OPENFLEET_HOME;
   if (home === undefined || home === '') throw invalidArguments('--home <OPENFLEET_HOME> is required (or set OPENFLEET_HOME)');
+  return home;
+}
+
+function cleanLawsRequestFrom(flags: ParsedFlags, environment: CliEnvironment): CleanLawsRequest {
+  const { values } = flags;
+  const applies = values.apply ?? false;
+  if (values.confirm !== undefined && !applies) throw invalidArguments('--confirm only goes with --apply');
+  return { home: homeFrom(flags, environment), applies, confirm: values.confirm, asJson: values.json ?? false };
+}
+
+function importOptionsFrom(flags: ParsedFlags, environment: CliEnvironment) {
+  const { values, positionals } = flags;
+  if (positionals.join(' ') !== 'scape') throw invalidArguments(USAGE);
+  if (values.apply || values.confirm !== undefined) throw invalidArguments(`--apply and --confirm belong to \`import scape ${CLEAN_LAWS_COMMAND}\``);
+  const home = homeFrom(flags, environment);
   const allowsReimport = values['allow-reimport'] ?? false;
   const options: ImportScapeOptions = {
     home,
@@ -92,6 +118,8 @@ export function runImportCli(argv: string[], environment: CliEnvironment): CliRe
   try {
     const flags = parseFlags(argv);
     if (flags.values.help) return { exitCode: EXIT_OK, output: USAGE };
+    const isCleanLaws = flags.positionals.join(' ') === `scape ${CLEAN_LAWS_COMMAND}`;
+    if (isCleanLaws) return { exitCode: EXIT_OK, output: runCleanLaws(cleanLawsRequestFrom(flags, environment)) };
     const { options, allowsReimport } = importOptionsFrom(flags, environment);
     const report = importScape(options);
     if (flags.values.json) return { exitCode: EXIT_OK, output: `${JSON.stringify(report, null, 2)}\n` };
