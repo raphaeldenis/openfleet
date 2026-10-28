@@ -80,9 +80,12 @@ const BASE_NOT_READ_HINT = 'Call get_manager_base without section, then spawn ag
 const baseNotReadWarning = { code: 'base_not_read', message: `${BASE_NOT_READ_MESSAGE} ${BASE_NOT_READ_HINT}` } as const;
 
 const NOTE_NOT_READ_MESSAGE = 'You have not read your mission note in full (get_note, every page and every mention), so no child is spawned.';
-const NOTE_NOT_READ_HINT = 'Call get_note on your mission note, follow nextOffset and each mentionsIndex entry until no answer says complete false, then spawn again.';
+const NOTE_NOT_READ_HINT = 'Call get_note on your mission note, follow nextOffset and each mentionsIndex entry that has readWith until no answer says complete false, then spawn again.';
 
-const noteNotReadWarning = { code: 'note_not_read', message: `${NOTE_NOT_READ_MESSAGE} ${NOTE_NOT_READ_HINT}` } as const;
+const NOTE_NOT_READ_WARNING_MESSAGE = 'You have not read your mission note in full (get_note, every page and every mention), but the child is created anyway.';
+const NOTE_NOT_READ_WARNING_HINT = 'Call get_note on your mission note, follow nextOffset and each mentionsIndex entry that has readWith until no answer says complete false; do not spawn this child again.';
+
+const noteNotReadWarning = { code: 'note_not_read', message: `${NOTE_NOT_READ_WARNING_MESSAGE} ${NOTE_NOT_READ_WARNING_HINT}` } as const;
 
 /** Records the warning in the denial journal, where the per-manager count over 48 hours reads it; a journal that fails never stops the spawn. */
 function journalNoteNotReadWarning(journal: Pick<DenialJournal, 'record'> | undefined, manager: Session): void {
@@ -90,7 +93,7 @@ function journalNoteNotReadWarning(journal: Pick<DenialJournal, 'record'> | unde
     journal?.record({
       sessionId: manager.id, managerId: manager.id, role: manager.role, profile: MANAGER_ROLE, harness: manager.harness,
       ruleId: NOTE_NOT_READ_RULE_ID, decisionSource: 'policy', outcome: 'observed', toolName: 'create_session', command: 'create_session',
-      alternative: NOTE_NOT_READ_HINT, actor: 'session',
+      alternative: NOTE_NOT_READ_WARNING_HINT, actor: 'session',
     });
   } catch (error) {
     log('warn', `note_not_read warning could not be journaled: ${error instanceof Error ? error.message : String(error)}`, manager.id);

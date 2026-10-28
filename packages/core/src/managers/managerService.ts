@@ -7,7 +7,7 @@ import { managerFirstPromptOf } from './managerFirstPrompt.js';
 import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { DEFAULT_HEARTBEAT_SECONDS } from '../workingState/workingStateSettings.js';
 import { toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
-import { isNoteReadInFull, noteReadEventOf, progressAfterMentionRead, progressAfterRead } from './noteReadGuard.js';
+import { isNoteReadInFull, noteReadEventOf, progressAfterOwedMentionRead, progressAfterRead } from './noteReadGuard.js';
 
 export interface PulseSchedulerLike {
   onManagerCreated(record: ManagerRecord): void;
@@ -160,10 +160,10 @@ export class ManagerService {
 
     const isMissionNoteRead = noteId === record.missionNoteId;
     const previous = record.noteRead;
-    const isOwedMentionRead = previous !== undefined && event.isWhole && previous.mentionIdsToRead.includes(noteId);
+    const isOwedMention = previous !== undefined && previous.mentionIdsToRead.includes(noteId);
     const progress = isMissionNoteRead
       ? progressAfterRead({ previous, noteId, rev: noteRev, event })
-      : isOwedMentionRead ? progressAfterMentionRead({ previous, mentionId: noteId }) : undefined;
+      : isOwedMention ? progressAfterOwedMentionRead({ previous, mentionId: noteId, event }) : undefined;
     if (!progress) return;
 
     this.deps.managers.setNoteRead(sessionId, progress);

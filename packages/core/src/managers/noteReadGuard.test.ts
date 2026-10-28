@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  NOTE_NOT_READ_ENFORCEMENT, isNoteReadInFull, noteReadEventOf, noteReadVerdictOf, progressAfterMentionRead, progressAfterRead, type NoteReadEvent, type NoteReadProgress,
+  NOTE_NOT_READ_ENFORCEMENT, isNoteReadInFull, noteReadEventOf, noteReadVerdictOf, progressAfterMentionPage, progressAfterMentionRead, progressAfterRead, type NoteReadEvent, type NoteReadProgress,
 } from './noteReadGuard.js';
 
 const MISSION_NOTE = { noteId: 'mission', rev: 3 };
 
-const firstPage = { bodyMd: 'abcd', offset: 0, bytes: 4, totalBytes: 10, truncated: true, complete: false, nextOffset: 4, mentionsIndex: [{ id: 'm1', type: 'note', bytes: 5 }, { id: 'm2', type: 'note', bytes: 5 }] };
+const noteEntry = (id: string) => ({ id, type: 'note', bytes: 5, readWith: `get_note note=${id}` });
+
+const firstPage = { bodyMd: 'abcd', offset: 0, bytes: 4, totalBytes: 10, truncated: true, complete: false, nextOffset: 4, mentionsIndex: [noteEntry('m1'), noteEntry('m2')] };
 
 const readOf = (response: Record<string, unknown>): NoteReadEvent => noteReadEventOf(response)!;
 
@@ -16,7 +18,7 @@ describe('noteReadEventOf', () => {
   it('sees a response without complete false as a whole read of its body', () => {
     const event = readOf({ id: 'mission', rev: 3, bodyMd: 'héllo' });
 
-    expect(event).toEqual({ start: 0, end: 6, totalBytes: 6, mentionIdsToRead: [], isWhole: true });
+    expect(event).toEqual({ start: 0, end: 6, totalBytes: 6, mentionIdsToRead: [], isWhole: true, isPage: false });
   });
 
   it('asks to read the mentions whose expansion was cut by the budget or the depth', () => {
@@ -28,7 +30,15 @@ describe('noteReadEventOf', () => {
   it('sees a page by its offset and its bytes, and carries the mentions index of the first page', () => {
     const event = readOf(firstPage);
 
-    expect(event).toEqual({ start: 0, end: 4, totalBytes: 10, mentionIdsToRead: ['m1', 'm2'], isWhole: false });
+    expect(event).toEqual({ start: 0, end: 4, totalBytes: 10, mentionIdsToRead: ['m1', 'm2'], isWhole: false, isPage: true });
+  });
+
+  it('asks to read only the resolved notes of the mentions index, since no get_note reads a table, a repo or an unresolved mention', () => {
+    const mentionsIndex = [noteEntry('annex'), { id: 'store', type: 'table', bytes: 9 }, { id: 'ghost', type: 'note', bytes: 0 }, { id: 'tool', type: 'playbook', bytes: 3, readWith: 'get_playbook' }];
+
+    const event = readOf({ bodyMd: 'body', complete: false, mentionsIndex });
+
+    expect(event.mentionIdsToRead).toEqual(['annex']);
   });
 
   it('sees a later page without a mentions index as not naming any mention', () => {
@@ -38,9 +48,9 @@ describe('noteReadEventOf', () => {
   });
 
   it('sees a body whole with a mentions index as a body read that leaves its mentions to read', () => {
-    const event = readOf({ bodyMd: 'body', complete: false, mentionsIndex: [{ id: 'm1', type: 'note', bytes: 5 }] });
+    const event = readOf({ bodyMd: 'body', complete: false, mentionsIndex: [noteEntry('m1')] });
 
-    expect(event).toEqual({ start: 0, end: 4, totalBytes: 4, mentionIdsToRead: ['m1'], isWhole: false });
+    expect(event).toEqual({ start: 0, end: 4, totalBytes: 4, mentionIdsToRead: ['m1'], isWhole: false, isPage: false });
   });
 
   it('sees nothing in a response that is not a note read', () => {
@@ -111,10 +121,35 @@ describe('isNoteReadInFull', () => {
   });
 
   it('counts a mention read whole as read, but not a mention read incompletely', () => {
-    const afterBody = readingPages([{ bodyMd: 'see', complete: false, mentionsIndex: [{ id: 'm1', type: 'note', bytes: 5 }] }])!;
+    const afterBody = readingPages([{ bodyMd: 'see', complete: false, mentionsIndex: [noteEntry('m1')] }])!;
 
     expect(isNoteReadInFull(progressAfterMentionRead({ previous: afterBody, mentionId: 'm1' }), MISSION_NOTE)).toBe(true);
     expect(isNoteReadInFull(afterBody, MISSION_NOTE)).toBe(false);
+  });
+
+  describe('a mention that pages itself', () => {
+    const missionWithAnnex = readingPages([{ bodyMd: 'see', complete: false, mentionsIndex: [noteEntry('annex')] }])!;
+    const annexPage = ({ offset, bytes }: { offset: number; bytes: number }) => readOf({ bodyMd: 'x', offset, bytes, totalBytes: 10, complete: false, truncated: offset + bytes < 10 });
+    const afterAnnexPages = (pages: { offset: number; bytes: number }[]) =>
+      pages.reduce((previous, page) => progressAfterMentionPage({ previous, mentionId: 'annex', event: annexPage(page) }), missionWithAnnex);
+
+    it('counts as read once contiguous pages cover [0, totalBytes]', () => {
+      const progress = afterAnnexPages([{ offset: 4, bytes: 6 }, { offset: 0, bytes: 4 }]);
+
+      expect(isNoteReadInFull(progress, MISSION_NOTE)).toBe(true);
+    });
+
+    it('does not count as read while a page is missing', () => {
+      const progress = afterAnnexPages([{ offset: 0, bytes: 4 }, { offset: 6, bytes: 4 }]);
+
+      expect(isNoteReadInFull(progress, MISSION_NOTE)).toBe(false);
+    });
+
+    it('does not count as read after a single page', () => {
+      const progress = afterAnnexPages([{ offset: 0, bytes: 4 }]);
+
+      expect(isNoteReadInFull(progress, MISSION_NOTE)).toBe(false);
+    });
   });
 });
 

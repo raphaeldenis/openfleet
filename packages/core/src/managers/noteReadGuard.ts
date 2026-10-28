@@ -21,6 +21,8 @@ export interface NoteReadProgress {
   bodyRanges: ByteRange[];
   mentionIdsToRead: string[];
   mentionIdsRead: string[];
+  /** The pages read so far of the mentions that page themselves, by mention id; absent in progress saved before pages were tracked. */
+  mentionPages?: Record<string, { totalBytes: number; ranges: ByteRange[] }>;
 }
 
 /** What one get_note response shows of a read. */
@@ -32,12 +34,20 @@ export interface NoteReadEvent {
   mentionIdsToRead: string[] | undefined;
   /** Whether the response holds the body and every mention expanded. */
   isWhole: boolean;
+  /** Whether the response is one page of a body read with offset and bytes. */
+  isPage: boolean;
 }
 
 const NOT_EXPANDED_MENTION = /@note:([^\s:]+): not expanded \((?:budget|depth)\)/g;
 
-const mentionIdsOf = (mentionsIndex: unknown): string[] =>
-  Array.isArray(mentionsIndex) ? mentionsIndex.map((entry: { id: string }) => entry.id) : [];
+interface MentionsIndexEntry { id: string; type: string; readWith?: string }
+
+/** The ids get_note can read: the resolved note mentions; a table, repo or playbook mention, or a note that does not resolve, has no get_note read. */
+const mentionIdsOf = (mentionsIndex: unknown): string[] => {
+  if (!Array.isArray(mentionsIndex)) return [];
+  const readableNotes = (mentionsIndex as MentionsIndexEntry[]).filter(({ type, readWith }) => type === 'note' && readWith !== undefined);
+  return readableNotes.map(({ id }) => id);
+};
 
 const notExpandedMentionIdsOf = (expandedBody: unknown): string[] =>
   typeof expandedBody === 'string' ? [...expandedBody.matchAll(NOT_EXPANDED_MENTION)].map((match) => match[1]!) : [];
@@ -50,15 +60,15 @@ export function noteReadEventOf(response: Record<string, unknown>): NoteReadEven
   const isPage = typeof offset === 'number' && typeof bytes === 'number' && typeof totalBytes === 'number';
   if (isPage) {
     const isFirstPage = Array.isArray(mentionsIndex);
-    return { start: offset, end: offset + bytes, totalBytes, mentionIdsToRead: isFirstPage ? mentionIdsOf(mentionsIndex) : undefined, isWhole: false };
+    return { start: offset, end: offset + bytes, totalBytes, mentionIdsToRead: isFirstPage ? mentionIdsOf(mentionsIndex) : undefined, isWhole: false, isPage: true };
   }
 
   const bodyByteCount = Buffer.byteLength(bodyMd, 'utf8');
   const isBodyWithMentionsIndex = complete === false;
-  if (isBodyWithMentionsIndex) return { start: 0, end: bodyByteCount, totalBytes: bodyByteCount, mentionIdsToRead: mentionIdsOf(mentionsIndex), isWhole: false };
+  if (isBodyWithMentionsIndex) return { start: 0, end: bodyByteCount, totalBytes: bodyByteCount, mentionIdsToRead: mentionIdsOf(mentionsIndex), isWhole: false, isPage: false };
 
   const cutMentionIds = notExpandedMentionIdsOf(expandedBody);
-  return { start: 0, end: bodyByteCount, totalBytes: bodyByteCount, mentionIdsToRead: cutMentionIds, isWhole: cutMentionIds.length === 0 };
+  return { start: 0, end: bodyByteCount, totalBytes: bodyByteCount, mentionIdsToRead: cutMentionIds, isWhole: cutMentionIds.length === 0, isPage: false };
 }
 
 function mergedRangesOf(ranges: ByteRange[]): ByteRange[] {
@@ -81,12 +91,31 @@ export function progressAfterRead({ previous, noteId, rev, event }: { previous: 
     bodyRanges: mergedRangesOf([...kept.bodyRanges, [event.start, event.end]]),
     mentionIdsToRead: event.mentionIdsToRead ?? kept.mentionIdsToRead,
     mentionIdsRead: kept.mentionIdsRead,
+    mentionPages: kept.mentionPages,
   };
 }
 
 /** The progress after a mention of the mission note was read whole. */
 export const progressAfterMentionRead = ({ previous, mentionId }: { previous: NoteReadProgress; mentionId: string }): NoteReadProgress =>
   previous.mentionIdsRead.includes(mentionId) ? previous : { ...previous, mentionIdsRead: [...previous.mentionIdsRead, mentionId] };
+
+/** The progress after one page of a mention that pages itself; the mention counts as read once its contiguous pages cover [0, totalBytes]. */
+export function progressAfterMentionPage({ previous, mentionId, event }: { previous: NoteReadProgress; mentionId: string; event: NoteReadEvent }): NoteReadProgress {
+  const pagesBefore = previous.mentionPages?.[mentionId];
+  const continuesPages = pagesBefore !== undefined && pagesBefore.totalBytes === event.totalBytes;
+  const ranges = mergedRangesOf([...(continuesPages ? pagesBefore.ranges : []), [event.start, event.end]]);
+  const [firstRange] = ranges;
+  const coversMention = ranges.length === 1 && firstRange![0] === 0 && firstRange![1] >= event.totalBytes;
+  const withPages = { ...previous, mentionPages: { ...previous.mentionPages, [mentionId]: { totalBytes: event.totalBytes, ranges } } };
+  return coversMention ? progressAfterMentionRead({ previous: withPages, mentionId }) : withPages;
+}
+
+/** The progress after a get_note response of a mention the mission note owes: a whole response reads it, a page counts toward its pages, anything else changes nothing. */
+export function progressAfterOwedMentionRead({ previous, mentionId, event }: { previous: NoteReadProgress; mentionId: string; event: NoteReadEvent }): NoteReadProgress | undefined {
+  if (event.isWhole) return progressAfterMentionRead({ previous, mentionId });
+  if (event.isPage) return progressAfterMentionPage({ previous, mentionId, event });
+  return undefined;
+}
 
 /** Whether the progress covers every body byte of the note at this revision and every mention it names. */
 export function isNoteReadInFull(progress: NoteReadProgress | undefined, { noteId, rev }: { noteId: string; rev: number }): boolean {

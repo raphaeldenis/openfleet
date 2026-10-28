@@ -121,6 +121,15 @@ async function aManagerWithPagedMissionNote(rig: Rig, name: string) {
   return { ...(await aManagerWithMissionNote(rig, { name, bodyMd: body })), mentionIds };
 }
 
+const linesOfBytes = (byteCount: number, line = 'a line of the note\n') => line.repeat(Math.ceil(byteCount / line.length)).slice(0, byteCount);
+
+/** A mission note over the read cap that mentions one note annex and one table, which no get_note can read. */
+async function aManagerWithNoteAnnexAndTableMentions(rig: Rig, { name, annexBodyMd }: { name: string; annexBodyMd: string }) {
+  const annex = await rig.aNote(`${name} annex`, annexBodyMd);
+  const body = `@note:${annex.id} @table:${name}-store\n${linesOfBytes(BODY_BYTES_NEEDING_PAGES / 2)}`;
+  return { ...(await aManagerWithMissionNote(rig, { name, bodyMd: body })), annexId: annex.id };
+}
+
 const closeRig = async (rig: Rig | undefined) => { await Promise.all(openClients.splice(0).map((client) => client.close())); await rig?.daemon.close(); };
 
 describe('the note_not_read warning when the enforcement is the default', () => {
@@ -146,7 +155,17 @@ describe('the note_not_read warning when the enforcement is the default', () => 
     expect(isError).toBeUndefined();
     expect(answer.id).toBeTruthy();
     expect(noteWarningOf(answer)?.message).toContain('Call get_note on your mission note');
-    expect(noteWarningOf(answer)?.message).toContain('then spawn again');
+  });
+
+  it('tells a warned manager that its child was created, so it must not spawn the same child again', async () => {
+    const { client } = await aManagerWithMissionNote(rig, { name: 'Warned-once' });
+
+    const { answer } = await rig.spawnChild(client, 'warned-once-child');
+
+    const message = noteWarningOf(answer)?.message ?? '';
+    expect(message).toContain('child is created');
+    expect(message).not.toContain('no child is spawned');
+    expect(message).not.toContain('then spawn again');
   });
 
   it('warns a manager that read only the first page of its note', async () => {
@@ -188,6 +207,48 @@ describe('the note_not_read warning when the enforcement is the default', () => 
 
     expect(isError).toBeUndefined();
     expect(noteWarningOf(answer)).toBeUndefined();
+  });
+
+  it('lets a spawn pass without a warning after every page and the note annex were read, though the table mention cannot be read', async () => {
+    const { client, note, annexId } = await aManagerWithNoteAnnexAndTableMentions(rig, { name: 'Annex-reader', annexBodyMd: 'annex' });
+    await rig.readAllPagesOf(client, note.id);
+    await rig.getNote(client, annexId);
+
+    const { isError, answer } = await rig.spawnChild(client, 'annex-reader-child');
+
+    expect(isError).toBeUndefined();
+    expect(noteWarningOf(answer)).toBeUndefined();
+  });
+
+  it('warns a manager that read every page but not the note annex, even with a table mention in the note', async () => {
+    const { client, note } = await aManagerWithNoteAnnexAndTableMentions(rig, { name: 'Annex-skipper', annexBodyMd: 'annex' });
+    await rig.readAllPagesOf(client, note.id);
+
+    const { answer } = await rig.spawnChild(client, 'annex-skipper-child');
+
+    expect(noteWarningOf(answer)).toBeDefined();
+  });
+
+  it('lets a spawn pass without a warning when the note annex, over the read cap, was read by contiguous pages', async () => {
+    const { client, note, annexId } = await aManagerWithNoteAnnexAndTableMentions(rig, { name: 'Paged-annex-reader', annexBodyMd: linesOfBytes(40 * 1024) });
+    await rig.readAllPagesOf(client, note.id);
+    const annexPages = await rig.readAllPagesOf(client, annexId);
+
+    const { isError, answer } = await rig.spawnChild(client, 'paged-annex-child');
+
+    expect(annexPages.length).toBeGreaterThan(1);
+    expect(isError).toBeUndefined();
+    expect(noteWarningOf(answer)).toBeUndefined();
+  });
+
+  it('warns a manager that read a single page of a note annex over the read cap', async () => {
+    const { client, note, annexId } = await aManagerWithNoteAnnexAndTableMentions(rig, { name: 'One-page-annex-reader', annexBodyMd: linesOfBytes(40 * 1024) });
+    await rig.readAllPagesOf(client, note.id);
+    await rig.getNote(client, annexId);
+
+    const { answer } = await rig.spawnChild(client, 'one-page-annex-child');
+
+    expect(noteWarningOf(answer)).toBeDefined();
   });
 
   it('warns a manager whose note changed after it read the note in full', async () => {
@@ -373,6 +434,8 @@ describe('the note_not_read refusal when the enforcement is injected as refuse',
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain('note_not_read');
     expect(refused.text).toContain('Call get_note on your mission note');
+    expect(refused.text).toContain('no child is spawned');
+    expect(refused.text).toContain('then spawn again');
     expect(accepted.isError).toBeUndefined();
     expect(accepted.answer.warnings).toBeUndefined();
     expect(rig.daemon.db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE parent_id = ?').get(manager.id)).toEqual({ count: 1 });
