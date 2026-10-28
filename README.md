@@ -6,6 +6,8 @@ Table MCP reads include `describe_data_store`, `query_data_store`, and `get_data
 
 Open-source desktop workspace for fleets of AI coding agents: sessions in git worktrees, manager agents with a pulse, mission notes, tables, triggers and human governance.
 
+A manager equips its project with `bootstrap_project_profile`; see [the project profile skeleton](docs/project-profile-bootstrap.md) for what it creates and what it never does.
+
 Status: phase 1 (foundation). See `docs/` for the phase smoke checklist; design lives in the author's superpowers folder for now.
 
 ## Sleep protection

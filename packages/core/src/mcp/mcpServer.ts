@@ -28,7 +28,9 @@ import { registerManagerProfileTools } from './managerProfileTools.js';
 import { registerNoteTools } from './noteTools.js';
 import { registerKnowledgeTools, type KnowledgeToolSearchPort } from './knowledgeTools.js';
 import { registerNoteVersionTools } from './noteVersionTools.js';
+import { registerProjectProfileTools } from './projectProfileTools.js';
 import { registerProjectTools } from './projectTools.js';
+import type { ProjectProfileBootstrap } from '../managers/projectProfileBootstrap.js';
 import { REVIEWER_ROLE, registerShipVerdictTools } from './shipVerdictTools.js';
 import { registerStepFindingTools } from './stepFindingTools.js';
 import { registerTableTools } from './tableTools.js';
@@ -61,7 +63,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
+export function createMcpHandler(deps: { projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -77,6 +79,7 @@ export function createMcpHandler(deps: { reviewFindings?: ReviewFindingsReposito
     if (deps.reviewFindings) registerStepFindingTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, caller, ...(deps.ticketPattern === undefined ? {} : { ticketPattern: deps.ticketPattern }) });
     registerManagerLinkTools(toolServer, { managers: deps.managers, caller });
     registerManagerProfileTools(toolServer, { managers: deps.managers, caller });
+    if (deps.projectProfile) registerProjectProfileTools(toolServer, { projectProfile: deps.projectProfile, managers: deps.managers, sessions: deps.sessions, caller });
     if (deps.managerBase) registerManagerBaseTools(toolServer, { managerBase: deps.managerBase, managers: deps.managers, caller });
     if (deps.managerDenials) registerDeniedCommandTools(toolServer, { managerDenials: deps.managerDenials, sessions: deps.sessions, caller });
     registerGovernanceTools(toolServer, { governanceQueue: deps.governanceQueue, caller });
