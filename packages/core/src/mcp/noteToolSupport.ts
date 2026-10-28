@@ -68,5 +68,11 @@ export function createNoteToolSupport({ notes, noteRepo, docs, caller, isMission
     };
   };
 
-  return { author, requireProject, requireOwnNote, requireWritableNote, writeBody, noteSummary, noteView, noteMentionBlocksView };
+  /** The summary plus the docs path, the part of a `get_note` response that does not depend on how much of the body it carries. */
+  const noteHeader = (note: Note) => {
+    const docsRelativePath = docs.docsRelativePath(note);
+    return { ...noteSummary(note), ...(docsRelativePath === null ? {} : { docsRelativePath }) };
+  };
+
+  return { author, requireProject, requireOwnNote, requireWritableNote, writeBody, noteSummary, noteView, noteMentionBlocksView, noteHeader };
 }

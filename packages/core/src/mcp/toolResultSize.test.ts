@@ -436,6 +436,152 @@ describe('MCP tool results are compact', () => {
       expect(note.expandedBody).toContain(`@note:${third.id}: not expanded (depth)`);
       expect(note.expandedBody).not.toContain('third body');
     });
+
+    describe('get_note stays under the safe read size', () => {
+      const SAFE_BYTES = 24 * 1024;
+      const MENTION_COUNT = 5;
+
+      const createMentioned = async (bodyBytes: number) =>
+        parsed(await call('create_note', { title: 'Mentioned', body_md: 'm'.repeat(bodyBytes), shared: true }));
+
+      const createMentioning = async (mentionedIds: string[], bodyBytes: number) => {
+        const mentions = mentionedIds.map((id) => `@note:${id}`).join(' ');
+        const body = `${mentions}\n${'line of the body\n'.repeat(Math.ceil(bodyBytes / 17))}`.slice(0, bodyBytes);
+        return { created: parsed(await call('create_note', { title: 'Source', body_md: body })), body };
+      };
+
+      const readAllPages = async (noteId: string) => {
+        const pages: Record<string, any>[] = [];
+        let offset = 0;
+        for (;;) {
+          const result = await call('get_note', { note: noteId, offset });
+          pages.push({ ...parsed(result), responseBytes: bytesOf(result) });
+          const nextOffset = pages.at(-1)!.nextOffset;
+          if (nextOffset === undefined) return pages;
+          offset = nextOffset;
+        }
+      };
+
+      it('agent gets every page of a 60 KB note with 5 mentions under the safe size, and the whole body back by pages', async () => {
+        const mentioned = await Promise.all(Array.from({ length: MENTION_COUNT }, () => createMentioned(3000)));
+        const { created, body } = await createMentioning(mentioned.map((m) => m.id), 60 * 1024);
+
+        const pages = await readAllPages(created.id);
+
+        expect(pages.length).toBeGreaterThan(1);
+        for (const page of pages) expect(page.responseBytes).toBeLessThanOrEqual(SAFE_BYTES);
+        expect(pages.map((page) => page.bodyMd).join('')).toBe(body);
+      });
+
+      it('agent never sees a silent cut: every page says it is incomplete and says where to continue', async () => {
+        const mentioned = await Promise.all(Array.from({ length: MENTION_COUNT }, () => createMentioned(3000)));
+        const { created, body } = await createMentioning(mentioned.map((m) => m.id), 60 * 1024);
+
+        const pages = await readAllPages(created.id);
+        const allButLast = pages.slice(0, -1);
+
+        for (const page of pages) expect(page.complete).toBe(false);
+        for (const page of allButLast) {
+          expect(page.truncated).toBe(true);
+          expect(page.nextAction).toContain(`get_note note=${created.id} offset=${page.nextOffset}`);
+        }
+        expect(pages.at(-1)).toMatchObject({ truncated: false, offset: pages.at(-1)!.offset });
+        expect(pages.at(-1)).not.toHaveProperty('nextOffset');
+        expect(pages[0]!.totalBytes).toBe(Buffer.byteLength(body, 'utf8'));
+        expect(pages.reduce((sum, page) => sum + page.bytes, 0)).toBe(pages[0]!.totalBytes);
+      });
+
+      it('agent gets the full mentions index on the first page, one readable entry per mention', async () => {
+        const mentioned = await Promise.all(Array.from({ length: MENTION_COUNT }, (_, index) => createMentioned(1000 * (index + 1))));
+        const { created } = await createMentioning(mentioned.map((m) => m.id), 60 * 1024);
+
+        const [firstPage] = await readAllPages(created.id);
+
+        expect(firstPage!.mentionsIndex).toEqual(mentioned.map((m, index) => ({
+          id: m.id, type: 'note', bytes: 1000 * (index + 1), readWith: `get_note note=${m.id}`,
+        })));
+      });
+
+      it('agent gets the body whole with a mentions index when only the expanded mentions overflow', async () => {
+        const mentioned = await Promise.all(Array.from({ length: MENTION_COUNT }, () => createMentioned(8000)));
+        const { created, body } = await createMentioning(mentioned.map((m) => m.id), 4000);
+
+        const result = await call('get_note', { note: created.id });
+        const note = parsed(result);
+
+        expect(bytesOf(result)).toBeLessThanOrEqual(SAFE_BYTES);
+        expect(note.bodyMd).toBe(body);
+        expect(note).not.toHaveProperty('expandedBody');
+        expect(note).not.toHaveProperty('truncated');
+        expect(note.complete).toBe(false);
+        expect(note.mentionsIndex).toHaveLength(MENTION_COUNT);
+        expect(note.nextAction).toContain('get_note note=<id>');
+      });
+
+      it('agent gets the same overflow protection with mentions_only', async () => {
+        const mentioned = await Promise.all(Array.from({ length: MENTION_COUNT }, () => createMentioned(8000)));
+        const { created } = await createMentioning(mentioned.map((m) => m.id), 4000);
+
+        const result = await call('get_note', { note: created.id, mentions_only: true });
+        const note = parsed(result);
+
+        expect(bytesOf(result)).toBeLessThanOrEqual(SAFE_BYTES);
+        expect(note).not.toHaveProperty('mentionBlocks');
+        expect(note.complete).toBe(false);
+        expect(note.mentionsIndex).toHaveLength(MENTION_COUNT);
+      });
+
+      it('agent keeps the exact historical shape of a small note: no new field', async () => {
+        const mentioned = await createMentioned(100);
+        const created = parsed(await call('create_note', { title: 'Small', body_md: `see @note:${mentioned.id}` }));
+
+        const note = parsed(await call('get_note', { note: created.id }));
+
+        expect(Object.keys(note).sort()).toEqual(['bodyMd', 'expandedBody', 'fileBacked', 'folder', 'id', 'rev', 'shared', 'title']);
+        expect(note).not.toHaveProperty('complete');
+        expect(note).not.toHaveProperty('truncated');
+        expect(note).not.toHaveProperty('mentionsIndex');
+      });
+
+      it('agent lowers the cap with max_bytes and still gets the whole body by pages', async () => {
+        const body = 'a line of text\n'.repeat(400);
+        const created = parsed(await call('create_note', { title: 'Medium', body_md: body }));
+
+        const first = await call('get_note', { note: created.id, max_bytes: 2048 });
+        const page = parsed(first);
+
+        expect(bytesOf(first)).toBeLessThanOrEqual(2048);
+        expect(page).toMatchObject({ truncated: true, complete: false, offset: 0 });
+        expect(body.startsWith(page.bodyMd)).toBe(true);
+      });
+
+      it('agent cannot raise the cap above the safe size with max_bytes', async () => {
+        const created = parsed(await call('create_note', { title: 'Big', body_md: 'x'.repeat(60 * 1024) }));
+
+        const result = await call('get_note', { note: created.id, max_bytes: 10 * 1024 * 1024 });
+
+        expect(bytesOf(result)).toBeLessThanOrEqual(SAFE_BYTES);
+        expect(parsed(result).truncated).toBe(true);
+      });
+
+      it('agent gets multi-byte text back intact across pages', async () => {
+        const body = 'é€😀 texte accentué\n'.repeat(3000);
+        const created = parsed(await call('create_note', { title: 'Unicode', body_md: body }));
+
+        const pages = await readAllPages(created.id);
+
+        expect(pages.map((page) => page.bodyMd).join('')).toBe(body);
+        for (const page of pages) expect(page.responseBytes).toBeLessThanOrEqual(SAFE_BYTES);
+      });
+
+      it('agent gets an empty last page, not an error, for an offset past the end', async () => {
+        const created = parsed(await call('create_note', { title: 'Short', body_md: 'tiny' }));
+
+        const page = parsed(await call('get_note', { note: created.id, offset: 999 }));
+
+        expect(page).toMatchObject({ bodyMd: '', truncated: false, complete: false, totalBytes: 4 });
+      });
+    });
   });
 
   describe('table tools', () => {

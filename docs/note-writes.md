@@ -8,6 +8,18 @@ A note that any manager links as its mission (`managers.mission_note_id`) refuse
 
 The note is recognised by its link, never by its id: unlinking it makes it writable again, and while two managers link it, it stays protected. Reads (`get_note`, `get_note_version`, `list_note_versions`) and `create_note` are unaffected, and so are a manager's journal table and its other notes. The human keeps every right through the app and the admin REST API.
 
+## `get_note` never exceeds the safe read size
+
+A `get_note` response is at most `NOTE_READ_SAFE_BYTES` (24 KiB of UTF-8 JSON, `packages/core/src/mcp/noteReadPaging.ts`), the size the agent harness shows whole instead of spilling to a file. The optional `max_bytes` lowers that cap (floor 2 KiB) and never raises it; the optional `offset` is a byte offset into the body (snapped down to a character start). Neither adds an error code.
+
+The cap applies in this order:
+
+1. The response (default shape, or `mentions_only`) fits and `offset` is absent or 0: it is returned unchanged. It carries no `complete`, `truncated` or `mentionsIndex` field, and a response without `complete: false` is a whole read.
+2. Body and expanded mentions overflow, the body fits: the result holds `bodyMd` whole, no `expandedBody` or `mentionBlocks`, `complete: false`, `nextAction`, and `mentionsIndex`, one `{ id, type, bytes, readWith: "get_note note=<id>" }` per distinct mention written in the body. `bytes` is the size of the mentioned note's body; an unresolved mention has `bytes: 0` and no `readWith`. Mentions of the mentioned notes show up in their own `get_note`.
+3. The body alone overflows, or `offset` is above 0: the body is paged. Each page carries `bodyMd` (the slice), `offset`, `bytes`, `totalBytes`, `truncated`, `complete: false` and, while more remains, `nextOffset` and `nextAction: "get_note note=<id> offset=<nextOffset>"`. `nextOffset` is where the slice ends, so contiguous pages cover `[0, totalBytes]` with no byte lost or repeated. `mentionsIndex` is on the page at offset 0. The last page has `truncated: false` and no `nextOffset`; an offset past the end returns an empty last page.
+
+A note is read in full when its response has no `complete: false`, or when contiguous pages from offset 0 to `totalBytes` are read together with every `mentionsIndex` entry.
+
 ## `update_note_section`
 
 `expected_rev` is required. When it is the current rev, the section is replaced.

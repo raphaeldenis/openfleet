@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Note, NoteChangeEvent, NoteChangeSource, NoteFolder } from '@openfleet/shared';
 import { afterCommit, inTransaction as runInTransaction, recoverStuckTransaction } from '../db/transaction.js';
-import { expandMentionBlocks, expandMentions, type MentionLookup } from './mentionExpander.js';
+import { expandMentionBlocks, expandMentions, indexMentions, type MentionIndexEntry, type MentionLookup } from './mentionExpander.js';
 import type { NoteRepository, NoteUpdateResult } from './noteRepository.js';
 import { appendSection, replaceSection } from './noteSections.js';
 
@@ -280,6 +280,12 @@ export class NoteService {
     const note = this.require(id);
     const mentionBlocks = this.expandMentionBlocks(note.bodyMd, this.mentionLookupFor(viewerProjectId), { rootNoteId: note.id });
     return { note, mentionBlocks };
+  }
+
+  /** One entry per mention the note's own body writes, with the size of the mentioned note; nothing is expanded. */
+  getMentionIndex(id: string, { viewerProjectId }: GetExpandedOptions): MentionIndexEntry[] {
+    const note = this.require(id);
+    return indexMentions(note.bodyMd, this.mentionLookupFor(viewerProjectId));
   }
 
   /** Unknown ids fall through to the CAS path's own NoteNotFoundError; only an existing, file-backed note is refused here. */
