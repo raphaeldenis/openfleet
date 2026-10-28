@@ -43,14 +43,12 @@ const permissionEntry = (permission: ScapeGovernanceRequest) => {
 };
 
 function lawsSections(governanceRequests: ScapeGovernanceRequest[]): string[] {
-  const laws = approvedRequestsOf(governanceRequests, 'law');
   const permissions = approvedRequestsOf(governanceRequests, 'permission');
-  const hasNothingToState = laws.length === 0 && permissions.length === 0;
-  if (hasNothingToState) return [];
+  const hasNoPermission = permissions.length === 0;
+  if (hasNoPermission) return [];
 
-  const standingLaws = laws.length === 0 ? [] : [['### Standing laws', ...laws.map((law) => bulletOf(law.text))].join('\n')];
-  const permissionSection = permissions.length === 0 ? [] : [['### Permissions', ...permissions.map((permission) => bulletOf(permissionEntry(permission)))].join('\n')];
-  return ['## Laws', ...standingLaws, ...permissionSection];
+  const permissionSection = ['### Permissions', ...permissions.map((permission) => bulletOf(permissionEntry(permission)))].join('\n');
+  return ['## Laws', permissionSection];
 }
 
 const notConverted = (what: string): ExposedResource => ({ line: `- [not converted: ${what}]`, isConverted: false, isPendingPlaybook: false });
@@ -86,7 +84,7 @@ function closedNoteBody(noteBody: string): string {
   return openFence === undefined ? body : `${body}\n${openFence}`;
 }
 
-/** Builds the mission of an imported manager: the mission note body, the approved laws and permissions in prose, and the exposed resources as mentions, with Scape tool references rewritten for OpenFleet. */
+/** Builds the mission of an imported manager: the mission note body, the approved permissions in prose under `## Laws` (the laws live in the laws table, not in the mission), and the exposed resources as mentions, with Scape tool references rewritten for OpenFleet. */
 export function composeMission(parts: MissionParts): Mission {
   const exposedResources = parts.resourceGrants.map((grant) => exposedResourceOf(grant, parts.availabilityOf));
   const exposedResourcesSection = exposedResources.length === 0 ? [] : [['## Exposed Resources', ...exposedResources.map(({ line }) => line)].join('\n')];

@@ -10,7 +10,7 @@ type RawGovernanceRequest = Record<string, unknown>;
 export const anApprovedLaw = (text: string, createdAt = 811_100_000): RawGovernanceRequest => ({ id: `law-${text}`, kind: 'law', status: 'approved', text, incident: 'why', createdAt });
 export const aDeniedLaw = (text: string): RawGovernanceRequest => ({ ...anApprovedLaw(text), status: 'denied', denialReason: 'no' });
 export const aPendingLaw = (text: string): RawGovernanceRequest => ({ ...anApprovedLaw(text), status: 'pending' });
-export const anApprovedPermission = (input: { text: string; scope: string; condition: string; exclusions: string }): RawGovernanceRequest => ({
+export const anApprovedPermission = (input: { text: string; scope: string; condition: string; exclusions: string; createdAt?: number }): RawGovernanceRequest => ({
   id: `permission-${input.text}`, kind: 'permission', status: 'approved', incident: 'why', createdAt: 811_100_100, ...input,
 });
 export const anApprovedResourceAccess = (): RawGovernanceRequest => ({

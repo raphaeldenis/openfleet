@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { renderImportReport } from './importReport.js';
 import { importScape } from './importScape.js';
-import { aGrant, anApprovedLaw, anArgus, LEAD_ARGUS_ID, writeArguses } from './scapeArguses.testkit.js';
+import { aGrant, anApprovedLaw, anApprovedPermission, anArgus, LEAD_ARGUS_ID, writeArguses } from './scapeArguses.testkit.js';
 import { buildScapeFixture, editScapeNotes, LEXICAL_NOTE_ID, MARKDOWN_NOTE_ID, type ScapeFixture } from './scapeFixture.testkit.js';
 import { hashOfValues } from './scapeLedger.js';
 
@@ -53,7 +53,7 @@ describe('importScape rewrites the Scape tool references of a manager mission', 
     setMissionInScape(MISSION_IN_SCAPE);
     writeArguses(fixture, [anArgus({
       name: 'Alpha',
-      governanceRequests: [anApprovedLaw('never push without a go')],
+      governanceRequests: [anApprovedLaw('never push without a go'), anApprovedPermission({ text: 'may merge docs PRs', scope: '', condition: '', exclusions: '' })],
       resourceGrants: [aGrant({ resourceType: 'note', resourceId: LEXICAL_NOTE_ID, access: 'read' })],
     })]);
   });
@@ -87,13 +87,15 @@ describe('importScape rewrites the Scape tool references of a manager mission', 
     expect(mission).toContain('Report with message_parent.');
   });
 
-  it('keeps the laws and the exposed resources as the mission always carried them', () => {
+  it('keeps the permissions and the exposed resources, and copies no law into the mission', () => {
     run();
 
     const mission = missionOfAlpha();
 
-    expect(mission).toContain('## Laws\n\n### Standing laws\n- never push without a go');
+    expect(mission).toContain('## Laws\n\n### Permissions\n- may merge docs PRs');
     expect(mission).toContain(`## Exposed Resources\n- @note:${LEXICAL_NOTE_ID} (read)`);
+    expect(mission).not.toContain('never push without a go');
+    expect(mission).not.toContain('### Standing laws');
   });
 
   it('counts what it renamed, pointed at the shims and could not map in the report', () => {

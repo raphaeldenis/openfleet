@@ -204,14 +204,12 @@ describe('importing the approved Scape laws into the laws table', () => {
     expect(JSON.stringify(report)).not.toContain('Secret wording of the law.');
   });
 
-  it('leaves the mission of the manager unchanged by the laws import', () => {
-    importWithLaws([aLaw({ id: 'req-1', text: 'Mission keeps me.' })]);
-    const missionBefore = missionOf(LEAD_ARGUS_ID);
+  it('does not copy the laws into the mission', () => {
+    importWithLaws([aLaw({ id: 'req-1', text: 'Mission does not hold me.' })]);
 
-    runImport();
-
-    expect(missionBefore).toContain('Mission keeps me.');
-    expect(missionOf(LEAD_ARGUS_ID)).toBe(missionBefore);
+    expect(lawsOf(LEAD_ARGUS_ID)).toHaveLength(1);
+    expect(missionOf(LEAD_ARGUS_ID)).not.toContain('Mission does not hold me.');
+    expect(missionOf(LEAD_ARGUS_ID)).not.toContain('Standing laws');
   });
 
   it('adds the laws to the --json report without renaming any existing key', () => {

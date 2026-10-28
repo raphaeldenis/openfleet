@@ -26,7 +26,7 @@ const FLAGS = {
 } as const;
 
 const REIMPORT_NOTE =
-  'A re-import compares each record with what the last import wrote: a Scape change is applied to a record OpenFleet left alone; a record edited or deleted in OpenFleet is a conflict and is kept (a deleted one is never written again); a record removed in Scape is reported and kept. The approved Scape laws are written to the laws table the same way: a law edited, withdrawn or deleted in OpenFleet is never overwritten, reactivated or written again. Run --dry-run first to see the outcome per entity.';
+  'A re-import compares each record with what the last import wrote: a Scape change is applied to a record OpenFleet left alone; a record edited or deleted in OpenFleet is a conflict and is kept (a deleted one is never written again); a record removed in Scape is reported and kept. The approved Scape laws are written to the laws table the same way: a law edited, withdrawn or deleted in OpenFleet is never overwritten, reactivated or written again. The laws are no longer copied into the manager mission, so an imported manager whose mission is intact has it rewritten without them (updated) and one edited in OpenFleet is a conflict and keeps its text. Run --dry-run first to see the outcome per entity.';
 
 const USAGE = [
   'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--state-dir <dir>] [--claude-dir <dir>] [--scape-claude-dir <dir>] [--allow-reimport]',
