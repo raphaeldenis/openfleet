@@ -34,14 +34,18 @@ function deferred<Value>() {
   return { promise, resolve };
 }
 
-function envelopeError(code: string, status: number) {
-  const envelope = { error: code, kind: 'not_found', retry: 'never', message: 'raw daemon words' };
+function envelopeError(code: string, status: number, { kind = 'not_found', retry = 'never' } = {}) {
+  const envelope = { error: code, kind, retry, message: 'raw daemon words' };
   return new ApiError(status, 'GET /x', code, envelope as never);
 }
 
-async function renderDetails(session: Session, getHandoffPreview = vi.fn((id: string) => Promise.resolve(previewFor(id)))) {
+async function renderDetails(
+  session: Session,
+  getHandoffPreview = vi.fn((id: string) => Promise.resolve(previewFor(id))),
+  saveHandoff = vi.fn(),
+) {
   const currentSession = signal(session);
-  const api = { updateModel: vi.fn(), closeSession: vi.fn(), sendInput: vi.fn(), renameSession: vi.fn(), getHandoffPreview };
+  const api = { updateModel: vi.fn(), closeSession: vi.fn(), sendInput: vi.fn(), renameSession: vi.fn(), getHandoffPreview, saveHandoff };
   await render(SessionDetailsComponent, {
     bindings: [inputBinding('session', currentSession)],
     providers: [
@@ -106,16 +110,44 @@ describe('SessionDetailsComponent write handoff', () => {
     expect(save).toHaveAccessibleDescription('Save is off: this project has no docs folder yet.');
   });
 
-  it('says saving is not available yet when the daemon target is usable and Save is pressed', async () => {
+  describe('when the docs folder can receive the handoff', () => {
     const usable = previewFor('s1', { target: { available: true, relativePath: 'handoffs/2026-10-04-gimli.md', writeOnCloseDefault: true } });
-    await renderDetails(aSession(), vi.fn(() => Promise.resolve(usable)));
-    await userEvent.click(writeHandoffButton());
+    const usablePreview = vi.fn(() => Promise.resolve(usable));
 
-    await screen.findByRole('textbox', { name: /Goal/ });
-    await userEvent.click(screen.getByRole('button', { name: 'Save handoff' }));
+    it('saves the edited goal and says where the file is written', async () => {
+      const saveHandoff = vi.fn().mockResolvedValue({ relativePath: 'handoffs/2026-10-04-gimli-2.md' });
+      await renderDetails(aSession(), usablePreview, saveHandoff);
+      await userEvent.click(writeHandoffButton());
+      const goal = await screen.findByRole('textbox', { name: /Goal/ });
+      await userEvent.clear(goal);
+      await userEvent.type(goal, 'Ship the save');
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Saving handoffs is not available yet.');
-    expect(screen.getByRole('textbox', { name: /Goal/ })).toHaveValue('Goal of s1');
+      await userEvent.click(screen.getByRole('button', { name: 'Save handoff' }));
+
+      expect(await screen.findByText('Saved to handoffs/2026-10-04-gimli-2.md')).toBeTruthy();
+      expect(saveHandoff).toHaveBeenCalledTimes(1);
+      expect(saveHandoff).toHaveBeenCalledWith('s1', expect.objectContaining({ goal: 'Ship the save', state: 'idle on main' }));
+    });
+
+    it('says the docs folder is not writable, keeps the edits, and saves them again on Try again', async () => {
+      const saveHandoff = vi
+        .fn()
+        .mockRejectedValueOnce(envelopeError('docs_folder_not_writable', 409, { kind: 'conflict', retry: 'later' }))
+        .mockResolvedValueOnce({ relativePath: 'handoffs/2026-10-04-gimli.md' });
+      await renderDetails(aSession(), usablePreview, saveHandoff);
+      await userEvent.click(writeHandoffButton());
+      const goal = await screen.findByRole('textbox', { name: /Goal/ });
+      await userEvent.clear(goal);
+      await userEvent.type(goal, 'Keep me');
+      await userEvent.click(screen.getByRole('button', { name: 'Save handoff' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('The handoff was not written: the docs folder is not writable — fix the folder permissions, then try again.');
+      expect(screen.getByRole('textbox', { name: /Goal/ })).toHaveValue('Keep me');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+      expect(await screen.findByText('Saved to handoffs/2026-10-04-gimli.md')).toBeTruthy();
+      expect(saveHandoff).toHaveBeenLastCalledWith('s1', expect.objectContaining({ goal: 'Keep me' }));
+    });
   });
 
   it('closes the panel and gives focus back to the button on Cancel', async () => {

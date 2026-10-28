@@ -31,8 +31,7 @@ test.afterEach(() => {
   rmSync(docsFolder, { recursive: true, force: true });
 });
 
-// Fails today: the panel's Save answers "Saving handoffs is not available yet." (handoff-preview.adapter.ts:6, pinned by handoff-preview.adapter.spec.ts:51 and session-details.handoff.spec.ts:109), so no file is written. Becomes a plain test() once HF-06 wires the Save to POST /api/sessions/:id/handoff.
-test.fixme('saving the handoff of a session in a project writes the file with the edited goal and says where', async ({ page, request }) => {
+test('saving the handoff of a session in a project writes the file with the edited goal and says where', async ({ page, request }) => {
   const project = await createProjectWithDocsFolder(request);
   const session = await fakeSessions.create(request, { name: uniqueName('Handoff save'), projectId: project.id });
   await session.hooks.announceIdle();

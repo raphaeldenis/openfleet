@@ -1,22 +1,24 @@
 import type { HandoffContent, HandoffPreview } from '@openfleet/shared';
-import { copyFor } from '../../core/error-copy';
+import { copyFor, type ErrorAction } from '../../core/error-copy';
 import type { FleetApiService } from '../../core/fleet-api.service';
 import { HandoffPreviewApiError, type HandoffPreviewApi, type HandoffSaveResult } from './handoff-preview.api';
 
-export const SAVE_NOT_AVAILABLE_COPY = 'Saving handoffs is not available yet.';
+async function failingWithCopyOf<Result>(action: ErrorAction, call: () => Promise<Result>): Promise<Result> {
+  try {
+    return await call();
+  } catch (error) {
+    throw new HandoffPreviewApiError(copyFor(error, { action }).text);
+  }
+}
 
-/** Connects the preview store to the daemon: the preview is read from the real route, saving is not offered yet. */
-export function createHandoffPreviewApi(fleetApi: Pick<FleetApiService, 'getHandoffPreview'>): HandoffPreviewApi {
+/** Connects the preview store to the daemon: the preview is read from, and the handoff written through, the real routes. */
+export function createHandoffPreviewApi(fleetApi: Pick<FleetApiService, 'getHandoffPreview' | 'saveHandoff'>): HandoffPreviewApi {
   return {
-    async getPreview(sessionId: string): Promise<HandoffPreview> {
-      try {
-        return await fleetApi.getHandoffPreview(sessionId);
-      } catch (error) {
-        throw new HandoffPreviewApiError(copyFor(error, { action: 'load_handoff' }).text);
-      }
+    getPreview(sessionId: string): Promise<HandoffPreview> {
+      return failingWithCopyOf('load_handoff', () => fleetApi.getHandoffPreview(sessionId));
     },
-    save(_sessionId: string, _sections: HandoffContent): Promise<HandoffSaveResult> {
-      return Promise.reject(new HandoffPreviewApiError(SAVE_NOT_AVAILABLE_COPY));
+    save(sessionId: string, sections: HandoffContent): Promise<HandoffSaveResult> {
+      return failingWithCopyOf('save_handoff', () => fleetApi.saveHandoff(sessionId, sections));
     },
   };
 }
