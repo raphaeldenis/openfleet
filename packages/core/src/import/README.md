@@ -71,7 +71,7 @@ preserving each surface's historical default. Explicit true/false overrides both
 
 ## Cleaning the laws copied into the missions
 
-An earlier import wrote the approved laws into each manager mission, under `## Laws` / `### Standing laws`. The import never removes them by itself. A separate command does, and only when a human confirms:
+An earlier import wrote the approved laws into each manager mission, under `## Laws` / `### Standing laws`. A re-import of a manager whose mission is intact rewrites the mission without the `### Standing laws` block the import composed (`updated`, `profile_rev` +1). A mission edited in OpenFleet stays as it is (`conflict`). Copies written by hand in the notes (a second `Laws` section, `Guardrails`) are never touched by the re-import. The `clean-laws` command is the way to clean without a Scape source, and it runs only when a human confirms: a plan first, then `--apply --confirm <fingerprint>`:
 
 ```sh
 pnpm --filter @openfleet/core import:scape clean-laws --home "$HOME/.openfleet"
