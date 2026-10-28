@@ -29,6 +29,7 @@ describe('toManagerView', () => {
       pinMissionNote: false,
       deniedCommandCount: 0,
       deniedCommandTotal: 0,
+      noteNotReadWarningCount: 0,
     });
   });
 

@@ -35,6 +35,8 @@ interface Rig {
   readAllPagesOf: (client: Client, noteId: string) => Promise<Json[]>;
   spawnChild: (client: Client, name: string) => Promise<{ isError: boolean | undefined; text: string; answer: SpawnAnswer }>;
   sessionStart: (sessionId: string, source: string) => Promise<void>;
+  managerViewOf: (managerId: string) => Promise<{ noteNotReadWarningCount?: number; deniedCommandCount?: number }>;
+  pulseBodiesOf: (managerId: string) => Promise<string[]>;
 }
 
 async function startRig(options: DaemonOptions): Promise<Rig> {
@@ -93,6 +95,11 @@ async function startRig(options: DaemonOptions): Promise<Rig> {
     sessionStart: async (sessionId, source) => {
       const { hook_token } = daemon.db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(sessionId) as { hook_token: string };
       await fetch(`${daemon.server.url}/hooks/${hook_token}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'c', hook_event_name: 'SessionStart', source }) });
+    },
+    managerViewOf: async (managerId) => ((await (await api(`/api/managers/${managerId}`)).json()) as { manager: { noteNotReadWarningCount?: number; deniedCommandCount?: number } }).manager,
+    pulseBodiesOf: async (managerId) => {
+      await api(`/api/managers/${managerId}/pulse`, { method: 'POST' });
+      return (daemon.db.prepare('SELECT body FROM message_queue WHERE session_id = ? AND body LIKE ?').all(managerId, '[pulse]%') as { body: string }[]).map((row) => row.body);
     },
   };
 }
@@ -248,6 +255,106 @@ describe('the note_not_read warning when the enforcement is the default', () => 
     expect(isError).toBeUndefined();
     expect(noteWarningOf(answer)).toBeDefined();
     expect(rig.daemon.db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE parent_id = ?').get(manager.id)).toEqual({ count: 1 });
+  });
+});
+
+describe('the pulse that follows a reset of the context', () => {
+  const REMINDER = 'context compacted: re-read your mission note in full with get_note';
+  let rig: Rig;
+  beforeAll(async () => { rig = await startRig({}); });
+  afterAll(async () => { await closeRig(rig); tempDirs.removeAll(); });
+
+  const lastPulseOf = async (managerId: string) => (await rig.pulseBodiesOf(managerId)).at(-1) ?? '';
+
+  it.each(RESETTING_SOURCES)('reminds the manager to re-read its mission note in full after a SessionStart with source %s', async (source) => {
+    const { manager, client, note } = await aManagerWithMissionNote(rig, { name: `Pulse-reset-${source}` });
+    await rig.getNote(client, note.id);
+    await rig.sessionStart(manager.id, source);
+
+    expect(await lastPulseOf(manager.id)).toContain(REMINDER);
+  });
+
+  it('stops reminding once the manager read its mission note in full again', async () => {
+    const { manager, client, note } = await aManagerWithMissionNote(rig, { name: 'Pulse-reread' });
+    await rig.sessionStart(manager.id, 'compact');
+    await rig.getNote(client, note.id);
+
+    expect(await lastPulseOf(manager.id)).not.toContain(REMINDER);
+  });
+
+  it('does not remind a manager whose context was never reset', async () => {
+    const { manager } = await aManagerWithMissionNote(rig, { name: 'Pulse-no-reset' });
+
+    expect(await lastPulseOf(manager.id)).not.toContain(REMINDER);
+  });
+
+  it('does not remind a manager without a mission note', async () => {
+    const manager = await rig.aManager('Pulse-noteless');
+    await rig.sessionStart(manager.id, 'compact');
+
+    expect(await lastPulseOf(manager.id)).not.toContain(REMINDER);
+  });
+});
+
+describe('the count of note_not_read warnings of a manager over 48 hours', () => {
+  const HOURS_TO_MS = 3_600_000;
+  let rig: Rig;
+  beforeAll(async () => { rig = await startRig({}); });
+  afterAll(async () => { await closeRig(rig); tempDirs.removeAll(); });
+
+  const journalRowsOf = (managerId: string) => rig.daemon.db.prepare('SELECT rule_id, outcome, tool_name, created_at FROM denied_commands WHERE manager_id = ? ORDER BY created_at').all(managerId) as { rule_id: string; outcome: string; tool_name: string; created_at: string }[];
+
+  it('counts each warning the manager received, and journals it as an observed note_not_read', async () => {
+    const { manager, client } = await aManagerWithMissionNote(rig, { name: 'Counted' });
+    await rig.spawnChild(client, 'counted-1');
+    await rig.spawnChild(client, 'counted-2');
+
+    const view = await rig.managerViewOf(manager.id);
+
+    expect(view.noteNotReadWarningCount).toBe(2);
+    expect(journalRowsOf(manager.id)).toMatchObject([{ rule_id: 'note_not_read', outcome: 'observed', tool_name: 'create_session' }, { rule_id: 'note_not_read', outcome: 'observed', tool_name: 'create_session' }]);
+  });
+
+  it('shows the count to the manager in get_argus_status', async () => {
+    const { client } = await aManagerWithMissionNote(rig, { name: 'Counted-status' });
+    await rig.spawnChild(client, 'counted-status-1');
+
+    const status = jsonOf(await client.callTool({ name: 'get_argus_status', arguments: {} })) as { manager: { noteNotReadWarningCount: number } };
+
+    expect(status.manager.noteNotReadWarningCount).toBe(1);
+  });
+
+  it('counts nothing for a spawn after a full read, and keeps the refusal count of commands at zero', async () => {
+    const { manager, client, note } = await aManagerWithMissionNote(rig, { name: 'Counted-none' });
+    await rig.getNote(client, note.id);
+    await rig.spawnChild(client, 'counted-none-1');
+
+    const view = await rig.managerViewOf(manager.id);
+
+    expect(view.noteNotReadWarningCount).toBe(0);
+    expect(view.deniedCommandCount).toBe(0);
+    expect(journalRowsOf(manager.id)).toEqual([]);
+  });
+
+  it('forgets the warnings older than 48 hours', async () => {
+    const { manager, client } = await aManagerWithMissionNote(rig, { name: 'Counted-old' });
+    await rig.spawnChild(client, 'counted-old-1');
+    await rig.spawnChild(client, 'counted-old-2');
+    const fortyNineHoursAgo = new Date(Date.now() - 49 * HOURS_TO_MS).toISOString();
+    rig.daemon.db.prepare('UPDATE denied_commands SET created_at = ? WHERE id = (SELECT id FROM denied_commands WHERE manager_id = ? LIMIT 1)').run(fortyNineHoursAgo, manager.id);
+
+    const view = await rig.managerViewOf(manager.id);
+
+    expect(view.noteNotReadWarningCount).toBe(1);
+  });
+
+  it('counts the warnings of each manager apart', async () => {
+    const first = await aManagerWithMissionNote(rig, { name: 'Counted-first' });
+    const second = await aManagerWithMissionNote(rig, { name: 'Counted-second' });
+    await rig.spawnChild(first.client, 'counted-first-1');
+
+    expect((await rig.managerViewOf(first.manager.id)).noteNotReadWarningCount).toBe(1);
+    expect((await rig.managerViewOf(second.manager.id)).noteNotReadWarningCount).toBe(0);
   });
 });
 

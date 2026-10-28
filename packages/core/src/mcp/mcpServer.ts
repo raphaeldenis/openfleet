@@ -21,6 +21,7 @@ import { DAEMON_VERSION } from '../version.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import type { GovernanceQueueService } from '../governance/governanceQueueService.js';
 import type { ManagerDenials } from '../policy/managerDenials.js';
+import type { DenialJournal } from '../policy/ports.js';
 import { registerDeniedCommandTools } from './deniedCommandTools.js';
 import { registerGovernanceTools } from './governanceTools.js';
 import { registerManagerBaseTools } from './managerBaseTools.js';
@@ -64,7 +65,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
+export function createMcpHandler(deps: { projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);

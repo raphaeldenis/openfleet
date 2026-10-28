@@ -5,6 +5,12 @@ export const NOTE_NOT_READ_ENFORCEMENT: NoteNotReadEnforcement = 'warn_only';
 
 export type NoteReadVerdict = 'allow' | 'warn' | 'refuse';
 
+/** The rule id under which the denial journal records a note_not_read warning. */
+export const NOTE_NOT_READ_RULE_ID = 'note_not_read';
+
+/** How far back the per-manager count of note_not_read warnings looks. */
+export const NOTE_NOT_READ_WARNING_WINDOW_HOURS = 48;
+
 type ByteRange = readonly [start: number, end: number];
 
 /** What a manager has read of its mission note at one revision: the body bytes covered, and the mentions it still owes a read. */
