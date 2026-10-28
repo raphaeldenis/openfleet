@@ -22,7 +22,7 @@ export async function signInAsAdmin(page: Page, { theme, rightPanel = 'open' }: 
   }, [token, api, theme ?? '', rightPanel] as const);
 }
 
-interface FakeSessionSpec { name: string; emoji?: string; directory?: string; model?: string; permissionMode?: string; manager?: { pulseSeconds: number; childrenCap: number; mission: string } }
+interface FakeSessionSpec { name: string; emoji?: string; directory?: string; model?: string; permissionMode?: string; projectId?: string; manager?: { pulseSeconds: number; childrenCap: number; mission: string } }
 
 /** Hooks of a fake session, played the way the Claude CLI would post them. */
 export interface SessionHooks {
@@ -44,8 +44,8 @@ export function useFakeSessions() {
   });
 
   return {
-    async create(request: APIRequestContext, { name, emoji = '🧪', directory = '/tmp', model, permissionMode, manager }: FakeSessionSpec): Promise<FakeSession> {
-      const created = await request.post(`${api}/api/sessions`, { headers: adminHeaders, data: { directory, name, emoji, harness: 'fake', ...(model ? { model } : {}), ...(permissionMode ? { permissionMode } : {}), ...(manager ? { manager } : {}) } });
+    async create(request: APIRequestContext, { name, emoji = '🧪', directory = '/tmp', model, permissionMode, projectId, manager }: FakeSessionSpec): Promise<FakeSession> {
+      const created = await request.post(`${api}/api/sessions`, { headers: adminHeaders, data: { directory, name, emoji, harness: 'fake', ...(model ? { model } : {}), ...(permissionMode ? { permissionMode } : {}), ...(projectId ? { projectId } : {}), ...(manager ? { manager } : {}) } });
       const { id } = await created.json();
       createdIds.push(id);
       const { hookToken } = await (await request.get(`${api}/api/sessions/${id}/tokens`, { headers: adminHeaders })).json();
@@ -74,6 +74,17 @@ export async function interceptDaemonGet(page: Page, pathname: string, respond: 
     const method = route.request().method();
     if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS_HEADERS });
     if (method === 'GET') return respond(route);
+    return route.fallback();
+  });
+}
+
+/** Answers the CORS preflight itself and hands every POST of `pathname` to `respond`; any other request goes to the real daemon. */
+export async function interceptDaemonPost(page: Page, pathname: string, respond: (route: Route) => Promise<void>): Promise<void> {
+  const isRequestedPath = (url: URL) => url.origin === api && url.pathname === pathname;
+  await page.route(isRequestedPath, async (route) => {
+    const method = route.request().method();
+    if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS_HEADERS });
+    if (method === 'POST') return respond(route);
     return route.fallback();
   });
 }
