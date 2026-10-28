@@ -8,8 +8,6 @@ export interface NotificationPrefs {
   toolCompletion: boolean;
   needsInput: boolean;
   chatMessage: boolean;
-  sound: boolean;
-  visual: boolean;
   muted: boolean;
   dockBadge: boolean;
 }
@@ -20,8 +18,6 @@ const DEFAULT_PREFS: NotificationPrefs = {
   toolCompletion: false,
   needsInput: true,
   chatMessage: true,
-  sound: false,
-  visual: true,
   muted: false,
   dockBadge: true,
 };
