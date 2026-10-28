@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { runImportCli } from '../importCli.js';
 import { importScape } from './importScape.js';
-import { anApprovedLaw, anArgus, CAPTAIN_ARGUS_ID, LEAD_ARGUS_ID, writeArguses } from './scapeArguses.testkit.js';
+import { anApprovedPermission, anArgus, CAPTAIN_ARGUS_ID, LEAD_ARGUS_ID, writeArguses } from './scapeArguses.testkit.js';
 import { buildScapeFixture, editScapeNotes, LEXICAL_NOTE_ID, MARKDOWN_NOTE_ID, OPENFLEET_NOTE_ID, PLAN_NOTE_ID, REPORT_NOTE_ID, type ScapeFixture } from './scapeFixture.testkit.js';
 
 const CLEAN_ID = LEAD_ARGUS_ID;
@@ -14,8 +14,8 @@ const QA_ID = CAPTAIN_ARGUS_ID;
 const DUPLICATE_ID = 'A0000006-0000-0000-0000-000000000006';
 
 const CLEAN_MISSION = '# Rules\n\nbe kind';
-const BIG_LAW = 'é'.repeat(4500);
-const BIG_MISSION = `${CLEAN_MISSION}\n\n## Laws\n\n### Standing laws\n- ${BIG_LAW}`;
+const BIG_PERMISSION = 'é'.repeat(4500);
+const BIG_MISSION = `${CLEAN_MISSION}\n\n## Laws\n\n### Permissions\n- ${BIG_PERMISSION}`;
 const CAP_MISSION = ['# Plan', 'Spawn up to 8 children at once.', 'Stay at cap of 3.', 'Count the children of your peers.'].join('\n');
 const MODEL_MISSION = ['# Arbitration','Use claude-opus-5-5 to arbitrate.', 'Use claude-haiku-5-5 to edit, and claude-opus-5-5 again.', 'Prefer the alias sonnet.'].join('\n');
 const QA_MISSION = ['# Review flow',"QA is the human's job.", "Le travail de l'humain reste la QA.", 'Run the automated QA first.'].join('\n');
@@ -40,7 +40,7 @@ describe('import scape --dry-run: the report of the manager missions', () => {
     setNoteContent(LEXICAL_NOTE_ID, DUPLICATE_MISSION);
     writeArguses(fixture, [
       anArgus({ id: CLEAN_ID, name: 'Clean', noteId: MARKDOWN_NOTE_ID }),
-      anArgus({ id: BIG_ID, name: 'Big', noteId: MARKDOWN_NOTE_ID, governanceRequests: [anApprovedLaw(BIG_LAW)] }),
+      anArgus({ id: BIG_ID, name: 'Big', noteId: MARKDOWN_NOTE_ID, governanceRequests: [anApprovedPermission({ text: BIG_PERMISSION, scope: '', condition: '', exclusions: '' })] }),
       anArgus({ id: CAP_ID, name: 'Cap', noteId: PLAN_NOTE_ID }),
       anArgus({ id: MODEL_ID, name: 'Model', noteId: REPORT_NOTE_ID }),
       anArgus({ id: QA_ID, name: 'Qa', noteId: OPENFLEET_NOTE_ID }),
@@ -102,7 +102,7 @@ describe('import scape --dry-run: the report of the manager missions', () => {
 
       expect(output).toContain('## Manager missions');
       expect(output).toContain('| Clean | 16 | no |');
-      expect(output).toContain('| Big | 9047 | yes |');
+      expect(output).toContain('| Big | 9045 | yes |');
       expect(output).toContain('Cap — number of children: Spawn up to 8 children at once.');
       expect(output).toContain('Model — exact model id: claude-opus-5-5');
       expect(output).toContain("Qa — QA for the human: QA is the human's job.");

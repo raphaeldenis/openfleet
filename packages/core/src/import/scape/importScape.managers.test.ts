@@ -124,7 +124,7 @@ describe('importScape: managers', () => {
   });
 
   describe('the mission', () => {
-    it('is the imported mission note body, then the approved laws and permissions, then the exposed resources', () => {
+    it('is the imported mission note body, then the approved permissions without the laws, then the exposed resources', () => {
       writeArguses(fixture, [anArgus({
         governanceRequests: [
           anApprovedLaw('Always log first.', 811_100_000),
@@ -142,9 +142,7 @@ describe('importScape: managers', () => {
 
       expect(missionOf(LEAD_ARGUS_ID)).toBe([
         '# Rules\n\nbe kind',
-        '## Laws',
-        '### Standing laws\n- Always log first.\n- Never push to main.',
-        '### Permissions\n- May merge docs PRs.\n  Permission: docs only / CI green / releases',
+        '## Laws\n\n### Permissions\n- May merge docs PRs.\n  Permission: docs only / CI green / releases',
         `## Exposed Resources\n- @note:${MARKDOWN_NOTE_ID} (read)\n- @table:${BACKLOG_STORE_ID} (read and write)\n- @playbook:play-1 (run)`,
       ].join('\n\n'));
     });
@@ -159,15 +157,23 @@ describe('importScape: managers', () => {
       expect(missionOf(LEAD_ARGUS_ID)).toBe(importedBody);
     });
 
-    it('leaves out the denied and the pending laws and the approved resource access request', () => {
+    it('leaves out every law and the approved resource access request, and the denied and pending permissions', () => {
       writeArguses(fixture, [anArgus({
-        governanceRequests: [anApprovedLaw('kept law'), aDeniedLaw('denied law'), aPendingLaw('pending law'), anApprovedResourceAccess()],
+        governanceRequests: [
+          anApprovedPermission({ text: 'kept permission', scope: '', condition: '', exclusions: '' }),
+          { ...anApprovedPermission({ text: 'denied permission', scope: '', condition: '', exclusions: '' }), status: 'denied' },
+          { ...anApprovedPermission({ text: 'pending permission', scope: '', condition: '', exclusions: '' }), status: 'pending' },
+          anApprovedLaw('approved law'), aDeniedLaw('denied law'), aPendingLaw('pending law'), anApprovedResourceAccess(),
+        ],
       })]);
 
       run();
 
       const mission = missionOf(LEAD_ARGUS_ID);
-      expect(mission).toContain('kept law');
+      expect(mission).toContain('kept permission');
+      expect(mission).not.toContain('denied permission');
+      expect(mission).not.toContain('pending permission');
+      expect(mission).not.toContain('approved law');
       expect(mission).not.toContain('denied law');
       expect(mission).not.toContain('pending law');
       expect(mission).not.toContain('resourceAccess');
@@ -181,8 +187,8 @@ describe('importScape: managers', () => {
       expect(missionOf(LEAD_ARGUS_ID)).toBe('# Rules\n\nbe kind');
     });
 
-    it('indents the continuation lines of a multi-line law under its bullet', () => {
-      writeArguses(fixture, [anArgus({ governanceRequests: [anApprovedLaw('first line\nsecond line')] })]);
+    it('indents the continuation lines of a multi-line permission under its bullet', () => {
+      writeArguses(fixture, [anArgus({ governanceRequests: [anApprovedPermission({ text: 'first line\nsecond line', scope: '', condition: '', exclusions: '' })] })]);
 
       run();
 
@@ -202,8 +208,9 @@ describe('importScape: managers', () => {
       expect(mission).toContain('[not converted: resource type]');
     });
 
-    it('lists the laws in the order they were created, whatever the order of the file', () => {
-      writeArguses(fixture, [anArgus({ governanceRequests: [anApprovedLaw('third', 811_100_030), anApprovedLaw('first', 811_100_010), anApprovedLaw('second', 811_100_020)] })]);
+    it('lists the permissions in the order they were created, whatever the order of the file', () => {
+      const aPermissionCreatedAt = (text: string, createdAt: number) => anApprovedPermission({ text, scope: '', condition: '', exclusions: '', createdAt });
+      writeArguses(fixture, [anArgus({ governanceRequests: [aPermissionCreatedAt('third', 811_100_030), aPermissionCreatedAt('first', 811_100_010), aPermissionCreatedAt('second', 811_100_020)] })]);
 
       run();
 
@@ -215,10 +222,10 @@ describe('importScape: managers', () => {
       ['one byte over the limit', 1, 0],
     ])('measures the mission limit in UTF-8 bytes: %s', (_label, bytesOverTheLimit, expectedWritten) => {
       const MANAGER_MISSION_LIMIT_BYTES = 64 * 1024;
-      const fixedPart = '# Rules\n\nbe kind\n\n## Laws\n\n### Standing laws\n- ';
-      const bytesLeftForTheLaw = MANAGER_MISSION_LIMIT_BYTES - fixedPart.length;
-      const lawText = 'é'.repeat(Math.floor(bytesLeftForTheLaw / 2)) + 'a'.repeat(bytesLeftForTheLaw % 2) + 'a'.repeat(bytesOverTheLimit);
-      writeArguses(fixture, [anArgus({ governanceRequests: [anApprovedLaw(lawText)] })]);
+      const fixedPart = '# Rules\n\nbe kind\n\n## Laws\n\n### Permissions\n- ';
+      const bytesLeftForThePermission = MANAGER_MISSION_LIMIT_BYTES - fixedPart.length;
+      const permissionText = 'é'.repeat(Math.floor(bytesLeftForThePermission / 2)) + 'a'.repeat(bytesLeftForThePermission % 2) + 'a'.repeat(bytesOverTheLimit);
+      writeArguses(fixture, [anArgus({ governanceRequests: [anApprovedPermission({ text: permissionText, scope: '', condition: '', exclusions: '' })] })]);
 
       const report = run();
 
@@ -226,7 +233,7 @@ describe('importScape: managers', () => {
     });
 
     it('skips a manager whose mission would exceed the manager size limit and counts it not converted', () => {
-      writeArguses(fixture, [anArgus({ governanceRequests: [anApprovedLaw('x'.repeat(70 * 1024))] })]);
+      writeArguses(fixture, [anArgus({ governanceRequests: [anApprovedPermission({ text: 'x'.repeat(70 * 1024), scope: '', condition: '', exclusions: '' })] })]);
 
       const report = run();
 
@@ -303,7 +310,7 @@ describe('importScape: managers', () => {
 
       it.each(['```', '~~~', '````'])('closes a %s fence left open at the end of the note so it cannot absorb the sections', (fence) => {
         editScapeNotes(fixture, (db) => db.prepare('UPDATE notes SET content = ? WHERE id = ?').run(`# T\n\n${fence}js\nunclosed`, MARKDOWN_NOTE_ID));
-        writeArguses(fixture, [anArgus({ governanceRequests: [anApprovedLaw('a law')] })]);
+        writeArguses(fixture, [anArgus({ governanceRequests: [anApprovedPermission({ text: 'a permission', scope: '', condition: '', exclusions: '' })] })]);
 
         run();
 
