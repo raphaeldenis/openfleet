@@ -3,10 +3,16 @@ import { DestroyRef, inject, Injectable, InjectionToken, signal } from '@angular
 const KNOWN_PHASES = ['starting', 'slow', 'ready', 'failed', 'reused'] as const;
 export type DaemonPhase = (typeof KNOWN_PHASES)[number];
 
-/** What the Tauri command `daemon_status` answers (camelCase, absent fields omitted). */
+/** The typed cause behind `lastLine`, as the desktop classified it. */
+export type LastLineKind = 'boot_refusal' | 'node_fatal' | 'exited' | 'no_answer' | 'spawn_failed' | 'unrecognised';
+
+/** What the Tauri command `daemon_status` answers (camelCase, absent fields omitted). `lastLine` is fixed copy built from `lastLineKind`, never daemon text. */
 export interface DaemonStatus {
   state: DaemonPhase;
   lastLine?: string;
+  lastLineKind?: LastLineKind;
+  /** The catalogued boot refusal (`boot_refusals.txt` id), or `unlisted`; present only when `lastLineKind` is `boot_refusal`. */
+  refusalReason?: string;
   pathSource?: 'shell' | 'fallback';
   daemonVersion?: string;
 }

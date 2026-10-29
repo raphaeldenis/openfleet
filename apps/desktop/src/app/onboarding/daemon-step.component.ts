@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, output, signal, untracked, viewChild } from '@angular/core';
 import { environment } from '../../environments/environment';
-import { DaemonStatusService } from '../core/daemon-status.service';
+import { DaemonStatusService, type LastLineKind } from '../core/daemon-status.service';
 import { FleetApiService } from '../core/fleet-api.service';
 import { SupportActions } from '../core/support-actions';
 import { VersionsService } from '../core/versions.service';
@@ -21,6 +21,8 @@ const MANUAL_CARD_TITLE_AFTER_FAILURE = 'Start it yourself';
 const COPIED_ANNOUNCEMENT = 'Command copied';
 const REVEAL_FAILURE_MESSAGE = 'Couldn’t open the logs folder';
 const COPY_FAILURE_MESSAGE = 'Couldn’t copy — select the command and copy it by hand';
+/** A fallback PATH alone proves nothing: the hint is for an exit or an error the desktop cannot name, never for a catalogued refusal. */
+const FAILURES_A_MISSING_PATH_CAN_CAUSE: readonly LastLineKind[] = ['unrecognised', 'exited'];
 
 @Component({
   selector: 'of-daemon-step',
@@ -151,12 +153,12 @@ export class DaemonStepComponent {
     if (this.isUnknown()) return UNKNOWN_STATE_COPY;
     return this.lastLine() ? FAILED_WITH_LAST_LINE_COPY : FAILED_WITHOUT_LAST_LINE_COPY;
   });
-  // The PATH hint appears only when the failure itself names claude; a fallback PATH alone proves nothing.
   protected readonly showsPathHint = computed(() => {
     const status = this.observedStatus();
     const isFallbackPath = status?.pathSource === 'fallback';
-    const failureNamesClaude = /claude/i.test(status?.lastLine ?? '');
-    return isFallbackPath && failureNamesClaude;
+    const lastLineKind = status?.lastLineKind;
+    const isFailureTheDesktopCannotName = lastLineKind !== undefined && FAILURES_A_MISSING_PATH_CAN_CAUSE.includes(lastLineKind);
+    return isFallbackPath && isFailureTheDesktopCannotName;
   });
 
   constructor() {

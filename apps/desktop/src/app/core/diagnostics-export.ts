@@ -6,7 +6,7 @@ export type SaveBundleOutcome = { status: 'saved'; path: string } | { status: 'c
 @Injectable({ providedIn: 'root', useFactory: () => new TauriDiagnosticsExport() })
 export abstract class DiagnosticsExport {
   abstract readonly isAvailable: boolean;
-  /** The tail of the desktop's daemon log, secrets masked and the home folder shortened. */
+  /** The tail of `desktop.log` as written: allowlisted typed records, where free text appears only as `[text:<length>:<tag>]`. */
   abstract readDesktopLog(): Promise<string>;
   /** Shows the native save dialog and writes the zip where the user chooses; a dismissed dialog answers `cancelled`. */
   abstract saveBundle(bundle: { fileName: string; bytes: Uint8Array }): Promise<SaveBundleOutcome>;
