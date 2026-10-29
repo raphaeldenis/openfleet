@@ -831,7 +831,7 @@ describe('InboxComponent questions from agents', () => {
       const user = userEvent.setup({ delay: null });
       await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] })]);
       await showOnlyQuestions();
-      screen.getByTestId('inbox-filter-governance').focus();
+      screen.getByTestId('inbox-filter-escalations').focus();
 
       await user.tab();
       expect(within(cards()[0]).getByTestId('inbox-attention-session')).toHaveFocus();

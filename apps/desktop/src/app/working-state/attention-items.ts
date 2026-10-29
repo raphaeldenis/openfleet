@@ -28,6 +28,24 @@ export interface AnsweredReply {
 
 const MAX_SHOWN_COUNT = 99;
 
+const ESCALATION_LINE_PREFIX = /^\[esc:([^\]]+)\]/;
+
+const isLineOfAnOpenEscalation = (line: string, openEscalationIds: ReadonlySet<string>): boolean => {
+  const escalationId = ESCALATION_LINE_PREFIX.exec(line.trim())?.[1];
+  return escalationId !== undefined && openEscalationIds.has(escalationId);
+};
+
+/** The state without the `[esc:<id>]` questions whose escalation card is open: the card asks them instead. */
+export function withoutOpenEscalationLines(state: WorkingState, openEscalationIds: ReadonlySet<string>): WorkingState {
+  const questionsForHuman = state.questionsForHuman.filter((line) => !isLineOfAnOpenEscalation(line, openEscalationIds));
+  return questionsForHuman.length === state.questionsForHuman.length ? state : { ...state, questionsForHuman };
+}
+
+export function statesWithoutOpenEscalationLines(states: ReadonlyMap<string, WorkingState>, openEscalationIds: ReadonlySet<string>): ReadonlyMap<string, WorkingState> {
+  if (openEscalationIds.size === 0) return states;
+  return new Map([...states].map(([sessionId, state]) => [sessionId, withoutOpenEscalationLines(state, openEscalationIds)]));
+}
+
 /** The questions and blockers the agent shows the human, trimmed so a rewrite with the same words compares equal. */
 export function linesAskedOf(state: WorkingState): string[] {
   return [...state.questionsForHuman, ...state.blockers].map((line) => line.trim());

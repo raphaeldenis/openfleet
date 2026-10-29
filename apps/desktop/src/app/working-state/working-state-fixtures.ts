@@ -1,5 +1,5 @@
 import { signal } from '@angular/core';
-import type { DaemonIssue, GovernanceProposalView, Session, SilentBlock, WorkingState } from '@openfleet/shared';
+import type { DaemonIssue, EscalationView, GovernanceProposalView, Session, SilentBlock, WorkingState } from '@openfleet/shared';
 
 export const NOW_ISO = '2026-09-30T10:00:00.000Z';
 const MINUTE_MS = 60_000;
@@ -39,6 +39,7 @@ export function silentWorkingStateSignals() {
   return {
     daemonIssues: signal<DaemonIssue[]>([]),
     proposals: signal<GovernanceProposalView[]>([]),
+    escalations: signal<EscalationView[]>([]),
     queuedTotal: () => 0,
     queuedCountOf: () => 0,
     reconnectCount: signal(0),
@@ -57,6 +58,7 @@ export function silentWorkingStateSignals() {
 interface FakeEventsOptions {
   sessions?: Session[];
   states?: WorkingState[];
+  escalations?: EscalationView[];
   reported?: boolean;
   maxAgeMinutes?: number | undefined;
   maxBytes?: number | undefined;
@@ -64,9 +66,10 @@ interface FakeEventsOptions {
 
 /** The slice of FleetEventsService the working-state views read, as plain signals. */
 export function fakeWorkingStateEvents(options: FakeEventsOptions = {}) {
-  const { sessions = [sessionOf()], states = [], reported = true } = options;
+  const { sessions = [sessionOf()], states = [], escalations = [], reported = true } = options;
   return {
     ...silentWorkingStateSignals(),
+    escalations: signal(escalations),
     sessions: signal(sessions),
     approvals: signal<unknown[]>([]),
     managers: signal<unknown[]>([]),

@@ -3,6 +3,7 @@ import { WORKING_STATE_SECTIONS, type Session } from '@openfleet/shared';
 import { clockTimeOf } from '../core/clock-time';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
+import { withoutOpenEscalationLines } from './attention-items';
 import { StateSectionComponent } from './state-section.component';
 import { SECTION_HEADINGS, ageInWholeMinutes, hasReadableUpdatedAt, tickingNow } from './working-state-freshness';
 import { injectOverdue } from './working-state-overdue';
@@ -76,11 +77,11 @@ export class StatePanelComponent {
     params: () => (this.isClosed() ? this.session().id : undefined),
     loader: ({ params: sessionId }) => this.api.getWorkingState(sessionId),
   });
+  private readonly openEscalationIds = computed(() => new Set(this.events.escalations().map(({ id }) => id)));
   protected readonly state = computed(() => {
     const liveState = this.events.workingStates().get(this.session().id);
-    if (liveState) return liveState;
-    const hasLastState = this.isClosed() && this.lastStateOfClosedSession.hasValue();
-    return hasLastState ? this.lastStateOfClosedSession.value() : undefined;
+    const shownState = liveState ?? this.lastStateOfClosedSessionIfAny();
+    return shownState && withoutOpenEscalationLines(shownState, this.openEscalationIds());
   });
 
   protected readonly meta = computed(() => {
@@ -99,6 +100,11 @@ export class StatePanelComponent {
     if (this.lastStateOfClosedSession.error()) return 'The last state could not be read.';
     return 'No state was recorded before this session closed.';
   });
+
+  private lastStateOfClosedSessionIfAny() {
+    const hasLastState = this.isClosed() && this.lastStateOfClosedSession.hasValue();
+    return hasLastState ? this.lastStateOfClosedSession.value() : undefined;
+  }
 
   private closedMetaOf(updatedAt: string): string {
     const writtenAt = clockTimeOf(updatedAt);

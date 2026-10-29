@@ -14,9 +14,10 @@ import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { REPLY_DELIVERED_COPY } from '../sessions/reply-delivered-copy';
 import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
-import { answeredItemsOf, attentionItemsOf, itemsNeedingYouOf } from '../working-state/attention-items';
+import { answeredItemsOf, attentionItemsOf, itemsNeedingYouOf, statesWithoutOpenEscalationLines } from '../working-state/attention-items';
 import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
 import { AttentionCardComponent } from './attention-card.component';
+import { EscalationCardsComponent } from './escalation-cards.component';
 import { GovernanceApprovedTexts } from './governance-approved-texts.store';
 import { waitingCountLabelOf } from './governance-details';
 import { GovernanceProposalsComponent } from './governance-proposals.component';
@@ -24,7 +25,7 @@ import { InboxNeedingYou } from './inbox-needing-you';
 import { minutesWaiting, silentBlockCopyOf, silentBlockDetailsMessageOf } from './silent-block-copy';
 import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 
-type FilterKey = 'all' | 'questions' | 'governance';
+type FilterKey = 'all' | 'questions' | 'governance' | 'escalations';
 
 interface FilterOption {
   readonly key: FilterKey;
@@ -32,6 +33,7 @@ interface FilterOption {
   readonly showsGates: boolean;
   readonly showsQuestions: boolean;
   readonly showsProposals: boolean;
+  readonly showsEscalations: boolean;
 }
 
 const DELIVERED_REPLY_SHOWN_MS = 2500;
@@ -39,9 +41,10 @@ const DELIVERED_REPLY_SHOWN_MS = 2500;
 // Only the filters the backend data can serve are listed: it has no read-tracking, assignee or
 // blocking flag yet, so Unread, Mine, Blocked and Recent join this list when it does.
 const FILTERS: readonly FilterOption[] = [
-  { key: 'all', label: 'All', showsGates: true, showsQuestions: true, showsProposals: true },
-  { key: 'questions', label: 'Questions', showsGates: false, showsQuestions: true, showsProposals: false },
-  { key: 'governance', label: 'Governance', showsGates: false, showsQuestions: false, showsProposals: true },
+  { key: 'all', label: 'All', showsGates: true, showsQuestions: true, showsProposals: true, showsEscalations: true },
+  { key: 'questions', label: 'Questions', showsGates: false, showsQuestions: true, showsProposals: false, showsEscalations: false },
+  { key: 'governance', label: 'Governance', showsGates: false, showsQuestions: false, showsProposals: true, showsEscalations: false },
+  { key: 'escalations', label: 'Escalations', showsGates: false, showsQuestions: false, showsProposals: false, showsEscalations: true },
 ];
 
 interface FormattedInput {
@@ -70,7 +73,7 @@ function formatInput(toolInput: unknown): FormattedInput {
 @Component({
   selector: 'of-inbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ErrorLineComponent, KindBadgeComponent,AttentionCardComponent, CopyDetailsButtonComponent, GovernanceProposalsComponent, RouterLink],
+  imports: [ErrorLineComponent, KindBadgeComponent,AttentionCardComponent, CopyDetailsButtonComponent, EscalationCardsComponent, GovernanceProposalsComponent, RouterLink],
   template: `
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
@@ -163,6 +166,9 @@ function formatInput(toolInput: unknown): FormattedInput {
           }
           @if (activeFilter().showsProposals) {
             <of-governance-proposals (noCardLeft)="focusGovernanceFilter()" />
+          }
+          @if (activeFilter().showsEscalations) {
+            <of-escalation-cards (noCardLeft)="focusEscalationsFilter()" />
           }
           @if (isListEmpty()) {
             <div class="empty" data-testid="inbox-empty">
@@ -308,7 +314,11 @@ export class InboxComponent {
     return gates;
   });
 
-  private readonly attentionItems = computed(() => attentionItemsOf(this.events.sessions(), this.events.workingStates(), this.answeredReplies.answeredReplyBySessionId()));
+  private readonly openEscalationIds = computed(() => new Set(this.events.escalations().map(({ id }) => id)));
+  private readonly attentionItems = computed(() => {
+    const statesToAsk = statesWithoutOpenEscalationLines(this.events.workingStates(), this.openEscalationIds());
+    return attentionItemsOf(this.events.sessions(), statesToAsk, this.answeredReplies.answeredReplyBySessionId());
+  });
   protected readonly attentionItemsNeedingYou = computed(() => itemsNeedingYouOf(this.attentionItems()));
   protected readonly isAnsweredSectionOpen = signal(false);
 
@@ -446,6 +456,10 @@ export class InboxComponent {
     return waitingTotal > 0 ? waitingCountLabelOf(waitingTotal) : '';
   });
 
+  protected focusEscalationsFilter(): void {
+    this.host.nativeElement.querySelector<HTMLElement>('[data-testid="inbox-filter-escalations"]')?.focus();
+  }
+
   protected focusGovernanceFilter(): void {
     this.host.nativeElement.querySelector<HTMLElement>('[data-testid="inbox-filter-governance"]')?.focus();
   }
@@ -463,13 +477,15 @@ export class InboxComponent {
     const gateCount = this.items().length;
     const questionCount = this.attentionItemsNeedingYou().length;
     const proposalCount = this.events.proposals().length;
-    return { all: gateCount + questionCount + proposalCount, questions: questionCount, governance: proposalCount };
+    const escalationCount = this.events.escalations().length;
+    return { all: gateCount + questionCount + proposalCount + escalationCount, questions: questionCount, governance: proposalCount, escalations: escalationCount };
   });
 
   protected readonly isListEmpty = computed(() => {
-    const { showsGates, showsQuestions, showsProposals } = this.activeFilter();
+    const { showsGates, showsQuestions, showsProposals, showsEscalations } = this.activeFilter();
     const proposalCardCount = this.events.proposals().length + this.approvedTexts().length;
-    const shownCardCount = (showsGates ? this.items().length : 0) + (showsQuestions ? this.attentionCards().length : 0) + (showsProposals ? proposalCardCount : 0);
+    const shownCardCount =
+      (showsGates ? this.items().length : 0) + (showsQuestions ? this.attentionCards().length : 0) + (showsProposals ? proposalCardCount : 0) + (showsEscalations ? this.events.escalations().length : 0);
     const hasNoIssueOrNotice = this.issues().length === 0 && this.contextNotices().length === 0;
     return shownCardCount === 0 && hasNoIssueOrNotice;
   });
