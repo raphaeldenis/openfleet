@@ -227,7 +227,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId, publishChange: (event) => bus.emit(event) });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString(), degraded, onWatchError: logDocsFolderFailure('watch') });
   const docsFolders = new DocsFolderSupervisor({ projects, docs, onError: ({ projectId, step, error }) => logDocsFolderFailure(step, projectId)(error) });
-  const projectService = new ProjectService({ projects, docs, noteRepo, clock: () => new Date().toISOString(), newId, onDocsFolderSet: (projectId) => docsFolders.watchProject(projectId), onProjectForgotten: (projectId) => docsFolders.unwatchProject(projectId) });
+  const docsRoot = new DocsRootSettings({ configPath: modelConfigPath, homeDir: homedir(), openfleetHome: config.home });
+  const projectService = new ProjectService({ projects, docs, noteRepo, docsRoot, clock: () => new Date().toISOString(), newId, onDocsFolderSet: (projectId) => docsFolders.watchProject(projectId), onProjectForgotten: (projectId) => docsFolders.unwatchProject(projectId) });
   const workingStates = new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: config.stateRoot, maxBytes: workingStateSettings.maxBytes });
   const stopRefusal = new StopRefusal({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString() });
   const sessionStartContext = new SessionStartContext({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString(), managerBase: shippedManagerBase });
@@ -264,7 +265,6 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   });
   bus.subscribe((event) => silentBlocks.handle(event));
   const handoffSettings = loadHandoffSettings(modelConfigPath);
-  const docsRoot = new DocsRootSettings({ configPath: modelConfigPath, homeDir: homedir(), openfleetHome: config.home });
   const reviewFindings = new ReviewFindingsRepository(db);
   const usageLedger = new UsageLedgerService(db);
   const findingsGate = {

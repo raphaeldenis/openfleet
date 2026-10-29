@@ -5,6 +5,7 @@ import * as z from 'zod';
 import { readableConfigReason } from '../configReason.js';
 import { log } from '../logger.js';
 import { updateConfigFile } from '../models.js';
+import { DocsFolderNotWritableError, InvalidDocsFolderError } from './docsFolderService.js';
 
 const DEFAULT_ROOT_UNDER_HOME = join('Documents', 'OpenFleet');
 const RESERVED_FOLDERS_UNDER_HOME = ['.claude', '.scape', '.openfleet'];
@@ -43,6 +44,15 @@ const isSamePath = (firstPath: string, secondPath: string) => comparableForm(fir
 
 const exists = (path: string) => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 
+/** Whether the path exists; only a missing entry means absent, any other filesystem refusal (name too long, file as folder, loop, permission) is an invalid docs folder. */
+function existsOrRefuse(path: string): boolean {
+  try {
+    return exists(path);
+  } catch {
+    throw new InvalidDocsFolderError();
+  }
+}
+
 /** The native real path of the deepest existing ancestor, followed by the parts that do not exist yet. */
 function resolveThroughExistingAncestor(absolutePath: string): string {
   const missingParts: string[] = [];
@@ -80,6 +90,39 @@ export class DocsRootSettings {
     const realRoot = this.acceptRoot(typedRoot);
     updateConfigFile(this.deps.configPath, (existingConfig) => ({ ...existingConfig, docs: { ...(existingConfig.docs as object | undefined), root: realRoot } }));
     return this.view();
+  }
+
+  /**
+   * Creates the folder of a new project when it is missing and lies under the docs root; an existing folder is left as it is.
+   * A path outside the root is not this method's business: the docs folder checks refuse it afterwards.
+   */
+  ensureProjectFolder(typedDocsFolderPath: string): void {
+    const isUsablePath = isAbsolute(typedDocsFolderPath) && !typedDocsFolderPath.includes('\u0000');
+    if (!isUsablePath) return;
+    const docsFolderPath = withoutRedundantSlashes(typedDocsFolderPath);
+    const lexicalFolder = resolve(docsFolderPath);
+    const isFreeOfDotSegments = lexicalFolder === docsFolderPath;
+    if (!isFreeOfDotSegments) throw new InvalidDocsFolderError();
+    const lexicalRoot = resolve(this.view().root);
+    const isMissingUnderRoot = !existsOrRefuse(lexicalFolder) && isInside(lexicalRoot, lexicalFolder);
+    if (!isMissingUnderRoot) return;
+
+    const resolvedFolder = this.resolveOrRefuse(lexicalFolder);
+    const resolvedRoot = this.resolveOrRefuse(lexicalRoot);
+    this.refuseReservedFolders({ lexicalRoot: lexicalFolder, resolvedRoot: resolvedFolder });
+    this.refuseOutsideHome(resolvedFolder);
+    if (!isInside(resolvedRoot, resolvedFolder)) throw invalid();
+    this.createFolder(resolvedFolder, docsFolderPath);
+  }
+
+  private createFolder(resolvedFolder: string, docsFolderPath: string): void {
+    try {
+      mkdirSync(resolvedFolder, { recursive: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const isPermissionRefusal = code === 'EACCES' || code === 'EPERM' || code === 'EROFS';
+      throw isPermissionRefusal ? new DocsFolderNotWritableError(docsFolderPath, error) : new InvalidDocsFolderError();
+    }
   }
 
   /** The saved root when it still passes every refusal (checked without creating anything); undefined otherwise, so the default applies. */
@@ -179,6 +222,13 @@ export class DocsRootSettings {
     }
     return realpathSync.native(resolvedRoot);
   }
+}
+
+/** The path without doubled slashes and without trailing slashes (the root `/` stays), as a terminal tab completion leaves it. Dot segments are kept. */
+export function withoutRedundantSlashes(path: string): string {
+  const withSingleSlashes = path.replace(/\/{2,}/g, '/');
+  const isRootPath = withSingleSlashes === '/';
+  return isRootPath ? withSingleSlashes : withSingleSlashes.replace(/\/+$/, '');
 }
 
 /** One folder name for a project: separators and control characters become dashes and a leading dot is dropped. Empty when nothing usable remains. */

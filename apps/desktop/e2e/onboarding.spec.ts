@@ -2,6 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import { readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
 
 import { api } from './support/daemon';
+import { createOnboardingProject, makeDocsFolder } from './support/onboardingProject';
 const token = readE2eAdminToken();
 const corsHeaders = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' };
 
@@ -15,8 +16,7 @@ async function reachFirstSessionStepWithACreateThatFails(page: Page) {
   });
   await page.goto('/onboarding');
   await page.getByLabel('Repository path').fill('/tmp');
-  await page.getByLabel('Name', { exact: true }).fill('Onboarding project');
-  await page.getByRole('button', { name: 'Create project', exact: true }).click();
+  await createOnboardingProject(page, { name: 'Onboarding project', docsFolder: makeDocsFolder() });
   await page.getByRole('button', { name: 'Continue' }).click();
 }
 

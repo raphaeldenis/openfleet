@@ -1,6 +1,7 @@
 import { OpenFleetError, projectNoteTitle, renderProjectNote, type CreateProjectRequest, type NoteFolder, type ProjectProfile, type UpdateProjectRequest } from '@openfleet/shared';
 import { unrunnableReasonOf } from '../git/postCreateHook.js';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
+import { withoutRedundantSlashes, type DocsRootSettings } from '../notes/docsRootSettings.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
 import { ProjectNotFoundError } from './projectErrors.js';
 import type { ProjectPatch, ProjectRecord, ProjectRepository } from './projectRepository.js';
@@ -19,6 +20,8 @@ export interface ProjectServiceDeps {
   projects: ProjectRepository;
   docs: Pick<DocsFolderService, 'prepareFolder' | 'attachFolder' | 'createFileBackedNote'>;
   noteRepo: Pick<NoteRepository, 'list' | 'delete'>;
+  /** Creates the folder of a new project under the docs root; without it a new project needs an existing folder. */
+  docsRoot?: Pick<DocsRootSettings, 'ensureProjectFolder'>;
   clock: () => string;
   newId: () => string;
   /** Called after a project gets a docs folder (on create or on change), so the daemon can reconcile and watch it. */
@@ -42,13 +45,20 @@ export class ProjectService {
   constructor(private readonly deps: ProjectServiceDeps) {}
 
   create(request: CreateProjectRequest): ProjectRecord {
-    const { docsFolderPath, profile } = request;
-    if (docsFolderPath !== undefined) this.deps.docs.prepareFolder(docsFolderPath);
+    const { profile } = request;
+    const docsFolderPath = request.docsFolderPath === undefined ? undefined : withoutRedundantSlashes(request.docsFolderPath);
+    if (docsFolderPath !== undefined) this.prepareNewProjectFolder(docsFolderPath);
     const record: ProjectRecord = { id: this.deps.newId(), name: request.name, docsFolderPath: docsFolderPath ?? null, createdAt: this.deps.clock() };
     this.deps.projects.insert(record);
     if (docsFolderPath !== undefined) this.importNotesOrForget(record, docsFolderPath);
     if (profile !== undefined) this.writeProjectNoteOrForget(record, profile);
     return record;
+  }
+
+  /** A missing folder under the docs root is created first; whatever then stands at the path must pass the docs folder checks. */
+  private prepareNewProjectFolder(docsFolderPath: string): void {
+    this.deps.docsRoot?.ensureProjectFolder(docsFolderPath);
+    this.deps.docs.prepareFolder(docsFolderPath);
   }
 
   update(projectId: string, patch: UpdateProjectRequest): ProjectRecord {

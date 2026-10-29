@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import { readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
 import { api, fulfillWithJson, interceptDaemonGet } from './support/daemon';
+import { createOnboardingProject, makeDocsFolder } from './support/onboardingProject';
 
 const token = readE2eAdminToken();
 
@@ -30,8 +31,7 @@ test('the project step and the first-session step of the onboarding wear the dar
   await expectDarkOnboarding(page);
 
   await page.getByLabel('Repository path').fill('/tmp');
-  await page.getByLabel('Name', { exact: true }).fill('Dark onboarding project');
-  await page.getByRole('button', { name: 'Create project', exact: true }).click();
+  await createOnboardingProject(page, { name: 'Dark onboarding project', docsFolder: makeDocsFolder() });
   await page.getByRole('button', { name: 'Continue' }).click();
 
   await expect(page.getByTestId('onboarding-step-first-session')).toBeVisible();

@@ -4,6 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { adminHeaders, api, fulfillWithJson, interceptDaemonGet, interceptDaemonPost, signInAsAdmin } from './support/daemon';
+import { createOnboardingProject } from './support/onboardingProject';
 
 const THEMES = ['light', 'dark'] as const;
 type Theme = (typeof THEMES)[number];
@@ -14,7 +15,7 @@ const DAEMON_POLL_GRACE_MS = 8_000;
 
 const uniqueProjectName = () => `Journey project ${randomUUID().slice(0, 8)}`;
 const step = (page: Page, name: string) => page.getByRole('list', { name: 'Setup steps' }).getByRole('listitem').filter({ hasText: name });
-const createProjectForm = (page: Page) => page.getByRole('group', { name: 'Create a project' });
+const docsFolderField = (page: Page) => page.getByLabel('Specs and docs are saved in');
 
 /** A first run: the fleet has no session yet, so the daemon step leads on to the project step instead of back to the app. */
 async function startAFirstRunOnABlankFleet(page: Page, theme: Theme): Promise<void> {
@@ -34,10 +35,7 @@ async function createFirstSessionsOnTheFakeHarness(page: Page, createdSessionIds
 }
 
 async function createTheProject(page: Page, { name, docsFolder }: { name: string; docsFolder: string }): Promise<void> {
-  const form = createProjectForm(page);
-  await form.getByLabel('Name').fill(name);
-  await form.getByLabel('Docs folder').fill(docsFolder);
-  await form.getByRole('button', { name: 'Create project' }).click();
+  await createOnboardingProject(page, { name, docsFolder });
   await expect(page.getByText(`Project ready: ${name}`)).toBeVisible();
 }
 
@@ -95,28 +93,29 @@ for (const theme of THEMES) {
     test('the project step refuses an empty name and a docs folder that is not an absolute path, then creates the project and shows it', async ({ page }) => {
       await startAFirstRunOnABlankFleet(page, theme);
       await page.goto('/onboarding');
-      const form = createProjectForm(page);
 
-      await form.getByRole('button', { name: 'Create project' }).click();
+      await page.getByRole('button', { name: 'Create project' }).click();
 
-      await expect(form.getByRole('alert')).toContainText('Name is required');
-      await expect(form.getByLabel('Name')).toHaveAttribute('aria-invalid', 'true');
+      await expect(page.getByRole('alert')).toContainText('Name is required');
+      await expect(page.getByLabel('Name', { exact: true })).toHaveAttribute('aria-invalid', 'true');
       await expect(page.getByText(/Project ready/)).toHaveCount(0);
 
       const projectName = uniqueProjectName();
-      await form.getByLabel('Name').fill(projectName);
-      await form.getByLabel('Docs folder').fill('relative/folder');
-      await form.getByRole('button', { name: 'Create project' }).click();
+      await page.getByLabel('Name', { exact: true }).fill(projectName);
+      await page.getByRole('button', { name: 'Use an existing folder' }).click();
+      await docsFolderField(page).fill('relative/folder');
+      await page.getByRole('button', { name: 'Create project' }).click();
 
-      await expect(form.getByTestId('project-form-error')).toContainText('That folder cannot be used');
-      await expect(form.getByLabel('Docs folder')).toHaveAttribute('aria-invalid', 'true');
+      await expect(page.getByTestId('project-form-error')).toContainText('That folder cannot be used');
+      await expect(docsFolderField(page)).toHaveAttribute('aria-invalid', 'true');
+      await expect(docsFolderField(page)).toBeFocused();
       await expect(page.getByText(/Project ready/)).toHaveCount(0);
 
-      await form.getByLabel('Docs folder').fill(docsFolder);
-      await form.getByRole('button', { name: 'Create project' }).click();
+      await docsFolderField(page).fill(docsFolder);
+      await page.getByRole('button', { name: 'Create project' }).click();
 
       await expect(page.getByText(`Project ready: ${projectName}`)).toBeVisible();
-      await expect(createProjectForm(page)).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Create project' })).toHaveCount(0);
       await expect(page.getByRole('button', { name: 'Continue' })).toBeDisabled();
     });
 
