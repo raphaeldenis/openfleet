@@ -32,6 +32,10 @@ export class ClaudeCliHarness implements Harness {
     return findPermissiveSettingsWarning(directory);
   }
 
+  binaryPath(): string | undefined {
+    return findExecutable(CLAUDE_COMMAND, pathDirectoriesOf(this.env));
+  }
+
   start(launch: HarnessLaunch): HarnessHandle {
     this.assertClaudeIsOnThePath();
     // Every session runs in a directory this daemon itself created (a worktree

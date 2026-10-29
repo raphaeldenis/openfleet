@@ -4,6 +4,16 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { z } from 'zod';
 import { createWorktreeWithHook, postCreateHookOf } from '../git/worktreeCreation.js';
 import { isPathWithin, sameGitRepository } from '../git/worktrees.js';
+import { isDirectoryInProject } from '../projects/projectMembership.js';
+
+// A session directory stored before it was resolved, or one that no longer exists, is compared as stored.
+function realPathOrItself(directory: string): string {
+  try {
+    return realpathSync.native(directory);
+  } catch {
+    return directory;
+  }
+}
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import { resolveModel, type ModelTable } from '../models.js';
 import type { ApprovalService } from '../governance/approvalService.js';
@@ -160,7 +170,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return false;
   };
 
-  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, effort, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree, branch and runtimeAttention when set; permissionMode and harness are not echoed';
+  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, effort, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree, branch, runtimeAttention, readiness (pending, ready or failed) and readinessReason when set; permissionMode and harness are not echoed';
 
   server.registerTool('get_session_status', { description: `State of your session or one in your lineage. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);
@@ -263,6 +273,8 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // lexical blind spot for some symlink + ".." combinations that the native OS call does not.
     const realDirectory = realpathSync.native(input.directory);
 
+    await sessions.assertHarnessHealthy(caller.harness);
+
     const ownerOfRequestedDirectory = findLineageSessionOwning(realDirectory);
     if (ownerOfRequestedDirectory) {
       return refuse(
@@ -290,6 +302,15 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const isWithinWorktreesRoot = isPathWithin(realDirectory, deps.worktreesRoot);
     const isCallersOwnRepo = await sameGitRepository(caller.directory, realDirectory);
     if (!isWithinWorktreesRoot && !isCallersOwnRepo) return refuse('outside_own_repository', 'directory must be inside the worktrees root or inside your own git repository');
+
+    const callerProjectId = caller.projectId;
+    if (callerProjectId !== undefined) {
+      const callerProject = deps.projects.get(callerProjectId);
+      const projectDirectories = sessions.list().filter((session) => session.projectId === callerProjectId).map((session) => realPathOrItself(session.directory));
+      const isInCallersProject = await isDirectoryInProject({ realDirectory, projectDirectories, docsFolderPath: callerProject?.docsFolderPath ?? null, sameGitRepository });
+      const projectName = callerProject?.name ?? callerProjectId;
+      if (!isInCallersProject) return refuse('directory_not_in_project', `directory ${realDirectory} belongs to no project.`, `Spawn inside project "${projectName}": use one of its directories or a worktree of its repository (create_worktree).`);
+    }
 
     const isDirectoryUnchangedSinceChecks = existsSync(input.directory) && realpathSync.native(input.directory) === realDirectory;
     if (!isDirectoryUnchangedSinceChecks) return refuse('spawn_raced', `directory ${input.directory} changed while the spawn was being checked: retry`);

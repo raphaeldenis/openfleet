@@ -66,7 +66,8 @@ import { DocsFolderSupervisor } from './projects/docsFolderSupervisor.js';
 import { ProjectRepository } from './projects/projectRepository.js';
 import { ProjectService } from './projects/projectService.js';
 import { WorktreeService } from './worktrees/worktreeService.js';
-import { SessionService } from './sessions/sessionService.js';
+import type { BinaryHealthCheck } from './harness/binaryHealth.js';
+import { DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS, SessionService } from './sessions/sessionService.js';
 import { DataStoreRepository } from './stores/dataStoreRepository.js';
 import { DataStoreService } from './stores/dataStoreService.js';
 import { TodoTracker } from './todos/todoTracker.js';
@@ -108,6 +109,8 @@ export interface DaemonOptions {
   /** The registry the process guards already mark; the daemon makes its own when none is handed over. */
   degraded?: DegradedRegistry;
   claudeConfigPath?: string;
+  /** Replaces the real `--version` check of the harness binary before a spawn, so a test can boot a daemon whose binary is a stand-in. */
+  binaryHealth?: BinaryHealthCheck;
   /** Overrides BASE_NOT_READ_ENFORCEMENT: 'warn_only' turns the base_not_read refusal of a spawn into a warning. */
   baseNotReadEnforcement?: BaseNotReadEnforcement;
   /** Overrides NOTE_NOT_READ_ENFORCEMENT: 'refuse' turns the note_not_read warning of a spawn into a refusal; absent, the warning only warns. */
@@ -150,7 +153,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     const { document, unattended } = commandPolicyService.settings();
     return document.mode !== 'off' || unattended.askBecomesDeny;
   };
-  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}), isCommandPolicyActive });
+  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, binaryHealth: options.binaryHealth, launchOutputTimeoutMs: DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}), isCommandPolicyActive });
   const approvals = new ApprovalService({ db, bus, timeoutMs: options.approvalTimeoutMs });
   // A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
   // process that would have decided it is gone with the old daemon.

@@ -49,7 +49,9 @@ const headOf = (directory: string) => git(directory, 'rev-parse', 'HEAD');
 const commitIn = (directory: string) => git(directory, 'commit', '--allow-empty', '-m', 'next');
 
 async function bootRootSession() {
-  const created = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'Root', harness: 'fake', emoji: '🧭' }) })).json()) as { id: string };
+  // The project root works in the worktrees root, so every child directory made below it belongs to the project.
+  mkdirSync(config.worktreesRoot, { recursive: true });
+  const created = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: config.worktreesRoot, name: 'Root', harness: 'fake', emoji: '🧭' }) })).json()) as { id: string };
   new ProjectRepository(daemon.db).insert({ id: 'p1', name: 'One', docsFolderPath: null, createdAt: 't0' });
   daemon.db.prepare('UPDATE sessions SET project_id = ? WHERE id = ?').run('p1', created.id);
   return created.id;

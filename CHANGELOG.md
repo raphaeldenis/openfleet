@@ -2,6 +2,17 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 3 — 2026-10-29
+
+- SPAWN-LAUNCH-HEALTH01, every tool that returns a compact session (`get_session_status`, `spawn_session` and the listings): the session carries `readiness` (`pending`, `ready` or `failed`) and `readinessReason` (`no_output_at_launch`) when set.
+- `spawn_session` refuses a harness binary that fails `--version` with `harness_binary_broken`, and a directory that belongs to no project of the caller with `directory_not_in_project`. Both are error codes, not input changes.
+
+Tools added: none.
+Tools changed: the compact session returned by the session tools (output fields only; no input schema changes).
+Migrations: 041 (`sessions.readiness`, `readiness_reason`, `launch_retries`).
+
+The guard test pins input schemas only, so it does not see the output fields; the pin changes only in its `contractVersion`.
+
 ## 2 — 2026-10-29
 
 Each batch that adds or changes a tool while the version is 2 appends its lines here.

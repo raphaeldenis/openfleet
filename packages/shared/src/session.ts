@@ -25,6 +25,19 @@ export const parseSessionCloseReason = (value: unknown): SessionCloseReason | un
   return parsed.success ? parsed.data : undefined;
 };
 
+/** Whether a launch produced a sign of life: pending until the first PTY byte or transcript progress, failed when none came in time. */
+export const SESSION_READINESS = ['pending', 'ready', 'failed'] as const;
+export type SessionReadiness = (typeof SESSION_READINESS)[number];
+
+export const READINESS_FAILURE_REASONS = ['no_output_at_launch'] as const;
+export type ReadinessFailureReason = (typeof READINESS_FAILURE_REASONS)[number];
+
+export const parseSessionReadiness = (value: unknown): SessionReadiness | undefined =>
+  SESSION_READINESS.find((readiness) => readiness === value);
+
+export const parseReadinessFailureReason = (value: unknown): ReadinessFailureReason | undefined =>
+  READINESS_FAILURE_REASONS.find((reason) => reason === value);
+
 export const HARNESSES =['claude-cli', 'fake'] as const;
 export type HarnessId = (typeof HARNESSES)[number];
 
@@ -83,6 +96,9 @@ export interface Session {
   state: SessionState;
   stateSince: string;
   runtimeAttention?: RuntimeAttention;
+  /** Absent for a session launched before readiness was tracked. A launch that produced no sign of life is failed, whatever its state says. */
+  readiness?: SessionReadiness;
+  readinessReason?: ReadinessFailureReason;
   exitCode?: number;
   /** Why the session is closed; absent while it is live, for a close recorded before the reason was stored, and for a reason this version does not know. */
   closeReason?: SessionCloseReason;

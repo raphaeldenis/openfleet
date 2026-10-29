@@ -583,6 +583,7 @@ const KNOWN_CODES: &[&str] = &[
   "docs_folder_not_writable", "docs_root_invalid", "docs_root_forbidden", "docs_root_not_writable", "payload_too_large", "note_too_large", "row_cap", "state_too_large", "daemon_shutting_down", "daemon_degraded",
   "delivery_failed", "message_held_for_review", "harness_exited", "claude_not_found", "git_unavailable", "internal_error", "launch_failed", "resume_timeout",
   "db_stuck", "proposal_not_found", "governance_queue_full", "law_not_found", "law_revision_conflict", "law_withdrawn",
+  "harness_binary_broken", "directory_not_in_project",
 ];
 
 const OTHER_CODE: &str = "other";

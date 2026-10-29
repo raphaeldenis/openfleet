@@ -83,6 +83,8 @@ export const ERROR_CODES = {
   verdict_stale: { kind: 'conflict', retry: 'never' },
   directory_in_use: { kind: 'conflict', retry: 'never' },
   duplicate_child: { kind: 'conflict', retry: 'never' },
+  // The directory belongs to no project: spawning inside a project's folders or worktrees is what lets the same call succeed.
+  directory_not_in_project: { kind: 'conflict', retry: 'never' },
   no_parent: { kind: 'conflict', retry: 'never' },
   // The directory moved while the spawn was being checked: the same call can succeed once it settles.
   spawn_raced: { kind: 'conflict', retry: 'later' },
@@ -110,6 +112,8 @@ export const ERROR_CODES = {
   // A missing binary on the daemon PATH: only installing it, or starting the daemon from a shell that has it, helps.
   claude_not_found: { kind: 'unavailable', retry: 'never' },
   git_unavailable: { kind: 'unavailable', retry: 'never' },
+  // The binary answers `--version` with a failure: repairing or reinstalling it, then waiting out the 60 s health cache, lets the same spawn succeed.
+  harness_binary_broken: { kind: 'unavailable', retry: 'later' },
 
   internal_error: { kind: 'internal' },
   launch_failed: { kind: 'internal' },

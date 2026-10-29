@@ -91,6 +91,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   verdict_stale: { what: 'That verdict is for a commit that is no longer the latest', fix: 'review the latest commit' },
   directory_in_use: { what: 'Another session already uses this directory', fix: 'pick another directory' },
   duplicate_child: { what: 'A session with that name already exists here', fix: 'pick another name' },
+  directory_not_in_project: { what: 'That directory belongs to no project', fix: 'pick a directory of the project' },
   no_parent: { what: 'This session has no parent' },
   spawn_raced: { what: 'The directory changed while the session was being created' },
   store_has_rows: { what: 'This table still has rows', fix: 'empty it first' },
@@ -112,6 +113,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   harness_exited: { what: 'The agent process ended', fix: 'resume the session' },
   claude_not_found: { what: 'The claude command is not on the daemon’s PATH', fix: 'install it, or start the daemon from a shell that has it' },
   git_unavailable: { what: 'Git is not available to the daemon', fix: 'install it' },
+  harness_binary_broken: { what: 'The agent command fails its version check', fix: 'reinstall it, then spawn again' },
 
   internal_error: { what: 'The daemon hit an unexpected error' },
   launch_failed: { what: 'The agent failed to launch' },

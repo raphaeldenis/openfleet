@@ -25,9 +25,9 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `invalid_request` | 400 | 12 |
 | `unauthorized` | 401 | 1 |
 | `not_found` | 404 | 12 |
-| `conflict` | 409 | 39 |
+| `conflict` | 409 | 40 |
 | `too_large` | 413 | 4 |
-| `unavailable` | 503 | 6 |
+| `unavailable` | 503 | 7 |
 | `internal` | 500 | 4 |
 
 ## Codes
@@ -107,6 +107,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `verdict_stale` | 409 | `never` |
 | `directory_in_use` | 409 | `never` |
 | `duplicate_child` | 409 | `never` |
+| `directory_not_in_project` | 409 | `never` |
 | `no_parent` | 409 | `never` |
 | `spawn_raced` | 409 | `later` |
 | `store_has_rows` | 409 | `never` |
@@ -135,6 +136,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `harness_exited` | 503 | `never` |
 | `claude_not_found` | 503 | `never` |
 | `git_unavailable` | 503 | `never` |
+| `harness_binary_broken` | 503 | `later` |
 
 ### internal
 

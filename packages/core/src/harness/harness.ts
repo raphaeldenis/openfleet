@@ -50,6 +50,8 @@ export interface Harness {
   /** How the command policy reaches this harness; a harness that does not say is not covered. */
   readonly policyEnforcement?: PolicyEnforcement;
   start(launch: HarnessLaunch): HarnessHandle;
+  // The executable `start` runs, when it is one file the daemon can probe with `--version`. A harness without one omits it.
+  binaryPath?(): string | undefined;
   // Whether a resume of this conversation can succeed: the CLI refuses (exit 1) a conversation it has no file for.
   // A harness that cannot tell omits it and its conversations are assumed to exist.
   conversationExists?(conversation: { cliSessionId: string; directory: string }): ConversationPresence;

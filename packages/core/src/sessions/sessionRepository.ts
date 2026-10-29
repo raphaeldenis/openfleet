@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
-import { PERMISSION_MODES, parseSessionCloseReason, type HarnessId, type PermissionMode, type Session, type SessionCloseReason, type SessionState } from '@openfleet/shared';
+import { PERMISSION_MODES, parseReadinessFailureReason, parseSessionCloseReason, parseSessionReadiness, type ReadinessFailureReason, type SessionReadiness, type HarnessId, type PermissionMode, type Session, type SessionCloseReason, type SessionState } from '@openfleet/shared';
 
 interface Row {
   id: string; name: string; emoji: string; directory: string; worktree: string | null; model: string | null;
@@ -9,9 +9,10 @@ interface Row {
   created_at: string; closed_at: string | null; project_id: string | null;
   resolved_model: string | null; cli_version: string | null; model_drifted_from: string | null; resolved_for_model: string | null;
   context_notice_tokens: number | null; effort: string | null;
+  readiness: string | null; readiness_reason: string | null; launch_retries: number;
 }
 
-type NewSessionRow = Omit<Row, 'exit_code' | 'close_reason' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model' | 'context_notice_tokens' | 'effort'> & { project_id?: string | null; effort?: string | null };
+type NewSessionRow = Omit<Row, 'exit_code' | 'close_reason' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model' | 'context_notice_tokens' | 'effort' | 'readiness' | 'readiness_reason' | 'launch_retries'> & { project_id?: string | null; effort?: string | null };
 
 export interface NormalizedPermissionMode { mode: PermissionMode | undefined; wasRecognized: boolean }
 
@@ -52,6 +53,7 @@ const toSession = (r: Row): Session => ({
   closeReason: parseSessionCloseReason(r.close_reason),
   permissionMode: normalizePermissionMode(r.permission_mode).mode,
   effort: r.effort ?? undefined,
+  readiness: parseSessionReadiness(r.readiness), readinessReason: parseReadinessFailureReason(r.readiness_reason),
   createdAt: r.created_at, closedAt: r.closed_at ?? undefined,
 });
 
@@ -89,6 +91,16 @@ export class SessionRepository {
   }
   removeReopen(reopenEventId: number): void {
     this.db.prepare('DELETE FROM session_events WHERE id = ?').run(reopenEventId);
+  }
+  setReadiness(id: string, input: { readiness: SessionReadiness; reason?: ReadinessFailureReason }): void {
+    this.db.prepare('UPDATE sessions SET readiness = ?, readiness_reason = ? WHERE id = ?').run(input.readiness, input.reason ?? null, id);
+  }
+  incrementLaunchRetries(id: string): void {
+    this.db.prepare('UPDATE sessions SET launch_retries = launch_retries + 1 WHERE id = ?').run(id);
+  }
+  launchRetriesOf(id: string): number {
+    const row = this.db.prepare('SELECT launch_retries FROM sessions WHERE id = ?').get(id) as { launch_retries: number } | undefined;
+    return row?.launch_retries ?? 0;
   }
   setModel(id: string, model: string): void {
     this.db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run(model, id);

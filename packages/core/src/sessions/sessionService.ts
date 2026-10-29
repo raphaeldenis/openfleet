@@ -6,6 +6,7 @@ import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktreeWithHook, postCreateHookOf } from '../git/worktreeCreation.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
+import { BinaryHealthCheck, brokenBinaryError, type BinaryHealth } from '../harness/binaryHealth.js';
 import { claudeProjectsDir } from '../harness/claudeProjectsDir.js';
 import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
@@ -28,7 +29,11 @@ import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConver
 // Absent, the service still closes sessions with their reason but broadcasts no error events.
 export type DescribeError = (error: unknown, scope: { sessionId?: string; where?: string }) => ErrorEnvelope;
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError; env?: NodeJS.ProcessEnv;
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number;
+  /** Probes `<bin> --version` before each spawn; defaults to a real check with a 60 s cache. */
+  binaryHealth?: BinaryHealthCheck;
+  /** How long a launch may show neither a PTY byte nor transcript progress before its readiness is failed; absent: launches are not watched. */
+  launchOutputTimeoutMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError; env?: NodeJS.ProcessEnv;
   /** The mission of a manager session (none for another session): handed over as the first prompt of a conversation the manager starts from nothing. */
   missionOf?: (sessionId: string) => string | undefined;
   /** The bounded recall of the expertise and pulse actions a manager wrote; empty when it wrote none. Placed before the mission in the first prompt. */
@@ -55,6 +60,9 @@ const isNamedLaunchFailure = (error: unknown): error is OpenFleetError => error 
 export const SESSION_END_EXIT_GRACE_MS = 2000;
 // A process that dies this soon after its spawn most likely never started (e.g. the CLI is not on the PATH).
 export const EARLY_EXIT_WINDOW_MS = 3000;
+export const DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS = 30_000;
+// A launch that shows no sign of life is relaunched on its own this many times; the next stall stays failed.
+const MAX_AUTOMATIC_LAUNCH_RETRIES = 1;
 const SIGNAL_EXIT_CODE_BASE = 128;
 const CLI_NOT_FOUND_HINT = 'Check that the claude CLI is installed and on the PATH the daemon runs with.';
 const REOPEN_HINT = 'reopen the session to resume the conversation.';
@@ -415,6 +423,9 @@ export class SessionService {
   private readonly handles = new Map<string, HarnessHandle>();
   private readonly outputBuffers = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly launchWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly sessionsWithOutput = new Set<string>();
+  private readonly binaryHealth: BinaryHealthCheck;
   private readonly deliveries = new Map<string, Delivery>();
   // What the human typed into the terminal prompt and has not sent, per live process: nothing is typed on top of it.
   private readonly humanDrafts = new Map<string, HumanDraftWatch>();
@@ -468,6 +479,7 @@ export class SessionService {
   constructor(private readonly deps: SessionServiceDeps) {
     this.runtime = new SessionRuntime(deps.bus);
     this.repo = new SessionRepository(deps.db);
+    this.binaryHealth = deps.binaryHealth ?? new BinaryHealthCheck();
     this.projects = new ProjectRepository(deps.db);
     this.handoffSeed = new HandoffSeed({ notes: new NoteRepository(deps.db), projects: this.projects, files: nodeHandoffFileReader });
     this.queue = new MessageQueue(deps.db);
@@ -487,6 +499,8 @@ export class SessionService {
   async create(spec: SessionSpec, options?: { branch?: string }): Promise<Session> {
     this.assertNotShuttingDown();
     const harness = this.harnessFor(spec.harness);
+    const binaryProbe = this.preflightBinary(harness);
+    if (binaryProbe) await binaryProbe;
     this.assertProjectExists(spec.projectId);
     this.assertBriefFitsFirstPrompt(spec.seededPrompt);
     const seededPrompt = this.seededPromptWithHandoff(spec);
@@ -506,6 +520,7 @@ export class SessionService {
     const isManager = spec.role === MANAGER_ROLE;
     if (spec.seededPrompt?.trim() && !isManager) this.repo.setSeededPrompt(id, spec.seededPrompt.trim());
     this.startPendingRecording(id, spec.model);
+    if (this.isLaunchWatched()) this.repo.setReadiness(id, { readiness: 'pending' });
     let handle: HarnessHandle;
     try {
       handle = harness.start({
@@ -523,6 +538,7 @@ export class SessionService {
     this.handles.set(id, handle);
     activeHandleBySessionId.set(id, handle);
     handle.onData((data) => {
+      this.noteOutputReceived(id);
       this.appendOutput(id, data);
       this.deps.bus.emit({ type: 'session.output', sessionId: id, data });
     });
@@ -531,6 +547,7 @@ export class SessionService {
     // included) leaves this session starting forever otherwise. A first launch gets its own, longer timeout
     // (firstStartTimeoutMs) since a cold real CLI can sit waiting on an auth or trust prompt (AUD-06).
     this.armFirstStartTimeout(id, handle);
+    this.armLaunchWatchdog(id, handle);
     const session = this.repo.get(id)!;
     this.deps.bus.emit({ type: 'session.created', session });
     return session;
@@ -1974,6 +1991,7 @@ export class SessionService {
   private markClosed(sessionId: string, closure: SessionClosure): void {
     const { exitCode, reason } = closure;
     this.clearResumeTimer(sessionId);
+    this.clearLaunchWatchdog(sessionId);
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
     this.dropPendingRecording(sessionId);
@@ -2182,6 +2200,133 @@ export class SessionService {
     const { mode, wasRecognized } = normalizePermissionMode(raw);
     if (!wasRecognized) log('warn', `resumeOne: session ${session.id} has an unrecognized permission_mode "${raw}", resuming without --permission-mode`);
     return mode;
+  }
+
+  /** Refuses with harness_binary_broken when the harness binary fails `--version`; callers that check other things first use it to fail before any await-sensitive window. */
+  async assertHarnessHealthy(harnessId: string): Promise<void> {
+    const probe = this.preflightBinary(this.harnessFor(harnessId));
+    if (probe) await probe;
+  }
+
+  // Synchronous while the answer is cached: create() keeps its no-await window for callers that already warmed the cache.
+  private preflightBinary(harness: Harness): Promise<void> | undefined {
+    const path = harness.binaryPath?.();
+    if (path === undefined) return undefined;
+    const cached = this.binaryHealth.cached(path);
+    if (cached) {
+      this.acceptOrRefuseBinary(cached);
+      return undefined;
+    }
+    return this.binaryHealth.check(path).then((health) => this.acceptOrRefuseBinary(health));
+  }
+
+  private acceptOrRefuseBinary(health: BinaryHealth): void {
+    if (!health.ok) {
+      log('warn', 'harness binary fails its version check', undefined, { code: 'harness_binary_broken', path: health.path, stderr: health.stderr });
+      throw brokenBinaryError(health);
+    }
+    log('info', `spawning with harness binary ${health.path} version ${health.version}`);
+  }
+
+  private isLaunchWatched(): boolean {
+    return this.deps.launchOutputTimeoutMs !== undefined;
+  }
+
+  private noteOutputReceived(sessionId: string): void {
+    if (!this.isLaunchWatched() || this.sessionsWithOutput.has(sessionId)) return;
+    this.sessionsWithOutput.add(sessionId);
+    this.markReady(sessionId);
+  }
+
+  private markReady(sessionId: string): void {
+    if (this.repo.get(sessionId)?.readiness === 'ready') return;
+    this.repo.setReadiness(sessionId, { readiness: 'ready' });
+    this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
+  }
+
+  private armLaunchWatchdog(sessionId: string, handle: HarnessHandle): void {
+    const timeoutMs = this.deps.launchOutputTimeoutMs;
+    if (timeoutMs === undefined) return;
+    clearTimeout(this.launchWatchdogs.get(sessionId));
+    this.launchWatchdogs.set(sessionId, setTimeout(() => this.judgeLaunchOutput(sessionId, handle), timeoutMs));
+  }
+
+  private clearLaunchWatchdog(sessionId: string): void {
+    clearTimeout(this.launchWatchdogs.get(sessionId));
+    this.launchWatchdogs.delete(sessionId);
+    this.sessionsWithOutput.delete(sessionId);
+  }
+
+  private judgeLaunchOutput(sessionId: string, handle: HarnessHandle): void {
+    const isStillThisLaunch = activeHandleBySessionId.get(sessionId) === handle;
+    if (!isStillThisLaunch) return;
+    const hasSignOfLife = this.sessionsWithOutput.has(sessionId) || handle.probeTranscriptProgress?.() !== undefined;
+    if (hasSignOfLife) {
+      this.markReady(sessionId);
+      return;
+    }
+    this.failLaunchWithoutOutput(sessionId, handle);
+  }
+
+  private failLaunchWithoutOutput(sessionId: string, stalledHandle: HarnessHandle): void {
+    const session = this.repo.get(sessionId)!;
+    const willRetry = this.repo.launchRetriesOf(sessionId) < MAX_AUTOMATIC_LAUNCH_RETRIES;
+    this.repo.setReadiness(sessionId, { readiness: 'failed', reason: 'no_output_at_launch' });
+    this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
+    log('warn', `session ${sessionId} produced no output at launch`, undefined, { code: 'no_output_at_launch', sessionId, willRetry });
+    this.notifyParentOfStalledLaunch(session, willRetry);
+    if (willRetry) this.relaunchStalledLaunch(session, stalledHandle);
+  }
+
+  private notifyParentOfStalledLaunch(session: Session, willRetry: boolean): void {
+    if (session.parentId === undefined) return;
+    const seconds = Math.round((this.deps.launchOutputTimeoutMs ?? 0) / 1000);
+    const followUp = willRetry
+      ? 'One automatic relaunch is under way.'
+      : 'No further automatic retry: close it and spawn again, or check the harness binary.';
+    const body = `[openfleet] child session ${session.name} (${session.id}) showed no PTY output and no transcript within ${seconds}s of launch: readiness failed, reason no_output_at_launch. ${followUp}`;
+    try {
+      this.sendMessage({ sessionId: session.parentId, body });
+    } catch (err) {
+      log('warn', `session ${session.id}: the parent ${session.parentId} could not be told about the stalled launch`, err);
+    }
+  }
+
+  // The retry is this session launching again, not a second spawn: it never goes through create_session's duplicate guard.
+  private relaunchStalledLaunch(session: Session, stalledHandle: HarnessHandle): void {
+    this.repo.incrementLaunchRetries(session.id);
+    activeHandleBySessionId.delete(session.id); // detached first: the stalled process's exit must not close the session
+    void this.killWithEscalation(stalledHandle, DEFAULT_CLOSE_ESCALATE_MS);
+    this.clearResumeTimer(session.id);
+    const harness = this.harnessFor(session.harness);
+    const hookToken = newToken();
+    const mcpToken = newToken();
+    this.repo.setTokens(session.id, hookToken, mcpToken);
+    let handle: HarnessHandle;
+    try {
+      handle = harness.start({
+        sessionId: session.id, directory: session.directory, model: session.model, effort: session.effort,
+        seededPrompt: this.seededPromptBySessionId.get(session.id),
+        hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken,
+        displayName: `${session.emoji} ${session.name}`, permissionMode: this.resolveResumePermissionMode(session),
+      });
+    } catch (err) {
+      this.logLaunchFailure(`relaunch: session ${session.id} failed to launch`, err);
+      this.closeAfterFailedLaunch(session.id, { reason: 'launch_failed', failure: err });
+      return;
+    }
+    this.handles.set(session.id, handle);
+    activeHandleBySessionId.set(session.id, handle);
+    handle.onData((data) => {
+      this.noteOutputReceived(session.id);
+      this.appendOutput(session.id, data);
+      this.deps.bus.emit({ type: 'session.output', sessionId: session.id, data });
+    });
+    this.watchProcessExit(session.id, handle);
+    this.armFirstStartTimeout(session.id, handle);
+    this.repo.setReadiness(session.id, { readiness: 'pending' });
+    this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(session.id)! });
+    this.armLaunchWatchdog(session.id, handle);
   }
 
   private armResumeTimeout(sessionId: string, handle: HarnessHandle): void {
