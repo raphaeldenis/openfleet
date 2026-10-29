@@ -9,6 +9,7 @@ import { isUserTyping } from './terminal-keystrokes';
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 const MAX_BACKGROUND_FAILURES = 50;
+const MIN_JITTER_SHARE = 0.5;
 
 export interface BackgroundFailure {
   key: string;
@@ -28,6 +29,14 @@ function isBackgroundFailure({ error: envelope, scope }: { error: ErrorEnvelope;
 
 /** Names one prompt of one session: the same prompt keeps its key for as long as it stays undecided. */
 export const silentBlockKey = ({ sessionId, waitingSince }: SilentBlock): string => `${sessionId}@${waitingSince}`;
+
+function parseServerEvent(text: string): ServerEvent | undefined {
+  try {
+    return JSON.parse(text) as ServerEvent;
+  } catch {
+    return undefined;
+  }
+}
 
 function notificationTriggerOf({ type: _type, ...trigger }: Extract<ServerEvent, { type: 'notification.trigger' }>): NotificationTrigger {
   return trigger;
@@ -162,7 +171,10 @@ export class FleetEventsService {
       this.hasConnectedBefore = true;
       this.flushQueuedSends();
     });
-    socket.addEventListener('message', (m) => this.reduce(JSON.parse(String(m.data)) as ServerEvent));
+    socket.addEventListener('message', (m) => {
+      const event = parseServerEvent(String(m.data));
+      if (event) this.reduce(event);
+    });
     socket.addEventListener('close', () => this.scheduleReconnect());
   }
 
@@ -185,7 +197,8 @@ export class FleetEventsService {
   private scheduleReconnect(): void {
     this.connected.set(false);
     this.attachedSinceOpenSessionIds.clear();
-    setTimeout(() => { void this.openSocket(); }, this.reconnectDelayMs);
+    const jitteredDelayMs = this.reconnectDelayMs * (MIN_JITTER_SHARE + (1 - MIN_JITTER_SHARE) * Math.random());
+    setTimeout(() => { void this.openSocket(); }, jitteredDelayMs);
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
   }
 
