@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { openDatabase } from '../../packages/core/src/db/database.js';
 import { ProjectRepository } from '../../packages/core/src/projects/projectRepository.js';
 import { DataStoreRepository } from '../../packages/core/src/stores/dataStoreRepository.js';
+import { isRemovableE2eHome } from './e2eHome.js';
 import { SEEDED_COLUMN, SEEDED_PROJECT, SEEDED_ROW, SEEDED_STORE } from './e2eSeedFixture.js';
 
 const SEED_ACTOR = { kind: 'human', label: 'Seed' } as const;
@@ -27,4 +28,5 @@ function writeSeed(databasePath: string): void {
 
 const [, , home] = process.argv;
 if (!home) throw new Error('usage: writeE2eSeed.ts <e2e home>');
+if (!isRemovableE2eHome(home)) throw new Error(`refusing to seed ${home}: it is not a home created for an e2e run`);
 writeSeed(join(home, 'openfleet.db'));
