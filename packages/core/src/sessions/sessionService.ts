@@ -17,6 +17,7 @@ import { NoteRepository } from '../notes/noteRepository.js';
 import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { HumanDraft } from './humanDraft.js';
 import { MessageQueue, type ChildExchange } from './messageQueue.js';
+import { OPENFLEET_NOTICE_PREFIX } from './daemonLines.js';
 import { DeliveryReconciler, promptDigestsInTranscript } from './deliveryReconciler.js';
 import { SessionRuntime, type RuntimeProgress } from './sessionRuntime.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
@@ -2387,7 +2388,7 @@ export class SessionService {
     const followUp = willRetry
       ? 'One automatic relaunch is under way.'
       : 'No further automatic retry: close it and spawn again, or check the harness binary.';
-    const body = `[openfleet] child session ${session.name} (${session.id}) showed no PTY output and no transcript within ${seconds}s of launch: readiness failed, reason no_output_at_launch. ${followUp}`;
+    const body = `${OPENFLEET_NOTICE_PREFIX} child session ${session.name} (${session.id}) showed no PTY output and no transcript within ${seconds}s of launch: readiness failed, reason no_output_at_launch. ${followUp}`;
     try {
       this.sendMessage({ sessionId: session.parentId, body });
     } catch (err) {

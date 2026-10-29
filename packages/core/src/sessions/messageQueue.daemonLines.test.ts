@@ -33,6 +33,14 @@ describe('the daemon lines a session waiting on the human skips', () => {
     expect(queue.countDeliveredSince('s1', '2000-01-01T00:00:00.000Z')).toBe(1);
   });
 
+  it('skips an [openfleet] readiness line and a [verdict] line, and still finds a human message behind them', () => {
+    const queue = aQueueWith(['[openfleet] child session Dev (c1) showed no PTY output: readiness failed', '[verdict] no-go CCM-1 @ abcd1234: missing test', 'human hello']);
+
+    const next = queue.nextPending('s1', { skipDaemonLines: true });
+
+    expect(next?.body).toBe('human hello');
+  });
+
   it('returns a scheduled event line when daemon lines are not skipped', () => {
     const queue = aQueueWith(['[scheduled event due 2026-10-31T09:30:00] check']);
 

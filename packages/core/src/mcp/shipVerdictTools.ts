@@ -6,6 +6,7 @@ import type { ManagerService } from '../managers/managerService.js';
 import { maskedSecrets } from '../redact.js';
 import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
 import { BLANK_CLAIM_MESSAGE, hasBlankClaim, lacksExecutedEvidence, sanitizedReproClaim } from '../review/sanitizedReproClaim.js';
+import { VERDICT_PREFIX } from '../sessions/daemonLines.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { DEFAULT_TICKET_PATTERN, gitOutput, ticketOfBranch } from '../review/worktreeGit.js';
 import { refuseInvalidBody } from './claimRefusal.js';
@@ -22,7 +23,7 @@ const cappedAt = (text: string, maxChars: number) => (text.length > maxChars ? `
 /** The message names each reason with the label of its status; the output of a reproduction stays in the table. */
 const noGoMessageOf = ({ ticket, sha, reasons }: { ticket: string; sha: string; reasons: ReproClaim[] }) => {
   const labelledReasons = reasons.map(({ claim, status }) => `${claim} [${REPRO_STATUS_LABELS[status]}]`);
-  return cappedAt(maskedSecrets(oneLine(`[verdict] no-go ${ticket} @ ${sha.slice(0, SHORT_SHA_LENGTH)}: ${labelledReasons.join('; ')}`)), MAX_VERDICT_MESSAGE_CHARS);
+  return cappedAt(maskedSecrets(oneLine(`${VERDICT_PREFIX} no-go ${ticket} @ ${sha.slice(0, SHORT_SHA_LENGTH)}: ${labelledReasons.join('; ')}`)), MAX_VERDICT_MESSAGE_CHARS);
 };
 
 export interface RegisterShipVerdictToolsDeps {
