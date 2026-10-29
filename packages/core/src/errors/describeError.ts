@@ -27,7 +27,7 @@ import {
 } from '../sessions/sessionService.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from '../stores/dataStoreRepository.js';
 import {
-  ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, ConstraintError, DaemonSetColumnError, DuplicateIdError, OptionsHeldByRowsError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
+  ColumnIsDisplayColumnError, ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, ConstraintError, DaemonSetColumnError, DuplicateIdError, OptionsHeldByRowsError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
   InvalidViewConfigError, RowGuardViolationError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
 
@@ -146,6 +146,7 @@ const RULES: Rule[] = [
   when(ColumnOrderMismatchError, asDetail('invalid_body', 'the column order is not a permutation of the columns.')),
   when(ColumnIsNaturalKeyError, asDetail('constraint_violation', 'the column is the natural key.')),
   when(ColumnUsedByViewError, asDetail('constraint_violation', 'a view uses the column.')),
+  when(ColumnIsDisplayColumnError, asDetail('constraint_violation', 'another column uses it as its display column.')),
   when(OptionsHeldByRowsError, asDetail('constraint_violation', 'rows still hold the removed options.')),
   when(ConstraintError, asDetail('constraint_violation', 'the change breaks a constraint.')),
   when(StoreRowCapError, asIs('row_cap')),

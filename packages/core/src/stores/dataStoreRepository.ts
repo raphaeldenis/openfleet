@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AutoValue, ColumnFormat, ColumnType, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, RowChangeKind, RowChangeOrder, SelectOption, ViewType } from '@openfleet/shared';
+import type { AutoValue, ColumnConfig, ColumnFormat, ColumnType, ColumnWrap, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, RowChangeKind, RowChangeOrder, SelectOption, ViewType } from '@openfleet/shared';
 import { inTransaction as runInTransaction } from '../db/transaction.js';
 import { newId } from '../ids.js';
 
@@ -48,7 +48,20 @@ export class AmbiguousColumnReferenceError extends UnknownColumnError {
 
 interface ViewRow { id: string; store_id: string; display_name: string; view_type: ViewType; config_json: string; sort_order: number }
 interface StoreRow { id: string; project_id: string; display_name: string; natural_key_column_id: string | null; created_at: string; updated_at: string }
-interface ColumnRow { id: string; store_id: string; display_name: string; column_type: ColumnType; column_format: ColumnFormat | null; options_json: string | null; sort_order: number; auto_value: AutoValue | null }
+/** The display metadata of a column, written whole: null stands for unset. */
+export interface ColumnMetadata {
+  required: boolean;
+  format: ColumnFormat | null;
+  config: ColumnConfig | null;
+  displayColumnId: string | null;
+  displayWidth: number | null;
+  wrap: ColumnWrap | null;
+}
+
+interface ColumnRow {
+  id: string; store_id: string; display_name: string; column_type: ColumnType; column_format: ColumnFormat | null; options_json: string | null; sort_order: number; auto_value: AutoValue | null;
+  required: number; display_column_id: string | null; config_json: string | null; display_width: number | null; wrap_mode: 'wrap' | null; wrap_max_lines: number | null;
+}
 interface RowRow { id: string; store_id: string; data_json: string; created_at: string; updated_at: string }
 interface HistoryRow { seq: number; id: string; row_id: string; actor_kind: RowActorKind; actor_label: string; change_json: string; created_at: string }
 
@@ -61,6 +74,11 @@ const toColumn = (r: ColumnRow): DsColumn => ({
   options: r.options_json === null ? null : (JSON.parse(r.options_json) as SelectOption[]), sortOrder: r.sort_order,
   autoValue: r.auto_value ?? undefined,
   ...(r.column_format === null ? {} : { format: r.column_format }),
+  ...(r.required === 1 ? { required: true as const } : {}),
+  ...(r.display_column_id === null ? {} : { displayColumnId: r.display_column_id }),
+  ...(r.config_json === null ? {} : { config: JSON.parse(r.config_json) as ColumnConfig }),
+  ...(r.display_width === null ? {} : { displayWidth: r.display_width }),
+  ...(r.wrap_mode === null ? {} : { wrap: r.wrap_max_lines === null ? { mode: r.wrap_mode } : { mode: r.wrap_mode, maxLines: r.wrap_max_lines } }),
 });
 const toView = (r: ViewRow): DsView => ({
   id: r.id, storeId: r.store_id, displayName: r.display_name, viewType: r.view_type,
@@ -187,13 +205,15 @@ export class DataStoreRepository {
     return rows.map(toColumn);
   }
 
-  /** Sets the display name and options of a column; its id, type and position stay. */
-  updateColumn(storeId: string, input: { columnId: string; displayName: string; options: SelectOption[] | null }): DsColumn {
+  /** Sets the display name, options and display metadata of a column in one statement; its id, type and position stay. */
+  updateColumn(storeId: string, input: { columnId: string; displayName: string; options: SelectOption[] | null; metadata: ColumnMetadata }): DsColumn {
     const sameNameColumn = this.findColumnByName(storeId, input.displayName);
     if (sameNameColumn && sameNameColumn.id !== input.columnId) throw new DuplicateNameError(input.displayName);
     const optionsJson = input.options === null ? null : JSON.stringify(input.options);
-    this.db.prepare('UPDATE ds_columns SET display_name = ?, options_json = ? WHERE id = ? AND store_id = ?')
-      .run(input.displayName, optionsJson, input.columnId, storeId);
+    const { required, format, config, displayColumnId, displayWidth, wrap } = input.metadata;
+    this.db.prepare(`UPDATE ds_columns SET display_name = ?, options_json = ?, required = ?, column_format = ?, config_json = ?, display_column_id = ?, display_width = ?, wrap_mode = ?, wrap_max_lines = ?
+      WHERE id = ? AND store_id = ?`)
+      .run(input.displayName, optionsJson, required ? 1 : 0, format, config === null ? null : JSON.stringify(config), displayColumnId, displayWidth, wrap?.mode ?? null, wrap?.maxLines ?? null, input.columnId, storeId);
     return this.listColumns(storeId).find((column) => column.id === input.columnId)!;
   }
 

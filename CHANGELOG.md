@@ -2,6 +2,15 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 6 — 2026-10-29
+
+- PARITY-TBL-03B, `update_data_store_column`: new optional `required`, `display_column_id` / `clear_display_column_id`, `format` / `clear_format`, `config` / `clear_config`, `display_width` / `clear_display_width`, `wrap_mode` (`wrap` or `truncate`) and `wrap_max_lines`. A field is set or cleared in one call, never both; `wrap_mode` `truncate` resets the wrapping. `display_column_id` names another column of the same store (id or display name) and a column used as display column cannot be deleted (`constraint_violation`). `config` (number column only) is `{symbol (max 8 characters), decimals 0-10, ratingMax 1-10, ratingIcon (max 32 characters)}`; `display_width` is 60-1200; `wrap_max_lines` is 1-100; `format` must match the column type. A column type never changes. `required` is stored, not enforced on row writes.
+- Column views (`describe_data_store`, `get_data_store`, `add_data_store_column`, `update_data_store_column`) carry `required` (only when true), `displayColumnId`, `config`, `displayWidth` and `wrap` when set. Select options accept at most 500 entries and a `color` must be `#RGB`, `#RRGGBB` or `#RRGGBBAA` (`add_data_store_column` and `update_data_store_column`). REST `PATCH /api/data-stores/:id/columns/:columnId` takes `required`, `displayColumnId`, `format`, `config`, `displayWidth` (null clears) and `wrap` `{mode, maxLines?}`.
+
+Tools added: none.
+Tools changed: `update_data_store_column` (input schema), `add_data_store_column` (option color and count), column views (output fields).
+Migrations: `048_ds_column_metadata` (additive `ds_columns.required`, `display_column_id`, `config_json`, `display_width`, `wrap_mode`, `wrap_max_lines`).
+
 ## 5 — 2026-10-29
 
 - PARITY-ACCT-01, `create_session`: new optional `config_dir`, an absolute path to an account profile directory, launched as `CLAUDE_CONFIG_DIR`. Accepted for the `claude-cli` harness only; any other harness is refused with `invalid_body` ("harness X does not support config_dir"). The path must exist, resolve (realpath) strictly under the home directory, and not be the `~/.claude` folder itself, nor `~/.openfleet` or the `OPENFLEET_HOME` folder or anything under them (compared as spelled and through realpath, so a symlinked dotfiles folder gives no way round, case-insensitively); otherwise `invalid_body`. Subfolders of `~/.claude` (for example `~/.claude/profiles/work`) are accepted. No file inside the directory is read, nothing picks a profile on the caller's behalf, and the path is never echoed. Session views (`create_session` ack, session listings) carry `configProfile`, the directory's last path segment, and never the path.

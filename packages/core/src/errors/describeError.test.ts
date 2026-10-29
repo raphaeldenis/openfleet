@@ -20,7 +20,7 @@ import {
 } from '../sessions/sessionService.js';
 import { AmbiguousColumnReferenceError, DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, UnknownColumnReferenceError } from '../stores/dataStoreRepository.js';
 import {
-  CellValueRejectedError, ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, OptionsHeldByRowsError, NaturalKeyConflictError, NaturalKeyMissingError, NaturalKeyNotFoundError, NaturalKeyNotUniqueError, NaturalKeyOnSeveralRowsError,
+  CellValueRejectedError, ColumnIsDisplayColumnError, ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, OptionsHeldByRowsError, NaturalKeyConflictError, NaturalKeyMissingError, NaturalKeyNotFoundError, NaturalKeyNotUniqueError, NaturalKeyOnSeveralRowsError,
   ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError, NoNaturalKeyError, AmbiguousNaturalKeyError,
   InvalidViewConfigError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError, JournalShortenedError, DoneWithoutPrUrlError, RowGuardViolationError,
 } from '../stores/dataStoreService.js';
@@ -101,6 +101,7 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['NaturalKeyNotUniqueError', () => new NaturalKeyNotUniqueError(), 'constraint_violation'],
   ['ColumnIsNaturalKeyError', () => new ColumnIsNaturalKeyError('Name'), 'constraint_violation'],
   ['ColumnUsedByViewError', () => new ColumnUsedByViewError('Status', 'Board'), 'constraint_violation'],
+  ['ColumnIsDisplayColumnError', () => new ColumnIsDisplayColumnError('Label', 'Price'), 'constraint_violation'],
   ['OptionsHeldByRowsError', () => new OptionsHeldByRowsError(['done']), 'constraint_violation'],
   ['ColumnOrderMismatchError', () => new ColumnOrderMismatchError({ missingIds: ['a'], unknownIds: [], repeatedIds: [] }), 'invalid_body'],
   ['CellValueRejectedError', () => new CellValueRejectedError('c1', 'not an option'), 'invalid_body'],

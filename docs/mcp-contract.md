@@ -14,6 +14,8 @@ The description text of a parameter is part of the input schema, so rewording it
 
 Output changes are not detected: the guard hashes input schemas only, so a changed result shape or result field passes unnoticed. Raise the version by hand when a tool's output changes in a way clients can see.
 
+Example: version 6 added `required`, `displayColumnId`, `config`, `displayWidth` and `wrap` to the column views next to new `update_data_store_column` parameters; the new parameters moved the pin, the new output fields were raised by hand.
+
 ## Where to read it
 
 - `CONTRACT_VERSION` in `packages/shared/src/mcpContract.ts`, the single definition.

@@ -1,7 +1,7 @@
 {
-  "contractVersion": 5,
+  "contractVersion": 6,
   "tools": [
-    { "name": "add_data_store_column", "inputSchemaHash": "4181f0be3b447d3c" },
+    { "name": "add_data_store_column", "inputSchemaHash": "968cbac3975a27b9" },
     { "name": "append_to_note", "inputSchemaHash": "e8b3f62130a1ad87" },
     { "name": "bootstrap_project_profile", "inputSchemaHash": "8586bf446a45357f" },
     { "name": "close_session", "inputSchemaHash": "7bd880ec34c4c5b7" },
@@ -54,7 +54,7 @@
     { "name": "set_argus_log_store", "inputSchemaHash": "65f351dcc2b17dee" },
     { "name": "set_data_store_natural_key", "inputSchemaHash": "52bcb5a45e813580" },
     { "name": "set_manager_profile", "inputSchemaHash": "eef2e69ca8f02e7c" },
-    { "name": "update_data_store_column", "inputSchemaHash": "d944c7d10399b93f" },
+    { "name": "update_data_store_column", "inputSchemaHash": "c3b4f8816e3709e7" },
     { "name": "update_data_store_row", "inputSchemaHash": "61764808ad6acf19" },
     { "name": "update_data_store_rows", "inputSchemaHash": "80fcf44f8711978e" },
     { "name": "update_data_store_view", "inputSchemaHash": "30a4abc7a1be9cca" },

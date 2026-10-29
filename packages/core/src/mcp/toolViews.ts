@@ -23,6 +23,11 @@ export const columnView = (column: DsColumn) => ({
   ...(column.options ? { options: column.options } : {}),
   ...(column.autoValue ? { autoValue: column.autoValue } : {}),
   ...(column.format ? { format: column.format } : {}),
+  ...(column.required ? { required: true } : {}),
+  ...(column.displayColumnId ? { displayColumnId: column.displayColumnId } : {}),
+  ...(column.config ? { config: column.config } : {}),
+  ...(column.displayWidth ? { displayWidth: column.displayWidth } : {}),
+  ...(column.wrap ? { wrap: column.wrap } : {}),
 });
 
 /** What an agent reads for a stored cell of a column. */
