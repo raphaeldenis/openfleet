@@ -1,4 +1,4 @@
-import type { ReproClaim } from '@openfleet/shared';
+import { isBlankText, type ReproClaim } from '@openfleet/shared';
 import { maskedSecrets } from '../redact.js';
 
 const TERMINAL_COLOUR_SEQUENCE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
@@ -29,11 +29,11 @@ export function sanitizedReproClaim({ claim, status, command, output }: ReproCla
 export const BLANK_CLAIM_MESSAGE = 'a claim states the defect or the check in visible text; this one is empty once control, bidi and zero-width characters are removed.';
 
 /** A claim made only of invisible characters says nothing once cleaned. */
-export const hasBlankClaim = ({ claim }: ReproClaim): boolean => claim === '';
+export const hasBlankClaim = ({ claim }: ReproClaim): boolean => isBlankText(claim);
 
 /** A proven or plausible claim must show the run it stands on. */
 export function lacksExecutedEvidence({ status, command, output }: ReproClaim): boolean {
   const isExecuted = status !== 'not_reproduced';
-  const showsTheRun = command !== undefined && output !== undefined;
+  const showsTheRun = command !== undefined && output !== undefined && !isBlankText(command) && !isBlankText(output);
   return isExecuted && !showsTheRun;
 }

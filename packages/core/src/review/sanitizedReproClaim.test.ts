@@ -90,6 +90,12 @@ describe('hasBlankClaim', () => {
     expect(hasBlankClaim(sanitizedReproClaim(proven({ claim: invisibleFormatClaim })))).toBe(true);
   });
 
+  it('is true for a claim made only of braille blanks or Unicode spaces, which cleaning keeps', () => {
+    const blankLookingClaim = String.fromCodePoint(0x2800, 0x3000, 0x2800);
+
+    expect(hasBlankClaim(sanitizedReproClaim(proven({ claim: blankLookingClaim })))).toBe(true);
+  });
+
   it('is false for a claim with text', () => {
     expect(hasBlankClaim(proven())).toBe(false);
   });
@@ -107,6 +113,7 @@ describe('lacksExecutedEvidence', () => {
   it.each([
     ['a proven claim whose output was only colour sequences', proven({ output: `${escape}[0m` })],
     ['a plausible claim without command', proven({ status: 'plausible', command: undefined })],
+    ['a proven claim whose output is only braille blanks', proven({ output: String.fromCodePoint(0x2800, 0x2800) })],
   ])('is true for %s', (_name, reproClaim) => {
     expect(lacksExecutedEvidence(sanitizedReproClaim(reproClaim))).toBe(true);
   });

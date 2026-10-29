@@ -55,7 +55,7 @@ const runCommand = async (sessionId: string, directory: string, command: string)
   })).json()) as HookAnswer;
 
 const line = (ticket: string, step: FindingStep, severity: FindingSeverity, sha: string) => new ReviewFindingsRepository(daemon!.db)
-  .record({ ticket, step, severity, claim: '', reasons: [], sha, authorSessionId: 'reviewer', managerSessionId: null, createdAt: '2026-10-17T10:00:00.000Z' });
+  .record({ ticket, step, severity, claim: 'ran the checks of the step', reasons: ['ran the checks of the step'], sha, authorSessionId: 'reviewer', managerSessionId: null, createdAt: '2026-10-17T10:00:00.000Z' });
 const allStepsOpenAt = (ticket: string, sha: string) => {
   line(ticket, 'qe', 'clean', sha);
   line(ticket, 'qa', 'clean', sha);
