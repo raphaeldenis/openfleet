@@ -2,6 +2,13 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## Unreleased — no contract_version change
+
+- TOOLING-OUTSIDE-REPO01, shared repo setting: a project can mark its repository as shared with a team (`sharedRepo`, `PATCH /api/projects/:id`; see `docs/shared-repo.md`). No tool schema changes. `insert_data_store_rows` on the "Manager backlog" table of such a project is refused to an agent that is not a manager with the new error code `backlog_write_refused` (`invalid_request`, retry `never`).
+- Worktrees of such a project get the fleet overlay linked as `.openfleet-overlay` and excluded from git; a failed overlay adds the warning `overlay_unavailable` to the worktree creation.
+
+Migrations: `054_project_shared_repo`: `projects.shared_repo`.
+
 ## 13 — 2026-10-29
 
 ALWAYS-REPRO01, every claim of a review report cites a reproduction or says it is not reproduced. A breaking change, on purpose.

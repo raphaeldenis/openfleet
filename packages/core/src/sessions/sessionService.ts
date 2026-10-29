@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { MANAGER_ROLE, MAX_MISSION_BYTES, OpenFleetError, type HeldMessage, type NotificationTrigger, type ReopenMode, type ErrorCode, type ErrorEnvelope, type PermissionMode, type RuntimeAttention, type Session, type SessionCloseReason, type SessionSpec, type WorktreeWarning } from '@openfleet/shared';
 import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
-import { createWorktreeWithHook, postCreateHookOf } from '../git/worktreeCreation.js';
+import { createWorktreeWithHook, overlayOf, postCreateHookOf } from '../git/worktreeCreation.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
 import { BinaryHealthCheck, brokenBinaryError, type BinaryHealth } from '../harness/binaryHealth.js';
 import { claudeProjectsDir } from '../harness/claudeProjectsDir.js';
@@ -572,8 +572,10 @@ export class SessionService {
   async createInWorktree(spec: SessionSpec & { repoPath: string; branchName: string }): Promise<Session & { warnings?: WorktreeWarning[] }> {
     this.harnessFor(spec.harness);
     this.assertProjectExists(spec.projectId);
-    const hook = postCreateHookOf(spec.projectId === undefined ? undefined : this.projects.get(spec.projectId));
-    const worktree = await createWorktreeWithHook({ repoPath: spec.repoPath, branchName: spec.branchName, worktreesRoot: this.deps.worktreesRoot, env: this.deps.env, hook });
+    const project = spec.projectId === undefined ? undefined : this.projects.get(spec.projectId);
+    const hook = postCreateHookOf(project);
+    const overlay = overlayOf(project, this.deps.worktreesRoot);
+    const worktree = await createWorktreeWithHook({ repoPath: spec.repoPath, branchName: spec.branchName, worktreesRoot: this.deps.worktreesRoot, env: this.deps.env, hook, overlay });
     const session = await this.create({ ...spec, directory: worktree.path }, { branch: worktree.branch });
     return worktree.warnings ? { ...session, warnings: worktree.warnings } : session;
   }

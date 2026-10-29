@@ -1,4 +1,4 @@
-import { AggregateSchema, ScapeAggregateSchema, AutoValueSchema, ColumnConfigSchema, ColumnFormatSchema, ColumnTypeSchema, DisplayWidthSchema, MAX_DISPLAY_WIDTH, MAX_SELECT_OPTIONS, MAX_WRAP_LINES, MIN_DISPLAY_WIDTH, OptionReplacementSchema, SelectOptionSchema, WrapMaxLinesSchema, WrapModeSchema, type Aggregate, type ColumnChanges, type ScapeAggregate, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
+import { AggregateSchema, MANAGER_ROLE, ScapeAggregateSchema, AutoValueSchema, ColumnConfigSchema, ColumnFormatSchema, ColumnTypeSchema, DisplayWidthSchema, MAX_DISPLAY_WIDTH, MAX_SELECT_OPTIONS, MAX_WRAP_LINES, MIN_DISPLAY_WIDTH, OptionReplacementSchema, SelectOptionSchema, WrapMaxLinesSchema, WrapModeSchema, type Aggregate, type ColumnChanges, type ScapeAggregate, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
@@ -29,6 +29,7 @@ const agentActor = (caller: Session): RowActor => ({ kind: 'agent', label: `${ca
 export function registerTableTools(server: McpServer, deps: RegisterTableToolsDeps): void {
   const { stores, storeRepo, caller } = deps;
   const guarded = guardedFor(caller);
+  const callerIsManager = caller.role === MANAGER_ROLE;
 
   function requireProject(): { projectId: string } | undefined {
     return caller.projectId ? { projectId: caller.projectId } : undefined;
@@ -209,7 +210,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       const report = writeRowByRow(rows, {
         write: (row) => {
           const cells = cellsKeyedByColumnId(columns, row);
-          const { outcome, row: written } = stores.saveRow(ownStore.id, { ...scope, data: cells, actor: agentActor(caller), mode: saveMode });
+          const { outcome, row: written } = stores.saveRow(ownStore.id, { ...scope, data: cells, actor: agentActor(caller), callerIsManager, mode: saveMode });
           stores.ignoredDaemonSetColumnIds(ownStore.id, { ...scope, items: [cells] }).forEach((columnId) => ignoredColumnIds.add(columnId));
           return { outcome, rowId: written.id };
         },

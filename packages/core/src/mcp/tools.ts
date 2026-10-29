@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { z } from 'zod';
-import { createWorktreeWithHook, postCreateHookOf } from '../git/worktreeCreation.js';
+import { createWorktreeWithHook, overlayOf, postCreateHookOf } from '../git/worktreeCreation.js';
 import { isPathWithin, sameGitRepository } from '../git/worktrees.js';
 import { isDirectoryInProject } from '../projects/projectMembership.js';
 
@@ -246,8 +246,10 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task. If your project configures a post-create script it runs in the new worktree; a failing script never fails the call, it adds a warnings entry (reason timeout, exit_nonzero, not_executable, not_found, unsafe_permissions or spawn_failed)', inputSchema: { repo_path: z.string(), branch_name: z.string(), base_ref: z.string().optional().describe('Existing branch, tag or commit sha of the repository the new branch starts from; defaults to the current HEAD of repo_path') } }, async ({ repo_path, branch_name, base_ref }) => {
     const isCallersOwnRepo = await sameGitRepository(caller.directory, repo_path);
     if (!isCallersOwnRepo) return refuse('outside_own_repository', 'repo_path must be the git repository of your own session directory');
-    const hook = postCreateHookOf(caller.projectId ? deps.projects.get(caller.projectId) : undefined);
-    return ok(await createWorktreeWithHook({ repoPath: repo_path, branchName: branch_name, baseRef: base_ref, worktreesRoot: deps.worktreesRoot, hook }));
+    const project = caller.projectId ? deps.projects.get(caller.projectId) : undefined;
+    const hook = postCreateHookOf(project);
+    const overlay = overlayOf(project, deps.worktreesRoot);
+    return ok(await createWorktreeWithHook({ repoPath: repo_path, branchName: branch_name, baseRef: base_ref, worktreesRoot: deps.worktreesRoot, hook, overlay }));
   });
 
   server.registerTool('create_session', { description: `Spawn a child coding session in a directory (use create_worktree first). ${COMPACT_SESSION}`, inputSchema: {

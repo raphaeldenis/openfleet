@@ -7,6 +7,7 @@ import {
 import { z } from 'zod';
 import { inTransaction as runInTransaction } from '../db/transaction.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, type ColumnMetadata, type DataStoreRepository, type RowActor } from './dataStoreRepository.js';
+import { BACKLOG_TABLE } from '../managers/projectProfileTemplate.js';
 import { rowGuardViolationOf } from './rowGuard.js';
 
 export { DoneWithoutPrUrlError, JournalShortenedError, RowGuardViolationError } from './rowGuard.js';
@@ -120,6 +121,16 @@ export class LogKindNotAllowedError extends Error {
   }
 }
 
+/** An agent that is not a manager inserted a row into the backlog of a project whose repository is shared with a team. */
+export class BacklogWriteRefusedError extends Error {
+  constructor() {
+    super('This project shares its repository with a team: findings outside your ticket go to your manager (message_parent), not into the backlog.');
+  }
+}
+
+const BACKLOG_STORE_NAME_KEY = BACKLOG_TABLE.name.toLowerCase();
+const storeNameKey = (name: string): string => name.normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase();
+
 const LOG_KIND_COLUMN_NAME = 'kind';
 const isLogKindColumn = (column: DsColumn): boolean => column.displayName.trim().toLowerCase() === LOG_KIND_COLUMN_NAME;
 const labelOfSelectedOption = (column: DsColumn, optionId: unknown): unknown => (column.options ?? []).find((option) => option.id === optionId)?.label ?? optionId;
@@ -134,6 +145,8 @@ export interface DataStoreServiceDeps {
 }
 export interface KanbanGroup { option: SelectOption; rows: DsRow[] }
 type Scope = { projectId: string };
+/** `callerIsManager` is true when the agent writing is a manager session; left out, an agent counts as not being one. */
+type InsertScope = Scope & { actor: RowActor; callerIsManager?: boolean };
 export const SAVE_MODES = ['create', 'upsert', 'update'] as const;
 export type SaveMode = (typeof SAVE_MODES)[number];
 
@@ -441,7 +454,7 @@ export class DataStoreService {
    * Writes one row according to what the store's natural key says about it: `create` inserts and refuses a key already held, `upsert` inserts or overwrites
    * the supplied cells, `update` overwrites and refuses an absent key. A store with no natural key inserts plainly (`update` is refused).
    */
-  saveRow(storeId: string, input: Scope & { data: Record<string, unknown>; actor: RowActor; mode: SaveMode }): { outcome: 'inserted' | 'updated'; row: DsRow } {
+  saveRow(storeId: string, input: InsertScope & { data: Record<string, unknown>; mode: SaveMode }): { outcome: 'inserted' | 'updated'; row: DsRow } {
     this.authorize(storeId, input.projectId);
     const { data, mode } = input;
     const insert = () => ({ outcome: 'inserted' as const, row: this.insertRow(storeId, input) });
@@ -474,8 +487,9 @@ export class DataStoreService {
     return { outcome: 'updated', row: this.updateRow(storeId, rowHoldingKey.id, { ...input, patch }) };
   }
 
-  insertRow(storeId: string, input: Scope & { data: Record<string, unknown>; actor: RowActor }): DsRow {
+  insertRow(storeId: string, input: InsertScope & { data: Record<string, unknown> }): DsRow {
     this.authorize(storeId, input.projectId);
+    this.refuseInsertIntoSharedBacklog(storeId, input);
     const at = this.clock();
     const columns = this.repo.listColumns(storeId);
     const data = this.withDaemonSetCells(this.daemonSetColumns(columns), input.data, at);
@@ -515,8 +529,9 @@ export class DataStoreService {
     });
   }
 
-  insertRows(storeId: string, input: Scope & { items: Record<string, unknown>[]; actor: RowActor }): DsRow[] {
+  insertRows(storeId: string, input: InsertScope & { items: Record<string, unknown>[] }): DsRow[] {
     this.authorize(storeId, input.projectId);
+    this.refuseInsertIntoSharedBacklog(storeId, input);
     const columns = this.repo.listColumns(storeId);
     const daemonSetColumns = this.daemonSetColumns(columns);
     const stampedRows = input.items.map((item) => {
@@ -588,6 +603,18 @@ export class DataStoreService {
       this.refuseRowGuardViolation(storeId, rowId, { projectId: input.projectId, patch });
       return this.repo.updateRow(rowId, { storeId, patch, actor: input.actor, at: this.clock() });
     }));
+  }
+
+  /**
+   * When the project's repository is shared with a team, refuses a row an agent that is not a manager inserts into the table named "Manager backlog".
+   * Humans and managers insert freely, updates are never concerned, and renaming the table lifts the refusal.
+   */
+  private refuseInsertIntoSharedBacklog(storeId: string, { projectId, actor, callerIsManager }: InsertScope): void {
+    const isAgentOtherThanManager = actor.kind === 'agent' && callerIsManager !== true;
+    if (!isAgentOtherThanManager || !this.repo.isSharedRepo(projectId)) return;
+    const storeName = this.repo.findStore(storeId)?.displayName ?? '';
+    const isBacklog = storeNameKey(storeName) === BACKLOG_STORE_NAME_KEY;
+    if (isBacklog) throw new BacklogWriteRefusedError();
   }
 
   /** When the project guards its rows, refuses a patch that shortens the journal or moves a row to done without a pr_url. */

@@ -19,6 +19,8 @@ export interface Project {
   docsFolderSharedWith?: string[];
   /** Present and true when the project's rows keep their journal append-only and need a pr_url to be done; absent means off. */
   rowGuardEnabled?: true;
+  /** Present and true when the project's repository is shared with a team, so the fleet's tooling stays out of it; absent means off. */
+  sharedRepo?: true;
   /** Present when the guard is on and a `status` or `step` column of the project is not a select column, so the done rule never fires on it. */
   rowGuardWarning?: string;
 }
@@ -88,6 +90,7 @@ export const UpdateProjectRequestSchema = z
     postCreateHookScript: PostCreateHookScriptSchema.optional(),
     postCreateHookTimeoutSeconds: PostCreateHookTimeoutSchema.optional(),
     rowGuardEnabled: z.boolean().optional(),
+    sharedRepo: z.boolean().optional(),
   })
-  .refine((patch) => Object.values(patch).some((value) => value !== undefined), { message: 'name, docsFolderPath, postCreateHookScript, postCreateHookTimeoutSeconds or rowGuardEnabled is required' });
+  .refine((patch) => Object.values(patch).some((value) => value !== undefined), { message: 'name, docsFolderPath, postCreateHookScript, postCreateHookTimeoutSeconds, rowGuardEnabled or sharedRepo is required' });
 export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequestSchema>;

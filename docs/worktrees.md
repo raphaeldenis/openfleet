@@ -26,6 +26,7 @@ Right after creating the worktree, before the post-create hook, OpenFleet copies
   ```
 
   It sits in the same `warnings` list as the post-create hook warnings, hooks warning first.
+- In a project whose repository is shared (`docs/shared-repo.md`), the warning `{ "type": "overlay_unavailable" }` means the fleet overlay could not be linked as `.openfleet-overlay`: the overlay directory or the git exclude could not be written, or `.openfleet-overlay` already exists and does not point to the overlay.
 - Worktrees that OpenFleet did not create (Scape, `git worktree add`) are not covered: check with `test -f .husky/_/pre-push` or run `pnpm install` in them.
 
 ## Post-create hook

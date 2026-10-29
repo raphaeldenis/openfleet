@@ -28,7 +28,7 @@ import {
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from '../stores/dataStoreRepository.js';
 import {
   ColumnIsDisplayColumnError, ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, ConstraintError, DaemonSetColumnError, DuplicateIdError, OptionsHeldByRowsError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
-  InvalidViewConfigError, LogKindNotAllowedError, RowGuardViolationError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
+  BacklogWriteRefusedError, InvalidViewConfigError, LogKindNotAllowedError, RowGuardViolationError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
 
 const MAX_MESSAGE_CHARS = 300;
@@ -153,6 +153,7 @@ const RULES: Rule[] = [
   when(StoreRowCapError, asIs('row_cap')),
   when(RowGuardViolationError, asIs('row_guard_violation')),
   when(LogKindNotAllowedError, asIs('log_kind_not_allowed')),
+  when(BacklogWriteRefusedError, asIs('backlog_write_refused')),
   when(DaemonSetColumnError, asDetail('invalid_body', 'the column is set by the daemon.')),
   when(InvalidCellValueError, asDetail('invalid_body', 'a cell value is invalid.')),
   when(InvalidNameError, asDetail('invalid_body', 'the name is invalid.')),
