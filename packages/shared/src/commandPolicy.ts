@@ -32,6 +32,8 @@ export interface RulePredicate {
   recipientIsFleetSession?: boolean;
   /** The command writes file content (a redirect, `tee`, `sed -i`, `dd of=`, an interpreter's inline code) to a path outside these roots (`{worktree}`, `{worktree}/<dir>`, `{scratch}`, `{toolResults}` or absolute paths). */
   writesFilesOutside?: string[];
+  /** The command is one of these canonical forms (`pytest`, `pnpm test`) once its launchers are removed, with arguments that stay in the worktree; or a `cd` to the worktree. An empty list matches nothing. */
+  runsDeclaredCommand?: string[];
   anyOf?: RulePredicate[];
   allOf?: RulePredicate[];
   not?: RulePredicate;
@@ -54,6 +56,7 @@ export const RulePredicateSchema: z.ZodType<RulePredicate> = z.lazy(() =>
     readsOnlyWithin: z.array(NonEmptyText).min(1).optional(),
     recipientIsFleetSession: z.boolean().optional(),
     writesFilesOutside: z.array(NonEmptyText).optional(),
+    runsDeclaredCommand: z.array(NonEmptyText).optional(),
     anyOf: z.array(RulePredicateSchema).optional(),
     allOf: z.array(RulePredicateSchema).optional(),
     not: RulePredicateSchema.optional(),
@@ -104,11 +107,41 @@ export type CommandPolicyDocument = z.infer<typeof CommandPolicyDocumentSchema>;
 /** `askBecomesDeny` is the fine switch of the incident: false gives back the permission dialog nobody sees to a child. */
 export const UnattendedOverrideSchema = z.strictObject({ askBecomesDeny: z.boolean().optional() });
 
+const MAX_DECLARED_COMMANDS = 50;
+const MAX_DECLARED_COMMAND_CHARS = 120;
+/** Words, dots, colons, slashes, equals signs and dashes: no shell metacharacter, no newline, no leading dash. */
+const DECLARED_COMMAND_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:/= -]*$/;
+
+const CHECK_SCRIPT = 'test|lint|typecheck|type-check|type:check';
+
+/**
+ * The test, lint and typecheck launchers a project may declare; an interpreter, a shell or a network tool never leads a declared command.
+ * `uv run` is not declared: the launcher is removed before a command is compared, so `pytest` already covers `uv run pytest`.
+ */
+const KNOWN_LAUNCHER_FORMS: readonly RegExp[] = [
+  /^(pytest|mypy|vitest|jest|tsc|eslint)( |$)/,
+  /^ruff check( |$)/,
+  /^make( [A-Za-z0-9_][A-Za-z0-9_.:-]*)*$/,
+  new RegExp(`^(pnpm|npm|yarn) (${CHECK_SCRIPT}|run (${CHECK_SCRIPT}))( |$)`),
+  /^cargo (test|clippy|check)( |$)/,
+  /^go (test|vet)( |$)/,
+];
+const startsWithKnownLauncher = (command: string): boolean => KNOWN_LAUNCHER_FORMS.some((form) => form.test(command));
+
+/** A canonical test, lint or typecheck command that children may run: `pytest`, `ruff check .`, `pnpm run lint`. */
+export const DeclaredCommandSchema = z
+  .string()
+  .max(MAX_DECLARED_COMMAND_CHARS)
+  .regex(DECLARED_COMMAND_PATTERN, 'a declared command is plain words: no shell operator, substitution, redirection or newline')
+  .refine(startsWithKnownLauncher, 'a declared command starts with a known test, lint or typecheck launcher');
+export const DeclaredCommandsSchema = z.array(DeclaredCommandSchema).max(MAX_DECLARED_COMMANDS);
+
 /** The user's file: every key is optional because it only states what differs from the delivered document. */
 export const CommandPolicyOverrideSchema = z.strictObject({
   version: z.literal(POLICY_DOCUMENT_VERSION),
   mode: z.enum(POLICY_MODES).optional(),
   unattended: UnattendedOverrideSchema.optional(),
+  declaredCommands: DeclaredCommandsSchema.optional(),
   disabledRules: z.array(NonEmptyText).optional(),
   rules: z.array(PolicyRuleSchema).optional(),
   profiles: z.record(z.string(), PolicyProfileSchema).optional(),

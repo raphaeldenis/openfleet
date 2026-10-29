@@ -97,6 +97,19 @@ const allowReadOnlyPipelines: PolicyRule = {
   reason: 'A pipeline that only reads files inside the working directories needs no confirmation.',
 };
 
+export const ALLOW_DECLARED_COMMANDS_RULE_ID = 'allow-declared-commands';
+
+/** Inert until the `declaredCommands` setting of the policy file fills the list. */
+const allowDeclaredCommands: PolicyRule = {
+  id: ALLOW_DECLARED_COMMANDS_RULE_ID,
+  tools: ['Bash'],
+  presence: 'unattended',
+  appliesTo: 'everyCommand',
+  decision: 'allow',
+  when: { runsDeclaredCommand: [] },
+  reason: 'A declared test, lint or typecheck command, run inside the worktree, needs no confirmation.',
+};
+
 export const FINDINGS_GATE_RULE_ID = 'findings-gate-pr-create';
 
 const API_CALLS_THAT_MAY_POST: RulePredicate = { flags: { any: [['f'], ['F'], ['X'], ['field'], ['raw-field'], ['method'], ['input']] } };
@@ -178,14 +191,14 @@ export const DEFAULT_COMMAND_POLICY: CommandPolicyDocument = {
     default: {
       rules: [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, noShellFileWrites.id, findingsGatePrCreate.id, noGenericSendMessageToFleetSession.id, allowReadOnlyPipelines.id],
     },
-    dev: { extends: 'default', rules: [delegateHeavyCommands.id] },
-    qe: { extends: 'default', rules: [], mode: 'observe' },
+    dev: { extends: 'default', rules: [allowDeclaredCommands.id, delegateHeavyCommands.id] },
+    qe: { extends: 'default', rules: [allowDeclaredCommands.id], mode: 'observe' },
     qa: { extends: 'default', rules: [noGitPublish.id], mode: 'observe' },
     review: { extends: 'default', rules: [noFileWrites.id, noGitMutations.id], mode: 'observe' },
   },
   roleToProfile: { DEV: 'dev', QE: 'qe', QA: 'qa', ADV: 'review', REVIEW: 'review' },
   rules: [
     noForcedRecursiveRm, noForcedGitClean, noWriteIntoGitDir, noFindDeleteOnBroadPaths, noHumanQuestionsUnattended,
-    noShellFileWrites, findingsGatePrCreate, noGenericSendMessageToFleetSession, delegateHeavyCommands, allowReadOnlyPipelines, noGitPublish, noGitMutations, noFileWrites,
+    noShellFileWrites, findingsGatePrCreate, noGenericSendMessageToFleetSession, delegateHeavyCommands, allowReadOnlyPipelines, allowDeclaredCommands, noGitPublish, noGitMutations, noFileWrites,
   ],
 };

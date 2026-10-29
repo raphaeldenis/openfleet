@@ -108,4 +108,41 @@ The analyzer sees through `bash -c`, `sh -c`, `eval`, `env`, `command`, `xargs`,
 
 The same rule is stated in section §9 of the manager base, which tells managers to say it in every child brief. The manager base template moves to version 3 with this rule (a change to the template contract): a manager that runs on version 2 does not tell its children about it until its base is updated.
 
+## Command policy: declared test, lint and typecheck commands
+
+A child that runs its repository's test runner (`uv run --directory <worktree> pytest …`) used to freeze on a permission dialog nobody answers when the policy had no rule for it. The delivered rule `allow-declared-commands` (profiles `dev` and `qe` only, so `qa`, `review` and a session without role do not get it; `Bash`, unattended sessions only) vouches for the commands the project declares, in every equivalent spelling, and for nothing else.
+
+**Off by default.** The rule ships with an empty list, which matches nothing: without `declaredCommands` the behaviour is unchanged.
+
+**Setting.** `declaredCommands` in `command-policy.json` (a list of at most 50 canonical forms, 120 characters each), read and replaced with the rest of the override by `GET` and `PUT /api/command-policy` (`override.declaredCommands`). A form is plain words (`pytest`, `ruff check .`, `pnpm test`, `pnpm run lint`, `vitest`): a shell operator (`;`, `&`, `|`), `$`, a backtick, a redirection, a newline, a leading dash or a leading program that is not a known test, lint or typecheck launcher (`pytest`, `ruff check`, `mypy`, `vitest`, `jest`, `tsc`, `eslint`, `make`, `pnpm|npm|yarn test|lint|typecheck|type-check|type:check` (also after `run`), `cargo test|clippy|check`, `go test|vet`; so never a shell, an interpreter, `env`, `git`, `curl`, `find`, `xargs`) is refused at validation (`400 invalid_body` on a save; the key is ignored and reported in `issues` when the file is read at boot). The setting is global to the daemon, not per project. `declaredCommandsFrom(detected.commands)` (`declaredCommands.ts`) lists the test, lint and typecheck commands that `POST /api/projects/detect` found, to copy into the setting.
+
+**What is vouched for.** One simple command per step of a fully read line, each one either a `cd` to the worktree (or the `cwd`), or a declared form once these launchers are removed:
+
+| Launcher | Accepted |
+|---|---|
+| `env` / `KEY=value` | `CI`, `NODE_ENV`, `FORCE_COLOR`, `NO_COLOR`, `PYTHONDONTWRITEBYTECODE`, `PYTHONUNBUFFERED`, `TZ`, `LANG` with a plain value; no `env` option |
+| `uv run` | `--directory`/`--project` inside the worktree, `--frozen`, `--locked`, `--offline`, `--no-sync`, `-q`, `--extra`, `--group`, `--all-extras`, `--dev`, `--no-dev`, `--with` limited to `pytest`, `coverage`, `pytest-cov`, `pytest-xdist`, `pytest-asyncio`, `pytest-mock`, `pytest-timeout` and `pytest-randomly` (with an optional version) |
+| `pnpm` | `-C`/`--dir` inside the worktree; `pnpm exec <bin>` only when `<bin>` is itself declared |
+| `make` | `-C`/`--directory` inside the worktree; no other option, no `NAME=value`, no extra target (`-f`, `-I`, `-e`, `--eval`, `SHELL=…` are refused) |
+
+The arguments that follow the declared words are checked against an allowlist of options per program; an option that is not listed is refused, so abbreviated long options (`--pya`) and grouped short options (`-xp`) cannot smuggle a plugin or a config file in:
+
+| Program | Options accepted |
+|---|---|
+| `pytest` | `-q -v -x -s -l` (groupable), `-k EXPR`, `-m EXPR`, `-n N\|auto`, `-r<chars>`, `--tb=<style>`, `--maxfail=N`, `--durations=N`, `--timeout=N`, `--color=`, `--capture=`, `--no-header`, `--disable-warnings`, `--lf`, `--ff`, `--collect-only`, `--cov[=<path in worktree>]`, `--cov-report=<term\|file under .scratch>`, `--cov-fail-under=N`, `--rootdir=`/`--ignore=` inside the worktree, `--junitxml=`/`--basetemp=` strictly below `.scratch` (the root itself is refused: pytest empties its base temp directory) |
+| `ruff check` | `-q`, `--statistics`, `--diff`, `--no-cache`, `--exit-zero`, `--no-fix`, `--select/--ignore/--extend-select CODES`, `--output-format=concise\|full\|json\|grouped\|github\|pylint` |
+| `mypy` | `-q -v`, `--strict`, `--no-incremental`, `--pretty`, `--show-error-codes`, `--no-error-summary`, `--ignore-missing-imports`, `--python-version=` |
+| `vitest` | `run` as first operand (no other: `init`, `watch`, `dev`, `bench`, `related` and a bare path filter are refused), `--run`, `--coverage`, `--passWithNoTests`, `--silent`, `--no-color`, `--watch=false`, `--bail=N`, `--retry=N`, `-t`/`--testNamePattern`, `--reporter=default\|dot\|verbose` (never a reporter file) |
+| `tsc` | `--noEmit`, `--pretty`, no operand |
+| `eslint` | `--quiet`, `--no-cache`, operands |
+| any other declared program | no option at all, operands only (`pnpm test packages/core`) |
+
+The words a declared form has after its program (`ruff check .`, `pytest -q`) go through the same check as the arguments of the command, so a declared `pytest -p evil` or `eslint . --fix` vouches for nothing. The schema limits `pnpm|npm|yarn run` to the scripts `test`, `lint`, `typecheck`, `type-check` and `type:check`, `ruff` to `ruff check`, and refuses `make` options (`make -f x test`), `@` and `uv run …` (the launcher is removed before the comparison, so declaring `pytest` covers `uv run pytest`).
+
+Besides the options: no argument starts with `@` (argument files), no `$`, backtick, `~`, quote-escape or shell operator; no path (operand, path value, redirect target, `-C`/`--directory`/`--project` value) contains a glob character `* ? [ ]`, because the shell expands it into paths the rule cannot read (the values of `-k`, `-m` and `-t`, which are expressions, may contain them); every path operand resolves inside the worktree, `..` segments are refused and symlinks are resolved when the path exists; redirects only write strictly below `<worktree>/.scratch` (or `> /dev/null`, `2>&1`); a line with a carriage return is never vouched. The program must be a bare name (`./bin/pytest` is not `pytest`). The working directory of the session must resolve inside the worktree (a sibling directory or a symlink leaving the worktree is never vouched). A line that contains a bare assignment (`PATH=x; pytest`, `FOO=1` on its own line, in a group or after the command) is never vouched, because the assignment changes how every later command resolves; only the `env KEY=value` prefix with the narrow list above and `KEY=value command` prefixes are allowed. Substitutions, `eval`, `sh -c`, pipes and any other command in the line make the line unvouched, and a child's unvouched command is refused immediately as before.
+
+**Accepted inherent risk.** `pytest`, `vitest`, `pnpm test` and `make` execute code written in the worktree (`conftest.py`, test files, configuration, scripts, Makefile): the rule guarantees the form of the command, not the harmlessness of the code it launches. Without a worktree the rule vouches for nothing (the scope is then the session directory, which the rule does not widen).
+
+**Known limits.** The list is global; a path that does not exist at evaluation can become a symlink before the command runs (TOCTOU); `pnpm test` and `make test` run scripts and targets that the child can edit in its worktree, and `vitest` and `pytest` execute the test files (and `conftest.py`, configuration files such as `pyproject.toml` or `vitest.config.ts`) of the worktree, which the child writes: the rule vouches for the command, not for the code it runs; a bare `pytest` is resolved through `PATH`, which a bare assignment can no longer change but which an earlier session step or the daemon environment still defines; `uv run --with <name>` fetches a package from the index (restricted to the pytest family); `rtk`, `time` and `nice` wrappers are not recognised.
+
 **Settings screen.** Settings → Command policy shows the mode (three states), the ask switch with what turning it off means, the rule list with a switch per delivered rule, a "Try a command" box (calls `evaluate`), the recent refusals and the number of times the policy engine failed open.
