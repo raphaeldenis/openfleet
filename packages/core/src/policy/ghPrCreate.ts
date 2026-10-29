@@ -23,6 +23,17 @@ export function argsWithoutLeadingRepoOptions(args: readonly string[]): string[]
   return args.slice(index);
 }
 
+const GROUPS_THAT_TAKE_REPO_OPTIONS_BEFORE_THE_ACTION: Readonly<Record<string, string>> = { gh: 'pr', glab: 'mr' };
+
+/** Like `argsWithoutLeadingRepoOptions`, and also removes the repository options between the `pr` (gh) or `mr` (glab) group and its action. */
+export function argsWithoutRepoOptionsAroundGroup(program: string, args: readonly string[]): string[] {
+  const argsFromGroup = argsWithoutLeadingRepoOptions(args);
+  const [group, ...afterGroup] = argsFromGroup;
+  const isGroupWithAction = group !== undefined && group === GROUPS_THAT_TAKE_REPO_OPTIONS_BEFORE_THE_ACTION[program];
+  if (!isGroupWithAction) return argsFromGroup;
+  return [group, ...argsWithoutLeadingRepoOptions(afterGroup)];
+}
+
 function headValueOf(args: readonly string[]): string | undefined {
   for (const [index, arg] of args.entries()) {
     if (HEAD_OPTIONS_WITH_VALUE.has(arg)) return args[index + 1];
@@ -98,12 +109,12 @@ function apiCreationOf(args: readonly string[]): PullRequestCreation | undefined
 
 function creationOf(command: SimpleCommand): PullRequestCreation | undefined {
   if (command.program === 'glab') {
-    const [group, action, ...options] = argsWithoutLeadingRepoOptions(command.args);
+    const [group, action, ...options] = argsWithoutRepoOptionsAroundGroup(command.program, command.args);
     const isMergeRequestCreation = group === 'mr' && (action === 'create' || action === 'new');
     return isMergeRequestCreation ? creationWithHead(glabSourceBranchOf(options)) : undefined;
   }
   if (command.program !== 'gh') return undefined;
-  const [group, action, ...options] = argsWithoutLeadingRepoOptions(command.args);
+  const [group, action, ...options] = argsWithoutRepoOptionsAroundGroup(command.program, command.args);
   if (group === 'api') return apiCreationOf([action, ...options].filter((arg): arg is string => arg !== undefined));
   const isPullRequestCreation = group === 'pr' && action === 'create';
   if (!isPullRequestCreation) return undefined;

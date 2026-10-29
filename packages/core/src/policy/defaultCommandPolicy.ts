@@ -112,7 +112,7 @@ const findingsGatePrCreate: PolicyRule = {
   when: {
     anyOf: [
       { commandPrefix: [['gh', 'pr', 'create'], ['glab', 'mr', 'create|new']] },
-      { allOf: [{ commandPrefix: [['gh', 'api']] }, { argMatching: ['**/pulls*'] }, API_CALLS_THAT_MAY_POST] },
+      { allOf: [{ commandPrefix: [['gh', 'api']] }, { argMatching: ['**/pulls*', '**/pulls/?*'] }, API_CALLS_THAT_MAY_POST] },
     ],
   },
   reason: 'findings_required: the ticket of this branch lacks the findings that open a pull request.',

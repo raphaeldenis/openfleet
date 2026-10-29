@@ -48,13 +48,22 @@ describe('the findings gate rule delivered with the command policy', () => {
     ['a quoted endpoint with a query string', 'gh api -X POST "repos/o/r/pulls?x=1"'],
     ['glab with a leading -R', 'glab -R o/r mr create --fill'],
     ['glab with a leading --repo=', 'glab --repo=o/r mr new --fill'],
+    ['an endpoint with a slash before the query string', 'gh api repos/o/r/pulls/?x=1 -f title=t'],
+    ['an endpoint with a slash before the fragment', 'gh api "repos/o/r/pulls/#frag" -f title=t'],
+    ['gh pr with -R between the group and the action', 'gh pr -R o/r create --fill'],
+    ['gh pr with --repo= between the group and the action', 'gh pr --repo=o/r create --fill'],
+    ['glab mr with -R between the group and the action', 'glab mr -R o/r create --fill'],
+    ['glab mr with --repo between the group and the action', 'glab mr --repo o/r new --fill'],
   ])('matches %s', (_label, command) => {
     expect(matchesTheGateRule(command)).toBe(true);
   });
 
   it.each([
     ['a listing of merge requests behind -R', 'glab -R o/r mr list'],
+    ['a listing of merge requests with -R after the group', 'glab mr -R o/r list'],
+    ['a view of a pull request with -R after the group', 'gh pr -R o/r view 3'],
     ['the comments of a pull request', 'gh api repos/o/r/pulls/12/comments -f body=x'],
+    ['the comments of a pull request behind a query string', 'gh api repos/o/r/pulls/12/comments?page=2 -f body=x'],
   ])('does not match %s', (_label, command) => {
     expect(matchesTheGateRule(command)).toBe(false);
   });
