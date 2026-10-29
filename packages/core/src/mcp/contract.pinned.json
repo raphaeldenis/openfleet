@@ -1,9 +1,10 @@
 {
-  "contractVersion": 6,
+  "contractVersion": 7,
   "tools": [
     { "name": "add_data_store_column", "inputSchemaHash": "968cbac3975a27b9" },
     { "name": "append_to_note", "inputSchemaHash": "e8b3f62130a1ad87" },
     { "name": "bootstrap_project_profile", "inputSchemaHash": "8586bf446a45357f" },
+    { "name": "cancel_argus_event", "inputSchemaHash": "75bcfa7335faaff5" },
     { "name": "close_session", "inputSchemaHash": "7bd880ec34c4c5b7" },
     { "name": "create_data_store", "inputSchemaHash": "1cf464444a7ccc5e" },
     { "name": "create_data_store_view", "inputSchemaHash": "66973211394d9016" },
@@ -25,6 +26,7 @@
     { "name": "get_session_status", "inputSchemaHash": "3defb6dc09111f7c" },
     { "name": "get_working_state", "inputSchemaHash": "3defb6dc09111f7c" },
     { "name": "insert_data_store_rows", "inputSchemaHash": "2d4d6f4bec9f66ab" },
+    { "name": "list_argus_events", "inputSchemaHash": "7a014b717a77aac9" },
     { "name": "list_children", "inputSchemaHash": "7a014b717a77aac9" },
     { "name": "list_data_store_views", "inputSchemaHash": "536a18f7904f8172" },
     { "name": "list_denied_commands", "inputSchemaHash": "0947d861eb9b7c57" },
@@ -48,6 +50,7 @@
     { "name": "report_step_finding", "inputSchemaHash": "768ec4ba9f1dfeac" },
     { "name": "request_resource_access", "inputSchemaHash": "e1c54ea9715e4a93" },
     { "name": "restore_note_version", "inputSchemaHash": "6a64ff62fd86fdd0" },
+    { "name": "schedule_argus_event", "inputSchemaHash": "1e1bc6a7ee1f2559" },
     { "name": "search_knowledge", "inputSchemaHash": "94df831a289d634f" },
     { "name": "search_notes", "inputSchemaHash": "163542f2fe00bba2" },
     { "name": "send_session_message", "inputSchemaHash": "d9f8114aa6dbb52e" },

@@ -27,7 +27,7 @@ export class MessageQueue {
     return Number(result.changes) > 0;
   }
   nextPending(sessionId: string, options: { skipDaemonLines?: boolean } = {}): QueuedMessage | undefined {
-    const daemonLineFilter = options.skipDaemonLines ? `AND body NOT LIKE '[pulse]%'` : '';
+    const daemonLineFilter = options.skipDaemonLines ? `AND body NOT LIKE '[pulse]%' AND body NOT LIKE '[scheduled event%'` : '';
     const row = this.db.prepare(`SELECT id, session_id, from_session_id, body, status, created_at FROM message_queue WHERE session_id = ? AND status = 'queued' ${daemonLineFilter} ORDER BY created_at LIMIT 1`).get(sessionId) as
       { id: string; session_id: string; from_session_id: string | null; body: string; status: 'queued'; created_at: string } | undefined;
     if (!row) return undefined;

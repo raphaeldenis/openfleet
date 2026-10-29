@@ -1,5 +1,5 @@
 /** The version of the MCP tool contract: raised by one on every added tool or changed tool shape (see docs/mcp-contract.md). */
-export const CONTRACT_VERSION = 6;
+export const CONTRACT_VERSION = 7;
 
 /** The sentence the MCP server announces at initialization; clients read the version from it. */
 export const CONTRACT_VERSION_INSTRUCTIONS_PREFIX = 'openfleet MCP contract_version: ';

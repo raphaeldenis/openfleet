@@ -2,6 +2,20 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 7 — 2026-10-29
+
+Scheduled manager events: a manager sends a message to itself at a chosen time.
+
+- `schedule_argus_event` added: `{ message, title?, at | in_minutes }`. `at` is the user's local time without offset, `YYYY-MM-DDTHH:MM:SS` (e.g. `2026-10-31T09:30:00`); `YYYY-MM-DDTHH:MM` is accepted and reads as second 0. `at` and `in_minutes` together, a past time, an offset in `at`, a message above 8192 bytes and a 21st pending event are refused. At a clock change the platform resolves the local time silently: a time that does not exist (spring forward) lands one hour later, an ambiguous time (fall back) reads as its first occurrence.
+- `list_argus_events` added: the pending events of the caller, soonest first.
+- `cancel_argus_event` added: `{ event_id }`, only by the actor that scheduled the event.
+- `get_argus_status` changed: the result gains `scheduled_events`, the caller's pending events (same shape as `list_argus_events`). Its input is unchanged.
+- An event is delivered once through the persisted message queue as a line starting `[scheduled event …]`, distinct from `[pulse]`. It is delivered late, with `delivered late` in the line, when the app was closed at its due time. It is held while the manager is closed or paused, replayed on reopening or resuming, and waits for the end of a running turn. When the queue refuses the message, the due event stays pending and is retried 60 s later.
+
+Tools added: `schedule_argus_event`, `list_argus_events`, `cancel_argus_event`.
+Tools changed: `get_argus_status` (new output field `scheduled_events`).
+Migrations: `049_argus_scheduled_events` (table `argus_scheduled_events`; down script in `packages/core/src/db/migrations-down/`).
+
 ## 6 — 2026-10-29
 
 - PARITY-TBL-03B, `update_data_store_column`: new optional `required`, `display_column_id` / `clear_display_column_id`, `format` / `clear_format`, `config` / `clear_config`, `display_width` / `clear_display_width`, `wrap_mode` (`wrap` or `truncate`) and `wrap_max_lines`. A field is set or cleared in one call, never both; `wrap_mode` `truncate` resets the wrapping. `display_column_id` names another column of the same store (id or display name) and a column used as display column cannot be deleted (`constraint_violation`). `config` (number column only) is `{symbol (max 8 characters), decimals 0-10, ratingMax 1-10, ratingIcon (max 32 characters)}`; `display_width` is 60-1200; `wrap_max_lines` is 1-100; `format` must match the column type. A column type never changes. `required` is stored, not enforced on row writes.
