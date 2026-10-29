@@ -73,10 +73,11 @@ export class ProjectService {
 
   update(projectId: string, patch: UpdateProjectRequest): ProjectRecord {
     const current = this.requireProject(projectId);
-    const { docsFolderPath } = patch;
+    const docsFolderPath = patch.docsFolderPath === undefined ? undefined : withoutRedundantSlashes(patch.docsFolderPath);
     const hookSetting = this.acceptedHookSetting(current, patch);
     if (docsFolderPath !== undefined) this.acceptFolderChange(current, docsFolderPath);
-    this.deps.projects.update(projectId, { ...patch, ...hookSetting });
+    const normalisedPatch = docsFolderPath === undefined ? patch : { ...patch, docsFolderPath };
+    this.deps.projects.update(projectId, { ...normalisedPatch, ...hookSetting });
     if (docsFolderPath !== undefined) this.deps.onDocsFolderSet?.(projectId);
     return this.requireProject(projectId);
   }

@@ -113,6 +113,26 @@ describe('ProjectService.create docs folder creation', () => {
     expect(projectRowCount()).toBe(1);
   });
 
+  it('stores the docs folder of an update without its trailing slash', () => {
+    const existingFolder = join(homeDir, 'repo');
+    mkdirSync(existingFolder);
+    const project = projectService.create({ name: 'Fleet' });
+
+    const updated = projectService.update(project.id, { docsFolderPath: `${existingFolder}/` });
+
+    expect(updated.docsFolderPath).toBe(existingFolder);
+  });
+
+  it('stores the docs folder of an update without its doubled slashes', () => {
+    const existingFolder = join(homeDir, 'repo');
+    mkdirSync(existingFolder);
+    const project = projectService.create({ name: 'Fleet' });
+
+    const updated = projectService.update(project.id, { docsFolderPath: `${homeDir}//repo` });
+
+    expect(updated.docsFolderPath).toBe(existingFolder);
+  });
+
   it('refuses a path that goes through a symbolic link leaving the docs root, and creates nothing', () => {
     const outsideFolder = join(homeDir, 'outside');
     mkdirSync(outsideFolder);
