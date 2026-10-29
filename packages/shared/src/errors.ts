@@ -26,6 +26,8 @@ export const ERROR_CODES = {
   message_too_long: { kind: 'invalid_request' },
   query_too_long: { kind: 'invalid_request' },
   outside_own_repository: { kind: 'invalid_request' },
+  docs_root_invalid: { kind: 'invalid_request' },
+  docs_root_forbidden: { kind: 'invalid_request' },
 
   unauthorized: { kind: 'unauthorized' },
 
@@ -90,6 +92,7 @@ export const ERROR_CODES = {
   not_file_backed: { kind: 'conflict', retry: 'never' },
   // The permissions can be fixed while the app stays open: the same save succeeds afterwards.
   docs_folder_not_writable: { kind: 'conflict', retry: 'later' },
+  docs_root_not_writable: { kind: 'conflict', retry: 'later' },
 
   payload_too_large: { kind: 'too_large' },
   note_too_large: { kind: 'too_large' },

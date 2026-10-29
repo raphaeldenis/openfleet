@@ -11,11 +11,15 @@ function response(body: unknown, status = 200): Response {
   return { ok: status < 400, status, json: () => Promise.resolve(body) } as Response;
 }
 
-async function openProjectStep() {
+async function openProjectStep(options: { docsRoot?: { root: string; isDefault: boolean } } = {}) {
   const requests: Array<{ url: string; body: unknown }> = [];
   const daemon = { saveProject: () => Promise.resolve(response(PROJECT)) };
   vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
     const path = new URL(url).pathname;
+    if (path === '/api/settings/docs-root' && options.docsRoot) {
+      const projectName = new URL(url).searchParams.get('projectName');
+      return Promise.resolve(response({ ...options.docsRoot, ...(projectName ? { proposedPath: `${options.docsRoot.root}/${projectName}` } : {}) }));
+    }
     const isWrite = init?.method === 'POST';
     if (isWrite) requests.push({ url, body: JSON.parse(init.body as string) });
     if (url.endsWith('/health')) return Promise.resolve(response({ ok: true }));
@@ -94,6 +98,37 @@ describe('onboarding project', () => {
     daemon.saveProject = () => Promise.resolve(response(PROJECT));
     await user.click(screen.getByRole('button', { name: 'Create project' }));
     await screen.findByText('Fleet', { exact: true });
+  });
+
+  describe('docs folder root', () => {
+    it('suggests <root>/<name> for the docs folder once a root is saved, following the typed name', async () => {
+      const { user } = await openProjectStep({ docsRoot: { root: '/Users/me/Work/docs', isDefault: false } });
+
+      await user.type(screen.getByLabelText('Name'), 'Fleet');
+
+      expect(await screen.findByTestId('project-docs-folder-suggestion')).toHaveTextContent('/Users/me/Work/docs/Fleet');
+    });
+
+    it('suggests nothing while the daemon only knows its default root, and the project is created exactly as before', async () => {
+      const { user, requests } = await openProjectStep({ docsRoot: { root: '/Users/me/Documents/OpenFleet', isDefault: true } });
+
+      await saveProject(user);
+
+      expect(screen.queryByTestId('project-docs-folder-suggestion')).not.toBeInTheDocument();
+      expect(requests.filter(({ url }) => url.endsWith('/api/projects'))).toEqual([{ url: expect.any(String), body: { name: 'Fleet' } }]);
+    });
+
+    it('does not fill the docs folder field, even when a root is saved', async () => {
+      const { user, requests } = await openProjectStep({ docsRoot: { root: '/Users/me/Work/docs', isDefault: false } });
+
+      await user.type(screen.getByLabelText('Repository path'), '/work/fleet');
+      await user.type(screen.getByLabelText('Name'), 'Fleet');
+      await screen.findByTestId('project-docs-folder-suggestion');
+      await user.click(screen.getByRole('button', { name: 'Create project' }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+
+      expect(requests.filter(({ url }) => url.endsWith('/api/projects'))).toEqual([{ url: expect.any(String), body: { name: 'Fleet' } }]);
+    });
   });
 
   it('lets the user cancel project setup without saving a project', async () => {

@@ -22,10 +22,10 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Kind | HTTP status | Codes |
 | --- | --- | --- |
-| `invalid_request` | 400 | 10 |
+| `invalid_request` | 400 | 12 |
 | `unauthorized` | 401 | 1 |
 | `not_found` | 404 | 12 |
-| `conflict` | 409 | 38 |
+| `conflict` | 409 | 39 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 6 |
 | `internal` | 500 | 4 |
@@ -45,6 +45,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `message_too_long` | 400 | `never` |
 | `query_too_long` | 400 | `never` |
 | `outside_own_repository` | 400 | `never` |
+| `docs_root_invalid` | 400 | `never` |
+| `docs_root_forbidden` | 400 | `never` |
 | `message_held_for_review` | 400 | `never` |
 
 ### unauthorized
@@ -112,6 +114,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `no_docs_folder` | 409 | `never` |
 | `not_file_backed` | 409 | `never` |
 | `docs_folder_not_writable` | 409 | `later` |
+| `docs_root_not_writable` | 409 | `later` |
 
 ### too_large
 

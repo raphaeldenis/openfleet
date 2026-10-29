@@ -42,6 +42,8 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   message_too_long: { what: 'The message is too long', fix: 'shorten it' },
   query_too_long: { what: 'The query is too long', fix: 'shorten it' },
   outside_own_repository: { what: 'That path is outside the session’s repository', fix: 'pick one inside it' },
+  docs_root_invalid: { what: 'That docs root cannot be used', fix: 'give an absolute path inside your home folder' },
+  docs_root_forbidden: { what: 'That docs root is a folder OpenFleet or its tools keep for themselves', fix: 'pick another folder' },
 
   unauthorized: { what: 'The daemon refused the app’s credentials', fix: 'check the admin token' },
 
@@ -96,6 +98,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   no_docs_folder: { what: 'No docs folder is set', fix: 'set one first' },
   not_file_backed: { what: 'This note does not live in a file' },
   docs_folder_not_writable: { what: 'The docs folder is not writable', fix: 'fix the folder permissions' },
+  docs_root_not_writable: { what: 'That docs root is not writable', fix: 'fix the folder permissions' },
 
   payload_too_large: { what: 'The request is too large', fix: 'shorten it' },
   note_too_large: { what: 'This note is too large', fix: 'shorten it' },

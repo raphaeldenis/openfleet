@@ -32,6 +32,8 @@ import type { SilentBlockDetector } from '../governance/silentBlockDetector.js';
 import { hooksHandler } from './hooksHandler.js';
 import { registerDiagnosticsRoutes } from './diagnosticsRoutes.js';
 import { registerManagerBaseRoutes } from './managerBaseRoutes.js';
+import { registerDocsRootRoutes } from './docsRootRoutes.js';
+import type { DocsRootSettings } from '../notes/docsRootSettings.js';
 import { registerHandoffRoutes, type HandoffRouteDeps } from './handoffRoutes.js';
 import { registerNoteRoutes } from './noteRoutes.js';
 import { registerProjectRoutes } from './projectRoutes.js';
@@ -65,6 +67,8 @@ export interface ServerDeps {
   wsTickets?: WsTicketStore;
   // The notes and data-store REST routes exist only when the daemon hands over their services.
   notes?: NoteService; noteRepo?: NoteRepository; docs?: DocsFolderService;
+  // Without it the docs-root setting routes do not exist.
+  docsRoot?: DocsRootSettings;
   stores?: DataStoreService; storeRepo?: DataStoreRepository; projects?: ProjectRepository;
   // Without it the project routes are read-only: no project is created and no docs folder is set.
   projectService?: ProjectService;
@@ -164,6 +168,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   registerRestRoutes(router, { ...deps, wsTickets });
   if (deps.diagnostics) registerDiagnosticsRoutes(router, deps.diagnostics);
   if (deps.managerBase) registerManagerBaseRoutes(router, deps.managerBase);
+  if (deps.docsRoot) registerDocsRootRoutes(router, { docsRoot: deps.docsRoot });
   if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService });
   if (deps.worktrees) registerWorktreeRoutes(router, { worktrees: deps.worktrees });
   if (deps.governanceQueue) registerGovernanceRoutes(router, { governanceQueue: deps.governanceQueue });

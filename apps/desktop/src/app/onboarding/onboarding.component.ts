@@ -136,7 +136,7 @@ function requestedUrlFrom(navigationState: unknown): string {
                   @if (savedProject(); as project) {
                     <p>Project ready: <strong>{{ project.name }}</strong></p>
                   } @else {
-                    <of-project-form (saved)="rememberProject($event)" (cancelled)="cancelProjectSetup()" />
+                    <of-project-form [suggestsDocsFolder]="true" (saved)="rememberProject($event)" (cancelled)="cancelProjectSetup()" />
                   }
                   <label class="of-field">
                     <span class="of-label">Repository path</span>

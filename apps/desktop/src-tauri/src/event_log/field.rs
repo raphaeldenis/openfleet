@@ -580,7 +580,7 @@ const KNOWN_CODES: &[&str] = &[
   "already_resolved", "config_unreadable", "config_read_only", "message_id_reused", "too_many_pending", "children_cap", "outside_lineage", "not_a_manager", "manager_paused",
   "mission_missing", "mission_too_large", "base_not_read", "note_not_read", "findings_required", "verdict_stale",
   "directory_in_use", "duplicate_child", "no_parent", "spawn_raced", "store_has_rows", "duplicate_id", "no_docs_folder", "not_file_backed",
-  "docs_folder_not_writable", "payload_too_large", "note_too_large", "row_cap", "state_too_large", "daemon_shutting_down", "daemon_degraded",
+  "docs_folder_not_writable", "docs_root_invalid", "docs_root_forbidden", "docs_root_not_writable", "payload_too_large", "note_too_large", "row_cap", "state_too_large", "daemon_shutting_down", "daemon_degraded",
   "delivery_failed", "message_held_for_review", "harness_exited", "claude_not_found", "git_unavailable", "internal_error", "launch_failed", "resume_timeout",
   "db_stuck", "proposal_not_found", "governance_queue_full", "law_not_found", "law_revision_conflict", "law_withdrawn",
 ];

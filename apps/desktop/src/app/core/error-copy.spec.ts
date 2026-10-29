@@ -139,8 +139,16 @@ describe('copyFor', () => {
         return problems.map((problem) => `${code}: ${problem} — "${text}"`);
       });
 
-    it('covers every code, action and retry once (3375 cases)', () => {
-      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(3375);
+    it('covers every code, action and retry once (3510 cases)', () => {
+      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(3510);
+    });
+
+    it.each([
+      ['docs_root_invalid', 'never', 'That docs root cannot be used — give an absolute path inside your home folder.'],
+      ['docs_root_forbidden', 'never', 'That docs root is a folder OpenFleet or its tools keep for themselves — pick another folder.'],
+      ['docs_root_not_writable', 'later', 'That docs root is not writable — fix the folder permissions, then try again.'],
+    ] as const)('words the docs root code %s for the user', (code, retry, expectedText) => {
+      expect(copyFor(apiErrorOf(envelopeOf(code, { retry })), { action: 'generic' }).text).toBe(expectedText);
     });
 
     describe.each(ACTIONS)('the action %s', (action) => {
