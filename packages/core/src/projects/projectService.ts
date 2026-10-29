@@ -29,7 +29,7 @@ export interface ProjectServiceDeps {
   newId: () => string;
   /** Called after a project gets a docs folder (on create or on change), so the daemon can reconcile and watch it. */
   onDocsFolderSet?: (projectId: string) => void;
-  /** Called after a refused creation removes the project, so the daemon stops watching its folder. */
+  /** Called with the project id after a refused creation has deleted the project; the daemon stops watching the folder of that project. */
   onProjectForgotten?: (projectId: string) => void;
 }
 
@@ -150,7 +150,7 @@ export class ProjectService {
     }
   }
 
-  /** Removes the project with the notes imported for it (they point at the row) and stops watching its folder. */
+  /** Deletes every note of the project (they point at its row), then the row, then reports the project to `onProjectForgotten`. */
   private forgetProject(projectId: string): void {
     for (const note of this.deps.noteRepo.list(projectId)) this.deps.noteRepo.delete(note.id);
     this.deps.projects.delete(projectId);
