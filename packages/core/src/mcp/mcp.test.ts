@@ -1,4 +1,4 @@
-import { MANAGER_ROLE, type Session } from '@openfleet/shared';
+import { EscalationPolicySchema, MANAGER_ROLE, type Session } from '@openfleet/shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
@@ -1094,6 +1094,43 @@ describe('get_argus_status, list_sessions, pulse_now', () => {
 
       expect(whilePaused).toBe(false);
       expect(afterResume).toBe(true);
+    });
+  });
+
+  describe('the escalation policy of the manager in get_argus_status', () => {
+    const DEFAULT_POLICY = EscalationPolicySchema.parse({});
+
+    async function statusOfALeadInAProject({ policy }: { policy?: ReturnType<typeof EscalationPolicySchema.parse> | 'no project' }) {
+      const parentClient = await connect(parentToken);
+      const lead = text(await parentClient.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('escalation-lead'), name: 'EscalationLead', manager: { pulse_seconds: 3600, children_cap: 1, mission: 'x' } } }));
+      if (policy !== 'no project') {
+        const projects = new ProjectRepository(db);
+        projects.insert({ id: 'project-escalation', name: 'Fleet', docsFolderPath: null, createdAt: 't0' });
+        if (policy !== undefined) projects.update('project-escalation', { escalation: policy });
+        db.prepare('UPDATE sessions SET project_id = ? WHERE id = ?').run('project-escalation', lead.id);
+      }
+      const leadClient = await connect(harness.launches.find((launch) => launch.sessionId === lead.id)!.mcpToken);
+      return text(await leadClient.callTool({ name: 'get_argus_status', arguments: {} }));
+    }
+
+    it('reports the defaults of the ladder to a manager whose project sets no policy', async () => {
+      const status = await statusOfALeadInAProject({});
+
+      expect(status.manager.escalationPolicy).toEqual(DEFAULT_POLICY);
+    });
+
+    it('reports the defaults to a manager that belongs to no project', async () => {
+      const status = await statusOfALeadInAProject({ policy: 'no project' });
+
+      expect(status.manager.escalationPolicy).toEqual(DEFAULT_POLICY);
+    });
+
+    it('reports the policy that the project sets', async () => {
+      const policy = EscalationPolicySchema.parse({ humanClasses: ['contract', 'security', 'deployment'], askUserGate: 'enforce', maxArbiterRunsPerTicket: 2 });
+
+      const status = await statusOfALeadInAProject({ policy });
+
+      expect(status.manager.escalationPolicy).toEqual(policy);
     });
   });
 

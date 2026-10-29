@@ -40,7 +40,7 @@ function rowGuardWarningOfProject({ id, rowGuardEnabled }: ProjectRecord, storeC
 }
 
 const projectOf = (record: ProjectRecord, allProjects: ProjectRecord[], storeColumns?: StoreColumns, identityOf: DocsFolderIdentity = memoizedDocsFolderIdentity()): Project => {
-  const { id, name, docsFolderPath, postCreateHookScript, postCreateHookTimeoutSeconds, rowGuardEnabled, sharedRepo } = record;
+  const { id, name, docsFolderPath, postCreateHookScript, postCreateHookTimeoutSeconds, rowGuardEnabled, sharedRepo, escalation } = record;
   const docsFolderSharedWith = namesOfProjectsSharingFolder(record, allProjects, identityOf);
   const rowGuardWarning = rowGuardWarningOfProject(record, storeColumns);
   return {
@@ -51,6 +51,7 @@ const projectOf = (record: ProjectRecord, allProjects: ProjectRecord[], storeCol
     ...(postCreateHookScript && postCreateHookTimeoutSeconds && { postCreateHookTimeoutSeconds }),
     ...(rowGuardEnabled && { rowGuardEnabled }),
     ...(sharedRepo && { sharedRepo }),
+    ...(escalation && { escalation }),
   };
 };
 

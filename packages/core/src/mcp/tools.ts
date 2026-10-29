@@ -1,4 +1,4 @@
-import { CONTRACT_VERSION, configDirHarnessRefusalOf, effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
+import { CONTRACT_VERSION, configDirHarnessRefusalOf, DEFAULT_ESCALATION_POLICY, effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -410,7 +410,8 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       ...(child.restartPending && { restartPending: true }),
     }));
     const record = caller.role === MANAGER_ROLE ? managers.get(caller.id) : undefined;
-    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed' || c.restartPending).length, deps.managerDenials?.countsOf(record.sessionId), managerBase)) : null;
+    const escalationPolicy = (caller.projectId ? deps.projects.get(caller.projectId)?.escalation : undefined) ?? DEFAULT_ESCALATION_POLICY;
+    const manager = record ? { ...managerView(toManagerView(record, children.filter((c) => c.state !== 'closed' || c.restartPending).length, deps.managerDenials?.countsOf(record.sessionId), managerBase)), escalationPolicy } : null;
     const blockedTickets = (deps.reviewFindings?.latestAdversarialLinePerTicketOf(caller.id) ?? [])
       .filter((line) => line.severity === 'no-go')
       .map(({ ticket, sha, reasons }) => ({ ticket, sha, reasons }));
