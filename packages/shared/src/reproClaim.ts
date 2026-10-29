@@ -14,7 +14,9 @@ export const REPRO_CLAIM_EXAMPLE = '{ claim: "the filter is missing", status: "p
 
 const statusesUnion = REPRO_STATUSES.join(' | ');
 export const SHAPE_MESSAGE = `a claim is { claim, status, command, output }; status is ${statusesUnion}; proven and plausible need the command you ran and its output; not_reproduced says where you read it.`;
-const STATUS_MESSAGE = `status is ${statusesUnion}. ${SHAPE_MESSAGE}`;
+export const STATUS_PROBLEM = 'a status is not one of the three.';
+export const EVIDENCE_PROBLEM = 'a proven or plausible claim lacks its command or output.';
+export const STATUS_MESSAGE = `status is ${statusesUnion}. ${SHAPE_MESSAGE}`;
 export const EVIDENCE_MESSAGE = `a proven or plausible claim needs the command you ran and its output. ${SHAPE_MESSAGE}`;
 
 const isGiven = (text: string | undefined): text is string => text !== undefined && text !== '';
