@@ -9,6 +9,7 @@ The MCP tool contract of the OpenFleet server. One section per `contract_version
 - FINDINGS-HYGIENE: the gate skip command in the findings gate refusal text no longer carries the `-H "Content-Type: application/json"` header; the server ignores the request content type. No tool schema changes.
 - ESCALATION-LADDER01, slices E0 and E1, escalation setting: a project can set its escalation policy (`escalation`, `PATCH /api/projects/:id`, admin token; `null` clears it). `contract` and `security` always stay on the human list. No tool is added.
 - `get_argus_status`: `manager` gains one field, `escalationPolicy`, the policy of the manager's project (the defaults when the project sets none). Read only. No tool schema changes.
+- ESCALATION-LADDER01, slice E6, manager base v5 (a change to the template, not to a tool): §6 tells managers to send their questions with `submit_plan_questions`, to wait for the arbiter and the single human question, to call `approve_plan_criteria` and never to write `criteria_status`. §7 says the size of a change never pauses a manager. The delivery lint refuses a pause on a number of files.
 
 Migrations: `054_project_shared_repo`: `projects.shared_repo`. `056_escalation_ladder`: `projects.escalation_policy_json` and the tables `escalations`, `plan_question_batches`, `plan_questions`, `arbiter_decisions` (down script in `packages/core/src/db/migrations-down/`).
 
