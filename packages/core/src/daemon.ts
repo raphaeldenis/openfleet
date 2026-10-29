@@ -46,6 +46,7 @@ import { ManagerRepository } from './managers/managerRepository.js';
 import { ManagerService } from './managers/managerService.js';
 import { ProjectProfileBootstrap } from './managers/projectProfileBootstrap.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
+import { staleInProgressRowLabelsOfProject } from './managers/staleRows.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { pendingPermissionViewOf } from './mcp/pendingPermissionView.js';
 import { KnowledgeRepository } from './knowledge/knowledgeRepository.js';
@@ -175,8 +176,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   sleepGuard.observeSessionEvents();
   const managerDenials = new ManagerDenials({ db, lineageSessionIdsOf: (managerId) => descendantSessionIdsOf(sessions.list(), managerId) });
   const deniedCommandCountsOf = (managerId: string) => managerDenials.countsOf(managerId);
-  const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError, deniedCommandCountsOf, managerBase: shippedManagerBase });
   const storeRepo = new DataStoreRepository(db);
+  const staleRowLabelsOf = (managerId: string) => {
+    const projectId = sessions.get(managerId)?.projectId;
+    return projectId === undefined ? [] : staleInProgressRowLabelsOfProject({ stores: storeRepo, projectId, now: Date.now() });
+  };
+  const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError, deniedCommandCountsOf, managerBase: shippedManagerBase, staleRowLabelsOf });
   const noteRepo = new NoteRepository(db);
   const managers = new ManagerService({
     managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds, deniedCommandCountsOf, currentBase: shippedManagerBase,
