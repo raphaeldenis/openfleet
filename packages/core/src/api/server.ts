@@ -41,6 +41,8 @@ import { registerWorktreeRoutes } from './worktreeRoutes.js';
 import { registerGovernanceE2eRoutes } from './governanceE2eRoutes.js';
 import { registerCommandPolicyRoutes } from './commandPolicyRoutes.js';
 import { registerReviewFindingsRoutes } from './reviewFindingsRoutes.js';
+import { registerUsageRoutes } from './usageRoutes.js';
+import type { UsageLedgerService } from '../usage/usageLedgerService.js';
 import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
 import { registerGovernanceRoutes } from './governanceRoutes.js';
 import type { CommandPolicyService } from '../policy/commandPolicyService.js';
@@ -97,6 +99,8 @@ export interface ServerDeps {
   commandPolicyAdmin?: { policy: CommandPolicyService; denials: DenialReader };
   // Without it the /api/review-findings routes do not exist.
   reviewFindings?: Pick<ReviewFindingsRepository, 'recordSkip' | 'skipsOf' | 'itemsOf'>;
+  // Without it the GET /api/usage routes do not exist.
+  usageLedger?: Pick<UsageLedgerService, 'dailyUsage'>;
   // Without it GET /api/diagnostics does not exist.
   diagnostics?: () => DiagnosticsDocument;
   // Without it GET /api/manager-base does not exist.
@@ -174,6 +178,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.governanceQueue) registerGovernanceRoutes(router, { governanceQueue: deps.governanceQueue });
   if (deps.commandPolicyAdmin) registerCommandPolicyRoutes(router, deps.commandPolicyAdmin);
   if (deps.reviewFindings) registerReviewFindingsRoutes(router, { findings: deps.reviewFindings });
+  if (deps.usageLedger) registerUsageRoutes(router, { usageLedger: deps.usageLedger });
   if (deps.governanceQueue && deps.e2eRoutes) registerGovernanceE2eRoutes(router, { governanceQueue: deps.governanceQueue });
   if (deps.projects && deps.noteRepo) registerHandoffPickerRoutes(router, new HandoffSeed({ projects: deps.projects, notes: deps.noteRepo, files: nodeHandoffFileReader }));
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });

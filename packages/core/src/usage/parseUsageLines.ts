@@ -1,6 +1,8 @@
 import type { ParseResult, UsageRow } from './types.js';
 
-type TokenField = 'input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_creation_input_tokens';
+const ZONED_ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+type TokenField ='input_tokens' | 'output_tokens' | 'cache_read_input_tokens' | 'cache_creation_input_tokens';
 
 // Returns one row per assistant message id found in the transcript text, the last line of an id winning, in order
 // of first appearance. A non-empty line that yields no row (malformed JSON, not an assistant line, no usable usage)
@@ -34,7 +36,7 @@ function usageRowOfLine(line: string): UsageRow | undefined {
   const { timestamp } = entry;
   if (typeof id !== 'string' || id === '') return undefined;
   if (typeof model !== 'string' || model === '') return undefined;
-  const hasValidTimestamp = typeof timestamp === 'string' && !Number.isNaN(Date.parse(timestamp));
+  const hasValidTimestamp = typeof timestamp === 'string' && ZONED_ISO_TIMESTAMP.test(timestamp) && !Number.isNaN(Date.parse(timestamp));
   if (!hasValidTimestamp) return undefined;
   const inputTokens = tokenCount(usage, 'input_tokens');
   const outputTokens = tokenCount(usage, 'output_tokens');

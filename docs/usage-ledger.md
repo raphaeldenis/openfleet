@@ -19,8 +19,25 @@
 
 ## What it does not do
 
-No table, migration, REST route, MCP tool or UI; no file reading; no price table; no guess of the biller.
+The pure part (`parseUsageLines` and the aggregates) has no storage, file reading or price table, and guesses no biller.
 
-## Next: PR 2
+## Storage: `usage_daily`
 
-The `usage_daily` table is a migration and therefore a contract. It is a separate PR, decided by Raphaël. It will store these aggregates; this module stays free of storage.
+Migration `046_usage_daily.sql` adds two tables. Its down script is `packages/core/src/db/migrations-down/046_usage_daily.down.sql`, kept outside the migrations folder so it is never applied.
+
+- `usage_messages` holds one row per message, keyed by session id and message id. It is the idempotency key.
+- `usage_daily` holds the buckets derived from it, keyed by UTC day, model, session, billing code, biller and cost status. A bucket carries the message count, the four token sums and `cost_usd`, the sum of reported costs (`NULL` in an unpriced bucket, which is how unpriced messages are counted apart).
+
+`UsageLedgerService` (`packages/core/src/usage/usageLedgerService.ts`, the only part of the module that touches the database):
+
+- `ingestTranscript({ sessionId, biller, transcriptText, billingCodeOf })` parses the text the caller hands over, upserts the messages and rebuilds the touched buckets in one transaction. Ingesting the same text again changes nothing. A message id seen again replaces its earlier counts, so a message that grew between two ingestions is not added twice. A message whose biller or billing code changes moves to its new bucket.
+- `dailyUsage({ fromDayUtc, toDayUtc, sessionId, billingCode, model })` returns the buckets.
+- `GET /api/usage/daily?from=&to=&sessionId=&billingCode=&model=` (admin token) answers `{ items }`. `from` and `to` are `YYYY-MM-DD`.
+
+Known limits of the storage:
+
+- **The same message under two sessions is counted twice.** The idempotency key is the session id plus the message id. When a resume or a fork writes the same assistant message (same message id) into the transcripts of two sessions, both are ingested and both are billed in the totals. Nothing deduplicates across sessions.
+- **Precision above 2^53.** Token sums are stored and summed as JSON numbers. A single count is rejected past `Number.MAX_SAFE_INTEGER` (2^53 - 1), but a bucket total above it is approximate. The same holds for the costs, which are floating-point sums.
+- **Timestamps.** A line is read only when its timestamp is an ISO 8601 date-time with a `Z` or a numeric offset (`+02:00`); the UTC day comes from that instant. A timestamp without a zone, or in another format, is skipped and counted, since its day would depend on the machine's time zone.
+
+There is no ingestion route, no MCP tool, no UI, no automatic reading of any transcript file and no price table.

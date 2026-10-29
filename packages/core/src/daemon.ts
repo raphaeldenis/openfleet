@@ -24,6 +24,7 @@ import { SqliteDenialJournal } from './policy/sqliteDenialJournal.js';
 import { ManagerDenials } from './policy/managerDenials.js';
 import { FINDINGS_GATE_ENFORCEMENT, FindingsGate, type FindingsGateEnforcement } from './review/findingsGate.js';
 import { ReviewFindingsRepository } from './review/reviewFindingsRepository.js';
+import { UsageLedgerService } from './usage/usageLedgerService.js';
 import { descendantSessionIdsOf } from './managers/lineage.js';
 import type { BaseNotReadEnforcement } from './managers/baseReadGuard.js';
 import type { NoteNotReadEnforcement } from './managers/noteReadGuard.js';
@@ -244,6 +245,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const handoffSettings = loadHandoffSettings(modelConfigPath);
   const docsRoot = new DocsRootSettings({ configPath: modelConfigPath, homeDir: homedir(), openfleetHome: config.home });
   const reviewFindings = new ReviewFindingsRepository(db);
+  const usageLedger = new UsageLedgerService(db);
   const findingsGate = {
     gate: new FindingsGate({ findings: reviewFindings, ticketPattern: findingsGateSettings.ticketPattern }),
     enforcement: options.findingsGateEnforcement ?? findingsGateSettings.enforcement ?? FINDINGS_GATE_ENFORCEMENT,
@@ -263,7 +265,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, mcp: createMcpHandler({ projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
