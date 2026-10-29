@@ -61,7 +61,8 @@ function hasFlagGroups(command: SimpleCommand, groups: FlagGroups): boolean {
 }
 
 function startsWithWords(command: SimpleCommand, sequence: string[]): boolean {
-  const args = command.program === 'gh' ? argsWithoutLeadingRepoOptions(command.args) : command.args;
+  const selectsRepositoryByOption = command.program === 'gh' || command.program === 'glab';
+  const args = selectsRepositoryByOption ? argsWithoutLeadingRepoOptions(command.args) : command.args;
   const words = [command.program, ...args];
   return sequence.length <= words.length && sequence.every((alternatives, index) => alternatives.split('|').includes(words[index] as string));
 }
