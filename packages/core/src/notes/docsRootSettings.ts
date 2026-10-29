@@ -99,10 +99,9 @@ export class DocsRootSettings {
   ensureProjectFolder(typedDocsFolderPath: string): void {
     const isUsablePath = isAbsolute(typedDocsFolderPath) && !typedDocsFolderPath.includes('\u0000');
     if (!isUsablePath) return;
+    this.refuseDotSegments(typedDocsFolderPath);
     const docsFolderPath = withoutRedundantSlashes(typedDocsFolderPath);
     const lexicalFolder = resolve(docsFolderPath);
-    const isFreeOfDotSegments = lexicalFolder === docsFolderPath;
-    if (!isFreeOfDotSegments) throw new InvalidDocsFolderError();
     const lexicalRoot = resolve(this.view().root);
     const isMissingUnderRoot = !existsOrRefuse(lexicalFolder) && isInside(lexicalRoot, lexicalFolder);
     if (!isMissingUnderRoot) return;
@@ -113,6 +112,15 @@ export class DocsRootSettings {
     this.refuseOutsideHome(resolvedFolder);
     if (!isInside(resolvedRoot, resolvedFolder)) throw invalid();
     this.createFolder(resolvedFolder, docsFolderPath);
+  }
+
+  /** Refuses an absolute docs folder path that holds a `.` or `..` segment; any other path is left to the docs folder checks. */
+  refuseDotSegments(typedDocsFolderPath: string): void {
+    const isUsablePath = isAbsolute(typedDocsFolderPath) && !typedDocsFolderPath.includes('\u0000');
+    if (!isUsablePath) return;
+    const docsFolderPath = withoutRedundantSlashes(typedDocsFolderPath);
+    const isFreeOfDotSegments = resolve(docsFolderPath) === docsFolderPath;
+    if (!isFreeOfDotSegments) throw new InvalidDocsFolderError();
   }
 
   private createFolder(resolvedFolder: string, docsFolderPath: string): void {

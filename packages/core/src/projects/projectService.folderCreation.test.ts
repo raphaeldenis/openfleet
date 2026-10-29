@@ -222,3 +222,19 @@ describe('ProjectService.create docs folder creation', () => {
     expect(projectRowCount()).toBe(0);
   });
 });
+
+describe('ProjectService.update docs folder with dot segments', () => {
+  it('refuses a typed path with a parent traversal even when the target folder exists, and keeps the folder of the project', () => {
+    const keptFolder = join(rootFolder, 'Fleet');
+    const existingTarget = join(rootFolder, 'Other');
+    mkdirSync(existingTarget, { recursive: true });
+    const project = projectService.create({ name: 'Fleet', docsFolderPath: keptFolder });
+    const traversingPath = `${keptFolder}/../Other`;
+
+    const attempt = () => projectService.update(project.id, { docsFolderPath: traversingPath });
+
+    expect(attempt).toThrow(InvalidDocsFolderError);
+    const storedFolder = (db.prepare('SELECT docs_folder_path AS path FROM projects WHERE id = ?').get(project.id) as { path: string }).path;
+    expect(storedFolder).toBe(keptFolder);
+  });
+});

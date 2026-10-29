@@ -22,7 +22,7 @@ export interface ProjectServiceDeps {
   docs: Pick<DocsFolderService, 'prepareFolder' | 'attachFolder' | 'createFileBackedNote'>;
   noteRepo: Pick<NoteRepository, 'list' | 'delete'>;
   /** Creates the folder of a new project under the docs root; without it a new project needs an existing folder. */
-  docsRoot?: Pick<DocsRootSettings, 'ensureProjectFolder'>;
+  docsRoot?: Pick<DocsRootSettings, 'ensureProjectFolder' | 'refuseDotSegments'>;
   /** Tells whether two paths reach the same directory; defaults to comparing the device and inode. */
   folderIdentity?: DocsFolderIdentity;
   clock: () => string;
@@ -75,6 +75,7 @@ export class ProjectService {
     const current = this.requireProject(projectId);
     const docsFolderPath = patch.docsFolderPath === undefined ? undefined : withoutRedundantSlashes(patch.docsFolderPath);
     const hookSetting = this.acceptedHookSetting(current, patch);
+    if (docsFolderPath !== undefined) this.deps.docsRoot?.refuseDotSegments(docsFolderPath);
     if (docsFolderPath !== undefined) this.acceptFolderChange(current, docsFolderPath);
     const normalisedPatch = docsFolderPath === undefined ? patch : { ...patch, docsFolderPath };
     this.deps.projects.update(projectId, { ...normalisedPatch, ...hookSetting });
