@@ -35,6 +35,13 @@ export const ManagerRecordBoundsSchema = z.object(managerFieldsWithMissionUpTo(M
 export const ManagerSpecSchema = z.object(managerFieldsWithMissionUpTo(MAX_MISSION_BYTES));
 export type ManagerSpec = z.infer<typeof ManagerSpecSchema>;
 
+/** The closed list of values a manager log row accepts in its `kind` column. */
+export const MANAGER_LOG_KINDS = [
+  'pulse', 'sleep', 'spawn', 'respawn', 'close', 'relay', 'pending_relay', 'fix', 'proposal', 'governance',
+  'event', 'verify', 'incident', 'decision', 'handover', 'openfleet', 'debloat', 'question', 'finding', 'blocked',
+] as const;
+export type ManagerLogKind = (typeof MANAGER_LOG_KINDS)[number];
+
 export const MAX_EXPERTISE_LENGTH = 500;
 export const MAX_PULSE_ACTIONS = 12;
 export const MAX_PULSE_ACTION_LENGTH = 280;

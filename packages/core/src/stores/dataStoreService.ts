@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  COLUMN_TYPES, COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, DsViewConfigSchema, MAX_SELECT_OPTIONS, NO_VALUE_GROUP_ID, orderedKanbanOptions, OrderTermSchema, SelectOptionSchema, VIEW_TYPES, WhereClauseSchema,
+  COLUMN_TYPES, COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, DsViewConfigSchema, MANAGER_LOG_KINDS, MAX_SELECT_OPTIONS, NO_VALUE_GROUP_ID, orderedKanbanOptions, OrderTermSchema, SelectOptionSchema, VIEW_TYPES, WhereClauseSchema,
   type AutoValue, type ColumnChanges, type ColumnWrap, type ColumnFormat, type ColumnType, type DataStore, type DsColumn, type DsRow, type DsView, type DsViewConfig, type OptionReplacement, type OrderTerm, type SelectOption, type ViewType, type WhereClause,
 } from '@openfleet/shared';
 import { z } from 'zod';
@@ -112,6 +112,18 @@ export class StoreRowCapError extends Error {
     super(`Data store ${storeId} is at its ${cap}-row cap`);
   }
 }
+
+/** A write put a `kind` outside the closed list in the log table of a manager. */
+export class LogKindNotAllowedError extends Error {
+  constructor(readonly kind: unknown) {
+    super(`The manager log refuses kind ${JSON.stringify(kind)}. Allowed kinds: ${MANAGER_LOG_KINDS.join(', ')}. Ticket reports go in the ticket journal, not in the log.`);
+  }
+}
+
+const LOG_KIND_COLUMN_NAME = 'kind';
+const isLogKindColumn = (column: DsColumn): boolean => column.displayName.trim().toLowerCase() === LOG_KIND_COLUMN_NAME;
+const labelOfSelectedOption = (column: DsColumn, optionId: unknown): unknown => (column.options ?? []).find((option) => option.id === optionId)?.label ?? optionId;
+const isPermittedLogKind =(kind: unknown): boolean => (MANAGER_LOG_KINDS as readonly unknown[]).includes(kind);
 
 export interface DataStoreServiceDeps {
   repo: DataStoreRepository;
@@ -459,6 +471,7 @@ export class DataStoreService {
     const columns = this.repo.listColumns(storeId);
     const data = this.withDaemonSetCells(this.daemonSetColumns(columns), input.data, at);
     this.validateCells(columns, data);
+    this.refuseKindOutsideManagerLogList(storeId, columns, data);
     this.assertRowCapacity(storeId, 1);
     return this.inTransaction(() => {
       const rowId = this.newId();
@@ -470,7 +483,9 @@ export class DataStoreService {
   updateRow(storeId: string, rowId: string, input: Scope & { patch: Record<string, unknown>; actor: RowActor }): DsRow {
     this.authorize(storeId, input.projectId);
     this.refuseDaemonSetCells(storeId, input.patch);
-    this.validateCells(this.repo.listColumns(storeId), input.patch);
+    const columns = this.repo.listColumns(storeId);
+    this.validateCells(columns, input.patch);
+    this.refuseKindOutsideManagerLogList(storeId, columns, input.patch);
     this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, input.patch);
     this.refuseRowGuardViolation(storeId, rowId, input);
     return this.guarded(() => this.repo.updateRow(rowId, { storeId, patch: input.patch, actor: input.actor, at: this.clock() }));
@@ -499,7 +514,10 @@ export class DataStoreService {
       const at = this.clock();
       return { at, data: this.withDaemonSetCells(daemonSetColumns, item, at) };
     });
-    for (const { data } of stampedRows) this.validateCells(columns, data);
+    for (const { data } of stampedRows) {
+      this.validateCells(columns, data);
+      this.refuseKindOutsideManagerLogList(storeId, columns, data);
+    }
     this.assertRowCapacity(storeId, input.items.length);
     return this.inTransaction(() => stampedRows.map(({ data, at }) => {
       const rowId = this.newId();
@@ -526,6 +544,22 @@ export class DataStoreService {
     return { matched: matchedRows.length, updated };
   }
 
+  /**
+   * In the log table of a manager, a written `kind` cell must be one of MANAGER_LOG_KINDS (exact, case-sensitive match).
+   * The column is found by its display name, ignoring case and surrounding spaces; in a select column the option label is compared, not the option id.
+   * Other tables, logs without a `kind` column and writes that leave the kind cell out or null are not concerned; stored rows are never rewritten.
+   */
+  private refuseKindOutsideManagerLogList(storeId: string, columns: DsColumn[], cells: Record<string, unknown>): void {
+    const kindColumn = columns.find(isLogKindColumn);
+    const writtenCell = kindColumn === undefined ? undefined : cells[kindColumn.id];
+    const writesNoKind = writtenCell === undefined || writtenCell === null;
+    if (kindColumn === undefined || writesNoKind) return;
+    const writtenKind = kindColumn.columnType === 'select' ? labelOfSelectedOption(kindColumn, writtenCell) : writtenCell;
+    if (isPermittedLogKind(writtenKind)) return;
+    const isManagerLog = this.db.prepare('SELECT 1 FROM managers WHERE log_store_id = ?').get(storeId) !== undefined;
+    if (isManagerLog) throw new LogKindNotAllowedError(writtenKind);
+  }
+
   /** The daemon-set columns that the given rows try to fill: they are dropped at insert, and the caller reports them. */
   ignoredDaemonSetColumnIds(storeId: string, input: Scope & { items: Record<string, unknown>[] }): string[] {
     this.authorize(storeId, input.projectId);
@@ -538,6 +572,7 @@ export class DataStoreService {
     for (const { patch } of input.items) {
       this.refuseDaemonSetCells(storeId, patch);
       this.validateCells(columns, patch);
+      this.refuseKindOutsideManagerLogList(storeId, columns, patch);
     }
     return this.inTransaction(() => input.items.map(({ rowId, patch }) => {
       this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, patch);

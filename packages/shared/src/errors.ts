@@ -23,6 +23,8 @@ export const ERROR_CODES = {
   unknown_harness: { kind: 'invalid_request' },
   // A bad cell value is the caller's row (decision D10): it answers 400, not 409.
   constraint_violation: { kind: 'invalid_request' },
+  // A manager log row carries a kind outside the closed list MANAGER_LOG_KINDS: another kind from the list makes the same write succeed.
+  log_kind_not_allowed: { kind: 'invalid_request' },
   message_too_long: { kind: 'invalid_request' },
   query_too_long: { kind: 'invalid_request' },
   outside_own_repository: { kind: 'invalid_request' },

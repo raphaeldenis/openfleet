@@ -2,7 +2,7 @@ import { OpenFleetError, type ErrorCode, type ErrorEnvelope, type Session } from
 import { describeError, type ErrorScope } from '../errors/describeError.js';
 import {
   ConstraintError, DaemonSetColumnError, DataStoreWriteError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError,
-  InvalidQueryError, InvalidViewConfigError, RowGuardViolationError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
+  InvalidQueryError, InvalidViewConfigError, LogKindNotAllowedError, RowGuardViolationError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from '../stores/dataStoreRepository.js';
 import { FileBackedNoteError, NoteNotFoundError, NoteTooLargeError, StaleRevisionError, VersionNotFoundError } from '../notes/noteService.js';
@@ -63,7 +63,7 @@ const FIXED_WORDING: [new (...args: never[]) => Error, ToolWording][] = [
 // Typed errors whose message was written for the caller and carries no SQL or internal state.
 const CALLER_SAFE_ERRORS = [
   ConstraintError, DaemonSetColumnError, DuplicateIdError, DuplicateNameError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
-  InvalidNameError, InvalidQueryError, InvalidViewConfigError, RowGuardViolationError, StoreHasRowsError, StoreRowCapError, UnknownColumnError,
+  InvalidNameError, InvalidQueryError, InvalidViewConfigError, LogKindNotAllowedError, RowGuardViolationError, StoreHasRowsError, StoreRowCapError, UnknownColumnError,
   NoteTooLargeError, SectionError, VersionNotFoundError,
 ];
 

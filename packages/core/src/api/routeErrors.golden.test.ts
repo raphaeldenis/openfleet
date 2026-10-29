@@ -25,7 +25,7 @@ import { NoteTooLargeError, NoteService, StaleRevisionError } from '../notes/not
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { DaemonShuttingDownError, SessionReopenError, SessionService } from '../sessions/sessionService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
-import { ConstraintError, DataStoreService, DoneWithoutPrUrlError, JournalShortenedError, StoreRowCapError } from '../stores/dataStoreService.js';
+import { ConstraintError, DataStoreService, DoneWithoutPrUrlError, JournalShortenedError, LogKindNotAllowedError, StoreRowCapError } from '../stores/dataStoreService.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { Router } from './router.js';
 import { startServer } from './server.js';
@@ -171,6 +171,7 @@ const REAL_REQUEST_SCENARIOS: Scenario[] = [
 // Typed errors that need an internal state a fixture cannot reach, thrown through the real catch-all.
 const THROWN_ERROR_SCENARIOS: { name: string; thrown: () => unknown; expected: Expected }[] = [
   { name: 'a constraint violation (moved from 409 to 400: decision D10)', thrown: () => new ConstraintError('violates'), expected: { status: 400, error: 'constraint_violation' } },
+  { name: 'a kind outside the manager log list', thrown: () => new LogKindNotAllowedError('wibble'), expected: { status: 400, error: 'log_kind_not_allowed' } },
   { name: 'a row cap', thrown: () => new StoreRowCapError('s1', 10000), expected: { status: 413, error: 'row_cap' } },
   { name: 'a shortened journal', thrown: () => new JournalShortenedError(), expected: { status: 400, error: 'row_guard_violation' } },
   { name: 'a done row without pull request link', thrown: () => new DoneWithoutPrUrlError(), expected: { status: 400, error: 'row_guard_violation' } },

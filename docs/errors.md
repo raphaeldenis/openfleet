@@ -22,7 +22,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Kind | HTTP status | Codes |
 | --- | --- | --- |
-| `invalid_request` | 400 | 13 |
+| `invalid_request` | 400 | 14 |
 | `unauthorized` | 401 | 1 |
 | `not_found` | 404 | 12 |
 | `conflict` | 409 | 40 |
@@ -42,6 +42,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `invalid_branch_name` | 400 | `never` |
 | `unknown_harness` | 400 | `never` |
 | `constraint_violation` | 400 | `never` |
+| `log_kind_not_allowed` | 400 | `never` |
 | `message_too_long` | 400 | `never` |
 | `query_too_long` | 400 | `never` |
 | `outside_own_repository` | 400 | `never` |
