@@ -167,6 +167,28 @@ const BLOCKED_WHEN_QUOTING_HIDES_A_GIT_COMMAND = [
   "HUSKY=0 git push 'x",
 ];
 
+const BLOCKED_BEHIND_SHELL_GROUPING_OR_FORCING_FLAGS = [
+  '{ git reset --hard; }',
+  '! git reset --hard',
+  'if git push -f origin x; then echo ok; fi',
+  'for f in a; do git reset --hard; done',
+  'while true; do git clean -fd; done',
+  'git switch -f main',
+  'git switch --discard-changes x',
+  'git switch --force x',
+  'git branch -f main HEAD~1',
+  'git branch --force master abc',
+];
+
+const ALLOWED_BEHIND_SHELL_GROUPING = [
+  '{ git status; }',
+  '! git diff --quiet',
+  'if git diff --quiet; then echo clean; fi',
+  'git branch feature/y',
+  'git branch -f feature/y abc',
+  'git switch x',
+];
+
 describe('block-dangerous-git hook', () => {
   it.each(ALLOWED_FROM_FEATURE_CHECKOUT)('allows %j', (command) => {
     expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
@@ -186,6 +208,16 @@ describe('block-dangerous-git hook', () => {
     });
 
     it.each(ALLOWED_DESPITE_RESEMBLING_HOOK_SKIPPING)('allows %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
+    });
+  });
+
+  describe('shell grouping and forcing flags', () => {
+    it.each(BLOCKED_BEHIND_SHELL_GROUPING_OR_FORCING_FLAGS)('blocks %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
+    });
+
+    it.each(ALLOWED_BEHIND_SHELL_GROUPING)('allows %j', (command) => {
       expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
     });
   });

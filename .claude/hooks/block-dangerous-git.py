@@ -16,6 +16,7 @@ PROTECTED_BRANCHES = {"main", "master"}
 SEGMENT_SEPARATORS = ("&&", "||", ";", "\n", "|", "&")
 SHELL_PROGRAMS = {"sh", "bash", "zsh", "dash", "ksh"}
 COMMAND_WRAPPERS = {"command", "env", "export", "rtk", "proxy", "sudo", "time", "nice", "exec", "nohup"}
+SHELL_GROUPING_KEYWORDS = {"{", "!", "if", "then", "do", "else", "elif", "while", "until"}
 GIT_GLOBAL_OPTIONS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
 HOOK_DISABLING_VARIABLE = re.compile(r"HUSKY|^GIT_(CONFIG|DIR|WORK_TREE)", re.IGNORECASE)
 SHELL_INLINE_SCRIPT_FLAGS = {"-c", "-lc", "-ic", "-ec"}
@@ -114,7 +115,7 @@ def strip_wrappers(tokens):
         token = tokens[index]
         if is_environment_assignment(token):
             assignments.append(token)
-        elif program_name(token) not in COMMAND_WRAPPERS:
+        elif token not in SHELL_GROUPING_KEYWORDS and program_name(token) not in COMMAND_WRAPPERS:
             break
         index += 1
     return assignments, tokens[index:]
@@ -270,6 +271,15 @@ def check_branch(arguments, _repository):
     forces = "f" in letters or has_long_flag(arguments, "--force")
     if "D" in letters or (deletes and forces):
         refuse("branch-force-delete", "git branch -D is forbidden, use git branch -d on a merged branch.")
+    moves_protected_branch = forces and any(name in PROTECTED_BRANCHES for name in positionals(arguments)[:1])
+    if moves_protected_branch:
+        refuse("branch-force-move", "git branch -f main moves a shared branch, ask your manager.")
+
+
+def check_switch(arguments, _repository):
+    discards = "f" in short_flag_letters(arguments) or has_long_flag(arguments, "--force", "--discard-changes")
+    if discards:
+        refuse("switch-discard", "git switch -f and --discard-changes throw away local changes, commit or copy them first.")
 
 
 def check_stash(arguments, _repository):
@@ -317,6 +327,7 @@ GIT_SUBCOMMAND_CHECKS = {
     "branch": check_branch,
     "stash": check_stash,
     "checkout": check_checkout,
+    "switch": check_switch,
     "restore": check_restore,
     "worktree": check_worktree,
     "config": check_config,
