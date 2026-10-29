@@ -240,6 +240,23 @@ describe('QE — the findings gate, enforcing (the shipped mode)', () => {
     expect(await journaledGateRows()).toEqual([{ ruleId: FINDINGS_GATE_RULE_ID, outcome: 'denied' }]);
   });
 
+  it('tells a child the exact report tools and the token-free skip command for the missing steps', async () => {
+    await bootDaemon();
+    const directory = worktreeOnBranch('CCM-7-gate');
+    const sessionId = await bootChildIn(directory);
+
+    const answer = await openPullRequest(sessionId, directory);
+
+    const reason = answer.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason).toContain('CCM-7');
+    expect(reason).toContain('qe, qa, ponytail, adversarial go');
+    expect(reason).toContain(`report_step_finding({ step: "qe" | "qa" | "ponytail", severity, claims: [...], sha: "${headOf(directory)}" })`);
+    expect(reason).toContain(`report_ship_verdict({ verdict: "go", reasons: [...], sha: "${headOf(directory)}" })`);
+    expect(reason).toContain('curl -X POST <daemon-url>/api/review-findings/skips');
+    expect(reason).toContain('with the admin token');
+    expect(reason).not.toContain(config.adminToken);
+  });
+
   it('refuses a branch without ticket for a session run by a manager', async () => {
     await bootDaemon();
     const directory = worktreeOnBranch('plain-branch');
@@ -342,6 +359,30 @@ describe('QE — step_skipped, a human act', () => {
     expect(created.status).toBe(201);
     expect(listed.items).toEqual([expect.objectContaining({ ticket: 'CCM-7', step: 'qa', reason: 'no browser on this project', createdAt: expect.any(String) })]);
     expect(await openPullRequest(sessionId, directory)).toEqual({});
+  });
+
+  it('traces a skip with its author and the head it applies to, and the gate behaves as before', async () => {
+    const { directory, sessionId } = await bootInEnforce();
+    line('CCM-7', 'qe', 'clean', headOf(directory));
+    line('CCM-7', 'ponytail', 'clean', headOf(directory));
+    line('CCM-7', 'adversarial', 'go', headOf(directory));
+
+    const created = await skip({ ticket: 'CCM-7', step: 'qa', reason: 'no browser on this project', sha: headOf(directory) });
+    const listed = (await (await adminApi('/api/review-findings/skips?ticket=CCM-7')).json()) as { items: unknown[] };
+
+    expect(created.status).toBe(201);
+    expect(listed.items).toEqual([expect.objectContaining({ ticket: 'CCM-7', step: 'qa', author: 'human', headSha: headOf(directory) })]);
+    expect(daemon!.db.prepare('SELECT author, head_sha AS headSha FROM review_step_skips').all()).toEqual([{ author: 'human', headSha: headOf(directory) }]);
+    expect(await openPullRequest(sessionId, directory)).toEqual({});
+  });
+
+  it('keeps a skip without sha valid: no head recorded, the author still human', async () => {
+    await bootInEnforce();
+
+    const created = await skip({ ticket: 'CCM-7', step: 'qa', reason: 'no browser' });
+
+    expect(created.status).toBe(201);
+    expect(daemon!.db.prepare('SELECT author, head_sha AS headSha FROM review_step_skips').all()).toEqual([{ author: 'human', headSha: null }]);
   });
 
   it('opens qe, qa and ponytail by skips alone but still asks for the adversarial go', async () => {
