@@ -11,12 +11,15 @@ import type { ProjectRepository } from '../projects/projectRepository.js';
 import { ok, refuse } from './toolResults.js';
 
 const MAX_TICKET_CHARS = 40;
+/** A ticket is an identifier such as CCM-123 or KB-01a: it is written into the arbiter prompt, the plan note and the journal, so it carries no text. */
+const TICKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const TicketSchema = z.string().trim().min(1).max(MAX_TICKET_CHARS).regex(TICKET_PATTERN, 'ticket must be an identifier of letters, digits, dots, underscores and hyphens, such as CCM-123');
 
 const repeatedIdOf = (questions: readonly { id: string }[]): string | undefined =>
   questions.map(({ id }) => id).find((id, position, ids) => ids.indexOf(id) !== position);
 
 const PlanQuestionsSubmissionSchema = z.object({
-  ticket: z.string().trim().min(1).max(MAX_TICKET_CHARS),
+  ticket: TicketSchema,
   plan_note_id: z.string().min(1),
   questions: z.array(PlanQuestionSchema).min(1).max(MAX_QUESTIONS_PER_BATCH).superRefine((questions, context) => {
     const repeatedId = repeatedIdOf(questions);
@@ -26,7 +29,7 @@ const PlanQuestionsSubmissionSchema = z.object({
 
 export const problemOf = ({ path, message }: z.core.$ZodIssue) => (path.length === 0 ? message : `${path.join('.')}: ${message}`);
 
-const ApprovalRequestSchema = z.object({ ticket: z.string().trim().min(1).max(MAX_TICKET_CHARS), plan_note_id: z.string().min(1) });
+const ApprovalRequestSchema = z.object({ ticket: TicketSchema, plan_note_id: z.string().min(1) });
 
 /** The refusal for a plan note that is missing, foreign to the caller's project or the mission note; undefined when the note can carry a plan. */
 function planNoteRefusalOf({ planNote, planNoteId, caller, managers }: {
