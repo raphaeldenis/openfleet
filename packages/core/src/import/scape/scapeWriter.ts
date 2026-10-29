@@ -9,7 +9,7 @@ import { writeMemories, type MemoryWriteContext } from './scapeMemoriesWriter.js
 import { writeWorkingStates } from './scapeWorkingStatesWriter.js';
 import { ImportLedger, type LedgerKind } from './scapeLedger.js';
 import { reportRemovedInScape } from './scapeRemovals.js';
-import { isLeftAlone, upsertRecord, type UpsertOutcome, type WritePolicy } from './scapeTarget.js';
+import { isLeftAlone, upsertRecord, type RecordValues, type UpsertOutcome, type WritePolicy } from './scapeTarget.js';
 import { writePlaybookArchives } from './playbookArchive.js';
 
 interface FamilyInput<Extra> {
@@ -21,6 +21,7 @@ interface FamilyInput<Extra> {
   planned: PlannedRecord<Extra>[];
   report: ImportReport;
   policyOf?: (planned: PlannedRecord<Extra>) => WritePolicy;
+  recordOf?: (planned: PlannedRecord<Extra>) => RecordValues;
   isNotConverted?: (extra: Extra) => boolean;
 }
 
@@ -29,7 +30,7 @@ function writeEntities<Extra>(input: FamilyInput<Extra>): Map<string, UpsertOutc
   const outcomes = new Map<string, UpsertOutcome>();
   for (const planned of input.planned) {
     counts.expected++;
-    const outcome = upsertRecord(input.db, { table: input.table, kind: input.kind, id: planned.id, record: planned.record, policy: input.policyOf?.(planned), ledger: input.ledger });
+    const outcome = upsertRecord(input.db, { table: input.table, kind: input.kind, id: planned.id, record: input.recordOf?.(planned) ?? planned.record, policy: input.policyOf?.(planned), ledger: input.ledger });
     outcomes.set(planned.id, outcome);
     countOutcome(counts, outcome);
     if (input.isNotConverted?.(planned.extra)) counts.notConverted++;
@@ -111,7 +112,32 @@ function storesBlockedByAMissingDefinition(db: DatabaseSync, plan: ImportPlan): 
   return new Set([...missingStores, ...storesMissingAColumn]);
 }
 
-const DATA_STORE_WRITE_POLICY: WritePolicy = { ignoredColumns: ['updated_at'], columnsOmittedFromHashWhenNull: ['natural_key_column_id'] };
+const DATA_STORE_WRITE_POLICY: WritePolicy = { ignoredColumns: ['updated_at'], columnsOmittedFromHashWhenEmpty: ['natural_key_column_id'] };
+const COLUMN_COLUMNS_ADDED_AFTER_FIRST_IMPORTS = ['column_format', 'required', 'display_column_id', 'config_json', 'display_width', 'wrap_mode', 'wrap_max_lines'];
+
+const storedDisplayColumnIdOf = (db: DatabaseSync, columnId: string): string | null =>
+  (db.prepare('SELECT display_column_id AS id FROM ds_columns WHERE id = ?').get(columnId) as { id: string | null } | undefined)?.id ?? null;
+
+/** Whether following the stored display columns from `from` reaches `columnId`; a stored cycle that does not contain it ends the walk. */
+function storedDisplayColumnsLeadTo(db: DatabaseSync, input: { from: string; columnId: string }): boolean {
+  const visited = new Set<string>();
+  for (let followed: string | null = input.from; followed !== null && !visited.has(followed); followed = storedDisplayColumnIdOf(db, followed)) {
+    if (followed === input.columnId) return true;
+    visited.add(followed);
+  }
+  return false;
+}
+
+/** The planned column, its Scape display column replaced by the stored one when the Scape one would close a cycle with the stored display columns. */
+function columnRecordWithoutStoredCycle(db: DatabaseSync, input: { column: PlannedRecord; report: ImportReport }): RecordValues {
+  const { column, report } = input;
+  const scapeDisplayColumnId = column.record.display_column_id;
+  if (typeof scapeDisplayColumnId !== 'string') return column.record;
+  const closesCycleWithStoredColumns = storedDisplayColumnsLeadTo(db, { from: scapeDisplayColumnId, columnId: column.id });
+  if (!closesCycleWithStoredColumns) return column.record;
+  report.droppedColumnMetadata.push({ columnId: column.id, field: 'displayColumnID', value: scapeDisplayColumnId });
+  return { ...column.record, display_column_id: storedDisplayColumnIdOf(db, column.id) };
+}
 
 function writeDataStoreDefinitions(input: { db: DatabaseSync; ledger: ImportLedger; plan: ImportPlan; report: ImportReport }): Set<string> {
   const { db, plan, report } = input;
@@ -120,8 +146,9 @@ function writeDataStoreDefinitions(input: { db: DatabaseSync; ledger: ImportLedg
   const onlyWhereTheStoreExists = (planned: PlannedRecord): WritePolicy => ({ canInsert: () => !storesWithoutRecord.has(String(planned.record.store_id)) });
   writeEntities({
     ...input, entity: 'columns', kind: 'column', table: 'ds_columns', planned: plan.columns,
-    policyOf: (column) => ({ ...onlyWhereTheStoreExists(column), columnsOmittedFromHashWhenNull: ['column_format'] }),
-    isNotConverted: (extra) => extra.hasDroppedFormat,
+    recordOf: (column) => columnRecordWithoutStoredCycle(db, { column, report }),
+    policyOf: (column) => ({ ...onlyWhereTheStoreExists(column), columnsOmittedFromHashWhenEmpty: COLUMN_COLUMNS_ADDED_AFTER_FIRST_IMPORTS }),
+    isNotConverted: (extra) => extra.hasUnconvertedPart,
   });
   writeEntities({ ...input, entity: 'views', kind: 'view', table: 'ds_views', planned: plan.views, policyOf: onlyWhereTheStoreExists, isNotConverted: (extra) => extra.hasDroppedFields });
   report.counts.views.expected += plan.skippedViewCount;

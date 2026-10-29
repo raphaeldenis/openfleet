@@ -352,6 +352,15 @@ export class DataStoreService {
     if (input.displayColumnId === input.column.id) throw new InvalidColumnDefinitionError('A column cannot be its own display column');
     const isInStore = this.repo.listColumns(storeId).some((storeColumn) => storeColumn.id === input.displayColumnId);
     if (!isInStore) throw new UnknownColumnError([input.displayColumnId]);
+    const displayColumnIdOf = new Map(this.repo.listColumns(storeId).map((storeColumn) => [storeColumn.id, storeColumn.displayColumnId]));
+    const visited = new Set<string>();
+    for (let followed = input.displayColumnId as string | undefined; followed !== undefined; followed = displayColumnIdOf.get(followed)) {
+      const closesCycle = followed === input.column.id;
+      if (closesCycle) throw new InvalidColumnDefinitionError('A display column cannot lead back to the column: this closes a cycle of display columns');
+      const isInsideAnExistingCycle = visited.has(followed);
+      if (isInsideAnExistingCycle) throw new InvalidColumnDefinitionError('A display column cannot lead into a cycle of display columns');
+      visited.add(followed);
+    }
   }
 
   /** Keeps the id of every replacement matching a current option (by id, else by label); a replacement matching none gets a fresh id. The list is authoritative: labels and colors come from the replacements only. */

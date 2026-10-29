@@ -1,6 +1,7 @@
 import { convertLexicalToMarkdown } from '../lexicalToMarkdown.js';
 import { COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, type ColumnFormat, type DsViewConfig } from '@openfleet/shared';
 import { ScapeImportError } from './scapeImportError.js';
+import { hexOfOptionColor, settingsOfScapeColumn, type ColumnSettings, type DroppedSetting } from './scapeColumnSettings.js';
 import { cellKeyOf, type ScapeColumn, type ScapeNote, type ScapeNoteVersion, type ScapeRow, type ScapeRowChange, type ScapeView } from './scapeSource.js';
 import { scapeNotesDateToIso, unixSecondsToIso } from './scapeTime.js';
 
@@ -10,7 +11,7 @@ const EMPTY_LEXICAL_DOCUMENT = '{}';
 const PLAN_NOTE_TITLE = /^Plan CCM-/;
 const FORGE_REPORT_NOTE_TITLE = /^Forge report/;
 
-type SelectOption = { id: string; label: string };
+type SelectOption = { id: string; label: string; color?: string };
 type OpenFleetColumnType = 'text' | 'number' | 'date' | 'select';
 const NATIVE_FORMAT_BY_COLUMN_TYPE: Record<OpenFleetColumnType, string> = {
   text: 'singleLine', number: 'number', date: 'date', select: 'singleSelect',
@@ -25,7 +26,12 @@ export interface MappedColumn {
   options: SelectOption[] | null;
   sortOrder: number;
   droppedFormat: string | null;
+  settings: ColumnSettings;
+  droppedSettings: DroppedSetting[];
+  droppedOptionColors: DroppedOptionColor[];
 }
+
+export interface DroppedOptionColor { optionId: string; color: string }
 
 export type ColumnsByCellKey = Map<string, MappedColumn>;
 
@@ -109,14 +115,22 @@ export function mapVersions(versions: ScapeNoteVersion[]) {
   });
 }
 
-function parseSelectOptions(rawOptions: string | null): SelectOption[] | null {
-  if (rawOptions === null) return null;
-  const parsed = parseJson<{ id: string; label: string }[]>(rawOptions, 'a column options list');
-  return parsed.length === 0 ? null : parsed.map(({ id, label }) => ({ id, label }));
+function parseSelectOptions(rawOptions: string | null): { options: SelectOption[] | null; droppedColors: DroppedOptionColor[] } {
+  if (rawOptions === null) return { options: null, droppedColors: [] };
+  const parsed = parseJson<{ id: string; label: string; color?: unknown }[]>(rawOptions, 'a column options list');
+  const droppedColors: DroppedOptionColor[] = [];
+  const options = parsed.map(({ id, label, color }) => {
+    const hasColor = color !== null && color !== undefined && color !== '';
+    if (!hasColor) return { id, label };
+    const hex = typeof color === 'string' ? hexOfOptionColor(color) : undefined;
+    if (hex === undefined) droppedColors.push({ optionId: id, color: String(color) });
+    return hex === undefined ? { id, label } : { id, label, color: hex };
+  });
+  return { options: options.length === 0 ? null : options, droppedColors };
 }
 
 export function mapColumn(column: ScapeColumn): MappedColumn {
-  const options = parseSelectOptions(column.options);
+  const { options, droppedColors } = parseSelectOptions(column.options);
   const isTextWithOptions = column.columnType === 'text' && options !== null;
   const isKnownType = ['text', 'number', 'date'].includes(column.columnType);
   if (!isKnownType) throw unreadable(`unsupported Scape column type "${column.columnType}" on column ${column.id}`);
@@ -126,7 +140,11 @@ export function mapColumn(column: ScapeColumn): MappedColumn {
   const format = isCompatibleFormat ? parsedFormat.data : null;
   const hasNativeFormat = column.format === NATIVE_FORMAT_BY_COLUMN_TYPE[columnType];
   const droppedFormat = hasNativeFormat || format !== null ? null : column.format || null;
-  return { id: column.id, storeId: column.storeId, displayName: column.displayName, columnType, format, options: isTextWithOptions ? options : null, sortOrder: column.sortOrder, droppedFormat };
+  const { settings, dropped: droppedSettings } = settingsOfScapeColumn({ ...column, columnType });
+  return {
+    id: column.id, storeId: column.storeId, displayName: column.displayName, columnType, format, options: isTextWithOptions ? options : null, sortOrder: column.sortOrder, droppedFormat,
+    settings, droppedSettings, droppedOptionColors: isTextWithOptions ? droppedColors : [],
+  };
 }
 
 export const columnsByCellKey = (columns: MappedColumn[]): ColumnsByCellKey => new Map(columns.map((column) => [cellKeyOf(column.id), column]));

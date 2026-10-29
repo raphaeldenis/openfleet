@@ -138,6 +138,44 @@ describe('update_data_store_column metadata', () => {
     expect(allowed.isError).toBe(false);
   });
 
+  it('refuses a display column that closes a cycle of two or more columns, leaving the chain unchanged', async () => {
+    const store = await createStore();
+    const first = await addColumn(store, { display_name: 'First', column_type: 'text' });
+    const second = await addColumn(store, { display_name: 'Second', column_type: 'text' });
+    const third = await addColumn(store, { display_name: 'Third', column_type: 'text' });
+    await update(store, first.id, { display_column_id: second.id });
+    await update(store, second.id, { display_column_id: third.id });
+
+    const twoColumnCycle = await update(store, second.id, { display_column_id: first.id });
+    const threeColumnCycle = await update(store, third.id, { display_column_id: first.id });
+
+    expect(twoColumnCycle.isError).toBe(true);
+    expect(threeColumnCycle.isError).toBe(true);
+    expect(threeColumnCycle.text).toContain('cycle');
+    expect(await describedColumn(store, third.id)).not.toHaveProperty('displayColumnId');
+    expect(await describedColumn(store, second.id)).toMatchObject({ displayColumnId: third.id });
+  });
+
+  it('blocks deleting a column that several columns use as their display column until every reference is cleared', async () => {
+    const store = await createStore();
+    const label = await addColumn(store, { display_name: 'Label', column_type: 'text' });
+    const price = await addColumn(store, { display_name: 'Price', column_type: 'number' });
+    const stock = await addColumn(store, { display_name: 'Stock', column_type: 'number' });
+    await update(store, price.id, { display_column_id: label.id });
+    await update(store, stock.id, { display_column_id: label.id });
+
+    const blockedByBoth = await kit.call('delete_data_store_column', { store, column_id: label.id });
+    await update(store, price.id, { clear_display_column_id: true });
+    const blockedByStock = await kit.call('delete_data_store_column', { store, column_id: label.id });
+    await update(store, stock.id, { clear_display_column_id: true });
+    const allowed = await kit.call('delete_data_store_column', { store, column_id: label.id });
+
+    expect(blockedByBoth.isError).toBe(true);
+    expect(blockedByStock.isError).toBe(true);
+    expect(blockedByStock.text).toContain('Stock');
+    expect(allowed.isError).toBe(false);
+  });
+
   it('keeps a column type unchanged when a retype is attempted', async () => {
     const store = await createStore();
     const label = await addColumn(store, { display_name: 'Label', column_type: 'text' });
