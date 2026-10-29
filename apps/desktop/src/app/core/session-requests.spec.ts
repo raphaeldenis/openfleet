@@ -64,6 +64,24 @@ describe('SessionRequestsService failures', () => {
     expect(requests.errorOf(SESSION_ID, 'resume')).toBeNull();
   });
 
+  it('does not keep a resume failure recorded after the session was already reported alive', async () => {
+    const { requests, fail, report } = setup(sessionIn('closed'));
+
+    report(sessionIn('starting'));
+    await fail('resume');
+
+    expect(requests.errorOf(SESSION_ID, 'resume')).toBeNull();
+  });
+
+  it.each(['close', 'interrupt'] as const)('does not keep a %s failure recorded after the session was already reported closed', async (kind) => {
+    const { requests, fail, report } = setup(sessionIn('idle'));
+
+    report(sessionIn('closed'));
+    await fail(kind);
+
+    expect(requests.errorOf(SESSION_ID, kind)).toBeNull();
+  });
+
   it('drops a model switch failure once the daemon reports another model', async () => {
     const { requests, fail, report } = setup(sessionIn('idle', { model: 'claude-sonnet-5-5' }));
 
