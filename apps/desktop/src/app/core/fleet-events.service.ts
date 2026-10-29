@@ -215,7 +215,12 @@ export class FleetEventsService {
     });
     socket.addEventListener('message', (m) => {
       const event = parseServerEvent(String(m.data));
-      if (event && carriesItsRequiredPayload(event)) this.reduce(event);
+      if (!event) return;
+      if (!carriesItsRequiredPayload(event)) {
+        console.warn(`Dropped a ${event.type} frame that lacks its payload`);
+        return;
+      }
+      this.reduce(event);
     });
     socket.addEventListener('close', () => this.scheduleReconnect());
   }

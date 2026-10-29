@@ -61,13 +61,14 @@ const aSession = { id: 's1', name: 'Gimli', emoji: '⚔️', directory: '/tmp', 
 describe('FleetEventsService frames without their payload', () => {
   let service: FleetEventsService;
   let consoleError: ReturnType<typeof vi.spyOn>;
+  let consoleWarn: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ticket: 't' }) }));
     consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     service = new FleetEventsService();
     await service.connect();
   });
@@ -149,5 +150,19 @@ describe('FleetEventsService frames without their payload', () => {
     socket().dispatchMessage({ type: 'governance.queue_changed', managerId: 'm1', queuedCount: 3 });
 
     expect(service.queuedTotal()).toBe(3);
+  });
+
+  it.each(TYPES_THAT_READ_A_PAYLOAD)('warns exactly once, naming the type, when it drops a %s frame, and reports no error', (type) => {
+    socket().dispatchMessage({ type });
+
+    expect(consoleWarn).toHaveBeenCalledTimes(1);
+    expect(String(consoleWarn.mock.calls[0]![0])).toContain(type);
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('does not warn on a valid frame', () => {
+    socket().dispatchMessage({ type: 'session.updated', session: aSession });
+
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 });
