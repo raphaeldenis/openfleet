@@ -173,7 +173,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.diagnostics) registerDiagnosticsRoutes(router, deps.diagnostics);
   if (deps.managerBase) registerManagerBaseRoutes(router, deps.managerBase);
   if (deps.docsRoot) registerDocsRootRoutes(router, { docsRoot: deps.docsRoot });
-  if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService });
+  if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService, storeRepo: deps.storeRepo });
   if (deps.worktrees) registerWorktreeRoutes(router, { worktrees: deps.worktrees });
   if (deps.governanceQueue) registerGovernanceRoutes(router, { governanceQueue: deps.governanceQueue });
   if (deps.commandPolicyAdmin) registerCommandPolicyRoutes(router, deps.commandPolicyAdmin);

@@ -49,3 +49,24 @@ export function rowGuardViolationOf(input: { columns: DsColumn[]; current: DsRow
   const isCancelled = step !== undefined && cancelledOptionId !== undefined && resultingCell(step) === cancelledOptionId;
   return isDone && !hasPrUrl && !isCancelled ? new DoneWithoutPrUrlError() : undefined;
 }
+
+const isPlainColumn = (column: DsColumn | undefined): column is DsColumn => column !== undefined && column.columnType !== 'select';
+
+const STATUS_NOT_SELECT_WARNING_PREFIX = 'The row guard does not check "done needs a pr_url"';
+const STEP_NOT_SELECT_WARNING = 'The row guard still refuses done without a pr_url even on a cancelled row while step is not a select column: make step a select column with the label cancelled.';
+
+/**
+ * The "done needs a pr_url" rule applies to the stores that have both a `status` and a `pr_url` column and reads the option labels `done` and `cancelled`.
+ * A `status` that is not a select disables the rule; a `step` that is not a select keeps the rule but makes it stricter, since `cancelled` can no longer be told apart.
+ * Returns a sentence per case found, or undefined when the rule holds as written everywhere.
+ */
+export function rowGuardWarningOf(columnsOfEachStore: DsColumn[][]): string | undefined {
+  const storesUnderTheRule = columnsOfEachStore.filter((columns) => columnNamed(columns, 'status') !== undefined && columnNamed(columns, 'pr_url') !== undefined);
+  const hasPlainStatus = storesUnderTheRule.some((columns) => isPlainColumn(columnNamed(columns, 'status')));
+  const hasPlainStepBesideSelectStatus = storesUnderTheRule.some((columns) => !isPlainColumn(columnNamed(columns, 'status')) && isPlainColumn(columnNamed(columns, 'step')));
+  const warnings = [
+    hasPlainStatus && `${STATUS_NOT_SELECT_WARNING_PREFIX} on a status column that is not a select: make status a select column with the label done, and step one with the label cancelled.`,
+    hasPlainStepBesideSelectStatus && STEP_NOT_SELECT_WARNING,
+  ].filter((warning): warning is string => warning !== false);
+  return warnings.length === 0 ? undefined : warnings.join(' ');
+}

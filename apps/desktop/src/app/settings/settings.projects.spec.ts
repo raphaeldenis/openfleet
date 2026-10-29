@@ -53,6 +53,25 @@ describe('Settings → General → Projects', () => {
       expect(within(rowOf('Armada')).getByText('No docs folder')).toBeInTheDocument();
     });
 
+    it('warns on a project whose docs folder is shared, naming the other projects', async () => {
+      await renderSettings(fakeApi([{ ...FLEET, docsFolderSharedWith: ['Armada', 'Fleet bis'] }, ARMADA]));
+
+      const warning = await screen.findByTestId('project-shared-folder-warning');
+
+      expect(warning).toHaveTextContent('This docs folder is also used by Armada, Fleet bis');
+      expect(screen.getAllByTestId('project-shared-folder-warning')).toHaveLength(1);
+    });
+
+    it('shows the row guard warning of a project under its row', async () => {
+      const warning = 'The row guard does not check "done needs a pr_url" on a status column that is not a select.';
+      await renderSettings(fakeApi([{ ...FLEET, rowGuardWarning: warning }, ARMADA]));
+
+      const shown = await screen.findByTestId('project-row-guard-warning');
+
+      expect(shown).toHaveTextContent(warning);
+      expect(screen.getAllByTestId('project-row-guard-warning')).toHaveLength(1);
+    });
+
     it('shows a very long docs folder path in full, so that the user can read it', async () => {
       await renderSettings(fakeApi([{ ...FLEET, docsFolderPath: LONG_PATH }]));
 

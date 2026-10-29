@@ -37,6 +37,20 @@ describe('FleetApiService project routes', () => {
       expect(sentRequest().url).toMatch(/\/api\/projects$/);
     });
 
+    it('keeps the names of the projects that share the docs folder', async () => {
+      const shared: Project = { ...FLEET, docsFolderSharedWith: ['Armada'] };
+      answerWith(shared, 201);
+
+      await expect(api.createProject({ name: 'Fleet', docsFolderPath: '/work/fleet-docs' })).resolves.toEqual(shared);
+    });
+
+    it('keeps the row guard warning of the project', async () => {
+      const warned: Project = { ...FLEET, rowGuardWarning: 'The row guard does not check a status column that is not a select.' };
+      answerWith(warned, 201);
+
+      await expect(api.createProject({ name: 'Fleet', docsFolderPath: '/work/fleet-docs' })).resolves.toEqual(warned);
+    });
+
     it('accepts a project without a docs folder', async () => {
       const withoutFolder: Project = { ...FLEET, docsFolderPath: null };
       answerWith(withoutFolder, 201);

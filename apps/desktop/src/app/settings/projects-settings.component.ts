@@ -30,6 +30,12 @@ const NOTICE_BY_EDITOR_KIND = { create: 'Project created', edit: 'Project update
           <of-settings-row [name]="project.name" [detail]="project.docsFolderPath ?? noDocsFolder">
             <button #editTrigger type="button" class="value" [attr.data-project-id]="project.id" [attr.aria-label]="'Edit docs folder of ' + project.name" [attr.aria-expanded]="isEditing(project)" (click)="openEditor({ kind: 'edit', project })">Edit docs folder</button>
           </of-settings-row>
+          @if (project.rowGuardWarning; as rowGuardWarning) {
+            <p class="warning" role="alert" data-testid="project-row-guard-warning">{{ rowGuardWarning }}</p>
+          }
+          @if (project.docsFolderSharedWith; as sharingProjectNames) {
+            <p class="warning" role="alert" data-testid="project-shared-folder-warning">This docs folder is also used by {{ sharingProjectNames.join(', ') }}. Give each project its own folder.</p>
+          }
         } @empty {
           @if (hasLoaded()) {
             <of-settings-row name="No projects yet" detail="Create one to keep handoffs and notes together" />
@@ -48,6 +54,7 @@ const NOTICE_BY_EDITOR_KIND = { create: 'Project created', edit: 'Project update
     ${SETTINGS_VALUE_STYLES}
     .projects { display: flex; flex-direction: column; gap: .75rem; }
     .hint:empty { display: none; }
+    .warning { margin: 0; font-size: .8125rem; color: var(--warn, #b45309); }
     .editor { padding: 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
   `,
 })

@@ -52,7 +52,7 @@ describe('the wire contract of the registry', () => {
     outside_lineage: 'conflict/never', not_a_manager: 'conflict/never', manager_paused: 'conflict/never', mission_missing: 'conflict/never', mission_too_large: 'conflict/never', directory_in_use: 'conflict/never',
     duplicate_child: 'conflict/never', no_parent: 'conflict/never', spawn_raced: 'conflict/later',
     store_has_rows: 'conflict/never', duplicate_id: 'conflict/never', no_docs_folder: 'conflict/never', not_file_backed: 'conflict/never',
-    docs_folder_not_writable: 'conflict/later', handoff_not_found: 'not_found/never',
+    docs_folder_not_writable: 'conflict/later', docs_folder_already_used: 'conflict/never', handoff_not_found: 'not_found/never',
     docs_root_invalid: 'invalid_request/never', docs_root_forbidden: 'invalid_request/never', docs_root_not_writable: 'conflict/later',
     base_not_read: 'conflict/never', note_not_read: 'conflict/never', findings_required: 'conflict/never', verdict_stale: 'conflict/never',
     payload_too_large: 'too_large/never', note_too_large: 'too_large/never', row_cap: 'too_large/never', state_too_large: 'too_large/never',

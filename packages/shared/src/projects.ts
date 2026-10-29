@@ -15,8 +15,12 @@ export interface Project {
   postCreateHookScript?: string;
   /** How long that script may run; absent means the default. */
   postCreateHookTimeoutSeconds?: number;
+  /** Names of the other projects that use the same docs folder; absent when the folder is the project's own. */
+  docsFolderSharedWith?: string[];
   /** Present and true when the project's rows keep their journal append-only and need a pr_url to be done; absent means off. */
   rowGuardEnabled?: true;
+  /** Present when the guard is on and a `status` or `step` column of the project is not a select column, so the done rule never fires on it. */
+  rowGuardWarning?: string;
 }
 
 const ProjectNameSchema = z.string().trim().min(1).max(MAX_PROJECT_NAME_CHARS).refine(hasNoteTitleText, { message: 'name must keep some text once template braces are removed' });

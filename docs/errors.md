@@ -25,7 +25,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `invalid_request` | 400 | 15 |
 | `unauthorized` | 401 | 1 |
 | `not_found` | 404 | 12 |
-| `conflict` | 409 | 41 |
+| `conflict` | 409 | 42 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 11 |
 | `internal` | 500 | 4 |
@@ -118,6 +118,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `no_docs_folder` | 409 | `never` |
 | `not_file_backed` | 409 | `never` |
 | `docs_folder_not_writable` | 409 | `later` |
+| `docs_folder_already_used` | 409 | `never` |
 | `docs_root_not_writable` | 409 | `later` |
 | `too_many_watched_prs` | 409 | `later` |
 

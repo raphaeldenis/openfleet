@@ -4,7 +4,7 @@ import { copyFor } from '../core/error-copy';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 
-const DOCS_FOLDER_ERROR_CODES: ReadonlySet<string> = new Set(['invalid_body', 'docs_folder_not_writable', 'path_escapes_docs_folder']);
+const DOCS_FOLDER_ERROR_CODES: ReadonlySet<string> = new Set(['invalid_body', 'docs_folder_not_writable', 'docs_folder_already_used', 'path_escapes_docs_folder']);
 const NAME_REQUIRED = 'Name is required';
 const NAME_TOO_LONG = `The name must be ${MAX_PROJECT_NAME_CHARS} characters or fewer`;
 const DOCS_FOLDER_REQUIRED = 'Docs folder is required';

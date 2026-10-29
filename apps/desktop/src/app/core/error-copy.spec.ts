@@ -234,6 +234,10 @@ describe('copyFor', () => {
       expect(copyOfProjectFailure('docs_folder_not_writable', 'later')).toBe('That folder is not writable — fix its permissions, then try again.');
     });
 
+    it('tells the user another project already uses the folder, without a retry', () => {
+      expect(copyOfProjectFailure('docs_folder_already_used', 'never')).toBe('Another project already uses that folder — pick another one.');
+    });
+
     it('tells the user a path inside the folder leaves it, without a retry', () => {
       expect(copyOfProjectFailure('path_escapes_docs_folder', 'never')).toBe('That folder contains a link that leads outside it — pick a folder without one.');
     });

@@ -100,6 +100,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   no_docs_folder: { what: 'No docs folder is set', fix: 'set one first' },
   not_file_backed: { what: 'This note does not live in a file' },
   docs_folder_not_writable: { what: 'The docs folder is not writable', fix: 'fix the folder permissions' },
+  docs_folder_already_used: { what: 'Another project already uses that docs folder', fix: 'pick another folder' },
   docs_root_not_writable: { what: 'That docs root is not writable', fix: 'fix the folder permissions' },
 
   payload_too_large: { what: 'The request is too large', fix: 'shorten it' },
@@ -207,6 +208,7 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
   save_project: {
     invalid_body: { what: 'That folder cannot be used: use an existing absolute folder path' },
     docs_folder_not_writable: { what: 'That folder is not writable', fix: 'fix its permissions' },
+    docs_folder_already_used: { what: 'Another project already uses that folder', fix: 'pick another one' },
     path_escapes_docs_folder: { what: 'That folder contains a link that leads outside it', fix: 'pick a folder without one' },
   },
   save_project_hook: {

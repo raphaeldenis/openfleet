@@ -97,6 +97,8 @@ export const ERROR_CODES = {
   not_file_backed: { kind: 'conflict', retry: 'never' },
   // The permissions can be fixed while the app stays open: the same save succeeds afterwards.
   docs_folder_not_writable: { kind: 'conflict', retry: 'later' },
+  // Another project already holds that folder (same directory once links and letter case are resolved): only another folder passes.
+  docs_folder_already_used: { kind: 'conflict', retry: 'never' },
   docs_root_not_writable: { kind: 'conflict', retry: 'later' },
 
   payload_too_large: { kind: 'too_large' },

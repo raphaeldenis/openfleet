@@ -3,6 +3,7 @@ import { unrunnableReasonOf } from '../git/postCreateHook.js';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
 import { withoutRedundantSlashes, type DocsRootSettings } from '../notes/docsRootSettings.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
+import { nodeDocsFolderIdentity, type DocsFolderIdentity } from './docsFolderIdentity.js';
 import { ProjectNotFoundError } from './projectErrors.js';
 import type { ProjectPatch, ProjectRecord, ProjectRepository } from './projectRepository.js';
 
@@ -22,6 +23,8 @@ export interface ProjectServiceDeps {
   noteRepo: Pick<NoteRepository, 'list' | 'delete'>;
   /** Creates the folder of a new project under the docs root; without it a new project needs an existing folder. */
   docsRoot?: Pick<DocsRootSettings, 'ensureProjectFolder'>;
+  /** Tells whether two paths reach the same directory; defaults to comparing the device and inode. */
+  folderIdentity?: DocsFolderIdentity;
   clock: () => string;
   newId: () => string;
   /** Called after a project gets a docs folder (on create or on change), so the daemon can reconcile and watch it. */
@@ -42,12 +45,19 @@ function isProjectNote(note: { title: string; bodyMd: string }, title: string): 
  * whose docs subfolders stay inside it; the notes already in it are imported. A refused request changes nothing.
  */
 export class ProjectService {
-  constructor(private readonly deps: ProjectServiceDeps) {}
+  private readonly folderIdentity: DocsFolderIdentity;
+
+  constructor(private readonly deps: ProjectServiceDeps) {
+    this.folderIdentity = deps.folderIdentity ?? nodeDocsFolderIdentity;
+  }
 
   create(request: CreateProjectRequest): ProjectRecord {
     const { profile } = request;
     const docsFolderPath = request.docsFolderPath === undefined ? undefined : withoutRedundantSlashes(request.docsFolderPath);
-    if (docsFolderPath !== undefined) this.prepareNewProjectFolder(docsFolderPath);
+    if (docsFolderPath !== undefined) {
+      this.refuseFolderOfAnotherProject({ docsFolderPath });
+      this.prepareNewProjectFolder(docsFolderPath);
+    }
     const record: ProjectRecord = { id: this.deps.newId(), name: request.name, docsFolderPath: docsFolderPath ?? null, createdAt: this.deps.clock() };
     this.deps.projects.insert(record);
     if (docsFolderPath !== undefined) this.importNotesOrForget(record, docsFolderPath);
@@ -65,7 +75,7 @@ export class ProjectService {
     const current = this.requireProject(projectId);
     const { docsFolderPath } = patch;
     const hookSetting = this.acceptedHookSetting(current, patch);
-    if (docsFolderPath !== undefined) this.acceptFolder(projectId, docsFolderPath);
+    if (docsFolderPath !== undefined) this.acceptFolderChange(current, docsFolderPath);
     this.deps.projects.update(projectId, { ...patch, ...hookSetting });
     if (docsFolderPath !== undefined) this.deps.onDocsFolderSet?.(projectId);
     return this.requireProject(projectId);
@@ -91,9 +101,27 @@ export class ProjectService {
     if (reason) throw new OpenFleetError('invalid_body', UNRUNNABLE_SCRIPT_MESSAGE[reason]);
   }
 
-  private acceptFolder(projectId: string, docsFolderPath: string): void {
+  private isSameFolder(docsFolderPath: string, otherDocsFolderPath: string | null): boolean {
+    if (otherDocsFolderPath === null) return false;
+    const identity = this.folderIdentity(docsFolderPath);
+    return identity !== null && identity === this.folderIdentity(otherDocsFolderPath);
+  }
+
+  /** Two projects never get the same folder: the refusal names the project that holds it. Folders already shared are left alone. */
+  private refuseFolderOfAnotherProject({ docsFolderPath, exceptProjectId }: { docsFolderPath: string; exceptProjectId?: string }): void {
+    const holder = this.deps.projects.list().find((project) => project.id !== exceptProjectId && project.docsFolderPath !== null && this.isSameFolder(docsFolderPath, project.docsFolderPath));
+    if (holder === undefined) return;
+    throw new OpenFleetError('docs_folder_already_used', `the docs folder is already the folder of the project "${holder.name}".`, {
+      hint: 'pick another folder, or move the notes of that project first.',
+    });
+  }
+
+  /** A project keeps the folder it has, even a shared one; only a different folder must be free. */
+  private acceptFolderChange(current: ProjectRecord, docsFolderPath: string): void {
+    const isFolderKept = this.isSameFolder(docsFolderPath, current.docsFolderPath);
+    if (!isFolderKept) this.refuseFolderOfAnotherProject({ docsFolderPath, exceptProjectId: current.id });
     this.deps.docs.prepareFolder(docsFolderPath);
-    this.deps.docs.attachFolder(projectId, docsFolderPath);
+    this.deps.docs.attachFolder(current.id, docsFolderPath);
   }
 
   /** The row must exist for the notes to point at it, so a refused import removes the row it just made. */
