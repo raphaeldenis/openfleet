@@ -67,7 +67,20 @@ export class FakeHandle implements HarnessHandle {
   private noticeShownAt: number | undefined;
   private lastEscapeAt: number | undefined;
 
+  // Test-only: where this handle's CLI posts its hooks; set by the FakeHarness that launched it.
+  hookUrl: string | undefined;
+
   constructor(private readonly onPromptTyped: () => void = () => undefined) {}
+
+  // Test-only: the CLI reaches a permission gate; like Claude Code's command hook it POSTs a PermissionRequest and
+  // the returned response settles when the daemon answers (a decision, or {} when the CLI must ask in its terminal).
+  requestPermission({ sessionId, toolName, toolInput }: { sessionId: string; toolName: string; toolInput: unknown }): Promise<Response> {
+    return fetch(this.hookUrl!, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, hook_event_name: 'PermissionRequest', tool_name: toolName, tool_input: toolInput }),
+    });
+  }
 
   // Test-only: what the composer holds right now.
   get composerText(): string { return this.composer; }
@@ -208,6 +221,7 @@ export class FakeHarness implements Harness {
     const conversationId = launch.cliSessionId ?? launch.sessionId;
     if (!launch.resuming) this.freshConversationsWithoutPrompt.add(conversationId);
     const handle = new FakeHandle(() => this.markPrompted(conversationId));
+    handle.hookUrl = launch.hookUrl;
     this.handles.push(handle);
     this.launches.push(launch);
     // A launch that names its conversation is a relaunch of an existing session (boot resume, reopen, relaunch):

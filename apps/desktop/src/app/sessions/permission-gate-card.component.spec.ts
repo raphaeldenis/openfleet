@@ -29,6 +29,20 @@ describe('PermissionGateCardComponent', () => {
     expect(screen.getByTestId('gate-tool-input')).toHaveTextContent('"command": "git push -u origin t6"');
   });
 
+  it('shows the whole pending Bash command, long, quoted and spanning several lines', async () => {
+    // Arrange
+    const longCommand = `git commit -m "feat: it's \\"quoted\\"" \\\n  && echo '${'x'.repeat(600)}'\nprintf "%s\\n" done`;
+    const pendingBash = approval({ toolInput: { command: longCommand } });
+    // Act
+    await render(PermissionGateCardComponent, {
+      bindings: [inputBinding('approval', () => pendingBash)],
+      providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }],
+    });
+    // Assert
+    const shownInput = screen.getByTestId('gate-tool-input').textContent;
+    expect(shownInput).toContain(JSON.stringify(longCommand));
+  });
+
   it('writes the warning in the foreground colour behind an amber glyph', async () => {
     await render(PermissionGateCardComponent, {
       bindings: [inputBinding('approval', () => approval())],

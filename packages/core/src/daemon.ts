@@ -115,6 +115,8 @@ export interface DaemonOptions {
   managerBase?: ManagerBase;
   /** The injection point of the command policy: the settings the daemon enforces and the evaluator that applies them. */
   commandPolicy?: { settings?: CommandPolicySettings; evaluate?: PolicyEvaluate };
+  /** Overrides the delay after which an undecided approval expires, so a test does not wait the nine minutes of the hook timeout. */
+  approvalTimeoutMs?: number;
   power?: {
     api?: PowerApi;
     clock?: () => number;
@@ -146,7 +148,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     return document.mode !== 'off' || unattended.askBecomesDeny;
   };
   const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}), isCommandPolicyActive });
-  const approvals = new ApprovalService({ db, bus });
+  const approvals = new ApprovalService({ db, bus, timeoutMs: options.approvalTimeoutMs });
   // A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
   // process that would have decided it is gone with the old daemon.
   approvals.expireAllPending('daemon restarted');

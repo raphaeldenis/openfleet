@@ -45,6 +45,17 @@ describe('InboxComponent', () => {
     expect(api.decide).toHaveBeenCalledWith('a1', 'allow');
   });
 
+  it('shows the whole pending Bash command of a gate, long, quoted and spanning several lines', async () => {
+    // Arrange
+    const longCommand = `git commit -m "feat: it's \\"quoted\\"" \\\n  && echo '${'x'.repeat(600)}'\nprintf "%s\\n" done`;
+    const events = fakeEvents({ toolInput: { command: longCommand } });
+    // Act
+    await render(InboxComponent, { providers: [{ provide: FleetApiService, useValue: { decide: vi.fn() } }, { provide: FleetEventsService, useValue: events }] });
+    // Assert
+    const shownArguments = screen.getByTestId('inbox-gate-args').textContent;
+    expect(shownArguments).toContain(JSON.stringify(longCommand));
+  });
+
   it('denies a gate via the Deny button', async () => {
     // Arrange
     const api = { decide: vi.fn().mockResolvedValue({}) };
