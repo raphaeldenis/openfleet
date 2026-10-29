@@ -80,6 +80,8 @@ export interface DsRow {
   id: string;
   storeId: string;
   data: Record<string, unknown>;
+  /** Starts at 1 and rises by one with each write that changes a cell; a writer sends it back as `expectedRev` to refuse a stale write. */
+  rev: number;
   createdAt: string;
   updatedAt: string;
 }
