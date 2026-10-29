@@ -1114,7 +1114,19 @@ fn cookie_header_at(text: &str, index: usize) -> Replacement {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::event_log::synthetic_tokens::{self, aws_key_id, aws_session_key_id, TokenShape};
   use crate::linear_growth::{cpu_time_to_run_on_repeated, linear_growth_problems, thread_cpu_time_of, LinearGrowthBudget};
+
+  const SEED: u64 = 1;
+  const GITLAB_BODY_LEN: usize = 20;
+  const JWT_HEADER_BODY_LEN: usize = 17;
+  const JWT_PAYLOAD_BODY_LEN: usize = 21;
+  const JWT_SIGNATURE_BODY_LEN: usize = 12;
+  const RS256_HEADER_BODY_LEN: usize = 33;
+
+  fn jwt_segment(body_len: usize, seed: u64) -> String {
+    synthetic_tokens::token(TokenShape::Jwt, body_len, seed)
+  }
 
   fn masked(text: &str) -> String {
     redact(text, &[])
@@ -1140,7 +1152,7 @@ mod tests {
     let mut credentials = vec![after("sk-", alphanumeric(30))];
     credentials.extend(["ghp_", "gho_", "ghu_", "ghs_", "ghr_"].map(|prefix| after(prefix, alphanumeric(36))));
     credentials.push(after("github_pat_", "aB3_".repeat(15)));
-    credentials.extend(["AKIAIOSFODNN7EXAMPLE", "ASIAIOSFODNN7EXAMPLE", "eyJabcdef.eyJabcdef.abcdef"].map(str::to_string));
+    credentials.extend([aws_key_id(), aws_session_key_id(), "eyJabcdef.eyJabcdef.abcdef".to_string()]);
     credentials.extend(["xoxb-", "xoxp-", "xoxc-", "xoxd-", "xoxe-", "xoxa-", "xoxr-", "xoxs-", "xapp-", "xoxe.xoxp-"].map(|prefix| after(prefix, alphanumeric(30))));
     credentials.push(after("AIza", "Ab3_-".repeat(8)));
     credentials.push(after("npm_", alphanumeric(36)));
@@ -1183,17 +1195,24 @@ mod tests {
 
   #[test]
   fn leaves_the_words_that_only_look_like_a_credential_prefix_alone() {
-    for plain in [
+    let words_only = [
       "ask about sk-1, the ghp_ prefix, AKIA alone and eyJ fragments",
-      "AKIAIOSFODNN7EXAMPLEXTRA",
-      "AKIAIOSFODNN7EXAMPLEx",
-      "x-eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP",
       "the task-list and risk-register, a chf_ value, whsec alone, hf_transfer_enabled and a sk_testing run",
       "hf_abcdef is not a token",
       "whsec_short is not a secret",
-      "header eyJhbGciOiJIUzI1NiJ9 only",
-    ] {
-      assert_eq!(masked(plain), plain);
+    ]
+    .map(str::to_string);
+    let header = jwt_segment(JWT_HEADER_BODY_LEN, SEED);
+    let payload = jwt_segment(JWT_PAYLOAD_BODY_LEN, SEED + 1);
+    let signature = synthetic_tokens::body(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", JWT_SIGNATURE_BODY_LEN, SEED + 2);
+    let token_lookalikes = [
+      format!("{}XTRA", aws_key_id()),
+      format!("{}x", aws_key_id()),
+      format!("x-{header}.{payload}.{signature}"),
+      format!("header {header} only"),
+    ];
+    for plain in words_only.into_iter().chain(token_lookalikes) {
+      assert_eq!(masked(&plain), plain);
     }
   }
 
@@ -1249,8 +1268,8 @@ mod tests {
 
   #[test]
   fn masks_a_jwt_whose_signature_is_missing_empty_or_short() {
-    let header = "eyJhbGciOiJIUzI1NiJ9";
-    let payload = "eyJzdWIiOiIxMjM0NTY3ODkw";
+    let header = jwt_segment(JWT_HEADER_BODY_LEN, SEED);
+    let payload = jwt_segment(JWT_PAYLOAD_BODY_LEN, SEED + 1);
 
     for jwt in [format!("{header}.{payload}"), format!("{header}.{payload}."), format!("{header}.{payload}.ab"), format!("{header}.{payload}.{}", "s".repeat(43))] {
       assert_eq!(masked(&format!("use {jwt} now")), "use [redacted] now", "{jwt}");
@@ -1259,7 +1278,7 @@ mod tests {
 
   #[test]
   fn masks_an_incomplete_jwt_tail_whatever_the_length_of_its_payload() {
-    let header = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9";
+    let header = jwt_segment(RS256_HEADER_BODY_LEN, SEED);
 
     for payload_length in [100, 508, 512, 600, 5000, 5100, 100_000] {
       let head = format!("Fix CI {header}.eyJ{}", "a".repeat(payload_length));
@@ -1854,11 +1873,11 @@ mod tests {
   fn masks_the_hardened_rules_in_linear_time() {
     const SMALL_INPUT: usize = 64 * 1024;
     const LARGE_INPUT: usize = 256 * 1024;
-    let units = [
+    let mut units: Vec<String> = [
       "token:","token: ", "\"token\":\"", "token:\"", "token:\\", "a:", "token:token:", "token:[redacted]", "password: '", "token:\\\"a", "api_key:1", "a:b ", ":",
       "Cookie: ", "Cookie: a=", "Set-Cookie: a=b;", "Cookie:a=b;c", "Cookie", "Cookie:   ", "Set-Cookie: a=b; c=d; e", "Cookie: aaaaaaaaaaaaaaaa",
-      "eyJ", "-eyJaaaaaa.eyJaaaaaa.", "eyJaaaaaa.eyJaaaaaa", "eyJaaaaaa.eyJ.", "sk-", "-sk-", "ghp_", "github_pat_", "AKIA", "AKIAAAAAAAAAAAAAAAAA", "xoxe.", "xoxe.xoxp-", "xoxd-",
-      "xapp-", "AIza", "npm_", "glpat-", "glpat-aaaaaaaaaaaaaaaaaaaa.01.", "sk_live_", "whsec_", "hf_", "-----BEGIN PRIVATE KEY-----", "-----BEGIN A A A A ", "-----BEGIN PRIVATE KEY-----\n-----END ",
+      "eyJ", "-eyJaaaaaa.eyJaaaaaa.", "eyJaaaaaa.eyJaaaaaa", "eyJaaaaaa.eyJ.", "sk-", "-sk-", "ghp_", "github_pat_", "AKIA", "xoxe.", "xoxe.xoxp-", "xoxd-",
+      "xapp-", "AIza", "npm_", "glpat-", "sk_live_", "whsec_", "hf_", "-----BEGIN PRIVATE KEY-----", "-----BEGIN A A A A ", "-----BEGIN PRIVATE KEY-----\n-----END ",
       "-----END ", "\u{85}", "Bearer\u{85}", "a=\u{85}token=", "é\"token\":\"", "日token: ",
       "Cookie: a=\"", "Set-Cookie: a=\"", "Cookie: a=\"b\"; ", "Cookie: a=\\\"", "Cookie: a='", "Cookie: a=1;\r\n ", "Cookie:\r\n \r\n ", "Cookie: \"", "Cookie: a=\"\\", "Cookie: é=\"日",
       "Authorization: Token ", "Authorization: Digest a=\"", "Authorization: Digest a=\"b\", ", "Proxy-Authorization: Token a b ", "Authorization: aaa ", "Authorization: Digest a=\\\"", "Authorization: Token \"", "authorization: aaa}",
@@ -1867,8 +1886,10 @@ mod tests {
       "Authorization: Token a\r\n ", "Authorization:\r\n ", "Authorization: Token\r\n \r\n ", "Authorization:\n\t", "Authorization: Token a\n\tb ", "Proxy-Authorization:\r\n Token\r\n a\r\n ", "Authorization: Digest a=\"b\",\r\n ",
       "tokens:[1,\"", "tokens:[1,2,", "tokens:{\"a\":", "tokens:{\"a\":1,", "tokens:[ \"", "tokens:[\"a\" ", "tokens:[[[[", "secrets:{\"", "tokens:[\"é\"\u{a0}",
       "tokenizer:[", "maxTokens:{", "password_policy: [", "tokens:[1,", "x-api-key:[", "aB:[tokenizer:{", "Authorization: Token é\r\n ", "Authorization: Digest a = \"日",
-    ];
-    for unit in units {
+    ].map(str::to_string).to_vec();
+    units.push(aws_key_id());
+    units.push(format!("{}.01.", synthetic_tokens::token(TokenShape::Gitlab, GITLAB_BODY_LEN, SEED)));
+    for unit in &units {
       let cpu_time_to_mask = cpu_time_to_run_on_repeated(unit, |hostile| {
         masked(hostile);
       });

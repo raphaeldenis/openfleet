@@ -13,6 +13,8 @@ mod hash;
 #[cfg(test)]
 mod hostile_corpus;
 mod salt;
+#[cfg(test)]
+pub(crate) mod synthetic_tokens;
 
 pub use daemon_line::DaemonLineAssembler;
 pub use event::{DaemonLineFields, DaemonTextClass, DesktopEvent, ForeignTarget, LineBuilder, SpawnFailure};

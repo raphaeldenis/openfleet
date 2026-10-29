@@ -7,6 +7,7 @@
 
 use super::salt::SALT_LEN;
 use super::field::{SessionId, ShortId};
+use super::synthetic_tokens::{aws_key_id, aws_session_key_id, github_token};
 use super::{validate, DaemonLineAssembler, DesktopEvent, EventName, KnownPaths, PathClass, Salt, Stream, Ts};
 use crate::log_file::{DesktopLog, RotatingLog, KEPT_FILES, MAX_LOG_BYTES};
 use serde_json::{json, Value};
@@ -60,7 +61,7 @@ fn the_twenty_nine_provider_credentials() -> Vec<HostileItem> {
   let mut credentials = vec![after("sk-", alphanumeric(30))];
   credentials.extend(["ghp_", "gho_", "ghu_", "ghs_", "ghr_"].map(|prefix| after(prefix, alphanumeric(36))));
   credentials.push(after("github_pat_", "aB3_".repeat(15)));
-  credentials.extend(["AKIAIOSFODNN7EXAMPLE", "ASIAIOSFODNN7EXAMPLE", "eyJabcdef.eyJabcdef.abcdef"].map(str::to_string));
+  credentials.extend([aws_key_id(), aws_session_key_id(), "eyJabcdef.eyJabcdef.abcdef".to_string()]);
   credentials.extend(["xoxb-", "xoxp-", "xoxc-", "xoxd-", "xoxe-", "xoxa-", "xoxr-", "xoxs-", "xapp-", "xoxe.xoxp-"].map(|prefix| after(prefix, alphanumeric(30))));
   credentials.push(after("AIza", "Ab3_-".repeat(8)));
   credentials.push(after("npm_", alphanumeric(36)));
@@ -1317,14 +1318,14 @@ mod tests {
 
     #[test]
     fn counts_a_secret_split_across_two_chunks_as_two_text_records() {
-      let secret = "ghp_aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3";
+      let secret = github_token();
       let (head, tail) = secret.split_at(secret.len() / 2);
       let chunks = vec![format!("note {head}").into_bytes(), format!("{tail}\n").into_bytes()];
 
       let lines = ProjectionSink::with_salt().emitted_lines(&Delivery::DaemonPipe { stream: Stream::Err, chunks });
 
       assert_eq!(lines.len(), 1);
-      assert_eq!(leaked_form_in(&lines, secret), None);
+      assert_eq!(leaked_form_in(&lines, &secret), None);
     }
   }
 
@@ -1405,7 +1406,7 @@ mod tests {
 
     #[test]
     fn stores_a_secret_split_across_two_chunks_as_one_text_record() {
-      let secret = "ghp_aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3";
+      let secret = github_token();
       let (head, tail) = secret.split_at(secret.len() / 2);
       let chunks = vec![format!("note {head}").into_bytes(), format!("{tail}\n").into_bytes()];
 
@@ -1413,7 +1414,7 @@ mod tests {
 
       assert_eq!(lines.len(), 2);
       assert!(lines[0].contains(" daemon_text stream=err "), "{}", lines[0]);
-      assert_eq!(leaked_form_in(&lines, secret), None);
+      assert_eq!(leaked_form_in(&lines, &secret), None);
     }
   }
 

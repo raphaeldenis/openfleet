@@ -296,6 +296,7 @@ mod tests {
   use super::*;
   use crate::event_log::grammar::{fields_of, validate, MAX_LINE_BYTES};
   use crate::event_log::salt::{Salt, SALT_LEN};
+  use crate::event_log::synthetic_tokens::{self, aws_key_id, github_token, TokenShape};
   use crate::linear_growth::{assert_linear_growth, thread_cpu_time_of, LinearGrowthBudget};
   use std::collections::HashSet;
   use std::io;
@@ -610,7 +611,7 @@ mod tests {
 
     #[test]
     fn an_event_carrying_text_never_prints_it_through_debug() {
-      let event = DesktopEvent::SidecarFailed { reason: opaque("ghp_abcdefghijklmnopqrstuvwxyz0123456789") };
+      let event = DesktopEvent::SidecarFailed { reason: opaque(&github_token()) };
 
       assert!(!format!("{event:?}").contains("ghp_"));
     }
@@ -724,6 +725,8 @@ mod tests {
     use super::*;
 
     const MIN_WINDOW: usize = 12;
+    const JWT_HEADER_BODY_LEN: usize = 17;
+    const JWT_SEED: u64 = 1;
 
     fn token(prefix: &str, length: usize) -> String {
       let body: String = "Zq9XvB3nKd7LpR2sTe5YwUa8HcMj4GfN6Vb1".chars().cycle().take(length).collect();
@@ -737,7 +740,8 @@ mod tests {
     fn hostile_secrets() -> Vec<String> {
       let github = token("ghp_", 36);
       let secret_key = token("sk-", 48);
-      let bearer = format!("Authorization: Bearer {}", token("eyJhbGciOiJIUzI1NiJ9.", 120));
+      let jwt_header_then_dot = format!("{}.", synthetic_tokens::token(TokenShape::Jwt, JWT_HEADER_BODY_LEN, JWT_SEED));
+      let bearer = format!("Authorization: Bearer {}", token(&jwt_header_then_dot, 120));
       let bidi = format!("\u{202e}\u{2066}{}\u{2069}\u{200f}", token("pa55w0rd-", 30));
       let control = format!("\u{0}\u{1b}[31m{}\u{7}\r\n\t{}", token("tok-", 24), token("again-", 24));
       let multibyte = format!("日本語😀é{}😀日本", token("secret-", 30));
@@ -924,7 +928,7 @@ mod tests {
 
     #[test]
     fn a_secret_lookalike_error_code_is_reduced_to_other() {
-      let event = DesktopEvent::DaemonLine(DaemonLineFields { code: Some(KnownCode::from_name("AKIAIOSFODNN7EXAMPLE")), ..daemon_line("x") });
+      let event = DesktopEvent::DaemonLine(DaemonLineFields { code: Some(KnownCode::from_name(&aws_key_id())), ..daemon_line("x") });
 
       assert!(event.render(now()).as_str().contains(" code=other "));
     }

@@ -180,10 +180,14 @@ mod tests {
   use super::*;
   use crate::event_log::grammar::validate;
   use crate::event_log::salt::SALT_LEN;
+  use crate::event_log::synthetic_tokens::{aws_key_id, github_token};
   use crate::linear_growth::{assert_linear_growth, cpu_time_to_run_on_repeated, LinearGrowthBudget};
 
   const NOW: &str = "2026-10-04T12:00:00Z";
-  const SECRET: &str = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+
+  fn secret() -> String {
+    format!("{}AB", github_token())
+  }
 
   fn salt() -> Salt {
     Salt::from_bytes([7; SALT_LEN])
@@ -236,7 +240,8 @@ mod tests {
 
     #[test]
     fn hashes_a_message_that_is_not_in_the_catalogue() {
-      let message = format!("session abc failed with {SECRET}");
+      let secret = secret();
+      let message = format!("session abc failed with {secret}");
 
       let line = line_of(&serde_json::json!({ "level": "error", "msg": message }).to_string());
 
@@ -246,7 +251,8 @@ mod tests {
 
     #[test]
     fn counts_every_other_key_and_copies_none_of_them() {
-      let record = serde_json::json!({ "level": "info", "msg": "ws: send failed", SECRET: "x", "step": SECRET, "detail": { "token": SECRET } });
+      let secret = secret();
+      let record = serde_json::json!({ "level": "info", "msg": "ws: send failed", (secret.clone()): "x", "step": secret, "detail": { "token": secret } });
 
       let line = line_of(&record.to_string());
 
@@ -256,7 +262,8 @@ mod tests {
 
     #[test]
     fn drops_the_error_cause_and_the_stack_text() {
-      let record = serde_json::json!({ "level": "error", "msg": "x", "err": { "name": "Error", "message": "m", "stack": format!("Error: {SECRET}\n    at a (/Users/me/{SECRET}.js:1:1)"), "cause": { "message": SECRET } } });
+      let secret = secret();
+      let record = serde_json::json!({ "level": "error", "msg": "x", "err": { "name": "Error", "message": "m", "stack": format!("Error: {secret}\n    at a (/Users/me/{secret}.js:1:1)"), "cause": { "message": secret } } });
 
       let line = line_of(&record.to_string());
 
@@ -266,7 +273,7 @@ mod tests {
 
     #[test]
     fn maps_an_error_name_outside_the_closed_list_to_other() {
-      let record = serde_json::json!({ "level": "error", "msg": "x", "err": { "name": SECRET, "message": "", "code": "AKIAIOSFODNN7EXAMPLE" } });
+      let record = serde_json::json!({ "level": "error", "msg": "x", "err": { "name": secret(), "message": "", "code": aws_key_id() } });
 
       let line = line_of(&record.to_string());
 
@@ -316,7 +323,7 @@ mod tests {
 
     #[test]
     fn counts_a_malformed_id_and_session_id_instead_of_copying_them() {
-      let record = serde_json::json!({ "level": "info", "msg": "ws: write failed", "id": SECRET, "sessionId": "not-a-uuid" });
+      let record = serde_json::json!({ "level": "info", "msg": "ws: write failed", "id": secret(), "sessionId": "not-a-uuid" });
 
       let line = line_of(&record.to_string());
 
@@ -368,7 +375,7 @@ mod tests {
 
     #[test]
     fn becomes_a_length_and_a_tag() {
-      let text = format!("plain {SECRET}");
+      let text = format!("plain {}", secret());
 
       let lines = lines_of_chunks(Stream::Out, &[format!("{text}\n").as_bytes()]);
 
@@ -498,7 +505,7 @@ mod tests {
 
     #[test]
     fn never_prints_a_secret_that_straddles_a_chunk_boundary() {
-      let text = format!("noise {SECRET} noise\n");
+      let text = format!("noise {} noise\n", secret());
       let (first, second) = text.as_bytes().split_at(12);
 
       let lines = lines_of_chunks(Stream::Out, &[first, second]);

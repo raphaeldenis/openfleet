@@ -38,6 +38,7 @@ fn capped(text: &str) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::event_log::synthetic_tokens::openai_key;
 
   const HOME: &str = "/Users/jdoe";
   const ADMIN_TOKEN: &str = "adm1n-t0ken-0123456789";
@@ -72,9 +73,10 @@ mod tests {
 
   #[test]
   fn masks_a_secret_valued_key() {
-    let line = safe(r#"config rejected: {"apiKey":"sk-live-0123456789abcdef"}"#);
+    let secret = openai_key();
+    let line = safe(&format!(r#"config rejected: {{"apiKey":"{secret}"}}"#));
 
-    assert!(!line.contains("sk-live-0123456789abcdef"), "{line}");
+    assert!(!line.contains(&secret), "{line}");
   }
 
   #[test]

@@ -345,6 +345,7 @@ pub fn start_on_disk(openfleet_home: &Path, clock: impl Fn() -> u64 + Send + 'st
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::event_log::synthetic_tokens::github_token;
   use crate::event_log::{DaemonTextClass, Pid, SALT_FILE_NAME};
   use std::collections::HashMap;
   use std::sync::atomic::{AtomicUsize, Ordering};
@@ -672,7 +673,7 @@ mod tests {
   fn the_writer_tags_free_text_under_the_install_salt_and_never_stores_it() {
     let fs = Arc::new(FakeFs::default());
     let log = writer_over(&fs, 100_000, Some(salt()), 16);
-    let secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let secret = format!("{}AB", github_token());
 
     ingest(&log, Stream::Err, &format!("{secret}\n"));
     log.record_event(DesktopEvent::SidecarFailed { reason: log.opaque(secret.as_bytes()) });

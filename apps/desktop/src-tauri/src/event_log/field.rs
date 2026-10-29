@@ -859,6 +859,7 @@ log_values!(
 mod tests {
   use super::*;
   use crate::event_log::salt::SALT_LEN;
+  use crate::event_log::synthetic_tokens::{aws_key_id, aws_session_key_id, github_token, openai_key};
   use crate::linear_growth::{assert_linear_growth, cpu_time_to_run_on_repeated, LinearGrowthBudget};
   use std::path::PathBuf;
 
@@ -926,8 +927,9 @@ mod tests {
 
     #[test]
     fn rejects_other_spellings() {
-      for text in ["", "INFO", "Info", "warning", "info ", " info", "fatal", "info\n", "ghp_0123456789abcdefghijklmnopqrstuvwxyz"] {
-        assert_eq!(Level::parse(text), None, "{text:?}");
+      let spellings = ["", "INFO", "Info", "warning", "info ", " info", "fatal", "info\n"].map(str::to_string);
+      for text in spellings.into_iter().chain([github_token()]) {
+        assert_eq!(Level::parse(&text), None, "{text:?}");
       }
     }
 
@@ -1014,11 +1016,11 @@ mod tests {
         "2026-10-04T12:34:56ZZ",
         "+026-10-04T12:34:56Z",
         "2026-10-04T12:34:56Z\n",
-        "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
         "２０２６-10-04T12:34:56Z",
       ] {
         assert_eq!(Ts::parse(text), None, "{text:?}");
       }
+      assert_eq!(Ts::parse(&github_token()), None);
     }
   }
 
@@ -1150,7 +1152,8 @@ mod tests {
 
     #[test]
     fn never_reads_the_message() {
-      let secret_message = "ghp_0123456789abcdefghijklmnopqrstuvwxyz Bearer abcdefghijklmnopqrstuvwxyz";
+      let secret = github_token();
+      let secret_message = format!("{secret} Bearer abcdefghijklmnopqrstuvwxyz");
       let error = io::Error::new(io::ErrorKind::PermissionDenied, secret_message);
       assert!(error.to_string().contains("ghp_"), "the premise: the message holds the secret");
 
@@ -1159,7 +1162,7 @@ mod tests {
       let rendered = format!("{failure} {failure:?} {failure:#?}");
       assert!(!rendered.contains("ghp_"), "{rendered}");
       assert!(!rendered.contains("Bearer"), "{rendered}");
-      assert!(!rendered.contains("0123456789"), "{rendered}");
+      assert!(!rendered.contains(&secret["ghp_".len()..]), "{rendered}");
       assert_eq!(failure.to_string(), "kind=permission_denied errno=none");
     }
 
@@ -1205,23 +1208,23 @@ mod tests {
 
     impl io::Read for FailingReader {
       fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-        Err(io::Error::other("ghp_0123456789abcdefghijklmnopqrstuvwxyz"))
+        Err(io::Error::other(github_token()))
       }
     }
 
     #[test]
     fn never_reads_the_message() {
-      let secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+      let secret = github_token();
       let data_error = serde_json::from_str::<u32>(&format!("\"{secret}\"")).unwrap_err();
       let io_error = serde_json::from_reader::<_, serde_json::Value>(FailingReader).unwrap_err();
-      assert!(data_error.to_string().contains(secret), "the premise: a data error message quotes the value");
+      assert!(data_error.to_string().contains(&secret), "the premise: a data error message quotes the value");
 
       for error in [data_error, io_error] {
         let failure = JsonFailure::of(&error);
 
         let rendered = format!("{failure} {failure:?} {failure:#?}");
         assert!(!rendered.contains("ghp_"), "{rendered}");
-        assert!(!rendered.contains("0123456789"), "{rendered}");
+        assert!(!rendered.contains(&secret["ghp_".len()..]), "{rendered}");
       }
     }
   }
@@ -1245,8 +1248,9 @@ mod tests {
 
     #[test]
     fn rejects_a_cloud_key_that_has_the_shape_of_an_errno_name() {
-      for secret_looking in ["AKIAIOSFODNN7EXAMPLE", "ASIAIOSFODNN7EXAMPLE", "E0123456789ABCDEFGH", "SQLITE_0123456789ABCDEF"] {
-        assert_eq!(KnownCode::from_name(secret_looking).to_string(), "other", "{secret_looking}");
+      let secret_lookings = [aws_key_id(), aws_session_key_id(), "E0123456789ABCDEFGH".to_string(), "SQLITE_0123456789ABCDEF".to_string()];
+      for secret_looking in secret_lookings {
+        assert_eq!(KnownCode::from_name(&secret_looking).to_string(), "other", "{secret_looking}");
       }
     }
 
@@ -1342,13 +1346,15 @@ mod tests {
   mod opaque {
     use super::*;
 
-    const SECRET_LOOKING_TEXTS: [&str; 5] = [
-      "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB",
-      "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF",
-      "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n-----END PRIVATE KEY-----",
-      "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789",
-      "AKIAIOSFODNN7EXAMPLE",
-    ];
+    fn secret_looking_texts() -> [String; 5] {
+      [
+        format!("{}AB", github_token()),
+        format!("{}ABCDEF", openai_key()),
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n-----END PRIVATE KEY-----".to_string(),
+        "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789".to_string(),
+        aws_key_id(),
+      ]
+    }
 
     fn every_window_of(text: &str, width: usize) -> Vec<String> {
       let characters: Vec<char> = text.chars().collect();
@@ -1413,12 +1419,12 @@ mod tests {
     #[test]
     fn never_exposes_the_source_in_any_rendering() {
       let salt = salt_of(1);
-      for secret in SECRET_LOOKING_TEXTS {
+      for secret in secret_looking_texts() {
         for opaque in [Opaque::of(secret.as_bytes(), Some(&salt)), Opaque::of(secret.as_bytes(), None)] {
           let renderings = [format!("{opaque}"), format!("{opaque:?}"), format!("{opaque:#?}"), format!("{:?}", Some(opaque)), format!("{:?}", vec![opaque])];
 
           for rendering in &renderings {
-            for window in every_window_of(secret, 6) {
+            for window in every_window_of(&secret, 6) {
               assert!(!rendering.contains(&window), "{window:?} leaked into {rendering}");
             }
           }

@@ -322,6 +322,7 @@ fn seal_under(policy: ShapeMismatchPolicy, event: EventName, timestamp: Ts, cand
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::event_log::synthetic_tokens::github_token;
 
   const TS: &str = "2026-10-04T12:00:00Z";
 
@@ -741,7 +742,7 @@ mod tests {
 
     #[test]
     fn replaces_a_line_that_fails_by_a_rejected_record_naming_only_the_event() {
-      let hostile = line_of("daemon_stop_requested", "pid=ghp_abcdefghijklmnopqrstuvwxyz0123456789 \n secret");
+      let hostile = line_of("daemon_stop_requested", &format!("pid={} \n secret", github_token()));
 
       let sealed = seal(EventName::DaemonStopRequested, ts(), hostile);
 

@@ -103,6 +103,7 @@ pub fn install_foreign_logger() -> Result<(), SetLoggerError> {
 mod tests {
   use super::*;
   use crate::event_log::field::Level as EventLevel;
+  use crate::event_log::synthetic_tokens::github_token;
 
   fn record_of(logger: &AllowlistLogger, level: log::Level, target: &str, message: &str) {
     logger.log(&Record::builder().level(level).target(target).args(format_args!("{message}")).build());
@@ -146,8 +147,9 @@ mod tests {
   #[test]
   fn an_unknown_or_lookalike_crate_is_counted_as_other() {
     let logger = AllowlistLogger::new();
-    for target in ["some_crate", "tauri_runtime", "tauri-evil", "", "ghp_0123456789abcdefghijklmnopqrstuvwxyz"] {
-      record_of(&logger, log::Level::Warn, target, "x");
+    let targets = ["some_crate", "tauri_runtime", "tauri-evil", ""].map(str::to_string);
+    for target in targets.into_iter().chain([github_token()]) {
+      record_of(&logger, log::Level::Warn, &target, "x");
     }
 
     assert_eq!(rendered(&logger), vec!["1970-01-01T00:00:00Z warn foreign_records target=other count=5"]);
@@ -174,7 +176,7 @@ mod tests {
   #[test]
   fn the_message_of_a_record_reaches_no_line() {
     let logger = AllowlistLogger::new();
-    record_of(&logger, log::Level::Error, "tauri", "Authorization: Bearer ghp_0123456789abcdefghijklmnopqrstuvwxyz");
+    record_of(&logger, log::Level::Error, "tauri", &format!("Authorization: Bearer {}", github_token()));
 
     let lines = rendered(&logger).join("\n");
 

@@ -598,6 +598,7 @@ async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Re
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::event_log::synthetic_tokens::github_token;
   use crate::log_file::RotatingLog;
   use std::cell::RefCell;
   use std::io::{BufRead, BufReader};
@@ -746,7 +747,7 @@ mod tests {
 
   #[test]
   fn a_hostile_health_version_never_reaches_the_issue_url() {
-    let token_shaped_value = format!("{}{}", ["gh", "p_"].concat(), "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD2fH4jL6");
+    let token_shaped_value = github_token();
     let hostile_versions = [token_shaped_value.clone(), format!("1.2.3-{token_shaped_value}"), format!("0.2.0 {token_shaped_value}")];
 
     for hostile_version in hostile_versions {
@@ -1390,8 +1391,8 @@ mod tests {
   fn the_status_text_and_the_version_reach_no_line() {
     let (state, daemon_log, fs) = state_writing_to_a_log();
 
-    state.on_start_failed("Authorization: Bearer ghp_0123456789abcdefghijklmnopqrstuvwxyz".to_string());
-    state.on_reused(Some(DaemonVersion::parse("ghp_0123456789abcdefghijklmnopqrstuvwxyz")));
+    state.on_start_failed(format!("Authorization: Bearer {}", github_token()));
+    state.on_reused(Some(DaemonVersion::parse(&github_token())));
 
     let lines = stored_lines(&daemon_log, &fs).join("\n");
     assert!(!lines.contains("ghp_") && !lines.contains("Bearer"), "{lines}");
@@ -1462,7 +1463,7 @@ mod tests {
   #[test]
   fn an_error_of_another_kind_is_told_by_its_length_and_tag() {
     let state = DaemonState::new();
-    let error = tauri_plugin_shell::Error::UnknownProgramName("/Users/jdoe/ghp_0123456789abcdefghijklmnopqrstuvwxyz".to_string());
+    let error = tauri_plugin_shell::Error::UnknownProgramName(format!("/Users/jdoe/{}", github_token()));
 
     let failure = spawn_failure_of_shell(&state, &error);
 
