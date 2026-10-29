@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, DOCS_ROOT_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DetectedRepository, DiagnosticsDocument, DocsRootView, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, GovernanceProposalView, HandoffContent, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
+  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DetectedRepository, DiagnosticsDocument, DocsRootView, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, EscalationAnswerBody, EscalationView, GovernanceProposalView, HandoffContent, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
   LawView, ManagerGovernanceWithLawsView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   RemovedWorktree, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
@@ -186,6 +186,7 @@ export class FleetApiService {
   }
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
   decideProposal(id: string, decision: ProposalDecision) { return this.post<GovernanceProposalView>(`/api/governance/proposals/${encodeURIComponent(id)}/decide`, decision); }
+  answerEscalation(id: string, body: EscalationAnswerBody) { return this.post<EscalationView>(`/api/escalations/${encodeURIComponent(id)}/answer`, body); }
   getManagerGovernance(managerId: string) { return this.call<ManagerGovernanceWithLawsView>(`/api/managers/${encodeURIComponent(managerId)}/governance`); }
   editLaw({ lawId, text, expectedRevision }: { lawId: string; text: string; expectedRevision: number }) {
     return this.patch<LawView>(`/api/governance/laws/${encodeURIComponent(lawId)}`, { text, expectedRevision });

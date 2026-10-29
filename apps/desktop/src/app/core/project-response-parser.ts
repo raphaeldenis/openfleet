@@ -1,4 +1,4 @@
-import type { Project } from '@openfleet/shared';
+import { EscalationPolicySchema, type Project } from '@openfleet/shared';
 
 const isText = (value: unknown): value is string => typeof value === 'string';
 
@@ -7,6 +7,7 @@ export function parseProject(payload: unknown): Project | undefined {
   const isObject = typeof payload === 'object' && payload !== null;
   if (!isObject) return undefined;
   const { id, name, docsFolderPath, docsFolderSharedWith, rowGuardWarning, postCreateHookScript, postCreateHookTimeoutSeconds } = payload as Record<string, unknown>;
+  const escalationPayload = (payload as Record<string, unknown>)['escalation'];
   if (!isText(id) || id === '' || !isText(name)) return undefined;
   if (docsFolderPath !== null && !isText(docsFolderPath)) return undefined;
   const project: Project = { id, name, docsFolderPath };
@@ -17,5 +18,7 @@ export function parseProject(payload: unknown): Project | undefined {
     project.postCreateHookScript = postCreateHookScript;
     if (Number.isInteger(postCreateHookTimeoutSeconds)) project.postCreateHookTimeoutSeconds = postCreateHookTimeoutSeconds as number;
   }
+  const escalation = EscalationPolicySchema.safeParse(escalationPayload);
+  if (escalation.success) project.escalation = escalation.data;
   return project;
 }

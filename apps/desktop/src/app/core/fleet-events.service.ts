@@ -1,6 +1,6 @@
 import { Injectable, computed, signal } from '@angular/core';
 import { TodoSummarySchema, closeReasonOfExitCode, parseSessionCloseReason } from '@openfleet/shared';
-import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, GovernanceProposalView, ManagerView, NoteChangeEvent, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, EscalationView, GovernanceProposalView, ManagerView, NoteChangeEvent, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { parseSessionTodos } from './session-todos-parser';
@@ -28,6 +28,8 @@ function isBackgroundFailure({ error: envelope, scope }: { error: ErrorEnvelope;
 
 /** Names one prompt of one session: the same prompt keeps its key for as long as it stays undecided. */
 export const silentBlockKey = ({ sessionId, waitingSince }: SilentBlock): string => `${sessionId}@${waitingSince}`;
+
+const isAwaitingAnswer = ({ status }: EscalationView): boolean => status === 'pending';
 
 function notificationTriggerOf({ type: _type, ...trigger }: Extract<ServerEvent, { type: 'notification.trigger' }>): NotificationTrigger {
   return trigger;
@@ -73,6 +75,8 @@ export class FleetEventsService {
   readonly managers = signal<ManagerView[]>([]);
   /** The governance proposals still awaiting a human decision; empty for a daemon that reports none. */
   readonly proposals = signal<GovernanceProposalView[]>([]);
+  /** The escalations still awaiting a human answer; empty for a daemon that reports none. */
+  readonly escalations = signal<EscalationView[]>([]);
   private readonly queuedCounts = signal<Readonly<Record<string, number>>>({});
   /** How many proposals wait for a pending place across all managers; zero for a daemon that reports no waiting list. */
   readonly queuedTotal = computed(() => Object.values(this.queuedCounts()).reduce((sum, count) => sum + count, 0));
@@ -252,6 +256,7 @@ export class FleetEventsService {
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
         this.proposals.set(event.proposals ?? []);
+        this.escalations.set((event.escalations ?? []).filter(isAwaitingAnswer));
         this.queuedCounts.set(event.queuedCounts ?? {});
         this.workingStates.set(new Map((event.workingStates ?? []).map((state) => [state.sessionId, state])));
         this.workingStatesReported.set(event.workingStates !== undefined);
@@ -289,6 +294,8 @@ export class FleetEventsService {
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
       case 'governance.proposed': return this.upsertProposal(event.proposal);
       case 'governance.resolved': return this.proposals.update((all) => all.filter((p) => p.id !== event.proposal.id));
+      case 'escalation.raised': return this.upsertEscalation(event.escalation);
+      case 'escalation.resolved': return this.escalations.update((all) => all.filter((escalation) => escalation.id !== event.escalation.id));
       case 'governance.queue_changed': return this.queuedCounts.update((all) => ({ ...all, [event.managerId]: event.queuedCount }));
       case 'law.created':
       case 'law.updated':
@@ -382,6 +389,11 @@ export class FleetEventsService {
     const isStillAwaitingDecision = proposal.status === 'pending';
     if (!isStillAwaitingDecision) return;
     this.proposals.update((all) => (all.some((p) => p.id === proposal.id) ? all.map((p) => (p.id === proposal.id ? proposal : p)) : [...all, proposal]));
+  }
+
+  private upsertEscalation(incoming: EscalationView): void {
+    if (!isAwaitingAnswer(incoming)) return;
+    this.escalations.update((all) => (all.some((escalation) => escalation.id === incoming.id) ? all.map((escalation) => (escalation.id === incoming.id ? incoming : escalation)) : [...all, incoming]));
   }
 
   private upsertManager(manager: ManagerView): void {
