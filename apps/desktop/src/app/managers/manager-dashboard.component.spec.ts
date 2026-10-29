@@ -235,6 +235,31 @@ describe('ManagerDashboardComponent', () => {
     expect(screen.queryByTestId('manager-dashboard-not-found')).toBeNull();
   });
 
+  it('shows header and body skeletons, not a plain "Loading…" line, while the snapshot is awaited', async () => {
+    const fake = fakeEvents({ snapshotReceived: false });
+    await render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('m1') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
+    });
+
+    const loading = screen.getByRole('status', { name: 'Loading the manager' });
+
+    expect(loading).toHaveAttribute('aria-busy', 'true');
+    expect(within(loading).getByTestId('manager-skeleton-header')).toBeTruthy();
+    expect(within(loading).getByTestId('manager-skeleton-body')).toBeTruthy();
+    expect(screen.queryByText('Loading…')).toBeNull();
+  });
+
+  it('says "Manager not found" with the reason, never "Session not found"', async () => {
+    const fake = fakeEvents({ sessions: [], snapshotReceived: true });
+    await render(ManagerDashboardComponent, {
+      providers: [provideRouter([]), { provide: ActivatedRoute, useValue: activatedRouteFor('missing-id') }, { provide: FleetEventsService, useValue: fake }, { provide: FleetApiService, useValue: governanceApi }],
+    });
+
+    expect(screen.getByText('Manager not found')).toBeTruthy();
+    expect(screen.getByText('This manager no longer exists on this daemon.')).toBeTruthy();
+    expect(screen.queryByText('Session not found')).toBeNull();
+  });
+
   it('shows "session not found" once the snapshot has loaded but no session matches the id', async () => {
     const fake = fakeEvents({ sessions: [], snapshotReceived: true });
     await render(ManagerDashboardComponent, {
@@ -252,7 +277,7 @@ describe('ManagerDashboardComponent', () => {
     const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
 
     const notFound = screen.getByTestId('manager-dashboard-not-found');
-    expect(notFound).toHaveTextContent('Session not found');
+    expect(notFound).toHaveTextContent('Manager not found');
     await userEvent.click(screen.getByTestId('manager-dashboard-not-found-back'));
 
     expect(navigateSpy).toHaveBeenCalledWith(['/']);
@@ -314,12 +339,13 @@ describe('ManagerDashboardComponent', () => {
       });
     const isBefore = (first: HTMLElement, second: HTMLElement) => Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 
-    it('user reads the profile of a live manager above its dashboard', async () => {
+    it('user reads the live dashboard of a live manager above its profile, so it never sits below the edit form', async () => {
       const { fixture } = await renderManager(MANAGER_SESSION);
       await fixture.whenStable();
 
       const profile = await screen.findByRole('region', { name: 'Profile' });
-      expect(isBefore(profile, screen.getByTestId('manager-dashboard-live'))).toBe(true);
+      expect(isBefore(screen.getByTestId('manager-dashboard-live'), profile)).toBe(true);
+      expect(isBefore(screen.getByTestId('manager-dashboard-child-c1'), profile)).toBe(true);
       expect(screen.getByTestId('manager-dashboard-child-c1')).toBeTruthy();
     });
 

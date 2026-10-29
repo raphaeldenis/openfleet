@@ -70,20 +70,26 @@ const apiFailure = (code: string, status = 409) => new ApiError(status, `refused
 
 describe('the manager profile', () => {
   describe('loading the profile', () => {
-    it('user sees a loading message until the profile arrives', async () => {
+    it('user sees header and body skeletons until the profile arrives', async () => {
       const never = vi.fn().mockReturnValue(new Promise(() => undefined));
 
       await openProfile({ api: fakeApi({ getManagerProfile: never }) });
 
-      expect(screen.getByText('Loading the manager profile…')).toHaveAttribute('role', 'status');
+      const loading = screen.getByRole('status', { name: 'Loading the manager profile' });
+      expect(loading).toHaveAttribute('aria-busy', 'true');
+      expect(within(loading).getByTestId('manager-profile-skeleton-header')).toBeTruthy();
+      expect(within(loading).getByTestId('manager-profile-skeleton-body')).toBeTruthy();
+      expect(screen.queryByText('Loading the manager profile…')).toBeNull();
     });
 
-    it('user is told the profile could not load and retries from the page', async () => {
-      const getManagerProfile = vi.fn().mockRejectedValueOnce(new Error('down')).mockResolvedValue(profileOf());
+    it('user reads a standalone failed-manager card with the reason, and retries from it', async () => {
+      const getManagerProfile = vi.fn().mockRejectedValueOnce(apiFailure('stale_revision', 500)).mockResolvedValue(profileOf());
       await openProfile({ api: fakeApi({ getManagerProfile }) });
 
-      expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load this manager's profile.");
-      await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      const card = await screen.findByRole('alert', { name: 'Manager failed to load' });
+      expect(within(card).getByRole('heading', { name: "Couldn't load this manager" })).toBeTruthy();
+      expect(within(card).getByTestId('manager-failed-reason').textContent?.trim()).not.toBe('');
+      await userEvent.click(within(card).getByRole('button', { name: 'Retry' }));
 
       expect(await screen.findByRole('region', { name: 'Mission' })).toBeInTheDocument();
     });
@@ -233,6 +239,17 @@ describe('the manager profile', () => {
       expect(screen.getByRole('textbox', { name: 'Mission' })).toHaveValue(MISSION);
       expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
       expect(screen.getByTestId('manager-changes-count')).toHaveTextContent('No changes');
+    });
+
+    it('user edits pulse cadence, children cap and model in one row, without the preset block', async () => {
+      await openEditor();
+
+      const row = screen.getByRole('group', { name: 'Pulse, children cap and model' });
+
+      expect(within(row).getByRole('spinbutton', { name: 'Pulse cadence' })).toBeTruthy();
+      expect(within(row).getByRole('spinbutton', { name: 'Children cap' })).toBeTruthy();
+      expect(within(row).getByRole('combobox', { name: 'Model' })).toBeTruthy();
+      expect(screen.queryByRole('group', { name: 'Pulse cadence presets' })).toBeNull();
     });
 
     it('user sees how many fields they changed', async () => {

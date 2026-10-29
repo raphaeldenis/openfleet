@@ -31,7 +31,10 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
   imports: [StateChipComponent, PulseRingComponent, OverdueChipComponent, HandoffPreviewHostComponent, ErrorLineComponent, ManagerGovernanceComponent, ManagerLinksComponent, ManagerProfileComponent],
   template: `
     @if (!hasSnapshot()) {
-      <p class="state-message" data-testid="manager-dashboard-loading">Loading…</p>
+      <div class="skeleton" role="status" aria-label="Loading the manager" aria-busy="true" data-testid="manager-dashboard-loading">
+        <div class="skeleton-header" data-testid="manager-skeleton-header" aria-hidden="true"></div>
+        <div class="skeleton-body" data-testid="manager-skeleton-body" aria-hidden="true"></div>
+      </div>
     } @else if (session(); as session) {
       @if (session.role === managerRole) {
         <header class="header" data-testid="manager-dashboard">
@@ -102,8 +105,6 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
             <of-handoff-preview [sessionId]="session.id" density="roomy" subject="manager" [targetAvailableHint]="handoffTargetAvailableHint" (dismissed)="closeHandoff()" />
           </div>
         }
-
-        <of-manager-profile [session]="session" />
 
         @if (!isSessionClosed()) {
           <div class="live-controls" data-testid="manager-dashboard-live">
@@ -186,6 +187,7 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
           </section>
 
         }
+        <of-manager-profile [session]="session" />
         <of-manager-governance [managerId]="session.id" [projectId]="session.projectId" />
       } @else {
         <div class="state-block" data-testid="manager-dashboard-not-manager">
@@ -196,8 +198,8 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
       }
     } @else {
       <div class="state-block" data-testid="manager-dashboard-not-found">
-        <span class="state-headline">Session not found</span>
-        <span class="state-detail">This manager session no longer exists on this daemon.</span>
+        <span class="state-headline">Manager not found</span>
+        <span class="state-detail">This manager no longer exists on this daemon.</span>
         <button type="button" class="of-btn of-btn--secondary" data-testid="manager-dashboard-not-found-back" (click)="backToSessions()">Back to sessions</button>
       </div>
     }
@@ -235,7 +237,9 @@ const HANDOFF_TARGET_AVAILABLE_HINT = 'Saved handoffs appear in Notes › handof
     .col-state { flex: 1 }
     .col-cost { width: 4rem; text-align: right }
     .empty { padding: 2rem; text-align: center; color: var(--mut) }
-    .state-message { padding: 2rem; text-align: center; color: var(--mut) }
+    .skeleton { display: flex; flex-direction: column; gap: 1.25rem }
+    .skeleton-header { height: 4.5rem; background: var(--sunk); border-bottom: 1px solid var(--line) }
+    .skeleton-body { height: 14rem; margin: 0 1.25rem; border-radius: .625rem; background: var(--sunk) }
     .state-block { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .375rem; padding: 4rem 1rem; text-align: center; color: var(--mut) }
     .state-headline { color: var(--fg); font-weight: 600 }
     .state-block .of-btn { margin-top: .5rem }
