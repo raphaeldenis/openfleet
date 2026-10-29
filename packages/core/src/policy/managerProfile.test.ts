@@ -50,19 +50,21 @@ describe('the manager profile of the delivered policy', () => {
     }
   });
 
-  it('keeps the mode of the profile that managers were judged by', () => {
+  it('keeps the mode of the profile that managers were judged by and applies the default rules plus the ladder rule', () => {
+    const defaultRules = DEFAULT_COMMAND_POLICY.profiles.default!.rules;
+
     expect(DEFAULT_COMMAND_POLICY.profiles.manager!.mode).toBe(DEFAULT_COMMAND_POLICY.profiles.default!.mode);
-    expect(DEFAULT_COMMAND_POLICY.profiles.manager!.extends).toBe('default');
+    expect([...DEFAULT_COMMAND_POLICY.profiles.manager!.rules].sort()).toEqual([...defaultRules, MANAGER_ASK_USER_RULE_ID].sort());
   });
 
-  it('refuses AskUserQuestion to an attended manager and points to submit_plan_questions', () => {
-    const verdict = evaluateCommandPolicy(policyRequest({ toolName: ASK_USER_QUESTION_TOOL, role: MANAGER, presence: 'attended' }), DEFAULT_COMMAND_POLICY);
+  it('refuses AskUserQuestion to a manager that has a parent and points to submit_plan_questions', () => {
+    const verdict = evaluateCommandPolicy(policyRequest({ toolName: ASK_USER_QUESTION_TOOL, role: MANAGER, presence: 'unattended' }), DEFAULT_COMMAND_POLICY);
 
     expect(verdict).toMatchObject({ decision: 'deny', ruleId: MANAGER_ASK_USER_RULE_ID, alternative: expect.stringContaining('submit_plan_questions') });
   });
 
-  it('leaves the refusal of an unattended manager to the rule that already refused it', () => {
-    const request = policyRequest({ toolName: ASK_USER_QUESTION_TOOL, role: MANAGER, presence: 'unattended' });
+  it('lets a root manager (attended) ask the human, as it was judged before the manager profile', () => {
+    const request = policyRequest({ toolName: ASK_USER_QUESTION_TOOL, role: MANAGER, presence: 'attended' });
 
     expect(evaluateCommandPolicy(request, DEFAULT_COMMAND_POLICY)).toEqual(evaluateCommandPolicy(request, policyWithoutManagerProfile));
   });

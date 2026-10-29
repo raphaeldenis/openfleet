@@ -59,14 +59,16 @@ const noHumanQuestionsUnattended: PolicyRule = {
 
 export const ASK_USER_QUESTION_TOOL = 'AskUserQuestion';
 export const MANAGER_ASK_USER_RULE_ID = 'manager-ask-user-via-ladder';
+/** The journal id of a root manager's question to the human: observed, never refused. */
+export const ROOT_MANAGER_ASK_USER_EVENT_ID = 'root-manager-ask-user';
 
 const managerAskUserViaLadder: PolicyRule = {
   id: MANAGER_ASK_USER_RULE_ID,
   tools: [ASK_USER_QUESTION_TOOL],
-  presence: 'any',
+  presence: 'unattended',
   decision: 'deny',
   when: {},
-  reason: 'A manager does not ask the human in free text: the ladder routes its questions by class.',
+  reason: 'A manager with a superior does not ask the human in free text: the ladder routes its questions by class.',
   alternative: 'Submit your plan questions with `submit_plan_questions`; the daemon sends a human only the ones that need one.',
 };
 
@@ -197,22 +199,25 @@ const noFileWrites: PolicyRule = {
 };
 
 /** The rules delivered with OpenFleet. The role profiles run in observe mode until usage shows which refusals are right. */
+const defaultProfileRuleIds = [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, noShellFileWrites.id, findingsGatePrCreate.id, noGenericSendMessageToFleetSession.id, allowReadOnlyPipelines.id];
+
+/** The default rules, with the ladder rule ahead of the generic refusal of questions, so a manager with a superior is pointed to submit_plan_questions. */
+const managerProfileRuleIds = defaultProfileRuleIds.flatMap((ruleId) => (ruleId === noHumanQuestionsUnattended.id ? [managerAskUserViaLadder.id, ruleId] : [ruleId]));
+
 export const DEFAULT_COMMAND_POLICY: CommandPolicyDocument = {
   version: 1,
   mode: 'enforce',
   profiles: {
-    default: {
-      rules: [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, noShellFileWrites.id, findingsGatePrCreate.id, noGenericSendMessageToFleetSession.id, allowReadOnlyPipelines.id],
-    },
+    default: { rules: defaultProfileRuleIds },
     dev: { extends: 'default', rules: [allowDeclaredCommands.id, delegateHeavyCommands.id] },
     qe: { extends: 'default', rules: [allowDeclaredCommands.id], mode: 'observe' },
     qa: { extends: 'default', rules: [noGitPublish.id], mode: 'observe' },
     review: { extends: 'default', rules: [noFileWrites.id, noGitMutations.id], mode: 'observe' },
-    manager: { extends: 'default', rules: [managerAskUserViaLadder.id] },
+    manager: { rules: managerProfileRuleIds },
   },
   roleToProfile: { DEV: 'dev', QE: 'qe', QA: 'qa', ADV: 'review', REVIEW: 'review', manager: 'manager' },
   rules: [
-    noForcedRecursiveRm, noForcedGitClean, noWriteIntoGitDir, noFindDeleteOnBroadPaths, noHumanQuestionsUnattended,
-    noShellFileWrites, findingsGatePrCreate, noGenericSendMessageToFleetSession, managerAskUserViaLadder, delegateHeavyCommands, allowReadOnlyPipelines, allowDeclaredCommands, noGitPublish, noGitMutations, noFileWrites,
+    noForcedRecursiveRm, noForcedGitClean, noWriteIntoGitDir, noFindDeleteOnBroadPaths, managerAskUserViaLadder, noHumanQuestionsUnattended,
+    noShellFileWrites, findingsGatePrCreate, noGenericSendMessageToFleetSession, delegateHeavyCommands, allowReadOnlyPipelines, allowDeclaredCommands, noGitPublish, noGitMutations, noFileWrites,
   ],
 };
