@@ -100,6 +100,21 @@ describe('ArbiterRunner — no arbiter session stays live without a run', () => 
     expect(sessionsById.get(arbiterId)!.state).toBe('closed');
   });
 
+  it('fires no close retry once the runner is stopped at daemon shutdown', async () => {
+    const { runner, created, state, closeCalls, scheduled } = aRunner();
+    await runner.launch(BATCH_ID);
+    const arbiterId = created[0]!.id;
+    state.closesToFail = 1;
+    runner.settle(arbiterId);
+    await settle();
+
+    runner.stop();
+    scheduled.forEach(({ run }) => run());
+    await settle();
+
+    expect(closeCalls).toEqual([arbiterId]);
+  });
+
   it('treats an arbiter that closes while it is being created as a lost arbiter, then hands the batch to the human on the second loss', async () => {
     const { runner, state, created, escalateBatchToHuman } = aRunner();
     state.closeDuringCreate = true;

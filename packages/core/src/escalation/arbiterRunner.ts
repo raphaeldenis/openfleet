@@ -68,9 +68,20 @@ export const expiryMsOf = (manager: Pick<ManagerRecord, 'mode' | 'pulseEnabled' 
 export class ArbiterRunner {
   private readonly runBySessionId = new Map<string, Run>();
   private readonly failuresByBatchId = new Map<string, number>();
+  private readonly cancelCloseRetries = new Set<() => void>();
+  private isStopped = false;
 
   constructor(private readonly deps: ArbiterRunnerDeps) {
     deps.bus.subscribe((event) => { if (event.type === 'session.closed') this.onSessionClosed({ sessionId: event.sessionId, isDaemonShutdown: event.reason === 'daemon_shutdown' }); });
+  }
+
+  /** Cancels the expiry and close-retry timers and schedules no other: the daemon is shutting down. */
+  stop(): void {
+    this.isStopped = true;
+    for (const cancelRetry of this.cancelCloseRetries) cancelRetry();
+    this.cancelCloseRetries.clear();
+    for (const run of this.runBySessionId.values()) run.cancelExpiry();
+    this.runBySessionId.clear();
   }
 
   /** The batch an arbiter session answers for, when the daemon runs it. */
@@ -210,7 +221,15 @@ export class ArbiterRunner {
     } catch (error) {
       log('warn', `arbiter: session ${sessionId} could not be closed (attempt ${attempt})`, error);
       const hasAttemptsLeft = attempt < MAX_CLOSE_ATTEMPTS;
-      if (hasAttemptsLeft) this.deps.schedule(() => void this.closeQuietly(sessionId, attempt + 1), CLOSE_RETRY_DELAY_MS);
+      if (hasAttemptsLeft && !this.isStopped) this.scheduleCloseRetry({ sessionId, attempt: attempt + 1 });
     }
+  }
+
+  private scheduleCloseRetry({ sessionId, attempt }: { sessionId: string; attempt: number }): void {
+    const cancelRetry = this.deps.schedule(() => {
+      this.cancelCloseRetries.delete(cancelRetry);
+      void this.closeQuietly(sessionId, attempt);
+    }, CLOSE_RETRY_DELAY_MS);
+    this.cancelCloseRetries.add(cancelRetry);
   }
 }

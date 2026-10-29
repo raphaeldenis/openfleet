@@ -348,6 +348,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     unwatchDatabase();
     pulseScheduler.stop();
     scheduledEvents.stop();
+    arbiters.stop();
     await ciWatch.stop();
     childAutoRestarter.stop();
     idleChildWatcher.stop();
