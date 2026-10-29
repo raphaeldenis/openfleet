@@ -19,6 +19,7 @@ import { guardedFor, ok, refuse } from './toolResults.js';
 import { lineageSessionView, managerView, sessionView } from './toolViews.js';
 import type { HeldFor, SessionService } from '../sessions/sessionService.js';
 import { sessionLastMessage } from './sessionLastMessage.js';
+import { pendingPermissionViewOf, type PendingPermissionView } from './pendingPermissionView.js';
 import { maskedSecrets } from '../redact.js';
 import type { ManagerDenials } from '../policy/managerDenials.js';
 import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
@@ -145,10 +146,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   };
   const isInLineage = (target: Session) => target.id === caller.id || target.parentId === caller.id || target.id === caller.parentId;
 
-  const pendingPermissionFor = (sessionId: string): { toolName: string; ageSeconds: number } | undefined => {
+  const pendingPermissionFor = (sessionId: string): PendingPermissionView | undefined => {
     const pending = approvals.listPending().find((a: Approval) => a.sessionId === sessionId);
-    if (!pending) return undefined;
-    return { toolName: pending.toolName, ageSeconds: Math.floor((Date.now() - new Date(pending.createdAt).getTime()) / 1000) };
+    return pending && pendingPermissionViewOf(pending, new Date());
   };
 
   const isDescendant = (target: Session): boolean => {
@@ -165,7 +165,8 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('get_session_status', { description: `State of your session or one in your lineage. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);
     if (!target || !isInLineage(target)) return refuse('outside_lineage', 'session not found or outside your lineage');
-    return ok(sessionView(target));
+    const pendingPermission = pendingPermissionFor(target.id);
+    return ok(pendingPermission ? { ...sessionView(target), pendingPermission } : sessionView(target));
   });
 
   server.registerTool('get_session_card', { description: `Session status plus last_message: the latest assistant transcript text, redacted and capped at 8192 UTF-8 bytes, null when unavailable. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {

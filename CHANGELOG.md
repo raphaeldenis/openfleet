@@ -2,6 +2,18 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 2 — 2026-10-29
+
+Each batch that adds or changes a tool while the version is 2 appends its lines here.
+
+- P1, `get_argus_status` and `get_session_status`: `pendingPermission` carries a new `input` field next to `toolName` and `ageSeconds`: the first word of a Bash command (never its arguments), the file path for file tools, or the compact form of the tool input, on one line, masked by `maskedSecrets` and capped at 200 characters plus a truncation marker. `get_session_status` returns `pendingPermission` only while an approval is pending. The silent-block message sent to a manager names the tool and carries the same `input`.
+
+Tools added: none.
+Tools changed: `get_argus_status` and `get_session_status` (output field only; no input schema changes).
+Migrations: none.
+
+The guard test pins tool names and input schemas only, so it does not see an output field. Raising the version for P1 is a convention, not something the guard enforces.
+
 ## 1 — 2026-10-29
 
 First numbered version. Each batch that adds or changes a tool while the version is 1 appends its lines here.

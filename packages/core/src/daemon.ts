@@ -45,6 +45,7 @@ import { ManagerService } from './managers/managerService.js';
 import { ProjectProfileBootstrap } from './managers/projectProfileBootstrap.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
+import { pendingPermissionViewOf } from './mcp/pendingPermissionView.js';
 import { KnowledgeRepository } from './knowledge/knowledgeRepository.js';
 import { KnowledgeRepoScope } from './knowledge/knowledgeRepoScope.js';
 import { KnowledgeSearchService } from './knowledge/knowledgeSearchService.js';
@@ -217,7 +218,10 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     const session = sessions.get(sessionId);
     const manager = session?.parentId;
     if (!wasUnwatched || session === undefined || manager === undefined) return;
-    const body = `[OpenFleet] ${session.name} (${session.id}) has waited more than ${unattendedSilentBlockSeconds} seconds on a permission prompt nobody can answer. Look at it, or close and relaunch it.`;
+    const pendingApproval = approvals.listPending().find((approval) => approval.sessionId === sessionId);
+    const pendingPermission = pendingApproval && pendingPermissionViewOf(pendingApproval, new Date());
+    const waitingOn = pendingPermission ? ` It waits on ${pendingPermission.toolName}: ${pendingPermission.input}` : '';
+    const body = `[OpenFleet] ${session.name} (${session.id}) has waited more than ${unattendedSilentBlockSeconds} seconds on a permission prompt nobody can answer.${waitingOn} Look at it, or close and relaunch it.`;
     try {
       sessions.sendMessage({ sessionId: manager, body });
     } catch (error) {
