@@ -19,7 +19,7 @@ export type AllowlistEntry<Value> = Value extends readonly (infer Item)[]
 export type AllowlistShape<Value> = { [Key in keyof Value]-?: AllowlistEntry<NonNullable<Value[Key]>> };
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
-const DAEMON_VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9a-z.]{1,24})?$/;
+const DAEMON_VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9a-z.]{1,24})?(\+[0-9a-f]{1,12}(\.[0-9a-f]{1,12})?)?$/;
 const NODE_VERSION = /^v\d{1,4}\.\d{1,4}\.\d{1,4}$/;
 const REFERENCE = /^[0-9a-f]{8}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

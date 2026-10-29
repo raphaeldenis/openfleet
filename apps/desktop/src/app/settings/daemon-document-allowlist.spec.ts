@@ -107,6 +107,24 @@ describe('the daemon document allowlist', () => {
     expect(allowlisted['config']).toEqual({ port: UNRECOGNISED, home: UNRECOGNISED, e2eEnabled: UNRECOGNISED });
   });
 
+  describe('the daemon version', () => {
+    const versionKeptAs = (openfleet: string): unknown => (allowlistedDaemonDocument({ ...A_FULL_DOCUMENT, version: { ...A_FULL_DOCUMENT.version, openfleet } })['version'] as { openfleet: string }).openfleet;
+
+    it.each(['1.2.3', '1.2.3-rc.1', '1.2.3+412', '1.2.3+abc1234', '1.2.3+abc1234.7', '1.2.3-rc.1+412', '1.2.3+0123456789ab'])('keeps %s, as the desktop does', (version) => {
+      expect(versionKeptAs(version)).toBe(version);
+    });
+
+    it.each(['1.2.3+', '1.2.3+build.7', '1.2.3+ABC1234', '1.2.3+abc-1234', '1.2.3+0123456789abc', '1.2.3+1.2.3', '1.2.3+1..2', '1.2.3+has_underscore', '1.2.3++1', '1.2.3+1+2', '+412'])('reduces %s to unrecognised', (version) => {
+      expect(versionKeptAs(version)).toBe(UNRECOGNISED);
+    });
+
+    it('reduces a token-shaped build metadata to unrecognised', () => {
+      const keptAs = hostileTokens().flatMap((token) => [`1.2.3+${token}`, `1.2.3+412.${token}`, `1.2.3-rc.1+${token}`]).map(versionKeptAs);
+
+      expect(keptAs.every((kept) => kept === UNRECOGNISED)).toBe(true);
+    });
+  });
+
   it('copies no window of a token placed in any field, in an unknown field or in place of a list', () => {
     const tokens = hostileTokens();
     const [first, second, third, fourth, fifth] = tokens as [string, string, string, string, string];
