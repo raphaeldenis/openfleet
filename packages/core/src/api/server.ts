@@ -96,7 +96,7 @@ export interface ServerDeps {
   // Without them the /api/command-policy routes do not exist.
   commandPolicyAdmin?: { policy: CommandPolicyService; denials: DenialReader };
   // Without it the /api/review-findings routes do not exist.
-  reviewFindings?: Pick<ReviewFindingsRepository, 'recordSkip' | 'skipsOf'>;
+  reviewFindings?: Pick<ReviewFindingsRepository, 'recordSkip' | 'skipsOf' | 'itemsOf'>;
   // Without it GET /api/diagnostics does not exist.
   diagnostics?: () => DiagnosticsDocument;
   // Without it GET /api/manager-base does not exist.

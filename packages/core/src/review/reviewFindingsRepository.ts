@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
+import { inTransaction } from '../db/transaction.js';
 
 export type FindingStep = 'qe' | 'qa' | 'ponytail' | 'adversarial';
 export type FindingSeverity = 'go' | 'no-go' | 'clean';
@@ -41,6 +43,38 @@ const toFinding = (row: Row): ReviewFinding => ({
   authorSessionId: row.author_session_id, managerSessionId: row.manager_session_id, createdAt: row.created_at,
 });
 
+/** One finding of a structured report; a report with no finding has one item that says so. */
+export interface ReviewFindingItem {
+  reportId: string;
+  position: number;
+  ticket: string;
+  step: FindingStep;
+  severity: FindingSeverity;
+  claim: string;
+  sha: string;
+  authorSessionId: string;
+  managerSessionId: string | null;
+  createdAt: string;
+}
+
+export const NO_FINDINGS_CLAIM = '0 findings';
+
+/** The same report, sent again, has the same id: it names the ticket, the step, the commit, the author, the severity and the claims. */
+const reportIdOf = (finding: ReviewFinding): string =>
+  createHash('sha256').update(JSON.stringify([finding.ticket, finding.step, finding.sha, finding.authorSessionId, finding.severity, finding.reasons])).digest('hex');
+
+interface ItemRow {
+  report_id: string; position: number; ticket: string; step: FindingStep; severity: FindingSeverity; claim: string; sha: string;
+  author_session_id: string; manager_session_id: string | null; created_at: string;
+}
+
+const toItem = (row: ItemRow): ReviewFindingItem => ({
+  reportId: row.report_id, position: row.position, ticket: row.ticket, step: row.step, severity: row.severity, claim: row.claim, sha: row.sha,
+  authorSessionId: row.author_session_id, managerSessionId: row.manager_session_id, createdAt: row.created_at,
+});
+
+const ITEM_COLUMNS = 'report_id, position, ticket, step, severity, claim, sha, author_session_id, manager_session_id, created_at';
+
 const COLUMNS = 'ticket, step, severity, claim, reasons_json, sha, author_session_id, manager_session_id, created_at';
 
 /** The findings of the review steps, written by the daemon only: it is the source of truth of the ship gate. */
@@ -51,9 +85,29 @@ export class ReviewFindingsRepository {
     this.db = db;
   }
 
+  /** Writes the report line and one item per finding of the report, in one transaction. */
   record(finding: ReviewFinding): void {
-    this.db.prepare(`INSERT INTO review_findings (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(finding.ticket, finding.step, finding.severity, finding.claim, JSON.stringify(finding.reasons), finding.sha, finding.authorSessionId, finding.managerSessionId, finding.createdAt);
+    inTransaction(this.db, 'record review finding', () => {
+      this.db.prepare(`INSERT INTO review_findings (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(finding.ticket, finding.step, finding.severity, finding.claim, JSON.stringify(finding.reasons), finding.sha, finding.authorSessionId, finding.managerSessionId, finding.createdAt);
+      this.recordItemsOf(finding);
+    });
+  }
+
+  /** Every finding of a ticket, one row each, oldest report first. */
+  itemsOf({ ticket }: { ticket: string }): ReviewFindingItem[] {
+    const rows = this.db.prepare(`SELECT ${ITEM_COLUMNS} FROM review_finding_items WHERE ticket = ? ORDER BY id`).all(ticket) as unknown as ItemRow[];
+    return rows.map(toItem);
+  }
+
+  /** A report already recorded leaves no new row: its report id and position are unique. */
+  private recordItemsOf(finding: ReviewFinding): void {
+    const reportId = reportIdOf(finding);
+    const claims = finding.reasons.length === 0 ? [NO_FINDINGS_CLAIM] : finding.reasons;
+    const insertItem = this.db.prepare(`INSERT OR IGNORE INTO review_finding_items (${ITEM_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    claims.forEach((claim, position) => {
+      insertItem.run(reportId, position, finding.ticket, finding.step, finding.severity, claim, finding.sha, finding.authorSessionId, finding.managerSessionId, finding.createdAt);
+    });
   }
 
   /** Every line of a ticket, oldest first. */
