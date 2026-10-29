@@ -4,7 +4,7 @@ import { newId } from '../ids.js';
 import { log } from '../logger.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { instantOfLocalDateTime, localDateTimeOf } from './localDateTime.js';
-import { isPulseEnabled, type ManagerRepository } from './managerRepository.js';
+import { modeOf, type ManagerRepository } from './managerRepository.js';
 import { ScheduledEventRepository, type ScheduledEvent, type ScheduledEventCreator } from './scheduledEventRepository.js';
 
 export const SCHEDULED_EVENT_PREFIX = '[scheduled event';
@@ -142,12 +142,12 @@ export class ScheduledEventService {
     return new Date(now + Math.ceil(inMinutes * MINUTE_MS));
   }
 
-  /** A closed or paused manager keeps its due events pending: reopening or resuming it delivers them. */
+  /** A closed or disabled manager keeps its due events pending: reopening or reactivating it delivers them. A sleeping manager receives them. */
   private canReceiveEvents(managerId: string): boolean {
     const session = this.deps.sessions.get(managerId);
     const record = this.deps.managers.getWithinBounds(managerId);
     const isOpen = session !== undefined && session.state !== 'closed';
-    return isOpen && record !== undefined && isPulseEnabled(record);
+    return isOpen && record !== undefined && modeOf(record) !== 'disabled';
   }
 
   private deliverDueEventsOf(managerId: string): void {

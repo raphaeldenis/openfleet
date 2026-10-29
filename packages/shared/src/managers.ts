@@ -3,6 +3,11 @@ import { ModelIdSchema } from './models.js';
 
 export const MANAGER_ROLE = 'manager';
 
+/** watching: pulses and messages. sleeping: messages only, no timed pulse. disabled: nothing automated reaches the manager; it is held and replayed on reactivation. */
+export const MANAGER_MODES = ['watching', 'sleeping', 'disabled'] as const;
+export type ManagerMode = (typeof MANAGER_MODES)[number];
+export const isManagerMode = (value: unknown): value is ManagerMode => MANAGER_MODES.some((mode) => mode === value);
+
 const ONE_DAY_SECONDS = 86400;
 export const MAX_CHILDREN_CAP = 64;
 export const MAX_MISSION_BYTES = 64 * 1024;
@@ -58,6 +63,7 @@ export const UpdateManagerSchema = ManagerSpecSchema.partial().extend({
   missionNoteId: z.string().min(1).nullable().optional(),
   pinMissionNote: z.boolean().optional(),
   pulseEnabled: z.boolean().optional(),
+  mode: z.enum(MANAGER_MODES).optional(),
   childAutoRestart: z.boolean().optional(),
   expertise: ManagerExpertiseSchema.optional(),
   pulseActions: ManagerPulseActionsSchema.optional(),
@@ -100,6 +106,14 @@ export interface ManagerView {
   pulseSeconds: number;
   /** False while the manager is paused: it receives no pulse until it is resumed. */
   pulseEnabled: boolean;
+  /** Absent from an older daemon: read as watching. */
+  mode?: ManagerMode;
+  modeChangedAt?: string;
+  /** True from the switch to sleeping until the [sleep] message is delivered. */
+  sleepHandoffPending?: boolean;
+  sleepHandoffDeliveredAt?: string;
+  /** Messages delivered to the manager since its [sleep] message, pulses excluded. Display only. */
+  inboundSinceSleepHandoff?: number;
   /** True when the daemon restarts a child of this manager that crashed on its own. Absent from an older daemon. */
   childAutoRestart?: boolean;
   childrenCap: number;

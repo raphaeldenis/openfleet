@@ -37,6 +37,10 @@ export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses
   launchOutputTimeoutMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError; env?: NodeJS.ProcessEnv;
   /** The mission of a manager session (none for another session): handed over as the first prompt of a conversation the manager starts from nothing. */
   missionOf?: (sessionId: string) => string | undefined;
+  /** True while nothing automated may be typed to the session (a disabled manager): its queue keeps the messages. Absent, delivery is never held. */
+  isDeliveryHeld?: (sessionId: string) => boolean;
+  /** A queued message the session no longer owes is dropped instead of typed. */
+  isMessageObsolete?: (message: { sessionId: string; messageId: string }) => boolean;
   /** The bounded recall of the expertise and pulse actions a manager wrote; empty when it wrote none. Placed before the mission in the first prompt. */
   profileRecallOf?: (sessionId: string) => string;
   /** False when the command policy neither judges commands nor converts permission dialogs: the sessions then report no enforcement at all. */
@@ -604,6 +608,15 @@ export class SessionService {
 
   queuedMessageCount(sessionId: string): number {
     return this.queue.countPending(sessionId);
+  }
+
+  deliveredMessageCountSince(sessionId: string, since: string): number {
+    return this.queue.countDeliveredSince(sessionId, since);
+  }
+
+  /** Types the messages that waited while delivery to the session was held. */
+  resumeHeldDelivery(sessionId: string): void {
+    this.guarded(sessionId, () => this.advance(sessionId));
   }
 
   // A messageId lets the caller retry a delivery attempt idempotently: resending the same id to the same
@@ -1742,10 +1755,16 @@ export class SessionService {
     const handle = this.liveHandle(sessionId);
     if (!handle) return;
     if (this.hasUnsentHumanDraft(sessionId)) return;
+    if (this.deps.isDeliveryHeld?.(sessionId)) return;
     // A daemon line ([pulse]) never lands in the composer of a session waiting on the human's answer.
     const isWaitingOnHuman = this.repo.get(sessionId)?.state === 'waiting_input';
     const message = this.queue.nextPending(sessionId, { skipDaemonLines: isWaitingOnHuman });
     if (!message) return;
+    if (this.deps.isMessageObsolete?.({ sessionId, messageId: message.id })) {
+      this.queue.discardQueued({ sessionId, messageId: message.id });
+      this.typeNextMessage(sessionId);
+      return;
+    }
     // Assumes HarnessHandle.typeMessage throws only when no bytes reached the pty: a failed body is retyped from 'ready'.
     handle.typeMessage(message.body);
     // typeMessage frames the body as one bracketed paste (see claudeCli/bracketedPaste.ts) so the composer

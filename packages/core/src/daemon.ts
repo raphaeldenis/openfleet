@@ -59,6 +59,7 @@ import { loadModelTable } from './models.js';
 import { DocsFolderService } from './notes/docsFolderService.js';
 import { registerHandoffOnClose } from './notes/handoffService.js';
 import { ChildAutoRestarter } from './managers/childAutoRestarter.js';
+import { SleepHandoff } from './managers/sleepHandoff.js';
 import { ChildRestartLedger } from './managers/childRestartLedger.js';
 import { loadHandoffSettings } from './notes/handoffSettings.js';
 import { DocsRootSettings } from './notes/docsRootSettings.js';
@@ -166,7 +167,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     const { document, unattended } = commandPolicyService.settings();
     return document.mode !== 'off' || unattended.askBecomesDeny;
   };
-  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, binaryHealth: options.binaryHealth, launchOutputTimeoutMs: DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}), isCommandPolicyActive });
+  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, binaryHealth: options.binaryHealth, launchOutputTimeoutMs: DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, isDeliveryHeld: (sessionId) => managerRepository.get(sessionId)?.mode === 'disabled', isMessageObsolete: (message) => managerRepository.isObsoleteSleepHandoff(message), profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}), isCommandPolicyActive });
   const approvals = new ApprovalService({ db, bus, timeoutMs: options.approvalTimeoutMs });
   // A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
   // process that would have decided it is gone with the old daemon.
@@ -203,6 +204,11 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const childAutoRestarter = new ChildAutoRestarter({
     bus, sessions, managers: managerRepository, ledger: new ChildRestartLedger(db),
     clock: options.childRestart?.clock ?? Date.now, schedule: options.childRestart?.schedule ?? scheduleOnRealClock,
+  });
+  const sleepHandoff = new SleepHandoff({ bus, sessions, managers: managerRepository, clock: () => new Date().toISOString() });
+  bus.subscribe((event) => {
+    const isReactivated = event.type === 'manager.updated' && event.manager.mode !== 'disabled';
+    if (isReactivated) sessions.resumeHeldDelivery(event.manager.sessionId);
   });
   const governanceQueue = new GovernanceQueueService({
     db, bus, clock: () => new Date().toISOString(), newId,
@@ -325,6 +331,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     await sessions.resumeAll();
     pulseScheduler.start();
     scheduledEvents.start();
+    sleepHandoff.start();
     idleChildWatcher.start();
   } catch (error) {
     await closeWithin({ timeoutMs: REFUSED_BOOT_CLOSE_TIMEOUT_MS, close });

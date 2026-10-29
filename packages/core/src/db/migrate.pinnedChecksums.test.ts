@@ -57,6 +57,7 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '048_ds_column_metadata': 'a2b85d78b9048f8ec334aaaf5a80b3987d15c05117bc1ab2e8d600a2efcf2846',
   '049_argus_scheduled_events': 'f55ad8363f95a6913e1016f23fc3f779cad7e00281f8d552665fcc6f4cc8b2f7',
   '050_child_auto_restart': '8f77f9f0ffdd35998a59921e8d172912a025d52b3945b6f98c1d339678468e43',
+  '051_manager_mode': 'a4f0c389ed4a2f3ae444a7a4e374452b32f277432491f93a17d3eaed6226db0f',
 };
 
 const migrationVersionsOnDisk = () =>

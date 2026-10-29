@@ -20,6 +20,7 @@ export const ERROR_CODES = {
   invalid_json: { kind: 'invalid_request' },
   invalid_url: { kind: 'invalid_request' },
   invalid_branch_name: { kind: 'invalid_request' },
+  invalid_mode: { kind: 'invalid_request' },
   unknown_harness: { kind: 'invalid_request' },
   // A bad cell value is the caller's row (decision D10): it answers 400, not 409.
   constraint_violation: { kind: 'invalid_request' },

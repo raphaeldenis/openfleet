@@ -59,6 +59,11 @@ export class MessageQueue {
     const result = this.db.prepare(`UPDATE message_queue SET status = 'queued', delivered_at = NULL WHERE id = ? AND status = 'delivered'`).run(id);
     return Number(result.changes) > 0;
   }
+  /** The messages typed to the session at or after `since`, daemon pulses and sleep handoffs excluded. */
+  countDeliveredSince(sessionId: string, since: string): number {
+    const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND status = 'delivered' AND delivered_at >= ? AND body NOT LIKE '[pulse]%' AND id NOT LIKE 'handoff:%'`).get(sessionId, since) as { n: number };
+    return row.n;
+  }
   countPending(sessionId: string): number {
     const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND status = 'queued'`).get(sessionId) as { n: number };
     return row.n;

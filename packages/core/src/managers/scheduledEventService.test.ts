@@ -42,6 +42,7 @@ async function aFleetWithAManager() {
     startBusyTurn: () => hook(manager.id, 'UserPromptSubmit'),
     endTurn: () => { hook(manager.id, 'Stop'); vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS); },
     pause: () => managerService.update(manager.id, { pulseEnabled: false }),
+    disable: () => managerService.update(manager.id, { mode: 'disabled' }),
     resume: () => managerService.update(manager.id, { pulseEnabled: true }),
     schedule: (input: { message?: string; title?: string; at?: string; inMinutes?: number; creator?: 'manager' | 'human' } = {}) =>
       events.schedule({ managerId: manager.id, creator: 'manager', message: 'check the nightly run', ...input }),
@@ -151,15 +152,25 @@ describe('scheduling a manager event', () => {
     expect(fleet.eventLinesWritten()[0]).toContain('delivered late');
   });
 
-  it('holds the event while the manager is paused and replays it on resume', async () => {
+  it('holds the event while the manager is disabled and replays it on reactivation', async () => {
     const fleet = await aFleetWithAManager();
-    fleet.pause();
+    fleet.disable();
     fleet.schedule({ inMinutes: 1 });
 
     fleet.letTimePass(5 * MINUTE_MS);
     expect(fleet.eventLinesWritten()).toEqual([]);
     fleet.resume();
     vi.advanceTimersByTime(SUBMIT_KEYSTROKE_DELAY_MS);
+
+    expect(fleet.eventLinesWritten()).toHaveLength(1);
+  });
+
+  it('delivers the event to a sleeping manager at its due time', async () => {
+    const fleet = await aFleetWithAManager();
+    fleet.pause();
+    fleet.schedule({ inMinutes: 1 });
+
+    fleet.letTimePass(5 * MINUTE_MS);
 
     expect(fleet.eventLinesWritten()).toHaveLength(1);
   });

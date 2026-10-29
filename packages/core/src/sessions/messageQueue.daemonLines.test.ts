@@ -23,6 +23,16 @@ describe('the daemon lines a session waiting on the human skips', () => {
     expect(next?.body).toBe('human hello');
   });
 
+  it('does not count the [sleep] handoff among the messages delivered since it was typed', () => {
+    const queue = aQueueWith([]);
+    const handoff = queue.enqueue({ id: 'handoff:s1:2026-10-29T09:00:00.000Z', sessionId: 's1', body: '[sleep] stop' });
+    const human = queue.enqueue({ sessionId: 's1', body: 'human hello' });
+    queue.markDelivered(handoff.id);
+    queue.markDelivered(human.id);
+
+    expect(queue.countDeliveredSince('s1', '2000-01-01T00:00:00.000Z')).toBe(1);
+  });
+
   it('returns a scheduled event line when daemon lines are not skipped', () => {
     const queue = aQueueWith(['[scheduled event due 2026-10-31T09:30:00] check']);
 

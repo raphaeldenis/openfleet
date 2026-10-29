@@ -1,10 +1,10 @@
-import { isMissionWritable, MANAGER_ROLE, MAX_MISSION_DELTA_BYTES, OpenFleetError, UpdateManagerSchema, type ManagerProfile, type ManagerSpec, type ManagerView, type ScapeImportStatus, type Session, type SessionSpec, type UpdateManager } from '@openfleet/shared';
+import { isMissionWritable, MANAGER_ROLE, MAX_MISSION_DELTA_BYTES, OpenFleetError, UpdateManagerSchema, type ManagerMode, type ManagerProfile, type ManagerSpec, type ManagerView, type ScapeImportStatus, type Session, type SessionSpec, type UpdateManager } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { NoteNotFoundError } from '../notes/noteService.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { StoreNotFoundError } from '../stores/dataStoreRepository.js';
 import { managerFirstPromptOf } from './managerFirstPrompt.js';
-import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
+import { isPulseEnabled, modeOf, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { DEFAULT_HEARTBEAT_SECONDS } from '../workingState/workingStateSettings.js';
 import { toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
 import { isNoteReadInFull, noteReadEventOf, progressAfterOwedMentionRead, progressAfterRead } from './noteReadGuard.js';
@@ -38,6 +38,14 @@ export interface ManagerServiceDeps {
   currentBase?: ManagerBaseIdentity;
   clock?: () => string;
 }
+
+/** The mode a patch asks for: `mode` itself, or the pause/resume alias (a disabled manager stays disabled when paused). */
+const requestedModeOf = (stored: ManagerRecord, patch: UpdateManager): ManagerMode | undefined => {
+  if (patch.mode !== undefined) return patch.mode;
+  if (patch.pulseEnabled === undefined) return undefined;
+  if (patch.pulseEnabled) return 'watching';
+  return modeOf(stored) === 'disabled' ? 'disabled' : 'sleeping';
+};
 
 export class ManagerService {
   private readonly deps: ManagerServiceDeps;
@@ -81,7 +89,8 @@ export class ManagerService {
     const updated = this.deps.managers.changeProfile({
       sessionId, expectedProfileRev,
       apply: (stored) => {
-        isPulseEnabledChanged = validated.pulseEnabled !== undefined && validated.pulseEnabled !== isPulseEnabled(stored);
+        const requestedMode = requestedModeOf(stored, validated);
+        isPulseEnabledChanged = requestedMode !== undefined && (requestedMode === 'watching') !== isPulseEnabled(stored);
         return this.applyProfilePatch(stored, validated);
       },
       committed: (record) => {
@@ -97,26 +106,28 @@ export class ManagerService {
 
   private applyProfilePatch(stored: ManagerRecord, patch: UpdateManager): boolean {
     const sessionId = stored.sessionId;
-    const { mission, model, missionNoteId, pinMissionNote, pulseEnabled, childAutoRestart, expertise, pulseActions } = patch;
+    const { mission, model, missionNoteId, pinMissionNote, childAutoRestart, expertise, pulseActions } = patch;
+    const requestedMode = requestedModeOf(stored, patch);
+    const isModeChange = requestedMode !== undefined && requestedMode !== modeOf(stored);
     if (mission !== undefined) this.requireMissionWritable({ mission, storedMission: stored.missionText });
     const isLinkingNote = typeof missionNoteId === 'string';
     if (isLinkingNote) this.requireNoteOfManagerProject({ managerId: sessionId, noteId: missionNoteId });
     const currentFields = {
       pulseSeconds: stored.pulseSeconds, childrenCap: stored.childrenCap, mission: stored.missionText,
       model: this.deps.sessions.get(sessionId)?.model, missionNoteId: stored.missionNoteId ?? null,
-      pinMissionNote: stored.pinMissionNote === true, pulseEnabled: isPulseEnabled(stored), childAutoRestart: stored.childAutoRestart === true,
+      pinMissionNote: stored.pinMissionNote === true, childAutoRestart: stored.childAutoRestart === true,
       expertise: stored.expertise ?? '', pulseActions: stored.pulseActions ?? [],
     };
     const hasChanges = Object.entries(currentFields).some(([key, value]) => {
       const requested = patch[key as keyof typeof currentFields];
       return requested !== undefined && JSON.stringify(requested) !== JSON.stringify(value);
     });
-    if (!hasChanges) return false;
+    if (!hasChanges && !isModeChange) return false;
     if (model !== undefined && model !== currentFields.model) this.deps.sessions.changeModel(sessionId, model);
     this.deps.managers.update(sessionId, { pulseSeconds: patch.pulseSeconds, childrenCap: patch.childrenCap, missionText: mission, expertise, pulseActions });
     if (missionNoteId !== undefined) this.deps.managers.setMissionNote(sessionId, missionNoteId);
     if (pinMissionNote !== undefined) this.deps.managers.setMissionNotePinned(sessionId, pinMissionNote);
-    if (pulseEnabled !== undefined) this.deps.managers.setPulseEnabled(sessionId, pulseEnabled);
+    if (isModeChange) this.deps.managers.setMode({ sessionId, mode: requestedMode, at: (this.deps.clock ?? (() => new Date().toISOString()))() });
     if (childAutoRestart !== undefined) this.deps.managers.setChildAutoRestart(sessionId, childAutoRestart);
     return true;
   }
@@ -224,6 +235,9 @@ export class ManagerService {
 
   private view(record: ManagerRecord): ManagerView {
     const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && (s.state !== 'closed' || s.restartPending === true)).length;
-    return toManagerView(record, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId), this.deps.currentBase);
+    const view = toManagerView(record, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId), this.deps.currentBase);
+    const handoffDeliveredAt = record.sleepHandoffDeliveredAt;
+    if (!handoffDeliveredAt) return view;
+    return { ...view, inboundSinceSleepHandoff: this.deps.sessions.deliveredMessageCountSince(record.sessionId, handoffDeliveredAt) };
   }
 }

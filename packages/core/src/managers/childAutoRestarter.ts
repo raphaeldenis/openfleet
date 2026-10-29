@@ -4,7 +4,7 @@ import { log } from '../logger.js';
 import { EARLY_EXIT_WINDOW_MS, type SessionService } from '../sessions/sessionService.js';
 import type { ChildRestartLedger } from './childRestartLedger.js';
 import { toSingleLineName } from './singleLineName.js';
-import type { ManagerRepository } from './managerRepository.js';
+import { modeOf, type ManagerRepository } from './managerRepository.js';
 
 /** The wait before each successive restart of a child inside the window; its length is the cap of restarts. */
 export const CHILD_RESTART_DELAYS_MS = [5_000, 30_000, 120_000] as const;
@@ -29,11 +29,13 @@ export interface ChildAutoRestarterDeps {
  */
 export class ChildAutoRestarter {
   private readonly cancelByChildId = new Map<string, () => void>();
+  private readonly missedWhileDisabled = new Map<string, Set<string>>();
   private readonly unsubscribe: () => void;
 
   constructor(private readonly deps: ChildAutoRestarterDeps) {
     const unsubscribeFromBus = deps.bus.subscribe((event) => {
       if (event.type === 'session.closed') this.onSessionClosed(event);
+      if (event.type === 'manager.updated') this.onManagerUpdated(event.manager.sessionId);
     });
     const unsubscribeFromCloseRequests = deps.sessions.onCloseRequested((childId) => this.cancelPendingRestart(childId));
     this.unsubscribe = () => { unsubscribeFromBus(); unsubscribeFromCloseRequests(); };
@@ -50,13 +52,31 @@ export class ChildAutoRestarter {
 
   private onSessionClosed({ sessionId: childId, reason }: SessionClosedEvent): void {
     const isCrash = reason === 'harness_exit';
-    if (!isCrash) return;
+    if (isCrash) this.decideRestartOf(childId);
+  }
+
+  // A disabled manager gets no restart: the crashes it missed are looked at once, when it is reactivated.
+  private onManagerUpdated(managerId: string): void {
+    const record = this.deps.managers.get(managerId);
+    const missed = this.missedWhileDisabled.get(managerId);
+    const isReactivated = record !== undefined && modeOf(record) !== 'disabled' && missed !== undefined;
+    if (!isReactivated) return;
+    this.missedWhileDisabled.delete(managerId);
+    for (const childId of missed) this.decideRestartOf(childId);
+  }
+
+  private decideRestartOf(childId: string): void {
     const child = this.deps.sessions.get(childId);
     const managerId = child?.parentId;
-    if (!child || !managerId) return;
-    const managerOptedIn = this.deps.managers.get(managerId)?.childAutoRestart === true;
+    if (!child || !managerId || child.state !== 'closed') return;
+    const manager = this.deps.managers.get(managerId);
+    const managerOptedIn = manager?.childAutoRestart === true;
     if (!managerOptedIn) return;
     if (this.cancelByChildId.has(childId)) return;
+    if (modeOf(manager) === 'disabled') {
+      this.rememberMissed(managerId, childId);
+      return;
+    }
 
     const label = this.labelOf(child);
     if (this.neverStarted(childId)) {
@@ -100,10 +120,15 @@ export class ChildAutoRestarter {
     const managerId = child?.parentId;
     if (!child || !managerId) return;
     const isStillClosed = child.state === 'closed';
-    const managerStillOptedIn = this.deps.managers.get(managerId)?.childAutoRestart === true;
+    const manager = this.deps.managers.get(managerId);
+    const managerStillOptedIn = manager?.childAutoRestart === true;
     const managerState = this.deps.sessions.get(managerId)?.state;
     const isManagerAlive = managerState !== undefined && managerState !== 'closed';
     if (!isStillClosed || !managerStillOptedIn || !isManagerAlive) return;
+    if (modeOf(manager) === 'disabled') {
+      this.rememberMissed(managerId, childId);
+      return;
+    }
 
     const label = this.labelOf(child);
     this.deps.ledger.record(childId, new Date(this.deps.clock()).toISOString());
@@ -114,6 +139,12 @@ export class ChildAutoRestarter {
       log('warn', `child restart: ${childId} could not be reopened`, error);
       this.tell(managerId, `[harness_exited] ${label} crashed and could not be restarted: it stays closed.`);
     }
+  }
+
+  private rememberMissed(managerId: string, childId: string): void {
+    const missed = this.missedWhileDisabled.get(managerId) ?? new Set<string>();
+    missed.add(childId);
+    this.missedWhileDisabled.set(managerId, missed);
   }
 
   private labelOf(child: { id: string; name: string }): string {

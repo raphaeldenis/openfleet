@@ -30,7 +30,7 @@ export function registerScheduledEventTools(server: McpServer, { scheduledEvents
   };
 
   server.registerTool('schedule_argus_event', {
-    description: 'Schedule a message to yourself, delivered once at a local time (at) or after a delay (in_minutes), prefixed [scheduled event …]. Delivered late rather than lost if the app was closed; held while you are paused or closed.',
+    description: 'Schedule a message to yourself, delivered once at a local time (at) or after a delay (in_minutes), prefixed [scheduled event …]. Delivered late rather than lost if the app was closed; held while you are disabled or closed.',
     inputSchema: {
       message: z.string().describe('The text you receive when the event is due (max 8192 bytes)'),
       title: z.string().optional().describe('A short label shown in the delivered line and in the list (max 80 characters)'),

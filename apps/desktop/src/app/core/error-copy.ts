@@ -34,6 +34,7 @@ interface CodeCopy {
 
 const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   invalid_body: { what: 'The daemon rejected these values', fix: 'check them and change what is wrong' },
+  invalid_mode: { what: 'That manager mode does not exist', fix: 'choose watching, sleeping or disabled' },
   invalid_json: { what: 'The app sent a request the daemon could not read', fix: 'restart the app' },
   invalid_url: { what: 'That address is not valid', fix: 'check it' },
   invalid_branch_name: { what: 'The branch name is not valid', fix: 'pick another one' },

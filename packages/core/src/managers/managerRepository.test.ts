@@ -13,7 +13,46 @@ describe('ManagerRepository', () => {
     insertSession(db, 's1');
     const repo = new ManagerRepository(db);
     repo.insert({ sessionId: 's1', pulseSeconds: 1800, childrenCap: 2, missionText: 'Ship it', createdAt: 't0' });
-    expect(repo.get('s1')).toEqual({ sessionId: 's1', pulseSeconds: 1800, childrenCap: 2, missionText: 'Ship it', lastPulseAt: undefined, createdAt: 't0', pinMissionNote: false, pulseEnabled: true, childAutoRestart: false, expertise: '', pulseActions: [], profileRev: 1 });
+    expect(repo.get('s1')).toEqual({ sessionId: 's1', pulseSeconds: 1800, childrenCap: 2, missionText: 'Ship it', lastPulseAt: undefined, createdAt: 't0', pinMissionNote: false, pulseEnabled: true, mode: 'watching', sleepHandoffPending: false, childAutoRestart: false, expertise: '', pulseActions: [], profileRev: 1 });
+  });
+
+  describe('the queued [sleep] handoff', () => {
+    const aSleepingManagerWithQueuedHandoff = () => {
+      const db = openDatabase(':memory:');
+      insertSession(db, 's1');
+      const repo = new ManagerRepository(db);
+      repo.insert({ sessionId: 's1', pulseSeconds: 60, childrenCap: 1, missionText: 'a', createdAt: 't0' });
+      repo.setMode({ sessionId: 's1', mode: 'sleeping', at: 't1' });
+      db.prepare("INSERT INTO message_queue (id, session_id, body, status, created_at) VALUES ('handoff:s1:t1', 's1', '[sleep] stop', 'queued', 't1')").run();
+      const queuedIds = () => (db.prepare("SELECT id FROM message_queue WHERE status = 'queued'").all() as { id: string }[]).map((row) => row.id);
+      return { repo, queuedIds };
+    };
+
+    it.each(['watching', 'disabled'] as const)('is dropped when the manager leaves sleeping for %s', (mode) => {
+      const { repo, queuedIds } = aSleepingManagerWithQueuedHandoff();
+
+      repo.setMode({ sessionId: 's1', mode, at: 't2' });
+
+      expect(queuedIds()).toEqual([]);
+    });
+
+    it('is kept when the manager re-enters sleeping', () => {
+      const { repo, queuedIds } = aSleepingManagerWithQueuedHandoff();
+
+      repo.setMode({ sessionId: 's1', mode: 'sleeping', at: 't2' });
+
+      expect(queuedIds()).toEqual(['handoff:s1:t1']);
+    });
+
+    it('is obsolete once the manager is no longer sleeping, and owed while it sleeps', () => {
+      const { repo } = aSleepingManagerWithQueuedHandoff();
+      const whileSleeping = repo.isObsoleteSleepHandoff({ sessionId: 's1', messageId: 'handoff:s1:t1' });
+      repo.setMode({ sessionId: 's1', mode: 'watching', at: 't2' });
+
+      const afterWaking = repo.isObsoleteSleepHandoff({ sessionId: 's1', messageId: 'handoff:s1:t1' });
+
+      expect({ whileSleeping, afterWaking }).toEqual({ whileSleeping: false, afterWaking: true });
+    });
   });
 
   it('returns undefined for a session with no manager record', () => {

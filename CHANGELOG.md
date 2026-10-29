@@ -2,6 +2,14 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 11 — 2026-10-29
+
+- PARITY-ARGUS-07b, `get_argus_status`: the `manager` record gains `mode` (`watching`, `sleeping` or `disabled`), `modeChangedAt`, `sleepHandoffPending` and `sleepHandoffDeliveredAt`. `pulseEnabled` stays and reads true only while the mode is `watching`. There is no tool to change the mode: a manager never changes its own, the human does it with `PATCH /api/managers/:id`.
+
+Tools added: none.
+Tools changed: none (the `get_argus_status` result gains fields; its input schema is unchanged).
+Migrations: 051, `managers.mode`, `mode_changed_at`, `sleep_handoff_pending`, `sleep_handoff_delivered_at`.
+
 ## 10 — 2026-10-29
 
 - NOTE-RESTORE-REQUIRE-REV01, `restore_note_version`: `expected_rev` is now required in practice. A call without it used to succeed with a `warning` in the reply; it is now refused with `invalid_body` ("expected_rev is required to restore a note version: call get_note to read its rev, then pass it as expected_rev") and the note is not changed. A call with `expected_rev` behaves as before (`stale_revision` when it differs from the current rev). The input schema is unchanged (`expected_rev` stays optional in the schema so the refusal carries this message instead of a generic validation error), so the pinned hashes do not move; the version is raised by hand because a call that succeeded is now refused. The `warning` field of the reply is gone. Clients: call `get_note` first and pass its `rev`.

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { ManagerExpertiseSchema, ManagerPulseActionsSchema, ManagerRecordBoundsSchema, OpenFleetError, type ManagerBaseRead } from '@openfleet/shared';
+import { ManagerExpertiseSchema, ManagerPulseActionsSchema, ManagerRecordBoundsSchema, OpenFleetError, type ManagerBaseRead, type ManagerMode } from '@openfleet/shared';
 import { afterCommit, inTransaction } from '../db/transaction.js';
 import { log } from '../logger.js';
 import type { NoteReadProgress } from './noteReadGuard.js';
@@ -19,6 +19,12 @@ export interface ManagerRecord {
   logStoreId?: string;
   /** Absent on a new record: the manager starts enabled. False while paused. */
   pulseEnabled?: boolean;
+  /** Absent on a new record: the manager is watching. Derived from pulseEnabled when a record predates the modes. */
+  mode?: ManagerMode;
+  modeChangedAt?: string;
+  /** True from the switch to sleeping until the [sleep] message is delivered. */
+  sleepHandoffPending?: boolean;
+  sleepHandoffDeliveredAt?: string;
   /** Absent on a new record: the manager's children are not restarted when they crash. */
   childAutoRestart?: boolean;
   /** The whole manager base the manager last read; absent while it never read it. */
@@ -33,6 +39,7 @@ interface Row {
   expertise: string | null; pulse_actions: string | null; profile_rev: number;
   session_id: string; pulse_seconds: number; children_cap: number; mission_text: string; last_pulse_at: string | null; created_at: string;
   mission_note_id: string | null; pin_mission_note: number; log_store_id: string | null; pulse_enabled: number; child_auto_restart: number;
+  mode: ManagerMode; mode_changed_at: string | null; sleep_handoff_pending: number; sleep_handoff_delivered_at: string | null;
   base_version_read: number | null; base_sha_read: string | null; base_read_at: string | null;
   note_read: string | null; note_read_reset_at: string | null;
 }
@@ -76,13 +83,21 @@ const toManager = (r: Row): ManagerRecord => ({
   missionText: r.mission_text, lastPulseAt: r.last_pulse_at ?? undefined, createdAt: r.created_at,
   missionNoteId: r.mission_note_id ?? undefined, pinMissionNote: r.pin_mission_note === 1, logStoreId: r.log_store_id ?? undefined,
   pulseEnabled: r.pulse_enabled === 1,
+  mode: r.mode, modeChangedAt: r.mode_changed_at ?? undefined,
+  sleepHandoffPending: r.sleep_handoff_pending === 1, sleepHandoffDeliveredAt: r.sleep_handoff_delivered_at ?? undefined,
   childAutoRestart: r.child_auto_restart === 1,
   baseRead: baseReadOf(r),
   noteRead: noteReadOf(r), noteReadResetAt: r.note_read_reset_at ?? undefined,
 });
 
-/** Whether the manager receives pulses: only an explicit false pauses it. */
-export const isPulseEnabled = (record: Pick<ManagerRecord, 'pulseEnabled'>): boolean => record.pulseEnabled !== false;
+/** The mode of the manager: a record that carries none is watching, or sleeping when its pulses were paused. */
+export const modeOf = (record: Pick<ManagerRecord, 'mode' | 'pulseEnabled'>): ManagerMode => record.mode ?? (record.pulseEnabled === false ? 'sleeping' : 'watching');
+
+/** Whether the manager receives timed pulses: only a watching manager does. */
+export const isPulseEnabled = (record: Pick<ManagerRecord, 'mode' | 'pulseEnabled'>): boolean => modeOf(record) === 'watching';
+
+/** The id of the [sleep] message of one switch to sleeping: a second enqueue of the same switch is the same message. */
+export const sleepHandoffMessageId = ({ sessionId, modeChangedAt }: { sessionId: string; modeChangedAt: string }): string => `handoff:${sessionId}:${modeChangedAt}`;
 
 const definedFieldsOf = <T extends object>(fields: T): Partial<T> => Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as Partial<T>;
 
@@ -160,8 +175,38 @@ export class ManagerRepository {
   setMissionNotePinned(sessionId: string, isPinned: boolean): void {
     this.db.prepare('UPDATE managers SET pin_mission_note = ? WHERE session_id = ?').run(Number(isPinned), sessionId);
   }
+  /**
+   * The only writer of the mode: pulse_enabled follows it, and a switch to sleeping owes the manager one [sleep] message.
+   * Does nothing when the manager already has this mode, so a repeated switch keeps its modeChangedAt.
+   * Leaving sleeping drops the [sleep] message still waiting in the queue.
+   */
+  setMode({ sessionId, mode, at }: { sessionId: string; mode: ManagerMode; at: string }): void {
+    const isSwitchToSleeping = mode === 'sleeping';
+    const { changes } = this.db.prepare(`UPDATE managers SET mode = ?, mode_changed_at = ?, pulse_enabled = ?, sleep_handoff_pending = ?, sleep_handoff_delivered_at = NULL
+      WHERE session_id = ? AND mode <> ?`).run(mode, at, Number(mode === 'watching'), Number(isSwitchToSleeping), sessionId, mode);
+    const hasLeftSleeping = Number(changes) > 0 && !isSwitchToSleeping;
+    if (hasLeftSleeping) this.db.prepare(`DELETE FROM message_queue WHERE session_id = ? AND status = 'queued' AND id LIKE 'handoff:%'`).run(sessionId);
+  }
+  /** Whether the queued message is a [sleep] handoff the manager no longer owes: it is not sleeping, or the handoff belongs to an earlier switch. */
+  isObsoleteSleepHandoff({ sessionId, messageId }: { sessionId: string; messageId: string }): boolean {
+    const isSleepHandoff = messageId.startsWith('handoff:');
+    if (!isSleepHandoff) return false;
+    const record = this.get(sessionId);
+    const isSleeping = record !== undefined && modeOf(record) === 'sleeping';
+    const isCurrentSwitch = record?.modeChangedAt !== undefined && messageId === sleepHandoffMessageId({ sessionId, modeChangedAt: record.modeChangedAt });
+    return !(isSleeping && isCurrentSwitch);
+  }
+  /** Pause and resume are the sleeping and watching modes. */
   setPulseEnabled(sessionId: string, isEnabled: boolean): void {
-    this.db.prepare('UPDATE managers SET pulse_enabled = ? WHERE session_id = ?').run(Number(isEnabled), sessionId);
+    this.setMode({ sessionId, mode: isEnabled ? 'watching' : 'sleeping', at: new Date().toISOString() });
+  }
+  /** The [sleep] message reached the manager: nothing is owed any more. */
+  markSleepHandoffDelivered(sessionId: string, at: string): void {
+    this.db.prepare('UPDATE managers SET sleep_handoff_pending = 0, sleep_handoff_delivered_at = ? WHERE session_id = ? AND sleep_handoff_pending = 1').run(at, sessionId);
+  }
+  /** The managers that still owe their [sleep] message. */
+  sessionIdsOwingSleepHandoff(): string[] {
+    return (this.db.prepare('SELECT session_id FROM managers WHERE sleep_handoff_pending = 1').all() as { session_id: string }[]).map((row) => row.session_id);
   }
   setChildAutoRestart(sessionId: string, isEnabled: boolean): void {
     this.db.prepare('UPDATE managers SET child_auto_restart = ? WHERE session_id = ?').run(Number(isEnabled), sessionId);
