@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OnboardingComponent } from './onboarding.component';
 
 const PROJECT = { id: '3f2b8c1e-5d4a-4b6e-9a7c-1d2e3f4a5b6c', name: 'Fleet', docsFolderPath: null };
@@ -58,8 +58,73 @@ async function saveProject(user: ReturnType<typeof userEvent.setup>) {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
 }
 
+const REMEMBERED_PROJECT_KEY = 'openfleet.onboarding.projectId';
+const REMEMBERED_REPOSITORY_PATH_KEY = 'openfleet.onboarding.repositoryPath';
+
 describe('onboarding project', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => localStorage.clear());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  describe('resuming after a reload', () => {
+    it('remembers the project it creates', async () => {
+      const { user } = await openProjectStep();
+
+      await saveProject(user);
+
+      expect(localStorage.getItem(REMEMBERED_PROJECT_KEY)).toBe(PROJECT.id);
+    });
+
+    it('shows the project it created before the reload as ready, with its repository path, Continue enabled and no second creation', async () => {
+      localStorage.setItem(REMEMBERED_PROJECT_KEY, PROJECT.id);
+      localStorage.setItem('openfleet.onboarding.repositoryPath', '/work/fleet');
+
+      const { requests } = await openProjectStep();
+
+      expect(await screen.findByText('Fleet', { exact: true })).toBeInTheDocument();
+      expect(screen.getByLabelText('Repository path')).toHaveValue('/work/fleet');
+      expect(screen.getByText(/Project ready/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Create project' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+      expect(projectPosts(requests)).toHaveLength(0);
+    });
+
+    it('forgets the remembered project and repository path once the user continues to the first session', async () => {
+      const { user } = await openProjectStep();
+      await saveProject(user);
+
+      await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+      await screen.findByRole('heading', { name: 'Start your first session' });
+      expect(localStorage.getItem(REMEMBERED_PROJECT_KEY)).toBeNull();
+      expect(localStorage.getItem(REMEMBERED_REPOSITORY_PATH_KEY)).toBeNull();
+    });
+
+    it('still shows the project step when the browser storage refuses to be read', async () => {
+      const readStorage = Storage.prototype.getItem;
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+        const isOnboardingKey = key.startsWith('openfleet.onboarding.');
+        if (isOnboardingKey) throw new DOMException('storage is blocked', 'SecurityError');
+        return readStorage.call(this, key);
+      });
+
+      await openProjectStep();
+
+      expect(screen.getByRole('button', { name: 'Create project' })).toBeInTheDocument();
+    });
+
+    it('shows the empty form when the remembered project no longer exists on the daemon', async () => {
+      localStorage.setItem(REMEMBERED_PROJECT_KEY, 'deleted-project-id');
+
+      await openProjectStep();
+
+      expect(screen.getByRole('button', { name: 'Create project' })).toBeInTheDocument();
+      expect(screen.queryByText(/Project ready/)).not.toBeInTheDocument();
+    });
+  });
 
   it('requires a saved daemon project before switching to the first session', async () => {
     const { user, requests } = await openProjectStep();
@@ -150,6 +215,21 @@ describe('onboarding project', () => {
 
       await waitFor(() => expect(projectPosts(requests)).toHaveLength(1));
       expect(projectPosts(requests)[0]!.body).toMatchObject({ docsFolderPath: '/Users/me/notes/fleet' });
+    });
+
+    it.each(['/Users/me/qa-docs/../x', '/Users/me/./x', '/Users/me/x/..'])('tells that %s holds a "." or ".." segment instead of calling an absolute path unusable, and sends nothing', async (typedFolder) => {
+      const { user, requests } = await openProjectStep();
+      await typeName(user, 'Fleet');
+      await user.click(screen.getByRole('button', { name: 'Change…' }));
+      const folderField = screen.getByLabelText('Specs and docs are saved in');
+      await user.clear(folderField);
+      await user.type(folderField, typedFolder);
+
+      await user.click(screen.getByRole('button', { name: 'Create project' }));
+
+      expect(await screen.findByTestId('project-form-error')).toHaveTextContent('That folder path cannot contain "." or ".." — type the full absolute path.');
+      expect(folderField).toHaveAttribute('aria-invalid', 'true');
+      expect(projectPosts(requests)).toHaveLength(0);
     });
 
     it('shows a folder the daemon refuses under the field, keeps what was typed and focuses the field', async () => {

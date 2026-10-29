@@ -117,7 +117,7 @@ describe('the docs root setting of a booted daemon', () => {
     expect(existsSync(join(outside, 'docs'))).toBe(false);
   });
 
-  it.each(['.claude', '.scape', '.openfleet'])('refuses ~/%s and anything below it, creating nothing', async (reservedFolder) => {
+  it.each(['.claude', '.scape', '.openfleet', '.openfleet-dev'])('refuses ~/%s and anything below it, creating nothing', async (reservedFolder) => {
     const reservedPath = join(userHome, reservedFolder);
     mkdirSync(reservedPath);
 
@@ -135,9 +135,10 @@ describe('the docs root setting of a booted daemon', () => {
     ['.CLAUDE', ['.CLAUDE', 'sub']],
     ['.Claude', ['.Claude']],
     ['.OPENFLEET', ['.OPENFLEET', 'y']],
+    ['.OPENFLEET-DEV', ['.OPENFLEET-DEV', 'y']],
     ['.SCAPE with a missing sub folder', ['.SCAPE', 'missing', 'deeper']],
   ])('refuses %s whatever the letter case, creating nothing', async (_label, segments) => {
-    const keptFolders = ['.claude', '.scape', '.openfleet'];
+    const keptFolders = ['.claude', '.scape', '.openfleet', '.openfleet-dev'];
     keptFolders.forEach((folder) => mkdirSync(join(userHome, folder)));
 
     const response = await saveRoot(join(userHome, ...segments));
@@ -154,6 +155,19 @@ describe('the docs root setting of a booted daemon', () => {
 
     expect((await response.json()).error).toBe('docs_root_forbidden');
     expect(readdirSync(userHome)).toEqual([]);
+  });
+
+  it.each([
+    ['a parent segment', ['Documents', 'qa-docs', '..', 'x']],
+    ['a current-folder segment', ['Documents', '.', 'x']],
+  ])('refuses a root with %s instead of normalizing it, creating nothing', async (_label, segments) => {
+    const typedRoot = [userHome, ...segments].join('/');
+
+    const response = await saveRoot(typedRoot);
+
+    expect((await response.json()).error).toBe('docs_root_invalid');
+    expect(existsSync(join(userHome, 'Documents'))).toBe(false);
+    expect((await readRoot()).isDefault).toBe(true);
   });
 
   it('refuses the home folder itself', async () => {

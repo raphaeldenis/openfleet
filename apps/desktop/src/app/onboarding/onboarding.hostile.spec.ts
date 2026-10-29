@@ -83,9 +83,13 @@ async function reachFirstSessionStep({ repositoryPath = REPOSITORY_PATH, canOpen
 }
 
 describe('Onboarding — hostile black-box suite', () => {
-  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
+  beforeEach(() => {
+    localStorage.clear();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
   afterEach(() => {
     vi.useRealTimers();
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 

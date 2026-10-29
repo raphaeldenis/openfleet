@@ -12,6 +12,22 @@ type StepId = 'daemon' | 'providers' | 'project' | 'playbooks' | 'team' | 'first
 
 const APP_HOME_URL = '/';
 const DEFERRED_STEP_LABEL = 'Available in a later phase';
+const REMEMBERED_PROJECT_KEY = 'openfleet.onboarding.projectId';
+const REMEMBERED_REPOSITORY_PATH_KEY = 'openfleet.onboarding.repositoryPath';
+
+function guardedStorage<Result>(access: () => Result, fallback: Result): Result {
+  try {
+    return access();
+  } catch {
+    return fallback;
+  }
+}
+
+const rememberedValues = {
+  read: (key: string): string | null => guardedStorage(() => localStorage.getItem(key), null),
+  write: (key: string, value: string): void => guardedStorage(() => localStorage.setItem(key, value), undefined),
+  forget: (key: string): void => guardedStorage(() => localStorage.removeItem(key), undefined),
+};
 
 const STEPS: ReadonlyArray<{ id: StepId; name: string; isBuilt: boolean }> = [
   { id: 'daemon', name: 'Daemon', isBuilt: true },
@@ -128,6 +144,8 @@ export class OnboardingComponent {
   protected rememberProject(project: Project): void {
     this.savedProject.set(project);
     this.firstSessionSeed.projectId.set(project.id);
+    rememberedValues.write(REMEMBERED_PROJECT_KEY, project.id);
+    rememberedValues.write(REMEMBERED_REPOSITORY_PATH_KEY, this.repositoryPath());
   }
 
   protected cancelProjectSetup(): void {
@@ -135,6 +153,8 @@ export class OnboardingComponent {
   }
 
   protected continueToFirstSession(): void {
+    rememberedValues.forget(REMEMBERED_PROJECT_KEY);
+    rememberedValues.forget(REMEMBERED_REPOSITORY_PATH_KEY);
     this.firstSessionSeed.directory.set(this.repositoryPath().trim());
     this.currentStepId.set('first-session');
   }
@@ -148,7 +168,23 @@ export class OnboardingComponent {
     const isReturningUser = isDeepLink || (await this.fleetHasSessions());
     if (this.isDestroyed) return;
     if (isReturningUser) await this.router.navigateByUrl(this.returnUrl).then((isOpened) => isOpened || this.showProjectStep(), () => this.showProjectStep());
-    else this.showProjectStep();
+    else await this.resumeThenShowProjectStep();
+  }
+
+  private async resumeThenShowProjectStep(): Promise<void> {
+    await this.resumeRememberedProject();
+    if (!this.isDestroyed) this.showProjectStep();
+  }
+
+  /** Finds again, on the daemon, the project this onboarding created before a reload; a project the daemon no longer has is forgotten. */
+  private async resumeRememberedProject(): Promise<void> {
+    const rememberedProjectId = rememberedValues.read(REMEMBERED_PROJECT_KEY);
+    if (rememberedProjectId === null || this.savedProject()) return;
+    const { items: projects } = await this.api.listProjects().catch(() => ({ items: [] as Project[] }));
+    const rememberedProject = projects.find((project) => project.id === rememberedProjectId);
+    if (!rememberedProject || this.isDestroyed) return;
+    this.repositoryPath.set(rememberedValues.read(REMEMBERED_REPOSITORY_PATH_KEY) ?? '');
+    this.rememberProject(rememberedProject);
   }
 
   protected showProjectStep(): void {

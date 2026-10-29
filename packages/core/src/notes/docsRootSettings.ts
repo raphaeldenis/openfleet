@@ -8,7 +8,7 @@ import { updateConfigFile } from '../models.js';
 import { DocsFolderNotWritableError, InvalidDocsFolderError } from './docsFolderService.js';
 
 const DEFAULT_ROOT_UNDER_HOME = join('Documents', 'OpenFleet');
-const RESERVED_FOLDERS_UNDER_HOME = ['.claude', '.scape', '.openfleet'];
+const RESERVED_FOLDERS_UNDER_HOME = ['.claude', '.scape', '.openfleet', '.openfleet-dev'];
 const MAX_ROOT_LENGTH = 1024;
 const MAX_FOLDER_NAME_LENGTH = 100;
 const UNSAFE_FOLDER_NAME_CHARACTERS = /[\\/:\u0000-\u001f]+/g;
@@ -167,6 +167,8 @@ export class DocsRootSettings {
     if (!isUsableText || !isAbsolute(trimmedRoot)) throw invalid();
 
     const lexicalRoot = resolve(trimmedRoot);
+    const isFreeOfDotSegments = lexicalRoot === withoutRedundantSlashes(trimmedRoot);
+    if (!isFreeOfDotSegments) throw invalid();
     const resolvedRoot = this.resolveOrRefuse(lexicalRoot);
     this.refuseReservedFolders({ lexicalRoot, resolvedRoot });
     this.refuseOutsideHome(resolvedRoot);

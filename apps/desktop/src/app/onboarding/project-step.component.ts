@@ -10,6 +10,8 @@ const DOCS_FOLDER_ERROR_CODES: ReadonlySet<string> = new Set(['invalid_body', 'd
 const NAME_REQUIRED = 'Name is required';
 const NAME_TOO_LONG = `The name must be ${MAX_PROJECT_NAME_CHARS} characters or fewer`;
 const DOCS_FOLDER_REQUIRED = 'Docs folder is required';
+const DOCS_FOLDER_DOT_SEGMENT = 'That folder path cannot contain "." or ".." — type the full absolute path.';
+const hasDotSegment = (path: string): boolean => path.split('/').some((segment) => segment === '.' || segment === '..');
 const DOCS_SUBFOLDERS = ['specs/', 'plans/', 'handoffs/', 'reports/'];
 const COMMAND_FIELDS: ReadonlyArray<{ kind: ProjectCommandName; label: string }> = [
   { kind: 'install', label: 'install' },
@@ -328,9 +330,11 @@ export class ProjectStepComponent {
     const isStillOnlyTheRoot = this.typedFolder() === undefined && docsFolderPath.endsWith('/');
     const isFolderMissing = docsFolderPath === '' || isStillOnlyTheRoot;
     this.nameError.set(nameError);
-    this.folderRequiredError.set(nameError === '' && isFolderMissing ? DOCS_FOLDER_REQUIRED : '');
+    const isFolderWithDotSegment = hasDotSegment(docsFolderPath);
+    const folderError = isFolderMissing ? DOCS_FOLDER_REQUIRED : isFolderWithDotSegment ? DOCS_FOLDER_DOT_SEGMENT : '';
+    this.folderRequiredError.set(nameError === '' ? folderError : '');
     if (nameError) return this.focusNameAfterRender();
-    if (isFolderMissing) {
+    if (isFolderMissing || isFolderWithDotSegment) {
       this.isEditingFolder.set(true);
       return this.focusDocsFolderAfterRender();
     }

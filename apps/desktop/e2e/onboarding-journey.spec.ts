@@ -119,6 +119,23 @@ for (const theme of THEMES) {
       await expect(page.getByRole('button', { name: 'Continue' })).toBeDisabled();
     });
 
+    test('reloading the project step finds the project again, ready to continue, without creating a second one', async ({ page }) => {
+      await startAFirstRunOnABlankFleet(page, theme);
+      await page.goto('/onboarding');
+      const projectName = uniqueProjectName();
+      await page.getByLabel('Repository path').fill('/tmp');
+      await createTheProject(page, { name: projectName, docsFolder });
+
+      await page.reload();
+
+      await expect(page.getByText(`Project ready: ${projectName}`)).toBeVisible();
+      await expect(page.getByLabel('Repository path')).toHaveValue('/tmp');
+      await expect(page.getByRole('button', { name: 'Create project' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Continue' })).toBeEnabled();
+      const { items } = await (await page.request.get(`${api}/api/projects`, { headers: adminHeaders })).json();
+      expect(items.filter((project: { name: string }) => project.name === projectName)).toHaveLength(1);
+    });
+
     test('the whole journey creates a project, starts the first session on it and leaves onboarding for that session', async ({ page }) => {
       await startAFirstRunOnABlankFleet(page, theme);
       await createFirstSessionsOnTheFakeHarness(page, createdSessionIds);
