@@ -1,4 +1,4 @@
-import { isLegacyMission, type ManagerView } from '@openfleet/shared';
+import { ARBITER_ROLE, isLegacyMission, type ManagerView, type Session } from '@openfleet/shared';
 import { isPulseEnabled, modeOf, type ManagerRecord } from './managerRepository.js';
 import { nextPulseAt } from './pulseTiming.js';
 
@@ -10,6 +10,13 @@ export interface DeniedCommandCounts {
 }
 
 export const NO_DENIED_COMMANDS: DeniedCommandCounts = { deniedCommandCount: 0, deniedCommandTotal: 0, noteNotReadWarningCount: 0 };
+
+/** A child counts against the children cap of its manager while it is live or waiting for the daemon to restart it; the arbiter the daemon spawns never counts. */
+export const countsAgainstChildrenCap = (child: Pick<Session, 'role' | 'state' | 'restartPending'>): boolean => {
+  const isArbiter = child.role === ARBITER_ROLE;
+  const isActive = child.state !== 'closed' || child.restartPending === true;
+  return isActive && !isArbiter;
+};
 
 export interface ManagerBaseIdentity {
   version: number;

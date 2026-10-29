@@ -57,10 +57,10 @@ async function aNote(title: string): Promise<{ id: string }> {
   return { id: created.id ?? created.data!.id };
 }
 
-async function bootManager({ pulseSeconds = WATCHING_PULSE_SECONDS, withJournal = true } = {}) {
+async function bootManager({ pulseSeconds = WATCHING_PULSE_SECONDS, withJournal = true, childrenCap = 3 } = {}) {
   const root = await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: worktreesRoot, name: 'Root', harness: 'fake', emoji: '🤖', projectId: PROJECT_ID }) });
   const rootClient = await connect(((await root.json()) as { id: string }).id);
-  const manager = await spawn(rootClient, { manager: { children_cap: 3, mission: 'Ship', pulse_seconds: pulseSeconds } });
+  const manager = await spawn(rootClient, { manager: { children_cap: childrenCap, mission: 'Ship', pulse_seconds: pulseSeconds } });
   await manager.client.callTool({ name: 'get_manager_base', arguments: {} });
   if (withJournal) await manager.client.callTool({ name: 'bootstrap_project_profile', arguments: {} });
   const planNote = await aNote('Plan');
@@ -223,6 +223,24 @@ describe('QE — only the daemon spawns an arbiter', () => {
     expect(attempt.isError).toBe(true);
     expect(decisionRows()).toEqual([]);
     expect(approval.isError).toBe(true);
+  });
+});
+
+describe('QE — the arbiter does not count in the children cap of its manager', () => {
+  it('lets a manager at a cap of one spawn its own child while its arbiter is live, counts only its own children, and refuses the second own child', async () => {
+    const { manager, planNote } = await bootManager({ childrenCap: 1 });
+    await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
+    await waitForArbiters(1);
+
+    const status = parsed(await manager.client.callTool({ name: 'get_argus_status', arguments: {} }));
+    const firstOwnChild = await spawn(manager.client);
+    const directory = join(worktreesRoot, `child-${randomUUID()}`);
+    mkdirSync(directory);
+    const secondOwnChild = await manager.client.callTool({ name: 'create_session', arguments: { directory, name: 'Second', allow_duplicate: true } });
+
+    expect(status.manager).toMatchObject({ childrenCount: 0, childrenHeadroom: 1 });
+    expect(firstOwnChild.id).toBeTruthy();
+    expect(rawText(secondOwnChild)).toMatch(/^error children_cap: .*\(1\/1\)/);
   });
 });
 
