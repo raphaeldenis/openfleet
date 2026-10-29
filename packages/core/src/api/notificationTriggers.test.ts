@@ -232,6 +232,7 @@ describe('user is told once when an agent needs them', () => {
 
     await startTurn(session.id);
     await askPermission(session.id, 'Bash');
+    await postHook(session.id, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' } });
     await new Promise((resolve) => setTimeout(resolve, 5));
     await askPermission(session.id, 'Edit');
 

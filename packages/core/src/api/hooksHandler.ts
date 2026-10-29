@@ -105,8 +105,9 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
     }
 
     const decision = await deps.approvals.request({ sessionId: session.id, toolName: event.tool_name, toolInput: event.tool_input });
+    const leavesCliAskingInItsTerminal = decision === 'ask';
+    if (leavesCliAskingInItsTerminal) return json(res, 200, {});
     deps.sessions.applyInput(session.id, { kind: 'permission_resolved' });
-    if (decision === 'ask') return json(res, 200, {});
     const message = decision === 'deny' ? 'denied in OpenFleet' : undefined;
     return json(res, 200, { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: decision, message } } });
   };
