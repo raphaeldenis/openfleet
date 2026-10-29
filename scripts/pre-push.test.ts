@@ -21,7 +21,7 @@ let repo: string;
 /** A git child may still be writing under the fixture (auto gc, index refresh) when the test ends; rmSync retries ENOTEMPTY instead of failing the hook. */
 const removeFixtureTree = (directory: string) => rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 
-const git =(...args: string[]): string => {
+const git = (...args: string[]): string => {
   const result = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: repo, encoding: 'utf8', env: cleanEnv() });
   if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
   return result.stdout.trim();
