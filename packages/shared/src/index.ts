@@ -22,3 +22,4 @@ export * from './diagnostics.js';
 export * from './worktrees.js';
 export * from './governance.js';
 export * from './commandPolicy.js';
+export * from './mcpContract.js';

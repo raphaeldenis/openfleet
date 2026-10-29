@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { OpenFleetError, type Session } from '@openfleet/shared';
+import { OpenFleetError, contractVersionInstructions, type Session } from '@openfleet/shared';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { BaseNotReadEnforcement } from '../managers/baseReadGuard.js';
 import type { NoteNotReadEnforcement } from '../managers/noteReadGuard.js';
@@ -72,7 +72,7 @@ export function createMcpHandler(deps: { projectProfile?: ProjectProfileBootstra
     if (!caller) throw new OpenFleetError('unauthorized', 'the mcp token is missing or wrong.');
 
     // ponytail: one McpServer per request (stateless); pool them if profiling says so
-    const server = new McpServer({ name: 'openfleet', version: DAEMON_VERSION });
+    const server = new McpServer({ name: 'openfleet', version: DAEMON_VERSION }, { instructions: contractVersionInstructions() });
     const answeringServer = answeringThrowsInGrammar(server, caller);
     const isReviewer = caller.role === REVIEWER_ROLE;
     const toolServer = isReviewer ? registeringOnly(answeringServer, REVIEWER_TOOL_NAMES) : answeringServer;

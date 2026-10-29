@@ -1,4 +1,4 @@
-import { effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
+import { CONTRACT_VERSION, effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { z } from 'zod';
@@ -371,7 +371,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const blockedTickets = (deps.reviewFindings?.latestAdversarialLinePerTicketOf(caller.id) ?? [])
       .filter((line) => line.severity === 'no-go')
       .map(({ ticket, sha, reasons }) => ({ ticket, sha, reasons }));
-    return ok({ manager, children, blockedTickets });
+    return ok({ contract_version: CONTRACT_VERSION, manager, children, blockedTickets });
   });
 
   server.registerTool('pulse_now', { description: 'Trigger an immediate pulse for a manager (yourself, or a manager you are the parent of)', inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
