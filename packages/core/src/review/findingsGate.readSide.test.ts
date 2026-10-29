@@ -74,4 +74,17 @@ describe('the findings gate reads a stored clean or go line only when it carries
 
     expect(answer).toMatchObject({ reason: expect.stringContaining('qe, qa, ponytail, adversarial lines have no evidence') });
   });
+
+  it('refuses a step logged in the old form, then opens once the step is reported again with a proven claim', async () => {
+    const { repo, head } = repoOnTicketBranch();
+    const otherStepsWithEvidence = (['qe', 'ponytail', 'adversarial'] as const).map((step) => lineOf({ step, head, repros: [provenRun] }));
+    const qaInOldForm = { ...lineOf({ step: 'qa', head, repros: undefined }), authorSessionId: 'qa-before-the-rule' };
+    const qaReportedAgain = lineOf({ step: 'qa', head, repros: [provenRun] });
+
+    const refusedAnswer = await gateOverRecorded([...otherStepsWithEvidence, qaInOldForm]).check({ directory: repo });
+    const reportedAgainAnswer = await gateOverRecorded([...otherStepsWithEvidence, qaInOldForm, qaReportedAgain]).check({ directory: repo });
+
+    expect(refusedAnswer).toMatchObject({ isOpen: false, reason: expect.stringContaining('qa line has no evidence') });
+    expect(reportedAgainAnswer.isOpen).toBe(true);
+  });
 });
