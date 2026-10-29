@@ -1,3 +1,4 @@
+use crate::daemon_version::DaemonVersion;
 use crate::log_file::ensure_private_dir;
 use std::ffi::OsStr;
 use std::io;
@@ -17,7 +18,7 @@ const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 pub struct IssueReport {
   pub app_version: String,
-  pub daemon_version: Option<String>,
+  pub daemon_version: Option<DaemonVersion>,
   pub daemon_state: String,
   pub macos_version: String,
   pub arch: String,
@@ -79,7 +80,7 @@ fn with_folder_shortened(text: &str, folder: &str) -> String {
 
 fn url_with(report: &IssueReport, lines: &[String]) -> String {
   let field = |text: &str| with_home_shortened(text, &report.user_home);
-  let daemon_version = field(report.daemon_version.as_deref().unwrap_or("unknown"));
+  let daemon_version = report.daemon_version.as_ref().map_or("unknown", DaemonVersion::as_str);
   let log_block = if lines.is_empty() { "(no daemon log yet)".to_string() } else { lines.join("\n") };
   let body = format!(
     "Describe what went wrong:\n\n\n---\nApp version: {}\nDaemon version: {daemon_version}\nmacOS: {}\nCPU: {}\nDaemon state: {}\n\nLast daemon log lines:\n```\n{log_block}\n```\n",
@@ -238,7 +239,7 @@ mod tests {
   fn report_with(log_lines: Vec<String>) -> IssueReport {
     IssueReport {
       app_version: "0.2.0".to_string(),
-      daemon_version: Some("0.2.0".to_string()),
+      daemon_version: Some(DaemonVersion::parse("0.2.0")),
       daemon_state: "ready".to_string(),
       macos_version: "15.4".to_string(),
       arch: "aarch64".to_string(),

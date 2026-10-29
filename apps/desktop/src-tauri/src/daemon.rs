@@ -1,5 +1,6 @@
 use crate::admin_token::{admin_token_path, admin_token_secrets, openfleet_home_dir};
 use crate::event_log::{self, DesktopEvent, ExitCode, IoFailure, KnownPaths, Opaque, PathClass, Pid, SpawnFailure, Stream};
+use crate::daemon_version::DaemonVersion;
 use crate::log_file::{logs_dir, start_on_disk, DesktopLog};
 use crate::path_repair::{repair_path, run_login_shell, PathSource, RepairedPath, LOGIN_SHELL_TIMEOUT};
 use serde::Serialize;
@@ -50,7 +51,7 @@ pub struct DaemonStatus {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub path_source: Option<PathSource>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub daemon_version: Option<String>,
+  pub daemon_version: Option<DaemonVersion>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub started_seconds_ago: Option<u64>,
 }
@@ -100,7 +101,7 @@ impl StopOutcome {
 /// What a daemon answers on `GET /health`.
 #[derive(Debug, PartialEq)]
 pub struct HealthAnswer {
-  pub version: Option<String>,
+  pub version: Option<DaemonVersion>,
 }
 
 /// Returns the last non-blank line of a chunk of daemon output.
@@ -112,11 +113,11 @@ fn last_boot_refusal_line(chunk: &str) -> Option<String> {
   chunk.lines().map(str::trim).rfind(|line| line.starts_with(BOOT_REFUSAL_PREFIX)).map(str::to_string)
 }
 
-fn version_in_health_response(response: &str) -> Option<String> {
+fn version_in_health_response(response: &str) -> Option<DaemonVersion> {
   let (_, body) = response.split_once("\r\n\r\n")?;
   let json = body.get(body.find('{')?..=body.rfind('}')?)?;
   let health: serde_json::Value = serde_json::from_str(json).ok()?;
-  health.get("version")?.as_str().map(str::to_string)
+  health.get("version")?.as_str().map(DaemonVersion::parse)
 }
 
 /// Returns the daemon's answer when it replies `GET /health` with a 200 within `timeout`.
@@ -336,14 +337,14 @@ impl DaemonState {
     self.inner.lock().unwrap().child.take()
   }
 
-  fn on_reused(&self, daemon_version: Option<String>) {
+  fn on_reused(&self, daemon_version: Option<DaemonVersion>) {
     let mut inner = self.inner.lock().unwrap();
     inner.change_phase(DaemonPhase::Reused);
     inner.status.daemon_version = daemon_version;
   }
 
   /// A health answer makes a booting daemon Ready; a daemon already Failed stays Failed.
-  fn on_health_answered(&self, daemon_version: Option<String>) {
+  fn on_health_answered(&self, daemon_version: Option<DaemonVersion>) {
     let mut inner = self.inner.lock().unwrap();
     let is_booting = matches!(inner.status.state, DaemonPhase::Starting | DaemonPhase::Slow);
     if !is_booting {
@@ -708,7 +709,7 @@ mod tests {
 
   #[test]
   fn serializes_the_reused_and_slow_states() {
-    let reused = DaemonStatus { state: DaemonPhase::Reused, daemon_version: Some("1.2.3".into()), ..DaemonStatus::starting() };
+    let reused = DaemonStatus { state: DaemonPhase::Reused, daemon_version: Some(DaemonVersion::parse("1.2.3")), ..DaemonStatus::starting() };
     let slow = DaemonStatus { state: DaemonPhase::Slow, started_seconds_ago: Some(20), path_source: Some(PathSource::Fallback), ..DaemonStatus::starting() };
 
     assert_eq!(serde_json::to_string(&reused).unwrap(), r#"{"state":"reused","daemonVersion":"1.2.3"}"#);
@@ -733,7 +734,7 @@ mod tests {
   fn probe_reads_the_daemon_version_from_the_health_body() {
     let address = serve_once("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"ok\":true,\"version\":\"0.4.2\"}");
 
-    assert_eq!(probe_health(&address, PROBE_TIMEOUT), Some(HealthAnswer { version: Some("0.4.2".to_string()) }));
+    assert_eq!(probe_health(&address, PROBE_TIMEOUT), Some(HealthAnswer { version: Some(DaemonVersion::parse("0.4.2")) }));
   }
 
   #[test]
@@ -741,6 +742,32 @@ mod tests {
     let address = serve_once("HTTP/1.1 200 OK\r\n\r\nnot json");
 
     assert_eq!(probe_health(&address, PROBE_TIMEOUT), Some(HealthAnswer { version: None }));
+  }
+
+  #[test]
+  fn a_hostile_health_version_never_reaches_the_issue_url() {
+    let token_shaped_value = format!("{}{}", ["gh", "p_"].concat(), "aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD2fH4jL6");
+    let hostile_versions = [token_shaped_value.clone(), format!("1.2.3-{token_shaped_value}"), format!("0.2.0 {token_shaped_value}")];
+
+    for hostile_version in hostile_versions {
+      let response: &'static str = Box::leak(format!("HTTP/1.1 200 OK\r\n\r\n{{\"version\":\"{hostile_version}\"}}").into_boxed_str());
+      let address = serve_once(response);
+      let answer = probe_health(&address, PROBE_TIMEOUT).unwrap();
+      let report = crate::issue_report::IssueReport {
+        app_version: "0.2.0".to_string(),
+        daemon_version: answer.version,
+        daemon_state: "ready".to_string(),
+        macos_version: "15.4".to_string(),
+        arch: "aarch64".to_string(),
+        log_lines: vec![],
+        user_home: "/Users/jdoe".to_string(),
+      };
+
+      let url = crate::issue_report::issue_url(&report);
+
+      assert!(!url.contains(&token_shaped_value), "the hostile version reached the URL: {hostile_version}");
+      assert!(url.contains("Daemon%20version%3A%20unrecognised"), "{url}");
+    }
   }
 
   #[test]
@@ -1034,7 +1061,7 @@ mod tests {
   #[test]
   fn stop_sends_no_signal_when_the_daemon_was_reused() {
     let state = DaemonState::new();
-    state.on_reused(Some("1.0.0".into()));
+    state.on_reused(Some(DaemonVersion::parse("1.0.0")));
     let signals = RecordingSignals::default();
 
     assert_eq!(stop_daemon(&state, &signals, Duration::from_secs(5)), None);
@@ -1118,11 +1145,11 @@ mod tests {
     state.on_slow();
     assert_eq!(state.phase(), DaemonPhase::Slow);
 
-    state.on_health_answered(Some("0.4.2".into()));
+    state.on_health_answered(Some(DaemonVersion::parse("0.4.2")));
 
     let status = state.snapshot(Instant::now());
     assert_eq!(status.state, DaemonPhase::Ready);
-    assert_eq!(status.daemon_version.as_deref(), Some("0.4.2"));
+    assert_eq!(status.daemon_version.as_ref().map(DaemonVersion::as_str), Some("0.4.2"));
     assert_eq!(status.last_line, None);
   }
 
@@ -1197,11 +1224,11 @@ mod tests {
   fn a_reused_daemon_exposes_its_version() {
     let state = DaemonState::new();
 
-    state.on_reused(Some("9.9.9".into()));
+    state.on_reused(Some(DaemonVersion::parse("9.9.9")));
 
     let status = state.snapshot(Instant::now());
     assert_eq!(status.state, DaemonPhase::Reused);
-    assert_eq!(status.daemon_version.as_deref(), Some("9.9.9"));
+    assert_eq!(status.daemon_version.as_ref().map(DaemonVersion::as_str), Some("9.9.9"));
   }
 
   #[test]
@@ -1233,7 +1260,7 @@ mod tests {
 
     let status = state.snapshot(Instant::now());
     assert_eq!(status.state, DaemonPhase::Ready);
-    assert_eq!(status.daemon_version.as_deref(), Some("7.7.7"));
+    assert_eq!(status.daemon_version.as_ref().map(DaemonVersion::as_str), Some("7.7.7"));
     assert!(observed_slow.load(std::sync::atomic::Ordering::SeqCst));
   }
 
@@ -1344,7 +1371,7 @@ mod tests {
   fn a_reused_daemon_logs_the_move_to_reused() {
     let (state, daemon_log, fs) = state_writing_to_a_log();
 
-    state.on_reused(Some("1.0.0".to_string()));
+    state.on_reused(Some(DaemonVersion::parse("1.0.0")));
 
     assert_eq!(stored_lines(&daemon_log, &fs), vec![phase_change("info", "starting", "reused")]);
   }
@@ -1364,7 +1391,7 @@ mod tests {
     let (state, daemon_log, fs) = state_writing_to_a_log();
 
     state.on_start_failed("Authorization: Bearer ghp_0123456789abcdefghijklmnopqrstuvwxyz".to_string());
-    state.on_reused(Some("ghp_0123456789abcdefghijklmnopqrstuvwxyz".to_string()));
+    state.on_reused(Some(DaemonVersion::parse("ghp_0123456789abcdefghijklmnopqrstuvwxyz")));
 
     let lines = stored_lines(&daemon_log, &fs).join("\n");
     assert!(!lines.contains("ghp_") && !lines.contains("Bearer"), "{lines}");

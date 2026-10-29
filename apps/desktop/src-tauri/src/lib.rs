@@ -3,6 +3,7 @@
 mod admin_token;
 mod app_exit;
 mod daemon;
+mod daemon_version;
 mod diagnostics_bundle;
 mod event_log;
 mod issue_report;
