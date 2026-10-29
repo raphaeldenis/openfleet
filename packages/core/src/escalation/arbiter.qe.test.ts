@@ -695,7 +695,7 @@ describe('QE — the human list is full (questions_for_human holds 20 items)', (
     return { manager, planNote, batchId: answer.batch_id as string };
   };
 
-  it('keeps the quota fallback answer on a full list (invalid_body), and puts the question on a card that says the hand-over was refused', async () => {
+  it('answers ok with the escalated arbiter and a list_refusal warning on a full list, and puts the question on a card that says the hand-over was refused', async () => {
     setPolicy({ maxArbiterRunsPerTicket: 1 });
     const { manager, planNote } = await bootManager();
     await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
@@ -704,8 +704,11 @@ describe('QE — the human list is full (questions_for_human holds 20 items)', (
 
     const result = await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q2')] });
 
-    expect(result.isError).toBe(true);
-    expect(rawText(result)).toMatch(/^error invalid_body: .*questions_for_human/);
+    expect(result.isError).toBeFalsy();
+    const answer = parsed(result);
+    expect(answer.arbiter).toEqual({ status: 'escalated', reason: 'arbiter_quota', question_ids: ['q2'] });
+    expect(answer.human).toEqual({ escalation_id: expect.any(String), question_ids: ['q2'] });
+    expect(answer.warnings).toEqual([expect.stringMatching(/^list_refusal: .*questions_for_human/)]);
     expect(statusOf('q2').status).toBe('pending_human');
     const [card] = await cards();
     expect(card).toMatchObject({ status: 'pending', handoverRefusal: { reason: 'arbiter_quota' }, questions: [{ questionId: 'q2', status: 'pending_human' }] });

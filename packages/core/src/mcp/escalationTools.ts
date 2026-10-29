@@ -55,7 +55,7 @@ export function registerEscalationTools(server: McpServer, deps: RegisterEscalat
   const { criteria, escalations, arbiters, managers, noteRepo, projects, caller } = deps;
 
   server.registerTool('submit_plan_questions', {
-    description: `Submit the questions of your plan on a ticket in one batch (managers only), instead of asking the human one by one. Each question is { id (20 characters, unique in the batch), text (300), class, options (up to 4), recommendation (300), paths (up to 20 files the answer would touch), resolution }. class is one of ${QUESTION_CLASSES.join(' | ')}; technical and factual questions go to the arbiter, and the escalating classes (${ESCALATING_CLASSES.join(', ')}) go to a human. The daemon also reads your text, options, recommendation and paths: a question that touches a contract, security, deployment, history, a waiver, spend or a visual check goes to a human whatever class you wrote, and a class outside the list goes to a human as unclassified. A factual question is answered by you when resolution proves it, an object ${REPRO_CLAIM_EXAMPLE} with the command you ran and its output; without an executed proof it goes to the arbiter. All the questions that need a human of one ticket make ONE escalation: the daemon writes its text and adds one [esc:<id>] item to your questions_for_human, so do not write that item yourself. Answers { batch_id, self, arbiter: { status, question_ids }, human: { escalation_id, question_ids } | null }. plan_note_id is the note of your plan, never your mission note`,
+    description: `Submit the questions of your plan on a ticket in one batch (managers only), instead of asking the human one by one. Each question is { id (20 characters, unique in the batch), text (300), class, options (up to 4), recommendation (300), paths (up to 20 files the answer would touch), resolution }. class is one of ${QUESTION_CLASSES.join(' | ')}; technical and factual questions go to the arbiter, and the escalating classes (${ESCALATING_CLASSES.join(', ')}) go to a human. The daemon also reads your text, options, recommendation and paths: a question that touches a contract, security, deployment, history, a waiver, spend or a visual check goes to a human whatever class you wrote, and a class outside the list goes to a human as unclassified. A factual question is answered by you when resolution proves it, an object ${REPRO_CLAIM_EXAMPLE} with the command you ran and its output; without an executed proof it goes to the arbiter. All the questions that need a human of one ticket make ONE escalation: the daemon writes its text and adds one [esc:<id>] item to your questions_for_human, so do not write that item yourself. Answers { batch_id, self, arbiter: { status, question_ids }, human: { escalation_id, question_ids } | null, warnings? }; warnings holds list_refusal when the human list was full: the questions are on the card and committed, so do not submit them again. plan_note_id is the note of your plan, never your mission note`,
     inputSchema: { ticket: z.string(), plan_note_id: z.string(), questions: z.array(z.unknown()) },
   }, async (input) => {
     const manager = managers.get(caller.id);
@@ -73,9 +73,8 @@ export function registerEscalationTools(server: McpServer, deps: RegisterEscalat
     const policy = escalationPolicyOf(projects, caller.projectId);
     const submitted = escalations.submitBatch({ managerId: caller.id, ticket, planNoteId, planNoteRev: planNote.rev, questions, policy });
     const arbiterLaunch = await arbiters.launch(submitted.batchId);
-    if (arbiterLaunch.status === 'refused') return refuse('invalid_body', arbiterLaunch.refusal, arbiterLaunch.hint);
-
     const handedToTheHuman = arbiterLaunch.status === 'escalated' ? arbiterLaunch.escalated : undefined;
+    const listRefusal = handedToTheHuman?.listRefusal;
     const humanQuestionIds = [...(submitted.human?.questionIds ?? []), ...(handedToTheHuman?.questionIds ?? [])];
     const humanEscalationId = handedToTheHuman?.escalationId ?? submitted.human?.escalationId;
     return ok({
@@ -85,6 +84,7 @@ export function registerEscalationTools(server: McpServer, deps: RegisterEscalat
         ? { status: 'escalated', reason: arbiterLaunch.reason, question_ids: handedToTheHuman?.questionIds ?? [] }
         : { status: 'pending', question_ids: submitted.arbiterQuestionIds },
       human: humanEscalationId === undefined ? null : { escalation_id: humanEscalationId, question_ids: humanQuestionIds },
+      ...(listRefusal && { warnings: [`list_refusal: ${listRefusal.refusal}${listRefusal.hint ? ` ${listRefusal.hint}` : ''}`] }),
     });
   });
 

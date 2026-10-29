@@ -8,7 +8,7 @@ import type { ProjectRepository } from '../projects/projectRepository.js';
 import { DEFAULT_TICKET_PATTERN, ticketOfBranch } from '../review/worktreeGit.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { arbiterPromptOf } from './arbiterBrief.js';
-import { ARBITER_QUOTA_REASON, ARBITER_UNAVAILABLE_REASON, type EscalatedToHuman, type EscalationService, type HumanListRefusal } from './escalationService.js';
+import { ARBITER_QUOTA_REASON, ARBITER_UNAVAILABLE_REASON, type EscalatedToHuman, type EscalationService } from './escalationService.js';
 import type { EscalationRepository } from './escalationRepository.js';
 import { escalationPolicyOf } from './projectPolicy.js';
 
@@ -33,8 +33,7 @@ const batchTagOf = (batchId: string) => `[${batchId.slice(0, BATCH_TAG_LENGTH)}]
 export type LaunchOutcome =
   | { status: 'idle' }
   | { status: 'running' }
-  | { status: 'escalated'; reason: string; escalated?: EscalatedToHuman }
-  | ({ status: 'refused'; reason: string } & HumanListRefusal);
+  | { status: 'escalated'; reason: string; escalated?: EscalatedToHuman };
 
 interface Run {
   batchId: string;
@@ -193,7 +192,6 @@ export class ArbiterRunner {
   private failClosed(batchId: string, reason: string): LaunchOutcome {
     this.failuresByBatchId.delete(batchId);
     const escalated = this.deps.escalations.escalateBatchToHuman({ batchId, reason });
-    if (escalated?.listRefusal) return { status: 'refused', reason, ...escalated.listRefusal };
     return { status: 'escalated', reason, ...(escalated && { escalated }) };
   }
 
