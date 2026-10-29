@@ -2,6 +2,14 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 10 — 2026-10-29
+
+- NOTE-RESTORE-REQUIRE-REV01, `restore_note_version`: `expected_rev` is now required in practice. A call without it used to succeed with a `warning` in the reply; it is now refused with `invalid_body` ("expected_rev is required to restore a note version: call get_note to read its rev, then pass it as expected_rev") and the note is not changed. A call with `expected_rev` behaves as before (`stale_revision` when it differs from the current rev). The input schema is unchanged (`expected_rev` stays optional in the schema so the refusal carries this message instead of a generic validation error), so the pinned hashes do not move; the version is raised by hand because a call that succeeded is now refused. The `warning` field of the reply is gone. Clients: call `get_note` first and pass its `rev`.
+
+Tools added: none.
+Tools changed: `restore_note_version` (behavior and output field `warning` removed; input schema unchanged).
+Migrations: none.
+
 ## 9 — 2026-10-29
 
 - TEAM-09, `create_worktree`: new optional `base_ref`, the branch, tag or commit sha the new branch starts from (default: the current HEAD of `repo_path`, unchanged). The ref must already resolve to a commit of the repository; it is checked with `git rev-parse --verify --end-of-options` and the worktree is cut from the resolved sha. Only plain branch, tag or sha spellings are accepted: an empty ref, a ref starting with `-`, a ref with whitespace or control characters, a revision expression (`~`, `^`, `:`, `@`), a range (`..`) or an unknown ref is refused with `invalid_body` before the worktree is created, and so is a `base_ref` given for a branch that already exists. The refusal names neither the repository path nor the ref.

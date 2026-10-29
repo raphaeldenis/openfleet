@@ -10,7 +10,7 @@ The MCP server carries a `contract_version`: a plain integer that rises by one o
 
 - A tool's output gains or loses a field (for example `pendingPermission.input`). The guard test does not see output fields, so raising the version for them is a convention: the author does it and records it in `CHANGELOG.md`.
 
-The description text of a parameter is part of the input schema, so rewording it changes the pin and raises the version. Text-only changes outside the input schema (the description of the tool itself, an error message) and behavior behind an unchanged shape do not raise it.
+The description text of a parameter is part of the input schema, so rewording it changes the pin and raises the version. Text-only changes outside the input schema (the description of the tool itself, an error message) and behavior behind an unchanged shape do not raise it, with one exception: a call that used to succeed and is now refused (for example `restore_note_version` without `expected_rev`, version 10). The guard cannot see it, so the author raises the version by hand and records it in `CHANGELOG.md`.
 
 Output changes are not detected: the guard hashes input schemas only, so a changed result shape or result field passes unnoticed. Raise the version by hand when a tool's output changes in a way clients can see.
 
