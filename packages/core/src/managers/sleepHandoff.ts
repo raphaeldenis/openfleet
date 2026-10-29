@@ -1,9 +1,10 @@
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
+import { SLEEP_PREFIX } from '../sessions/daemonLines.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { modeOf, sleepHandoffMessageId, type ManagerRepository } from './managerRepository.js';
 
-export const SLEEP_HANDOFF_TEXT = '[sleep] Note where things stand in your journal, schedule an event for everything that needs follow-up, then stop.';
+export const SLEEP_HANDOFF_TEXT = `${SLEEP_PREFIX} Note where things stand in your journal, schedule an event for everything that needs follow-up, then stop.`;
 
 const HANDOFF_ID_PREFIX = 'handoff:';
 

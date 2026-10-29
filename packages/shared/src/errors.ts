@@ -102,9 +102,10 @@ export const ERROR_CODES = {
   payload_too_large: { kind: 'too_large' },
   note_too_large: { kind: 'too_large' },
   row_cap: { kind: 'too_large' },
+  state_too_large: { kind: 'too_large' },
+
   // The project keeps a row journal append-only and a done row linked to a pull request: only a changed write (previous journal plus a line, or a pr_url) passes.
   row_guard_violation: { kind: 'invalid_request' },
-  state_too_large: { kind: 'too_large' },
 
   daemon_shutting_down: { kind: 'unavailable' },
   daemon_degraded: { kind: 'unavailable' },

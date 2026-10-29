@@ -2,12 +2,12 @@ import { OpenFleetError } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { newId } from '../ids.js';
 import { log } from '../logger.js';
+import { SCHEDULED_EVENT_PREFIX } from '../sessions/daemonLines.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { instantOfLocalDateTime, localDateTimeOf } from './localDateTime.js';
 import { modeOf, type ManagerRepository } from './managerRepository.js';
 import { ScheduledEventRepository, type ScheduledEvent, type ScheduledEventCreator } from './scheduledEventRepository.js';
 
-export const SCHEDULED_EVENT_PREFIX = '[scheduled event';
 export const MAX_PENDING_EVENTS_PER_MANAGER = 20;
 export const MAX_EVENT_MESSAGE_BYTES = 8192;
 export const MAX_EVENT_TITLE_CHARS = 80;

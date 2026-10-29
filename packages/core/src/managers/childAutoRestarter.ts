@@ -1,6 +1,7 @@
 import type { ServerEvent } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
+import { CHILD_RESTARTED_PREFIX, CHILD_RESTART_EXHAUSTED_PREFIX, HARNESS_EXITED_PREFIX } from '../sessions/daemonLines.js';
 import { EARLY_EXIT_WINDOW_MS, type SessionService } from '../sessions/sessionService.js';
 import type { ChildRestartLedger } from './childRestartLedger.js';
 import { toSingleLineName } from './singleLineName.js';
@@ -80,13 +81,13 @@ export class ChildAutoRestarter {
 
     const label = this.labelOf(child);
     if (this.neverStarted(childId)) {
-      this.tell(managerId, `[harness_exited] ${label} exited right after launch without any output: it never started, so it is not restarted.`);
+      this.tell(managerId, `${HARNESS_EXITED_PREFIX} ${label} exited right after launch without any output: it never started, so it is not restarted.`);
       return;
     }
     const restartsInWindow = this.deps.ledger.countSince(childId, new Date(this.deps.clock() - CHILD_RESTART_WINDOW_MS).toISOString());
     const isCapReached = restartsInWindow >= CHILD_RESTART_DELAYS_MS.length;
     if (isCapReached) {
-      this.tell(managerId, `[child_restart_exhausted] ${label} crashed again after ${restartsInWindow} restarts in ${CHILD_RESTART_WINDOW_MS / 60_000} minutes: it stays closed.`);
+      this.tell(managerId, `${CHILD_RESTART_EXHAUSTED_PREFIX} ${label} crashed again after ${restartsInWindow} restarts in ${CHILD_RESTART_WINDOW_MS / 60_000} minutes: it stays closed.`);
       return;
     }
     const attempt = restartsInWindow + 1;
@@ -134,10 +135,10 @@ export class ChildAutoRestarter {
     this.deps.ledger.record(childId, new Date(this.deps.clock()).toISOString());
     try {
       this.deps.sessions.reopen(childId, { mode: 'resume' });
-      this.tell(managerId, `[child_restarted] ${label} was restarted after a crash (restart ${attempt} of ${CHILD_RESTART_DELAYS_MS.length}).`);
+      this.tell(managerId, `${CHILD_RESTARTED_PREFIX} ${label} was restarted after a crash (restart ${attempt} of ${CHILD_RESTART_DELAYS_MS.length}).`);
     } catch (error) {
       log('warn', `child restart: ${childId} could not be reopened`, error);
-      this.tell(managerId, `[harness_exited] ${label} crashed and could not be restarted: it stays closed.`);
+      this.tell(managerId, `${HARNESS_EXITED_PREFIX} ${label} crashed and could not be restarted: it stays closed.`);
     }
   }
 
