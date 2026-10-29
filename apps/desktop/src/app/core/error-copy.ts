@@ -59,6 +59,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   manager_not_found: { what: 'That manager no longer exists' },
   proposal_not_found: { what: 'That proposal no longer exists' },
   law_not_found: { what: 'That law no longer exists' },
+  escalation_not_found: { what: 'That escalation no longer exists' },
   handoff_not_found: { what: 'That handoff is no longer in the docs folder', fix: 'pick another handoff or remove it' },
 
   session_closed: { what: 'The session is closed', fix: 'resume it first' },
@@ -78,6 +79,9 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   message_id_reused: { what: 'That message id was already used with another text' },
   too_many_pending: { what: 'Too many messages are waiting for this session' },
   governance_queue_full: { what: 'This manager already has as many proposals as allowed (10 pending + 50 waiting)', fix: 'answer or withdraw one first' },
+  question_unclassified: { what: 'That question was not sent through the escalation ladder', fix: 'the manager must submit it with its class' },
+  escalation_open: { what: 'A human answer is still open on this ticket', fix: 'answer the escalation first' },
+  criteria_stale: { what: 'The plan changed since the arbiter gave its opinion', fix: 'ask for a new opinion on the current plan' },
   law_revision_conflict: { what: 'This law changed since you opened it' },
   law_withdrawn: { what: 'This law was withdrawn' },
   children_cap: { what: 'This manager already runs as many sessions as allowed' },
