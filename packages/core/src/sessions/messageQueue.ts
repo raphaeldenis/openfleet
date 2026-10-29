@@ -2,6 +2,10 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { QueuedMessage } from '@openfleet/shared';
 import { newId } from '../ids.js';
 
+import { unwrapAgentMessage } from './messageEnvelope.js';
+
+export interface ChildExchange { lastChildMessage: string | undefined; hasExchangeSince: boolean }
+
 export class MessageQueue {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -58,6 +62,14 @@ export class MessageQueue {
   countPending(sessionId: string): number {
     const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND status = 'queued'`).get(sessionId) as { n: number };
     return row.n;
+  }
+  /** The last message the child wrote to its manager, and whether any message reached the child or came again from it since. */
+  childExchangeOf({ managerId, childId }: { managerId: string; childId: string }): ChildExchange {
+    const lastChildRow = this.db.prepare(`SELECT rowid AS position, body FROM message_queue WHERE session_id = ? AND from_session_id = ? ORDER BY rowid DESC LIMIT 1`).get(managerId, childId) as
+      { position: number; body: string } | undefined;
+    if (!lastChildRow) return { lastChildMessage: undefined, hasExchangeSince: false };
+    const followingRow = this.db.prepare(`SELECT 1 FROM message_queue WHERE rowid > ? AND session_id = ? LIMIT 1`).get(lastChildRow.position, childId);
+    return { lastChildMessage: unwrapAgentMessage(lastChildRow.body), hasExchangeSince: followingRow !== undefined };
   }
   countPendingFromSender(input: { sessionId: string; fromSessionId: string }): number {
     const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND from_session_id = ? AND status = 'queued'`).get(input.sessionId, input.fromSessionId) as { n: number };

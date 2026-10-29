@@ -16,7 +16,7 @@ import { HandoffSeed } from '../notes/handoffSeed.js';
 import { NoteRepository } from '../notes/noteRepository.js';
 import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { HumanDraft } from './humanDraft.js';
-import { MessageQueue } from './messageQueue.js';
+import { MessageQueue, type ChildExchange } from './messageQueue.js';
 import { DeliveryReconciler, promptDigestsInTranscript } from './deliveryReconciler.js';
 import { SessionRuntime, type RuntimeProgress } from './sessionRuntime.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
@@ -1491,6 +1491,8 @@ export class SessionService {
     return session ? this.projected(session) : undefined;
   }
   list(): Session[] { return this.repo.list().map((session) => this.projected(session)); }
+  /** The last message of a child to its manager and whether anything was exchanged with the child since. */
+  childExchangeOf(input: { managerId: string; childId: string }): ChildExchange { return this.queue.childExchangeOf(input); }
   private projected(session: Session): Session {
     const harnessEnforcement = this.deps.harnesses.find((harness) => harness.id === session.harness)?.policyEnforcement ?? 'none';
     const isPolicyActive = this.deps.isCommandPolicyActive?.() ?? true;

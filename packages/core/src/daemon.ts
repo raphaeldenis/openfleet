@@ -45,6 +45,7 @@ import { profileRecallOf } from './managers/managerProfileRecall.js';
 import { ManagerRepository } from './managers/managerRepository.js';
 import { ManagerService } from './managers/managerService.js';
 import { ProjectProfileBootstrap } from './managers/projectProfileBootstrap.js';
+import { IdleChildWatcher } from './managers/idleChildWatcher.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
 import { ScheduledEventRepository } from './managers/scheduledEventRepository.js';
 import { ScheduledEventService } from './managers/scheduledEventService.js';
@@ -192,6 +193,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     return projectId === undefined ? [] : staleInProgressRowLabelsOfProject({ stores: storeRepo, projectId, now: Date.now() });
   };
   const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError, deniedCommandCountsOf, managerBase: shippedManagerBase, staleRowLabelsOf });
+  const idleChildWatcher = new IdleChildWatcher({ managers: managerRepository, sessions });
   const noteRepo = new NoteRepository(db);
   const managers = new ManagerService({
     managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds, deniedCommandCountsOf, currentBase: shippedManagerBase,
@@ -299,6 +301,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     pulseScheduler.stop();
     scheduledEvents.stop();
     childAutoRestarter.stop();
+    idleChildWatcher.stop();
     contextNotice.stop();
     silentBlocks.stop();
     stopHandoffOnClose();
@@ -322,6 +325,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     await sessions.resumeAll();
     pulseScheduler.start();
     scheduledEvents.start();
+    idleChildWatcher.start();
   } catch (error) {
     await closeWithin({ timeoutMs: REFUSED_BOOT_CLOSE_TIMEOUT_MS, close });
     throw error;
