@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { fulfillWithJson, interceptDaemonGet, signInAsAdmin } from './support/daemon';
 
+const LAYOUT_SETTLE_TIMEOUT_MS = 5_000;
+
 test('history displays escaped long text on separate visible lines', async ({ page }) => {
   await signInAsAdmin(page);
   const project = { id: 'format-project', name: 'Formats', directory: '/tmp', createdAt: '2026-10-06T08:00:00Z' };
@@ -24,9 +26,11 @@ test('history displays escaped long text on separate visible lines', async ({ pa
   const secondLine = history.getByText('Second line <script>', { exact: true });
   await expect(firstLine).toBeVisible();
   await expect(secondLine).toBeVisible();
-  const firstBounds = await firstLine.boundingBox();
-  const secondBounds = await secondLine.boundingBox();
-  expect(firstBounds).not.toBeNull();
-  expect(secondBounds).not.toBeNull();
-  expect(secondBounds!.y).toBeGreaterThanOrEqual(firstBounds!.y + firstBounds!.height);
+  const secondLineGapBelowFirstLine = async () => {
+    const firstBounds = await firstLine.boundingBox();
+    const secondBounds = await secondLine.boundingBox();
+    if (!firstBounds || !secondBounds) return Number.NEGATIVE_INFINITY;
+    return secondBounds.y - (firstBounds.y + firstBounds.height);
+  };
+  await expect.poll(secondLineGapBelowFirstLine, { timeout: LAYOUT_SETTLE_TIMEOUT_MS }).toBeGreaterThanOrEqual(0);
 });
