@@ -150,6 +150,23 @@ const ALLOWED_DESPITE_RESEMBLING_HOOK_SKIPPING = [
   'git config user.name x',
 ];
 
+const ALLOWED_DESPITE_MENTIONING_GIT_INSIDE_OTHER_TEXT = [
+  "echo it's git",
+  "pnpm test # don't forget git",
+  'cat <<\'EOF\'\ngit reset --hard is blocked now\nEOF',
+  'cat <<EOF\ngit push --force is documented here\nEOF',
+  'git commit -F - <<\'EOF\'\nfix(x): y\n\ngit reset --hard is documented\nEOF',
+  'cat <<-EOF\n\tgit clean -fd\n\tEOF',
+];
+
+const BLOCKED_WHEN_QUOTING_HIDES_A_GIT_COMMAND = [
+  'git commit -m "it\'s',
+  "env git push -f 'x",
+  "sudo git reset --hard 'x",
+  "bash -c 'git reset --hard",
+  "HUSKY=0 git push 'x",
+];
+
 describe('block-dangerous-git hook', () => {
   it.each(ALLOWED_FROM_FEATURE_CHECKOUT)('allows %j', (command) => {
     expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
@@ -170,6 +187,16 @@ describe('block-dangerous-git hook', () => {
 
     it.each(ALLOWED_DESPITE_RESEMBLING_HOOK_SKIPPING)('allows %j', (command) => {
       expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
+    });
+  });
+
+  describe('text that only mentions git', () => {
+    it.each(ALLOWED_DESPITE_MENTIONING_GIT_INSIDE_OTHER_TEXT)('allows %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
+    });
+
+    it.each(BLOCKED_WHEN_QUOTING_HIDES_A_GIT_COMMAND)('blocks the unparsable %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
     });
   });
 

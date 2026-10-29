@@ -10,6 +10,7 @@ import re
 import shlex
 import subprocess
 import sys
+from collections import namedtuple
 
 PROTECTED_BRANCHES = {"main", "master"}
 SEGMENT_SEPARATORS = ("&&", "||", ";", "\n", "|", "&")
@@ -20,6 +21,10 @@ HOOK_DISABLING_VARIABLE = re.compile(r"HUSKY|^GIT_(CONFIG|DIR|WORK_TREE)", re.IG
 SHELL_INLINE_SCRIPT_FLAGS = {"-c", "-lc", "-ic", "-ec"}
 
 
+HEREDOC_START = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][\w.-]*)\2")
+Heredoc = namedtuple("Heredoc", ["delimiter", "strips_tabs", "is_quoted"])
+
+
 class Refusal(Exception):
     """Carries the one-line reason shown to the agent."""
 
@@ -28,9 +33,31 @@ def refuse(rule, explanation):
     raise Refusal(f"BLOCKED by git-guardrails ({rule}): {explanation}")
 
 
+def skip_heredoc_bodies(command, start, heredocs):
+    """Returns the index just after the bodies of `heredocs`, which are text and not commands."""
+    index = start
+    for heredoc in heredocs:
+        body_lines = []
+        while index < len(command):
+            line_end = command.find("\n", index)
+            line_end = len(command) if line_end == -1 else line_end
+            line = command[index:line_end]
+            index = line_end + 1
+            terminator_candidate = line.lstrip("\t") if heredoc.strips_tabs else line
+            if terminator_candidate == heredoc.delimiter:
+                break
+            body_lines.append(line)
+        body = "\n".join(body_lines)
+        runs_substitution = "$(" in body or "`" in body
+        if not heredoc.is_quoted and runs_substitution and re.search(r"\bgit\b", body):
+            refuse("unanalysable", "a command substitution inside an unquoted heredoc hides a git command, quote the heredoc delimiter.")
+    return index
+
+
 def split_outside_quotes(command):
     segments = []
     current = []
+    heredocs = []
     quote = None
     index = 0
     while index < len(command):
@@ -41,6 +68,18 @@ def split_outside_quotes(command):
             continue
         if quote:
             quote = None if char == quote else quote
+        elif command.startswith("<<<", index):
+            current.append("<<<")
+            index += 3
+            continue
+        elif command.startswith("<<", index):
+            heredoc_start = HEREDOC_START.match(command, index)
+            if heredoc_start:
+                strips_tabs, delimiter_quote, delimiter = heredoc_start.groups()
+                heredocs.append(Heredoc(delimiter, bool(strips_tabs), bool(delimiter_quote)))
+            current.append("<<")
+            index += 2
+            continue
         elif char in ("'", '"'):
             quote = char
         else:
@@ -49,6 +88,9 @@ def split_outside_quotes(command):
                 segments.append("".join(current))
                 current = []
                 index += len(separator)
+                if separator == "\n" and heredocs:
+                    index = skip_heredoc_bodies(command, index, heredocs)
+                    heredocs = []
                 continue
         current.append(char)
         index += 1
@@ -321,12 +363,22 @@ def change_directory(tokens, shell_state):
     shell_state.working_directory = resolve_directory(shell_state.working_directory, target)
 
 
+def check_unparsable_segment(segment, shell_state):
+    """Refuses a segment whose quoting is broken only when its first word is git or leads to git."""
+    _, tokens = strip_wrappers(segment.split())
+    first_program = program_name(tokens[0]) if tokens else ""
+    if first_program in ("cd", "pushd"):
+        shell_state.working_directory = None
+    leads_to_git = first_program == "git" or first_program in SHELL_PROGRAMS
+    if leads_to_git:
+        refuse("unparsable", "this git command cannot be analysed, simplify the quoting.")
+
+
 def check_segment(segment, shell_state):
     try:
         assignments, tokens = strip_wrappers(shlex.split(segment))
     except ValueError:
-        if re.search(r"\bgit\b", segment):
-            refuse("unparsable", "this git command cannot be analysed, simplify the quoting.")
+        check_unparsable_segment(segment, shell_state)
         return
     sets_hook_variable = disables_repository_hooks(assignments)
     if not tokens:
