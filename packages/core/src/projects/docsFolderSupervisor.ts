@@ -44,6 +44,11 @@ export class DocsFolderSupervisor {
     this.attempt(projectId, 'import', () => this.deps.docs.attachFolder(projectId, docsFolderPath));
   }
 
+  /** Stops watching the project's docs folder. */
+  unwatchProject(projectId: string): void {
+    this.stopWatching(projectId);
+  }
+
   stop(): void {
     this.isStopped = true;
     for (const projectId of [...this.unwatchByProjectId.keys()]) this.stopWatching(projectId);

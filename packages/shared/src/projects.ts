@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { hasNoteTitleText } from './projectNote.js';
 
 export const MAX_PROJECT_NAME_CHARS = 80;
 const MAX_DOCS_FOLDER_PATH_CHARS = 4096;
@@ -18,14 +19,39 @@ export interface Project {
   rowGuardEnabled?: true;
 }
 
-const ProjectNameSchema = z.string().trim().min(1).max(MAX_PROJECT_NAME_CHARS);
+const ProjectNameSchema = z.string().trim().min(1).max(MAX_PROJECT_NAME_CHARS).refine(hasNoteTitleText, { message: 'name must keep some text once template braces are removed' });
 // Whether the path is absolute and exists is the daemon's call: shared stays free of Node's path module.
 const DocsFolderPathSchema = z.string().min(1).max(MAX_DOCS_FOLDER_PATH_CHARS);
 
-export const CreateProjectRequestSchema = z.strictObject({
-  name: ProjectNameSchema,
-  docsFolderPath: DocsFolderPathSchema.optional(),
+const MAX_GOAL_CHARS = 2000;
+const MAX_STACK_BULLETS = 20;
+const MAX_STACK_BULLET_CHARS = 80;
+const MAX_COMMAND_CHARS = 300;
+const MAX_REPOSITORIES = 10;
+
+const ProjectCommandSchema = z.string().trim().max(MAX_COMMAND_CHARS);
+
+/** What the onboarding Project step writes into the body of the "Project: <name>" note. */
+export const ProjectProfileSchema = z.strictObject({
+  goal: z.string().trim().max(MAX_GOAL_CHARS).optional(),
+  stack: z.array(z.string().trim().max(MAX_STACK_BULLET_CHARS)).max(MAX_STACK_BULLETS).optional(),
+  commands: z
+    .strictObject({ install: ProjectCommandSchema.optional(), build: ProjectCommandSchema.optional(), test: ProjectCommandSchema.optional(), dev: ProjectCommandSchema.optional() })
+    .optional(),
+  repositories: z.array(DocsFolderPathSchema).max(MAX_REPOSITORIES).optional(),
 });
+export type ProjectProfile = z.infer<typeof ProjectProfileSchema>;
+
+export const CreateProjectRequestSchema = z
+  .strictObject({
+    name: ProjectNameSchema,
+    docsFolderPath: DocsFolderPathSchema.optional(),
+    profile: ProjectProfileSchema.optional(),
+  })
+  .refine((request) => request.profile === undefined || request.docsFolderPath !== undefined, {
+    message: 'profile needs a docsFolderPath: the project note is written into the docs folder',
+    path: ['profile'],
+  });
 export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
 
 export const DetectRepositoryRequestSchema = z.strictObject({ repositoryPath: DocsFolderPathSchema });

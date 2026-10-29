@@ -13,6 +13,7 @@ export * from './effort.js';
 export * from './configDir.js';
 export * from './pagination.js';
 export * from './projects.js';
+export * from './projectNote.js';
 export * from './workingState.js';
 export * from './todos.js';
 export * from './handovers.js';

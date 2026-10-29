@@ -1,6 +1,7 @@
-import { OpenFleetError, type CreateProjectRequest, type UpdateProjectRequest } from '@openfleet/shared';
+import { OpenFleetError, projectNoteTitle, renderProjectNote, type CreateProjectRequest, type NoteFolder, type ProjectProfile, type UpdateProjectRequest } from '@openfleet/shared';
 import { unrunnableReasonOf } from '../git/postCreateHook.js';
 import type { DocsFolderService } from '../notes/docsFolderService.js';
+import type { NoteRepository } from '../notes/noteRepository.js';
 import { ProjectNotFoundError } from './projectErrors.js';
 import type { ProjectPatch, ProjectRecord, ProjectRepository } from './projectRepository.js';
 
@@ -10,13 +11,27 @@ const UNRUNNABLE_SCRIPT_MESSAGE = {
   unsafe_permissions: 'the post-create script must not be writable by group or others.',
 } as const;
 
+// The docs folder import scans only the four docs subfolders; `specs` is the closest to a project card.
+const PROJECT_NOTE_FOLDER: NoteFolder = 'specs';
+const PROJECT_NOTE_AUTHOR = 'onboarding';
+
 export interface ProjectServiceDeps {
   projects: ProjectRepository;
-  docs: Pick<DocsFolderService, 'prepareFolder' | 'attachFolder'>;
+  docs: Pick<DocsFolderService, 'prepareFolder' | 'attachFolder' | 'createFileBackedNote'>;
+  noteRepo: Pick<NoteRepository, 'list' | 'delete'>;
   clock: () => string;
   newId: () => string;
   /** Called after a project gets a docs folder (on create or on change), so the daemon can reconcile and watch it. */
   onDocsFolderSet?: (projectId: string) => void;
+  /** Called after a refused creation removes the project, so the daemon stops watching its folder. */
+  onProjectForgotten?: (projectId: string) => void;
+}
+
+/** A project note matches by title, or by a first line that spells the title in any letter case and with any line end. */
+function isProjectNote(note: { title: string; bodyMd: string }, title: string): boolean {
+  const normalisedTitle = title.toLowerCase();
+  const firstLine = note.bodyMd.split(/\r?\n/, 1)[0]!.toLowerCase();
+  return note.title.toLowerCase() === normalisedTitle || firstLine === `# ${normalisedTitle}`;
 }
 
 /**
@@ -27,11 +42,12 @@ export class ProjectService {
   constructor(private readonly deps: ProjectServiceDeps) {}
 
   create(request: CreateProjectRequest): ProjectRecord {
-    const { docsFolderPath } = request;
+    const { docsFolderPath, profile } = request;
     if (docsFolderPath !== undefined) this.deps.docs.prepareFolder(docsFolderPath);
     const record: ProjectRecord = { id: this.deps.newId(), name: request.name, docsFolderPath: docsFolderPath ?? null, createdAt: this.deps.clock() };
     this.deps.projects.insert(record);
     if (docsFolderPath !== undefined) this.importNotesOrForget(record, docsFolderPath);
+    if (profile !== undefined) this.writeProjectNoteOrForget(record, profile);
     return record;
   }
 
@@ -75,10 +91,31 @@ export class ProjectService {
     try {
       this.deps.docs.attachFolder(record.id, docsFolderPath);
     } catch (error) {
-      this.deps.projects.delete(record.id);
+      this.forgetProject(record.id);
       throw error;
     }
     this.deps.onDocsFolderSet?.(record.id);
+  }
+
+  /** A project note already in the folder (imported from it) is kept as written; a refused write removes the project, so no half-set-up project stays. */
+  private writeProjectNoteOrForget(record: ProjectRecord, profile: ProjectProfile): void {
+    const { name, id: projectId } = record;
+    const title = projectNoteTitle(name);
+    const isAlreadyWritten = this.deps.noteRepo.list(projectId).some((note) => isProjectNote(note, title));
+    if (isAlreadyWritten) return;
+    try {
+      this.deps.docs.createFileBackedNote({ projectId, folder: PROJECT_NOTE_FOLDER, title, bodyMd: renderProjectNote({ name, ...profile }), author: PROJECT_NOTE_AUTHOR });
+    } catch (error) {
+      this.forgetProject(projectId);
+      throw error;
+    }
+  }
+
+  /** Removes the project with the notes imported for it (they point at the row) and stops watching its folder. */
+  private forgetProject(projectId: string): void {
+    for (const note of this.deps.noteRepo.list(projectId)) this.deps.noteRepo.delete(note.id);
+    this.deps.projects.delete(projectId);
+    this.deps.onProjectForgotten?.(projectId);
   }
 
   private requireProject(projectId: string): ProjectRecord {
