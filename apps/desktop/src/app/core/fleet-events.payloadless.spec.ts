@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { Observable } from 'rxjs';
-import { FleetEventsService } from './fleet-events.service';
+import { FleetEventsService, type PayloadCarryingEventType } from './fleet-events.service';
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -54,7 +54,7 @@ const TYPES_THAT_READ_A_PAYLOAD = [
   'note.created',
   'note.updated',
   'note.deleted',
-];
+] as const;
 
 const aSession = { id: 's1', name: 'Gimli', emoji: '⚔️', directory: '/tmp', harness: 'fake', state: 'idle', stateSince: 't', createdAt: 't' };
 
@@ -158,6 +158,10 @@ describe('FleetEventsService frames without their payload', () => {
     expect(consoleWarn).toHaveBeenCalledTimes(1);
     expect(String(consoleWarn.mock.calls[0]![0])).toContain(type);
     expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('covers every ServerEvent type that carries a payload, and only those', () => {
+    expectTypeOf<PayloadCarryingEventType>().toEqualTypeOf<(typeof TYPES_THAT_READ_A_PAYLOAD)[number]>();
   });
 
   it('does not warn on a valid frame', () => {

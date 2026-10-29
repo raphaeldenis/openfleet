@@ -40,7 +40,12 @@ function parseServerEvent(text: string): ServerEvent | undefined {
   }
 }
 
-const REQUIRED_PAYLOAD_FIELDS: Partial<Record<ServerEvent['type'], readonly string[]>> = {
+/** The event types the service reads no payload field of: a frame of one of them is never dropped. */
+const EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD = ['session.attention', 'session.relaunching', 'message.queued', 'message.held', 'command.denied'] as const;
+
+export type PayloadCarryingEventType = Exclude<ServerEvent['type'], (typeof EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD)[number]>;
+
+const REQUIRED_PAYLOAD_FIELDS: Record<PayloadCarryingEventType, readonly string[]> = {
   'snapshot': ['sessions', 'approvals'],
   'session.todos': ['todos'],
   'session.working_state': ['state'],
@@ -75,7 +80,7 @@ const REQUIRED_PAYLOAD_FIELDS: Partial<Record<ServerEvent['type'], readonly stri
 };
 
 function carriesItsRequiredPayload(event: ServerEvent): boolean {
-  const requiredFields = REQUIRED_PAYLOAD_FIELDS[event.type] ?? [];
+  const requiredFields = REQUIRED_PAYLOAD_FIELDS[event.type as PayloadCarryingEventType] ?? [];
   const fields = event as unknown as Record<string, unknown>;
   return requiredFields.every((field) => fields[field] != null);
 }
