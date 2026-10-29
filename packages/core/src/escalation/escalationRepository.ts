@@ -164,6 +164,11 @@ export class EscalationRepository {
     return (this.db.prepare('SELECT * FROM plan_questions WHERE batch_id = ? ORDER BY rowid').all(batchId) as unknown as QuestionRow[]).map(toQuestion);
   }
 
+  /** The questions an escalation carries, across the batches that joined it, oldest first. */
+  questionsOfEscalation(escalationId: string): StoredQuestion[] {
+    return (this.db.prepare('SELECT * FROM plan_questions WHERE escalation_id = ? ORDER BY rowid').all(escalationId) as unknown as QuestionRow[]).map(toQuestion);
+  }
+
   /** Moves a question that is still in `from` to `to` in one statement; false when it was no longer in `from`. */
   transitionQuestion({ batchId, questionId, from, to, reason, humanAnswer, answeredAt }: {
     batchId: string; questionId: string; from: QuestionStatus; to: QuestionStatus; reason?: string; humanAnswer?: string; answeredAt?: string;

@@ -155,6 +155,18 @@ describe('the escalations', () => {
     expect(repository.questionsOfBatch('b1')[0]!.escalationId).toBe('e1');
   });
 
+  it('lists the questions of an escalation across batches, oldest first, and none of the questions outside it', () => {
+    aBatch('b2');
+    repository.insertQuestion(aQuestion({ questionId: 'q1', route: 'human', status: 'pending_human' }));
+    repository.insertQuestion(aQuestion({ questionId: 'q2' }));
+    repository.insertQuestion(aQuestion({ batchId: 'b2', questionId: 'q3', route: 'human', status: 'pending_human' }));
+    repository.insertEscalation(anEscalation('e1'));
+    repository.attachQuestionToEscalation({ batchId: 'b1', questionId: 'q1', escalationId: 'e1' });
+    repository.attachQuestionToEscalation({ batchId: 'b2', questionId: 'q3', escalationId: 'e1' });
+
+    expect(repository.questionsOfEscalation('e1').map(({ batchId, questionId }) => `${batchId}/${questionId}`)).toEqual(['b1/q1', 'b2/q3']);
+  });
+
   describe('the answer', () => {
     it('closes a pending escalation once, and the second answer finds it closed', () => {
       repository.insertEscalation(anEscalation('e1'));

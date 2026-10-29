@@ -23,6 +23,8 @@ import type { GovernanceQueueService } from '../governance/governanceQueueServic
 import type { ManagerDenials } from '../policy/managerDenials.js';
 import type { DenialJournal } from '../policy/ports.js';
 import { registerDeniedCommandTools } from './deniedCommandTools.js';
+import type { EscalationService } from '../escalation/escalationService.js';
+import { registerEscalationTools } from './escalationTools.js';
 import { registerGovernanceTools } from './governanceTools.js';
 import { registerManagerBaseTools } from './managerBaseTools.js';
 import { registerManagerLinkTools } from './managerLinkTools.js';
@@ -69,7 +71,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
+export function createMcpHandler(deps: { escalations?: EscalationService; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -91,6 +93,7 @@ export function createMcpHandler(deps: { scheduledEvents?: ScheduledEventService
     if (deps.managerBase) registerManagerBaseTools(toolServer, { managerBase: deps.managerBase, managers: deps.managers, caller });
     if (deps.managerDenials) registerDeniedCommandTools(toolServer, { managerDenials: deps.managerDenials, sessions: deps.sessions, caller });
     registerGovernanceTools(toolServer, { governanceQueue: deps.governanceQueue, caller });
+    if (deps.escalations) registerEscalationTools(toolServer, { escalations: deps.escalations, managers: deps.managers, noteRepo: deps.noteRepo, projects: deps.projects, caller });
     registerKnowledgeTools(toolServer, { knowledgeSearch: deps.knowledgeSearch, caller });
     registerTableTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerTableViewTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
