@@ -65,7 +65,7 @@ const unavailableReasonOf = (target: HandoffTarget): string =>
       }
     </div>
     @if (confirmingClose()) {
-      <div class="close-confirm-overlay" tabindex="-1" data-testid="close-confirm-overlay" (mousedown)="keepFocusOnDialogWhenScrimPressed($event)" (keydown.escape)="cancelClose()" (keydown)="trapTabFocus($event)">
+      <div class="close-confirm-overlay" tabindex="-1" data-testid="close-confirm-overlay" (mousedown)="keepFocusOnDialogWhenScrimPressed($event)" (keydown.escape)="cancelClose($event)" (keydown)="trapTabFocus($event)">
         <div #dialog class="close-confirm" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title" data-testid="close-confirm-dialog">
           <span id="close-confirm-title" class="close-confirm-title">Close {{ sessionName() }}?</span>
           <p class="close-confirm-body">{{ closeConfirmBody }}</p>
@@ -241,7 +241,9 @@ export class SessionActionsComponent {
     this.writeHandoff.set(target.writeOnCloseDefault);
   }
 
-  cancelClose(): void {
+  /** Closes only the dialog: an Escape pressed in it never reaches a host that also closes on Escape. */
+  cancelClose(event?: Event): void {
+    event?.stopPropagation();
     this.dialogOpening++;
     this.confirmingClose.set(false);
     this.focusCloseTriggerAfterRender();

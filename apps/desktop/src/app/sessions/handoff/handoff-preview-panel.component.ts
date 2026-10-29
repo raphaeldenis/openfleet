@@ -46,7 +46,7 @@ let nextPanelId = 0;
       aria-modal="false"
       [attr.aria-labelledby]="titleId"
       [attr.data-density]="density()"
-      (keydown.escape)="cancelUnlessSaving()"
+      (keydown.escape)="cancelUnlessSaving($event)"
     >
       <div class="header">
         <span #title class="title" tabindex="-1" [id]="titleId">Handoff preview</span>
@@ -201,7 +201,8 @@ export class HandoffPreviewPanelComponent {
     this.save.emit();
   }
 
-  protected cancelUnlessSaving(): void {
+  protected cancelUnlessSaving(event: Event): void {
+    event.stopPropagation();
     if (this.state() === 'saving') return;
     this.cancel.emit();
   }

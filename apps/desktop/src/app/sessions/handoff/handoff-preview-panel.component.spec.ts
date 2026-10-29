@@ -2,7 +2,7 @@ import { inputBinding, outputBinding } from '@angular/core';
 import type { HandoffContent, HandoffSectionSource } from '@openfleet/shared';
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { HandoffPreviewState } from './handoff-preview.store';
 import { HandoffPreviewPanelComponent } from './handoff-preview-panel.component';
 
@@ -215,6 +215,17 @@ describe('HandoffPreviewPanelComponent', () => {
       await userEvent.keyboard('{Escape}');
 
       expect(cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it.each<HandoffPreviewState>(['ready', 'saving'])('keeps an Escape pressed while %s from reaching the host around it', async (state) => {
+      const hostSawEscape = vi.fn();
+      document.body.addEventListener('keydown', hostSawEscape);
+      onTestFinished(() => document.body.removeEventListener('keydown', hostSawEscape));
+      await renderPanel({ state });
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(hostSawEscape).not.toHaveBeenCalled();
     });
   });
 
