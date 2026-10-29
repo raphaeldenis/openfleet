@@ -698,7 +698,7 @@ impl Sink for ProjectionSink {
   fn emitted_lines(&self, delivery: &Delivery) -> Vec<String> {
     match delivery {
       Delivery::DesktopNotice { kind, text } => {
-        let opaque = super::Opaque::of(text.as_bytes(), self.salt.as_ref());
+        let opaque = super::Opaque::bucketed(text.as_bytes(), self.salt.as_ref());
         vec![Self::line_of(&notice_event(*kind, text, opaque))]
       }
       Delivery::DaemonPipe { stream, chunks } => {

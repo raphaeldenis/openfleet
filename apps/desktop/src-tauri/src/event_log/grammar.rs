@@ -138,6 +138,8 @@ pub enum FieldKind {
   Bool,
   Enum(&'static [&'static str]),
   Opaque,
+  /// Free text whose exact byte length is kept on purpose: only `daemon_text.text`, where the line length is what support needs.
+  OpaqueExactLength,
   Ts,
   Hex8,
   Uuid,
@@ -155,7 +157,7 @@ impl FieldKind {
       FieldKind::SignedDecimalOrNone => value == NONE_VALUE || is_signed_decimal(value),
       FieldKind::Bool => value == b"true" || value == b"false",
       FieldKind::Enum(names) => names.iter().any(|name| name.as_bytes() == value),
-      FieldKind::Opaque => is_opaque(value),
+      FieldKind::Opaque | FieldKind::OpaqueExactLength => is_opaque(value),
       FieldKind::Ts => Ts::parse(text).is_some_and(|parsed| parsed.to_string() == text),
       FieldKind::Hex8 => ShortId::parse(text).is_some(),
       FieldKind::Uuid => SessionId::parse(text).is_some(),
@@ -237,7 +239,7 @@ const SIDECAR_FAILED_FIELDS: &[FieldSpec] = &[field!("reason", FieldKind::Opaque
 const DAEMON_TEXT_FIELDS: &[FieldSpec] = &[
   field!("stream", FieldKind::Enum(&Stream::NAMES), 3),
   field!("class", FieldKind::Enum(&DaemonTextClass::NAMES), 12),
-  field!("text", FieldKind::Opaque, 24),
+  field!("text", FieldKind::OpaqueExactLength, 24),
 ];
 const DAEMON_LINE_FIELDS: &[FieldSpec] = &[
   field!("id", FieldKind::Hex8, 8),
@@ -437,6 +439,14 @@ mod tests {
     }
 
     #[test]
+    fn only_the_daemon_text_text_keeps_the_exact_length_of_its_free_text() {
+      let keeping_the_exact_length: Vec<String> =
+        all_specs().into_iter().filter(|(_, spec)| spec.kind == FieldKind::OpaqueExactLength).map(|(event, spec)| format!("{event}.{}", spec.key)).collect();
+
+      assert_eq!(keeping_the_exact_length, ["daemon_text.text"]);
+    }
+
+    #[test]
     fn every_max_bytes_is_positive_and_within_the_value_ceiling() {
       for (event, spec) in all_specs() {
         assert!(spec.max_bytes > 0 && usize::from(spec.max_bytes) <= MAX_VALUE_BYTES, "{event}.{}", spec.key);
@@ -465,7 +475,7 @@ mod tests {
           FieldKind::SignedDecimal | FieldKind::SignedDecimalOrNone => "-2147483648",
           FieldKind::Bool => "false",
           FieldKind::Enum(_) => "",
-          FieldKind::Opaque | FieldKind::CatalogueOrOpaque => "[text:99999999:ffffffff]",
+          FieldKind::Opaque | FieldKind::OpaqueExactLength | FieldKind::CatalogueOrOpaque => "[text:99999999:ffffffff]",
           FieldKind::Ts => "9999-12-31T23:59:59Z",
           FieldKind::Hex8 => "ffffffff",
           FieldKind::Uuid => "ffffffff-ffff-ffff-ffff-ffffffffffff",

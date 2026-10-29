@@ -274,11 +274,11 @@ impl DaemonState {
     }
   }
 
-  /// Reduces a free text to its length and its tag; a length alone while no log runs.
+  /// Reduces a free text to the bucket of its length and its tag; a bucket alone while no log runs.
   fn opaque(&self, text: &[u8]) -> Opaque {
     match self.daemon_log() {
       Some(daemon_log) => daemon_log.opaque(text),
-      None => Opaque::of(text, None),
+      None => Opaque::bucketed(text, None),
     }
   }
 
@@ -1103,7 +1103,7 @@ mod tests {
 
     let status = state.snapshot(Instant::now());
     assert_eq!(status.state, DaemonPhase::Failed);
-    assert_eq!(status.last_line(), Some(format!("the daemon wrote an unrecognised error ([text:11]); {SAVE_A_BUNDLE}")));
+    assert_eq!(status.last_line(), Some(format!("the daemon wrote an unrecognised error ([text:16]); {SAVE_A_BUNDLE}")));
   }
 
   #[test]
@@ -1534,13 +1534,13 @@ mod tests {
   }
 
   #[test]
-  fn an_error_of_another_kind_is_told_by_its_length_and_tag() {
+  fn an_error_of_another_kind_is_told_by_its_length_bucket_and_tag() {
     let state = DaemonState::new();
     let error = tauri_plugin_shell::Error::UnknownProgramName(format!("/Users/jdoe/{}", github_token()));
 
     let failure = spawn_failure_of_shell(&state, &error);
 
-    assert_eq!(StatusLine::SpawnFailed(failure).render(), format!("could not start the daemon: [text:{}]", error.to_string().len()));
+    assert_eq!(StatusLine::SpawnFailed(failure).render(), format!("could not start the daemon: [text:{}]", error.to_string().len().next_power_of_two()));
   }
 
   #[test]

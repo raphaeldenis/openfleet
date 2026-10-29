@@ -591,9 +591,9 @@ mod tests {
 
     #[test]
     fn without_a_salt_the_tag_is_absent() {
-      let event = DesktopEvent::SidecarFailed { reason: Opaque::of(b"disk", None) };
+      let event = DesktopEvent::SidecarFailed { reason: Opaque::bucketed(b"disk", None) };
 
-      assert_eq!(event.render(now()).as_str(), "2026-10-04T12:00:00Z error sidecar_failed reason=[text:4]");
+      assert_eq!(event.render(now()).as_str(), "2026-10-04T12:00:00Z error sidecar_failed reason=[text:16]");
     }
 
     #[test]
