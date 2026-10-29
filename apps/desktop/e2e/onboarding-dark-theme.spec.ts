@@ -1,6 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import { readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
-import { api } from './support/daemon';
+import { api, fulfillWithJson, interceptDaemonGet } from './support/daemon';
 
 const token = readE2eAdminToken();
 
@@ -8,6 +8,7 @@ const DARK_BACKGROUND = 'rgb(26, 26, 25)';
 const DARK_TEXT = 'rgb(236, 235, 230)';
 
 async function openOnboardingUnderTheRememberedDarkTheme(page: Page) {
+  await interceptDaemonGet(page, '/api/sessions', (route) => fulfillWithJson(route, 200, []));
   await page.addInitScript(([adminToken, apiUrl]) => {
     localStorage.setItem('openfleet.adminToken', adminToken!);
     localStorage.setItem('openfleet.apiUrl', apiUrl!);
