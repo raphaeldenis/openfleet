@@ -74,20 +74,50 @@ def strip_wrappers(tokens):
     return tokens[index:]
 
 
-def split_git_invocation(tokens):
-    """Returns (subcommand, arguments) of a `git ...` token list, skipping global options."""
+def resolve_directory(base_directory, path):
+    """Returns the absolute directory `path` designates from `base_directory`, or None when it cannot be known statically."""
+    is_computed = any(marker in path for marker in ("$", "`", "*", "?")) or path == "-"
+    if base_directory is None or is_computed:
+        return None
+    return os.path.normpath(os.path.join(base_directory, os.path.expanduser(path)))
+
+
+def split_git_invocation(tokens, working_directory):
+    """Returns (subcommand, arguments, repository) of a `git ...` token list, skipping global options.
+
+    `repository` is the list of git options (-C, --git-dir) that locate the repository the command runs in,
+    or None when that location cannot be determined.
+    """
+    directory = working_directory
+    git_directory = False
     index = 1
     while index < len(tokens):
         token = tokens[index]
-        takes_next_token = token in GIT_GLOBAL_OPTIONS_WITH_VALUE
-        if takes_next_token:
+        value = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if token == "-C":
+            directory = resolve_directory(directory, value)
             index += 2
-            continue
-        if token.startswith("-"):
+        elif token == "--git-dir":
+            git_directory = resolve_directory(directory, value)
+            index += 2
+        elif token.startswith("--git-dir="):
+            git_directory = resolve_directory(directory, token.split("=", 1)[1])
             index += 1
-            continue
-        return token, tokens[index + 1:]
-    return None, []
+        elif token in GIT_GLOBAL_OPTIONS_WITH_VALUE:
+            index += 2
+        elif token.startswith("-"):
+            index += 1
+        else:
+            return token, tokens[index + 1:], locate_repository(directory, git_directory)
+    return None, [], None
+
+
+def locate_repository(directory, git_directory):
+    """Returns the git options locating the repository; `git_directory` is False when no --git-dir was given."""
+    git_directory_unresolved = git_directory is None
+    if directory is None or git_directory_unresolved:
+        return None
+    return ["-C", directory] + (["--git-dir", git_directory] if git_directory else [])
 
 
 def short_flag_letters(arguments):
@@ -102,11 +132,13 @@ def positionals(arguments):
     return [a for a in arguments if not a.startswith("-")]
 
 
-def current_branch(working_directory):
-    """Returns the checked-out branch name; refuses when HEAD cannot be read (detached or no repository)."""
+def current_branch(repository):
+    """Returns the branch checked out in `repository`; refuses when it cannot be located or HEAD cannot be read."""
+    if repository is None:
+        refuse("branch-unreadable", "the directory the git command runs in cannot be resolved, so the command cannot be checked.")
     try:
         result = subprocess.run(
-            ["git", "-C", working_directory or ".", "symbolic-ref", "--short", "HEAD"],
+            ["git", *repository, "symbolic-ref", "--short", "HEAD"],
             capture_output=True, text=True, timeout=3,
         )
     except (OSError, subprocess.SubprocessError):
@@ -123,7 +155,7 @@ def names_protected_branch(refspec):
     return branch_name in PROTECTED_BRANCHES
 
 
-def check_push(arguments, working_directory):
+def check_push(arguments, repository):
     letters = short_flag_letters(arguments)
     if has_long_flag(arguments, "--no-verify"):
         refuse("no-verify", "git push --no-verify skips the husky pre-push checks, fix what the hook reports.")
@@ -142,38 +174,38 @@ def check_push(arguments, working_directory):
         refuse("push-delete", "a :branch refspec deletes a remote branch, ask your manager.")
     pushes_current_branch = not refspecs or "HEAD" in refspecs
     targets_protected_branch = any(names_protected_branch(r) for r in refspecs)
-    is_on_protected_branch = pushes_current_branch and current_branch(working_directory) in PROTECTED_BRANCHES
+    is_on_protected_branch = pushes_current_branch and current_branch(repository) in PROTECTED_BRANCHES
     if targets_protected_branch or is_on_protected_branch:
         refuse("push-protected-branch", "pushing to main or master is forbidden, push your own branch and open a PR.")
 
 
-def check_commit(arguments, _working_directory):
+def check_commit(arguments, _repository):
     skips_hooks = "n" in short_flag_letters(arguments) or has_long_flag(arguments, "--no-verify")
     if skips_hooks:
         refuse("no-verify", "git commit --no-verify / -n skips commitlint and husky, fix what the hook reports.")
 
 
-def check_reset(arguments, _working_directory):
+def check_reset(arguments, _repository):
     if "--hard" in arguments:
         refuse("reset-hard", "git reset --hard throws away work, use git restore --staged or commit first.")
 
 
-def check_clean(arguments, _working_directory):
+def check_clean(arguments, _repository):
     is_dry_run = "n" in short_flag_letters(arguments) or has_long_flag(arguments, "--dry-run")
     is_forced = "f" in short_flag_letters(arguments) or has_long_flag(arguments, "--force")
     if is_forced and not is_dry_run:
         refuse("clean-force", "git clean -f deletes untracked files, remove them one by one with rm.")
 
 
-def check_rebase(arguments, working_directory):
+def check_rebase(arguments, repository):
     branch_being_rebased = positionals(arguments)[1:2]
     rebases_named_protected_branch = any(b in PROTECTED_BRANCHES for b in branch_being_rebased)
-    rebases_current_protected_branch = not branch_being_rebased and current_branch(working_directory) in PROTECTED_BRANCHES
+    rebases_current_protected_branch = not branch_being_rebased and current_branch(repository) in PROTECTED_BRANCHES
     if rebases_named_protected_branch or rebases_current_protected_branch:
         refuse("rebase-protected-branch", "never rebase main or master, it is shared.")
 
 
-def check_branch(arguments, _working_directory):
+def check_branch(arguments, _repository):
     letters = short_flag_letters(arguments)
     deletes = "d" in letters or has_long_flag(arguments, "--delete")
     forces = "f" in letters or has_long_flag(arguments, "--force")
@@ -181,19 +213,19 @@ def check_branch(arguments, _working_directory):
         refuse("branch-force-delete", "git branch -D is forbidden, use git branch -d on a merged branch.")
 
 
-def check_stash(arguments, _working_directory):
+def check_stash(arguments, _repository):
     if positionals(arguments)[:1] in (["drop"], ["clear"]):
         refuse("stash-drop", "dropping a stash loses work, apply it and leave the entry.")
 
 
-def check_checkout(arguments, _working_directory):
+def check_checkout(arguments, _repository):
     discards_by_pathspec = "--" in arguments or "." in positionals(arguments)
     forces = "f" in short_flag_letters(arguments) or has_long_flag(arguments, "--force")
     if discards_by_pathspec or forces:
         refuse("checkout-discard", "git checkout -- <path>, . and -f discard changes, commit or copy them first.")
 
 
-def check_restore(arguments, _working_directory):
+def check_restore(arguments, _repository):
     restores_index_only = ("S" in short_flag_letters(arguments) or has_long_flag(arguments, "--staged")) and not (
         "W" in short_flag_letters(arguments) or has_long_flag(arguments, "--worktree")
     )
@@ -201,14 +233,14 @@ def check_restore(arguments, _working_directory):
         refuse("restore-discard", "git restore discards working-tree changes, only --staged is allowed.")
 
 
-def check_worktree(arguments, _working_directory):
+def check_worktree(arguments, _repository):
     is_removal = positionals(arguments)[:1] == ["remove"]
     forces = "f" in short_flag_letters(arguments) or has_long_flag(arguments, "--force")
     if is_removal and forces:
         refuse("worktree-remove-force", "git worktree remove --force can lose changes, remove without --force.")
 
 
-def refuse_history_rewrite(_arguments, _working_directory):
+def refuse_history_rewrite(_arguments, _repository):
     refuse("history-rewrite", "filter-branch and filter-repo rewrite history, ask your manager.")
 
 
@@ -248,7 +280,20 @@ def is_unanalysable_program(tokens):
     return is_eval or is_computed_program or is_base64_decoder or is_shell_reading_stdin
 
 
-def check_segment(segment, working_directory):
+class ShellState:
+    """The directory the next command runs in; None once a `cd` makes it impossible to know."""
+
+    def __init__(self, working_directory):
+        self.working_directory = working_directory
+
+
+def change_directory(tokens, shell_state):
+    targets = [t for t in tokens[1:] if not t.startswith("-") or t == "-"]
+    target = targets[0] if targets else "~"
+    shell_state.working_directory = resolve_directory(shell_state.working_directory, target)
+
+
+def check_segment(segment, shell_state):
     try:
         tokens = strip_wrappers(shlex.split(segment))
     except ValueError:
@@ -263,20 +308,23 @@ def check_segment(segment, working_directory):
 
     script = inline_shell_script(tokens)
     if script is not None:
-        check_command(script, working_directory)
+        check_command(script, ShellState(shell_state.working_directory))
+        return
+    if program_name(tokens[0]) in ("cd", "pushd"):
+        change_directory(tokens, shell_state)
         return
     if program_name(tokens[0]) != "git":
         return
 
-    subcommand, arguments = split_git_invocation(tokens)
+    subcommand, arguments, repository = split_git_invocation(tokens, shell_state.working_directory)
     check_for_subcommand = GIT_SUBCOMMAND_CHECKS.get(subcommand)
     if check_for_subcommand:
-        check_for_subcommand(arguments, working_directory)
+        check_for_subcommand(arguments, repository)
 
 
-def check_command(command, working_directory):
+def check_command(command, shell_state):
     for segment in split_outside_quotes(command):
-        check_segment(segment, working_directory)
+        check_segment(segment, shell_state)
 
 
 def main():
@@ -286,7 +334,7 @@ def main():
         working_directory = payload.get("cwd") or os.getcwd()
         if "git" not in command:
             return 0
-        check_command(command, working_directory)
+        check_command(command, ShellState(working_directory))
     except Refusal as refusal:
         print(refusal, file=sys.stderr)
         return 2
