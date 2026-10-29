@@ -114,8 +114,13 @@ export class EscalationService {
   submitBatch(batch: PlanQuestionBatch): SubmittedPlanQuestions {
     const submitted = this.storeBatch(batch);
     this.journalSelfResolved({ managerId: batch.managerId, ticket: batch.ticket, submitted });
-    if (submitted.human) this.deps.bus?.emit({ type: 'escalation.raised', escalation: this.viewOf(submitted.human.escalationId) });
+    if (submitted.human) this.emitRaised(submitted.human.escalationId);
     return submitted;
+  }
+
+  /** Sends the escalation as it stands after a change, so the UI shows it without waiting for a snapshot. */
+  private emitRaised(escalationId: string): void {
+    this.deps.bus?.emit({ type: 'escalation.raised', escalation: this.viewOf(escalationId) });
   }
 
   /**
@@ -134,6 +139,7 @@ export class EscalationService {
 
     const recorded = inTransaction(this.deps.db, 'escalation_record_arbiter_opinion', () =>
       this.applyOpinion({ batch, questions, opinion, arbiterSessionId, evidenceByQuestionId }));
+    if (recorded.escalationId !== undefined) this.emitRaised(recorded.escalationId);
     const hasChangedSomething = recorded.appliedDecisions.length > 0;
     if (!hasChangedSomething) return recorded.result;
 
@@ -160,6 +166,7 @@ export class EscalationService {
     }
     if (escalated === undefined) return undefined;
 
+    this.emitRaised(escalated.escalationId);
     const { managerId, ticket } = batch;
     this.deps.audit.journal({ managerId, entries: [`${ticket} ${escalated.questionIds.join(',')} escalated to the human: ${reason}`] });
     this.deps.audit.tellManager({ managerId, body: `[arbiter] escalated ${escalated.questionIds.join(',')} on ${ticket} to the human: ${reason}` });
@@ -222,7 +229,7 @@ export class EscalationService {
 
   private applyOpinion({ batch, questions, opinion, arbiterSessionId, evidenceByQuestionId }: {
     batch: StoredBatch; questions: readonly StoredQuestion[]; opinion: ArbiterOpinion; arbiterSessionId: string; evidenceByQuestionId: ReadonlyMap<string, ReproClaim>;
-  }): { result: RecordedOpinion; appliedDecisions: AuditedDecision[] } {
+  }): { result: RecordedOpinion; appliedDecisions: AuditedDecision[]; escalationId?: string } {
     const { repository, audit } = this.deps;
     const appliedDecisions: AuditedDecision[] = [];
     const ignoredQuestionIds: string[] = [];
@@ -261,8 +268,8 @@ export class EscalationService {
       });
     }
     repository.recordCriteriaOpinion({ batchId: batch.id, opinion: opinion.criteria.opinion, reasons: opinion.criteria.reasons.map(humanReadableText) });
-    if (escalatedQuestionIds.length > 0) this.joinEscalation({ batchId: batch.id, managerId: batch.managerId, ticket: batch.ticket, questionIds: escalatedQuestionIds });
-    return { result: { batchId: batch.id, decidedQuestionIds, escalatedQuestionIds, ignoredQuestionIds, warnings: trail.warnings }, appliedDecisions };
+    const joined = escalatedQuestionIds.length === 0 ? undefined : this.joinEscalation({ batchId: batch.id, managerId: batch.managerId, ticket: batch.ticket, questionIds: escalatedQuestionIds });
+    return { result: { batchId: batch.id, decidedQuestionIds, escalatedQuestionIds, ignoredQuestionIds, warnings: trail.warnings }, appliedDecisions, ...(joined && { escalationId: joined.escalationId }) };
   }
 
   private journalSelfResolved({ managerId, ticket, submitted }: { managerId: string; ticket: string; submitted: SubmittedPlanQuestions }): void {
