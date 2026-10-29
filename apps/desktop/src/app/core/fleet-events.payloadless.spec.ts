@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Observable } from 'rxjs';
 import { FleetEventsService } from './fleet-events.service';
 
 class FakeWebSocket {
@@ -66,6 +67,7 @@ describe('FleetEventsService frames without their payload', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ticket: 't' }) }));
     consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     service = new FleetEventsService();
     await service.connect();
   });
@@ -76,19 +78,76 @@ describe('FleetEventsService frames without their payload', () => {
 
   const socket = () => FakeWebSocket.instances[0]!;
 
-  it.each(TYPES_THAT_READ_A_PAYLOAD)('ignores a %s frame that carries no payload, and applies the valid event after it', (type) => {
-    const deliverPayloadlessFrame = () => socket().dispatchMessage({ type });
-    expect(deliverPayloadlessFrame).not.toThrow();
-
-    socket().dispatchMessage({ type: 'session.created', session: aSession });
-
-    expect(service.sessions().map((s) => s.id)).toEqual(['s1']);
-    expect(consoleError).not.toHaveBeenCalled();
+  const observableStateOf = (fleet: FleetEventsService) => ({
+    sessions: fleet.sessions(),
+    approvals: fleet.approvals(),
+    managers: fleet.managers(),
+    proposals: fleet.proposals(),
+    queuedCounts: (fleet as unknown as { queuedCounts: () => unknown }).queuedCounts(),
+    queuedTotal: fleet.queuedTotal(),
+    workingStates: fleet.workingStates(),
+    workingStatesReported: fleet.workingStatesReported(),
+    todos: fleet.todos(),
+    todoSummaries: fleet.todoSummaries(),
+    todosReported: fleet.todosReported(),
+    sessionIdsWithRetainedTodos: fleet.sessionIdsWithRetainedTodos(),
+    daemonIssues: fleet.daemonIssues(),
+    backgroundFailures: fleet.backgroundFailures(),
+    silentBlocks: fleet.silentBlocks(),
+    snapshotReceived: fleet.snapshotReceived(),
+    deliveredMessageIds: fleet.deliveredMessageIds(),
   });
 
-  it('still applies a valid session.updated', () => {
-    socket().dispatchMessage({ type: 'session.updated', session: aSession });
+  const listenToEverySubject = (fleet: FleetEventsService) => {
+    const subjects: Observable<unknown>[] = [
+      fleet.liveOutputSessionIds,
+      fleet.typedInSessionIds,
+      fleet.notificationTriggers,
+      fleet.noteChanges,
+      fleet.lawChanges,
+      fleet.output('s1'),
+      fleet.output(undefined as unknown as string),
+    ];
+    const received = vi.fn();
+    for (const subject of subjects) subject.subscribe(received);
+    return received;
+  };
 
-    expect(service.sessions().map((s) => s.id)).toEqual(['s1']);
+  it.each(TYPES_THAT_READ_A_PAYLOAD)('leaves everything untouched on a %s frame that carries no payload, then applies the valid event after it', (type) => {
+    socket().dispatchMessage({ type: 'session.created', session: aSession });
+    const stateBefore = observableStateOf(service);
+    const subscriberCalled = listenToEverySubject(service);
+
+    socket().dispatchMessage({ type });
+
+    expect(observableStateOf(service)).toStrictEqual(stateBefore);
+    expect(subscriberCalled).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    socket().dispatchMessage({ type: 'session.updated', session: { ...aSession, name: 'Gandalf' } });
+    expect(service.sessions().map((s) => s.name)).toEqual(['Gandalf']);
+  });
+
+  it('applies a valid daemon.issues after a payloadless one', () => {
+    socket().dispatchMessage({ type: 'daemon.issues' });
+
+    socket().dispatchMessage({ type: 'daemon.issues', issues: [] });
+
+    expect(service.daemonIssues()).toStrictEqual([]);
+  });
+
+  it('applies a valid message.delivered after a payloadless one', () => {
+    socket().dispatchMessage({ type: 'message.delivered' });
+
+    socket().dispatchMessage({ type: 'message.delivered', sessionId: 's1', messageId: 'm1' });
+
+    expect([...service.deliveredMessageIds()]).toEqual(['m1']);
+  });
+
+  it('applies a valid governance.queue_changed after a payloadless one', () => {
+    socket().dispatchMessage({ type: 'governance.queue_changed' });
+
+    socket().dispatchMessage({ type: 'governance.queue_changed', managerId: 'm1', queuedCount: 3 });
+
+    expect(service.queuedTotal()).toBe(3);
   });
 });
