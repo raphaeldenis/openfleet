@@ -11,7 +11,7 @@ export interface PullRequestCreation {
   headBranch?: string;
 }
 
-/** The arguments of a gh command with the repository options that sit before the subcommand removed: they select a repository, not a command. */
+/** The arguments of a gh or glab command with the repository options that sit before the subcommand removed: they select a repository, not a command. */
 export function argsWithoutLeadingRepoOptions(args: readonly string[]): string[] {
   let index = 0;
   while (index < args.length) {
@@ -87,7 +87,8 @@ function apiRequestOf(args: readonly string[]): ApiRequest {
 /** A `gh api` call creates a pull request when it POSTs to a `/pulls` endpoint; gh posts by itself as soon as the call carries fields or an input. */
 function apiCreationOf(args: readonly string[]): PullRequestCreation | undefined {
   const { endpoint, method, fields, hasInput } = apiRequestOf(args);
-  const targetsPulls = endpoint !== undefined && PULLS_ENDPOINT.test(endpoint.split('?')[0] as string);
+  const endpointPath = endpoint?.split(/[?#]/)[0];
+  const targetsPulls = endpointPath !== undefined && PULLS_ENDPOINT.test(endpointPath);
   const carriesBody = fields.length > 0 || hasInput;
   const effectiveMethod = (method ?? (carriesBody ? 'POST' : 'GET')).toUpperCase();
   if (!targetsPulls || effectiveMethod !== 'POST') return undefined;
@@ -97,7 +98,7 @@ function apiCreationOf(args: readonly string[]): PullRequestCreation | undefined
 
 function creationOf(command: SimpleCommand): PullRequestCreation | undefined {
   if (command.program === 'glab') {
-    const [group, action, ...options] = command.args;
+    const [group, action, ...options] = argsWithoutLeadingRepoOptions(command.args);
     const isMergeRequestCreation = group === 'mr' && (action === 'create' || action === 'new');
     return isMergeRequestCreation ? creationWithHead(glabSourceBranchOf(options)) : undefined;
   }

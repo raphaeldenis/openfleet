@@ -43,6 +43,22 @@ describe('the findings gate rule delivered with the command policy', () => {
     expect(matchesTheGateRule(command)).toBe(true);
   });
 
+  it.each([
+    ['an endpoint with a query string', 'gh api repos/o/r/pulls?draft=true -f title=x'],
+    ['a quoted endpoint with a query string', 'gh api -X POST "repos/o/r/pulls?x=1"'],
+    ['glab with a leading -R', 'glab -R o/r mr create --fill'],
+    ['glab with a leading --repo=', 'glab --repo=o/r mr new --fill'],
+  ])('matches %s', (_label, command) => {
+    expect(matchesTheGateRule(command)).toBe(true);
+  });
+
+  it.each([
+    ['a listing of merge requests behind -R', 'glab -R o/r mr list'],
+    ['the comments of a pull request', 'gh api repos/o/r/pulls/12/comments -f body=x'],
+  ])('does not match %s', (_label, command) => {
+    expect(matchesTheGateRule(command)).toBe(false);
+  });
+
   it('does not see through a script file (documented limit)', () => {
     expect(matchesTheGateRule('bash ./open-pr.sh')).toBe(false);
   });

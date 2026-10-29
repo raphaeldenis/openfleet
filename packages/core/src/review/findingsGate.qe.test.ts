@@ -215,6 +215,14 @@ describe('QE — the findings gate on gh pr create, enforcing', () => {
     'gh api repos/o/r/pulls -f title=t -F base=main',
     'glab mr create --fill',
     'glab mr create --source-branch CCM-7-gate --target-branch main',
+    'gh api repos/o/r/pulls?draft=true -f title=x',
+    'gh api -X POST "repos/o/r/pulls?x=1"',
+    'gh api -X POST "repos/o/r/pulls?x=1#frag"',
+    'gh api -X POST "repos/o/r/pulls#frag"',
+    'glab -R o/r mr create --fill',
+    'glab --repo o/r mr create --fill',
+    'glab -R=o/r mr new --fill',
+    'glab --repo=o/r mr create --fill',
   ])('refuses a child opening a request without findings through %s, with the same actionable message', async (command) => {
     const { directory, sessionId } = await bootInEnforce();
 
@@ -235,6 +243,12 @@ describe('QE — the findings gate on gh pr create, enforcing', () => {
     'gh api -X POST repos/o/r/issues/1/comments -f body=x',
     'glab mr list',
     'glab mr view 3',
+    'gh api repos/o/r/pulls?state=open',
+    'gh api -X GET "repos/o/r/pulls?state=open" -f per_page=5',
+    'gh api repos/o/r/pulls/12/comments?page=2 -f body=x',
+    'gh api repos/o/r/pulls-foo?x=1 -f title=t',
+    'glab -R o/r mr list',
+    'glab --repo=o/r mr view 3',
   ])('never blocks %s: only a request creation is judged', async (command) => {
     const { directory, sessionId } = await bootInEnforce();
 
