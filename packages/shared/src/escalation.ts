@@ -129,6 +129,16 @@ export interface EscalationQuestionView {
   answeredAt?: string;
 }
 
+/** Set while the escalation could not be listed in the questions_for_human of its manager: the card exists and can be answered, and a human retries the listing. */
+export interface EscalationHandoverRefusal {
+  /** Why the questions were handed to the human, for example `arbiter_unavailable`. */
+  reason: string;
+  /** Why the listing was refused. */
+  refusal: string;
+  hint?: string;
+  at: string;
+}
+
 /** What the Inbox shows and what the WebSocket carries: the escalation the daemon wrote, with the questions it carries. */
 export interface EscalationView {
   id: string;
@@ -138,5 +148,6 @@ export interface EscalationView {
   body: string;
   createdAt: string;
   resolvedAt?: string;
+  handoverRefusal?: EscalationHandoverRefusal;
   questions: EscalationQuestionView[];
 }

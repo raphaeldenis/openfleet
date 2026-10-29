@@ -24,4 +24,8 @@ export function registerEscalationRoutes(router: Router, deps: { escalations: Es
     const { answers } = EscalationAnswerBodySchema.parse(body);
     json(res, 200, escalations.answer({ escalationId: params.id!, answers }));
   });
+
+  router.add('POST', '/api/escalations/:id/retry-handover', ({ res, params }) => {
+    json(res, 200, escalations.retryHandover(params.id!));
+  });
 }

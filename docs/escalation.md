@@ -16,6 +16,7 @@ The manager finds one item `[esc:<id>] Escalation on <ticket>: …` in its `ques
 | `status` | `pending` or `answered` |
 | `body` | the text the daemon rendered |
 | `createdAt`, `resolvedAt?` | ISO timestamps |
+| `handoverRefusal?` | `{ reason, refusal, hint?, at }`, set while the card could not be listed in the manager's `questions_for_human` (the list holds 20 items) after the arbiter was unavailable or its quota was used up. The questions wait on the card, and a human can answer it or retry the listing |
 | `questions[]` | `questionId`, `text`, `declaredClass`, `effectiveClasses`, `reason?` (`unclassified`), `options?`, `recommendation?`, `status` (`pending_human` or `answered`), `humanAnswer?`, `answeredAt?` |
 
 ## REST
@@ -27,6 +28,7 @@ Every route sits under `/api`: it needs the admin token. The token of a session 
 | `GET /api/escalations?status=pending\|answered` | `EscalationView[]`, oldest first. `status` defaults to `pending`. Any other value is refused `invalid_body` (400). |
 | `GET /api/managers/:id/escalations` | the escalations of that manager, all statuses. `manager_not_found` (404) for a session that is not a manager. |
 | `POST /api/escalations/:id/answer` | body `{ answers: [{ question_id, answer }] }` → the answered `EscalationView`. |
+| `POST /api/escalations/:id/retry-handover` | no body → the `EscalationView`, listed in the manager's `questions_for_human`, `handoverRefusal` cleared. Refused `invalid_body` (400) while the list is still full (the card keeps `handoverRefusal`) or when the hand-over was not refused; `already_resolved` (409), `escalation_not_found` (404). Nothing retries by itself. |
 
 `answer` rules:
 

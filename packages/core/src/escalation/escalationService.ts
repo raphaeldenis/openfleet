@@ -40,16 +40,18 @@ export interface RecordedOpinion {
 export interface EscalatedToHuman {
   escalationId: string;
   questionIds: string[];
+  /** Set when the questions_for_human of the manager had no room: the questions wait on the card, unlisted, until a human retries the listing. */
+  listRefusal?: HumanListRefusal;
 }
 
-/** The human list had no room: the questions stay with the arbiter's batch, and this says why. */
+/** The questions_for_human of the manager had no room for the escalation item, and this says why. */
 export interface HumanListRefusal {
   refusal: string;
   hint?: string;
 }
 
-export const isHumanListRefusal = (outcome: EscalatedToHuman | HumanListRefusal | undefined): outcome is HumanListRefusal =>
-  outcome !== undefined && 'refusal' in outcome;
+/** What a hand-over does when the human list is full: a submission is refused as a whole, a fail-closed hand-over keeps the card and marks it. */
+type OnFullList = 'refuse' | { markCardWith: string };
 
 export interface PlanQuestionBatch {
   managerId: string;
@@ -150,35 +152,46 @@ export class EscalationService {
 
   /**
    * Hands the questions of a batch that still wait for the arbiter to the human, in the single open escalation, with the reason the human reads. Answers undefined when none was waiting.
-   * When the human list has no room, nothing is handed over, the questions stay open, the manager is told why, and the answer carries the refusal.
+   * When the human list has no room, the questions still reach the card, which carries the refusal until a human retries the listing; the manager is told why.
    */
-  escalateBatchToHuman({ batchId, reason }: { batchId: string; reason: string }): EscalatedToHuman | HumanListRefusal | undefined {
+  escalateBatchToHuman({ batchId, reason }: { batchId: string; reason: string }): EscalatedToHuman | undefined {
     const batch = this.deps.repository.findBatch(batchId);
     if (batch === undefined) return undefined;
 
-    let escalated: EscalatedToHuman | undefined;
-    try {
-      escalated = this.handWaitingQuestionsToHuman({ batch, reason });
-    } catch (error) {
-      const isHumanListFull = error instanceof OpenFleetError && error.code === 'invalid_body';
-      if (!isHumanListFull) throw error;
-      return this.refuseHandOver({ batch, reason, refusal: error.message, hint: error.options.hint });
-    }
+    const escalated = this.handWaitingQuestionsToHuman({ batch, reason });
     if (escalated === undefined) return undefined;
 
     this.emitRaised(escalated.escalationId);
     const { managerId, ticket } = batch;
-    this.deps.audit.journal({ managerId, entries: [`${ticket} ${escalated.questionIds.join(',')} escalated to the human: ${reason}`] });
-    this.deps.audit.tellManager({ managerId, body: `[arbiter] escalated ${escalated.questionIds.join(',')} on ${ticket} to the human: ${reason}` });
+    const handedIds = escalated.questionIds.join(',');
+    const { listRefusal } = escalated;
+    if (listRefusal === undefined) {
+      this.deps.audit.journal({ managerId, entries: [`${ticket} ${handedIds} escalated to the human: ${reason}`] });
+      this.deps.audit.tellManager({ managerId, body: `[arbiter] escalated ${handedIds} on ${ticket} to the human: ${reason}` });
+      return escalated;
+    }
+    const line = `${ticket} ${handedIds} escalated to the human (${reason}) but not listed in questions_for_human: ${listRefusal.refusal}`;
+    this.deps.audit.journal({ managerId, entries: [line] });
+    this.deps.audit.tellManager({ managerId, body: `[arbiter] ${line}. The card waits in the Inbox; a human can answer it or retry the listing.` });
     return escalated;
   }
 
-  private refuseHandOver({ batch, reason, refusal, hint }: { batch: StoredBatch; reason: string; refusal: string; hint: string | undefined }): HumanListRefusal {
-    const { managerId, ticket } = batch;
-    const line = `${ticket} could not be handed to the human (${reason}): ${refusal}`;
-    this.deps.audit.journal({ managerId, entries: [line] });
-    this.deps.audit.tellManager({ managerId, body: `[arbiter] ${line}${hint ? ` ${hint}` : ''}` });
-    return { refusal, ...(hint && { hint }) };
+  /** A human retries the listing of an escalation card in the questions_for_human of its manager; it fails visibly, the card unchanged, while the list is still full. */
+  retryHandover(escalationId: string): EscalationView {
+    const { repository } = this.deps;
+    const listedEscalation = inTransaction(this.deps.db, 'escalation_retry_handover', () => {
+      const escalation = repository.findEscalation(escalationId);
+      if (!escalation) throw new OpenFleetError('escalation_not_found', 'the escalation does not exist.');
+      if (escalation.status === 'answered') throw new OpenFleetError('already_resolved', 'the escalation is already answered.');
+      if (escalation.handoverRefusal === undefined) throw new OpenFleetError('invalid_body', 'the hand-over of this escalation was not refused: there is nothing to retry.');
+
+      this.ensureItemInQuestionsForHuman({ managerId: escalation.managerId, escalation });
+      repository.setHandoverRefusal({ id: escalationId, refusal: null });
+      return escalation;
+    });
+    this.emitRaised(escalationId);
+    this.deps.audit.journal({ managerId: listedEscalation.managerId, entries: [`${listedEscalation.ticket} escalation listed in questions_for_human after a human retried the hand-over`] });
+    return this.viewOf(escalationId);
   }
 
   private handWaitingQuestionsToHuman({ batch, reason }: { batch: StoredBatch; reason: string }): EscalatedToHuman | undefined {
@@ -188,7 +201,7 @@ export class EscalationService {
       const handed = waiting.filter((question) => this.deps.repository.deferOpenQuestionToHuman({ batchId, questionId: question.questionId, effectiveClasses: question.effectiveClasses, reason }));
       const hasNothingToHand = handed.length === 0;
       if (hasNothingToHand) return undefined;
-      return this.joinEscalation({ batchId, managerId: batch.managerId, ticket: batch.ticket, questionIds: handed.map((question) => question.questionId) });
+      return this.joinEscalation({ batchId, managerId: batch.managerId, ticket: batch.ticket, questionIds: handed.map((question) => question.questionId), onFullList: { markCardWith: reason } });
     });
   }
 
@@ -333,8 +346,8 @@ export class EscalationService {
 
   private viewOfStored(escalation: StoredEscalation): EscalationView {
     const questions = this.deps.repository.questionsOfEscalation(escalation.id).map(questionViewOf);
-    const { managerId, ticket, status, body, createdAt, resolvedAt } = escalation;
-    return { id: escalation.id, managerId, ticket, status, body, createdAt, ...(resolvedAt && { resolvedAt }), questions };
+    const { managerId, ticket, status, body, createdAt, resolvedAt, handoverRefusal } = escalation;
+    return { id: escalation.id, managerId, ticket, status, body, createdAt, ...(resolvedAt && { resolvedAt }), ...(handoverRefusal && { handoverRefusal }), questions };
   }
 
   private storeBatch(batch: PlanQuestionBatch): SubmittedPlanQuestions {
@@ -367,7 +380,9 @@ export class EscalationService {
   }
 
   /** Attaches the questions to the open escalation of the ticket, or opens it; the body is rebuilt from every question it carries. */
-  private joinEscalation({ batchId, managerId, ticket, questionIds }: { batchId: string; managerId: string; ticket: string; questionIds: string[] }) {
+  private joinEscalation({ batchId, managerId, ticket, questionIds, onFullList = 'refuse' }: {
+    batchId: string; managerId: string; ticket: string; questionIds: string[]; onFullList?: OnFullList;
+  }): EscalatedToHuman {
     const { repository } = this.deps;
     const openEscalation = repository.findPendingEscalation({ managerId, ticket });
     const escalation = openEscalation ?? this.openEscalation({ managerId, ticket });
@@ -375,8 +390,25 @@ export class EscalationService {
 
     const body = renderEscalationBody({ id: escalation.id, ticket, questions: repository.questionsOfEscalation(escalation.id) });
     repository.updateEscalationBody({ id: escalation.id, body });
-    this.ensureItemInQuestionsForHuman({ managerId, escalation });
-    return { escalationId: escalation.id, questionIds };
+    const listRefusal = this.listItemOrRefusal({ managerId, escalation, onFullList });
+    const hasBeenListed = listRefusal === undefined;
+    if (hasBeenListed && escalation.handoverRefusal !== undefined) repository.setHandoverRefusal({ id: escalation.id, refusal: null });
+    return { escalationId: escalation.id, questionIds, ...(listRefusal && { listRefusal }) };
+  }
+
+  /** Lists the escalation; a full list refuses the whole submission, or marks the card with the reason and the refusal when the hand-over must not fail. */
+  private listItemOrRefusal({ managerId, escalation, onFullList }: { managerId: string; escalation: StoredEscalation; onFullList: OnFullList }): HumanListRefusal | undefined {
+    try {
+      this.ensureItemInQuestionsForHuman({ managerId, escalation });
+      return undefined;
+    } catch (error) {
+      const isHumanListFull = error instanceof OpenFleetError && error.code === 'invalid_body';
+      if (!isHumanListFull || onFullList === 'refuse') throw error;
+      const hint = error.options.hint;
+      const listRefusal: HumanListRefusal = { refusal: error.message, ...(hint && { hint }) };
+      this.deps.repository.setHandoverRefusal({ id: escalation.id, refusal: { reason: onFullList.markCardWith, ...listRefusal, at: this.deps.clock() } });
+      return listRefusal;
+    }
   }
 
   private openEscalation({ managerId, ticket }: { managerId: string; ticket: string }): StoredEscalation {

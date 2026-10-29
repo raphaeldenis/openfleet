@@ -676,7 +676,26 @@ describe('QE — the human list is full (questions_for_human holds 20 items)', (
     arguments: { plan: [], todo: [], remaining: [], internal_questions: [], blockers: [], questions_for_human: Array.from({ length: FULL_LIST_SIZE }, (_, index) => `an open question ${index}`) },
   });
 
-  it('refuses the quota fallback with invalid_body and the reason, leaves the question open and tells the manager', async () => {
+  interface RefusedCard { id: string; status: string; handoverRefusal?: { reason: string; refusal: string; at: string }; questions: { questionId: string; status: string }[] }
+  const cards = async (): Promise<RefusedCard[]> => (await (await adminApi('/api/escalations')).json()) as RefusedCard[];
+  const retryHandover = (escalationId: string, headers: Record<string, string> = {}) => adminApi(`/api/escalations/${escalationId}/retry-handover`, { method: 'POST', body: '{}', headers });
+  const freeOneSlot = (client: Client) => client.callTool({
+    name: 'update_working_state',
+    arguments: { plan: [], todo: [], remaining: [], internal_questions: [], blockers: [], questions_for_human: Array.from({ length: FULL_LIST_SIZE - 1 }, (_, index) => `an open question ${index}`) },
+  });
+  const failClosedOnAFullList = async () => {
+    const { manager, planNote } = await bootManager();
+    const answer = parsed(await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] }));
+    const [first] = await waitForArbiters(1);
+    await fillHumanList(manager.client);
+    await closeSession(first!.id);
+    const [, second] = await waitForArbiters(2);
+    await closeSession(second!.id);
+    await vi.waitFor(() => expect(escalationRows()).toHaveLength(1), { timeout: 5000 });
+    return { manager, planNote, batchId: answer.batch_id as string };
+  };
+
+  it('keeps the quota fallback answer on a full list (invalid_body), and puts the question on a card that says the hand-over was refused', async () => {
     setPolicy({ maxArbiterRunsPerTicket: 1 });
     const { manager, planNote } = await bootManager();
     await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
@@ -687,26 +706,66 @@ describe('QE — the human list is full (questions_for_human holds 20 items)', (
 
     expect(result.isError).toBe(true);
     expect(rawText(result)).toMatch(/^error invalid_body: .*questions_for_human/);
-    expect(statusOf('q2').status).toBe('open');
-    expect(escalationRows()).toEqual([]);
+    expect(statusOf('q2').status).toBe('pending_human');
+    const [card] = await cards();
+    expect(card).toMatchObject({ status: 'pending', handoverRefusal: { reason: 'arbiter_quota' }, questions: [{ questionId: 'q2', status: 'pending_human' }] });
+    expect(card!.handoverRefusal!.refusal).toContain('questions_for_human');
     expect(questionsForHumanOf(manager.id)).toHaveLength(FULL_LIST_SIZE);
     expect(arbiterMessagesTo(manager.id).join('\n')).toContain('questions_for_human');
     expect(journalEntries().join('\n')).toContain('questions_for_human');
   });
 
-  it('tells the manager, without throwing, when the arbiter fails closed on a full list: the batch stays open', async () => {
+  it('ends a batch that fails closed on a full list in a visible state on the card: the question waits for the human, criteria say escalation_open and no arbiter is launched again', async () => {
+    const { manager, planNote } = await failClosedOnAFullList();
+
+    const [card] = await cards();
+    const approval = await manager.client.callTool({ name: 'approve_plan_criteria', arguments: { ticket: TICKET, plan_note_id: planNote.id } });
+
+    expect(card).toMatchObject({ status: 'pending', handoverRefusal: { reason: 'arbiter_unavailable' }, questions: [{ questionId: 'q1', status: 'pending_human' }] });
+    expect(statusOf('q1').status).toBe('pending_human');
+    expect(rawText(approval)).toMatch(/^error escalation_open: /);
+    expect(arbiterRows()).toHaveLength(2);
+    expect(arbiterMessagesTo(manager.id).join('\n')).toContain('questions_for_human');
+  });
+
+  it('retries the hand-over only on a human gesture: refused while the list is full, done once a slot is free, and the manager token is refused', async () => {
+    const { manager } = await failClosedOnAFullList();
+    const [card] = await cards();
+
+    const withManagerToken = await retryHandover(card!.id, { authorization: `Bearer ${tokenOf(manager.id)}` });
+    const whileFull = await retryHandover(card!.id);
+    const cardAfterFailedRetry = (await cards())[0]!;
+    await freeOneSlot(manager.client);
+    const afterFreeing = await retryHandover(card!.id);
+
+    expect(withManagerToken.status).toBe(401);
+    expect(whileFull.status).toBe(400);
+    expect(await whileFull.json()).toMatchObject({ error: 'invalid_body' });
+    expect(cardAfterFailedRetry.handoverRefusal).toMatchObject({ reason: 'arbiter_unavailable' });
+    expect(afterFreeing.status).toBe(200);
+    expect(((await afterFreeing.json()) as RefusedCard).handoverRefusal).toBeUndefined();
+    expect(questionsForHumanOf(manager.id).filter((item) => item.startsWith('[esc:'))).toHaveLength(1);
+    expect((await cards())[0]!.handoverRefusal).toBeUndefined();
+  });
+
+  it('refuses a retry on a card whose hand-over was not refused', async () => {
     const { manager, planNote } = await bootManager();
-    await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
-    const [first] = await waitForArbiters(1);
-    await fillHumanList(manager.client);
+    await submit(manager.client, { plan_note_id: planNote.id, questions: [contractQuestion] });
+    const [card] = await cards();
 
-    await closeSession(first!.id);
-    const [, second] = await waitForArbiters(2);
-    await closeSession(second!.id);
+    const retry = await retryHandover(card!.id);
 
-    await vi.waitFor(() => expect(arbiterMessagesTo(manager.id).join('\n')).toContain('questions_for_human'), { timeout: 5000 });
-    expect(statusOf('q1').status).toBe('open');
-    expect(escalationRows()).toEqual([]);
+    expect(retry.status).toBe(400);
+  });
+
+  it('lets the human answer a card whose hand-over was refused', async () => {
+    await failClosedOnAFullList();
+    const [card] = await cards();
+
+    const answer = await adminApi(`/api/escalations/${card!.id}/answer`, { method: 'POST', body: JSON.stringify({ answers: [{ question_id: 'q1', answer: 'use the plain name' }] }) });
+
+    expect(answer.status).toBe(200);
+    expect(statusOf('q1').status).toBe('answered');
   });
 });
 

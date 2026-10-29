@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { EscalatingClass, ReproClaim } from '@openfleet/shared';
+import type { EscalatingClass, EscalationHandoverRefusal, ReproClaim } from '@openfleet/shared';
 import type { QuestionRoute } from './questionRouting.js';
 
 export const QUESTION_STATUSES = ['open', 'decided', 'self_resolved', 'pending_human', 'answered'] as const;
@@ -56,6 +56,7 @@ export interface NewEscalation {
 export interface StoredEscalation extends NewEscalation {
   status: 'pending' | 'answered';
   resolvedAt?: string;
+  handoverRefusal?: EscalationHandoverRefusal;
 }
 
 export interface NewArbiterDecision {
@@ -84,6 +85,7 @@ interface QuestionRow {
 
 interface EscalationRow {
   id: string; manager_id: string; ticket: string; status: 'pending' | 'answered'; body: string; created_at: string; resolved_at: string | null;
+  handover_refusal_json: string | null;
 }
 
 interface DecisionRow {
@@ -115,6 +117,7 @@ const toQuestion = (row: QuestionRow): StoredQuestion => ({
 const toEscalation = (row: EscalationRow): StoredEscalation => ({
   id: row.id, managerId: row.manager_id, ticket: row.ticket, status: row.status, body: row.body, createdAt: row.created_at,
   ...(row.resolved_at !== null && { resolvedAt: row.resolved_at }),
+  ...(row.handover_refusal_json !== null && { handoverRefusal: JSON.parse(row.handover_refusal_json) as EscalationHandoverRefusal }),
 });
 
 const toDecision = (row: DecisionRow): NewArbiterDecision => ({
@@ -228,6 +231,11 @@ export class EscalationRepository {
 
   updateEscalationBody({ id, body }: { id: string; body: string }): void {
     this.db.prepare("UPDATE escalations SET body = ? WHERE id = ? AND status = 'pending'").run(body, id);
+  }
+
+  /** Marks a pending escalation whose listing in the questions_for_human of its manager was refused; a null clears the mark. */
+  setHandoverRefusal({ id, refusal }: { id: string; refusal: EscalationHandoverRefusal | null }): void {
+    this.db.prepare("UPDATE escalations SET handover_refusal_json = ? WHERE id = ? AND status = 'pending'").run(refusal === null ? null : JSON.stringify(refusal), id);
   }
 
   /** Closes a pending escalation in one statement; false when it was not pending (answered already, or it does not exist). */
