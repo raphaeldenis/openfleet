@@ -137,4 +137,12 @@ describe('rich cell editor', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(submitted).toHaveBeenLastCalledWith('');
   });
+
+  it('draws its actions with the shared button system, Save being the primary one', async () => {
+    await openEditor('longText', 'Original');
+    const save = screen.getByRole('button', { name: 'Save' });
+    const secondaryActions = [screen.getByRole('button', { name: 'Clear value' }), screen.getByRole('button', { name: 'Cancel' })];
+    expect(save).toHaveClass('of-btn', 'of-btn--primary');
+    for (const action of secondaryActions) expect(action).toHaveClass('of-btn', 'of-btn--secondary');
+  });
 });

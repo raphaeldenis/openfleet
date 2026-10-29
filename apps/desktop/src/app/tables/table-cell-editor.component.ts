@@ -22,9 +22,9 @@ import { editedCellValue } from './table-cell-editor-values';
           @if (clearsValue()) { <p role="status">The value will be cleared.</p> }
           <p id="cell-editor-error" role="alert">{{ validationError() || error() }}</p>
           <div class="actions">
-            <button type="button" [disabled]="saving()" (click)="clearValue()">Clear value</button>
-            <button type="button" [disabled]="saving()" (click)="cancelled.emit()">Cancel</button>
-            <button type="submit" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Save' }}</button>
+            <button type="button" class="of-btn of-btn--secondary" [disabled]="saving()" (click)="clearValue()">Clear value</button>
+            <button type="button" class="of-btn of-btn--secondary" [disabled]="saving()" (click)="cancelled.emit()">Cancel</button>
+            <button type="submit" class="of-btn of-btn--primary" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Save' }}</button>
           </div>
           @if (saving()) { <span role="status">Saving…</span> }
         </form>
@@ -41,8 +41,7 @@ import { editedCellValue } from './table-cell-editor-values';
     p { margin: 0; font-size: .75rem; overflow-wrap: anywhere }
     #cell-editor-error { color: var(--s-err) }
     .actions { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: flex-end }
-    button { padding: .375rem .625rem; font: inherit; cursor: pointer }
-    :is(input, textarea, button):focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
+    :is(input, textarea):focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
   `,
 })
 export class TableCellEditorComponent {
