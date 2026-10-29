@@ -19,3 +19,4 @@ stored_model_unknown stored model is not in the known model list; check availabi
 command_policy_saved command policy saved
 restore_without_expected_rev restore without expected_rev
 harness_binary_fails_version_check harness binary fails its version check
+ci_watch_pass_failed a CI watch pass failed; the next pass retries
