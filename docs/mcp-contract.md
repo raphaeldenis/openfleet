@@ -32,7 +32,7 @@ One pull request that adds or changes tools does all three.
 
 ## Example: an optional parameter
 
-`create_worktree` gained the optional `base_ref` at version 6. An added optional parameter is a changed input schema: the pin changed and the version rose by one, with the `CHANGELOG.md` section "6".
+`create_worktree` gained the optional `base_ref` at version 9. An added optional parameter is a changed input schema: the pin changed and the version rose by one, with the `CHANGELOG.md` section "9".
 
 ## The guard test
 
