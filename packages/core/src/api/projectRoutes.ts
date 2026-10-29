@@ -1,6 +1,8 @@
+import { homedir } from 'node:os';
 import {
-  CreateProjectRequestSchema, MAX_NOTE_PAGE_LIMIT, pageQuerySchema, UpdateProjectRequestSchema, type Page, type Project,
+  CreateProjectRequestSchema, DetectRepositoryRequestSchema, MAX_NOTE_PAGE_LIMIT, pageQuerySchema, UpdateProjectRequestSchema, type Page, type Project,
 } from '@openfleet/shared';
+import { detectRepository } from '../projects/repositoryDetector.js';
 import type { ProjectRecord, ProjectRepository } from '../projects/projectRepository.js';
 import type { ProjectService } from '../projects/projectService.js';
 import { json, queryParams, type Router } from './router.js';
@@ -13,12 +15,20 @@ const projectOf = ({ id, name, docsFolderPath, postCreateHookScript, postCreateH
   ...(postCreateHookScript && postCreateHookTimeoutSeconds && { postCreateHookTimeoutSeconds }),
 });
 
-export function registerProjectRoutes(router: Router, deps: { projects: ProjectRepository; projectService?: ProjectService }): void {
+export function registerProjectRoutes(router: Router, deps: { projects: ProjectRepository; projectService?: ProjectService; homeDirectory?: string }): void {
+  const homeDirectory = deps.homeDirectory ?? homedir();
+
   router.add('GET', '/api/projects', ({ req, res }) => {
     const { limit, offset } = ListProjectsQuerySchema.parse(queryParams(req));
     const all = deps.projects.list().map(projectOf);
     const page: Page<Project> = { items: all.slice(offset, offset + limit), total: all.length, limit, offset };
     json(res, 200, page);
+  });
+
+  router.add('POST', '/api/projects/detect', ({ res, body }) => {
+    const { repositoryPath } = DetectRepositoryRequestSchema.parse(body);
+    const registeredFolders = deps.projects.list().flatMap(({ docsFolderPath }) => docsFolderPath ?? []);
+    json(res, 200, detectRepository(repositoryPath, { allowedRoots: [homeDirectory, ...registeredFolders] }));
   });
 
   const { projectService } = deps;

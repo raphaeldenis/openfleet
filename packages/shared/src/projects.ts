@@ -26,6 +26,25 @@ export const CreateProjectRequestSchema = z.strictObject({
 });
 export type CreateProjectRequest = z.infer<typeof CreateProjectRequestSchema>;
 
+export const DetectRepositoryRequestSchema = z.strictObject({ repositoryPath: DocsFolderPathSchema });
+export type DetectRepositoryRequest = z.infer<typeof DetectRepositoryRequestSchema>;
+
+export const DETECTED_COMMAND_KINDS = ['install', 'build', 'test', 'lint', 'typecheck', 'dev'] as const;
+export type DetectedCommandKind = (typeof DETECTED_COMMAND_KINDS)[number];
+
+/** `command` is built by the daemon from a validated script or target name; a script body is never returned. */
+export interface DetectedCommand {
+  command: string;
+  source: 'package.json' | 'Makefile' | 'pyproject.toml' | 'Cargo.toml';
+}
+
+export interface DetectedRepository {
+  isGitRepository: boolean;
+  defaultBranch?: string;
+  stack: string[];
+  commands: Partial<Record<DetectedCommandKind, DetectedCommand>>;
+}
+
 /** `null` clears the setting. Whether the script is absolute, executable and safe is the daemon's call. */
 const PostCreateHookScriptSchema = DocsFolderPathSchema.nullable();
 const PostCreateHookTimeoutSchema = z.number().int().min(1).max(MAX_POST_CREATE_HOOK_TIMEOUT_SECONDS).nullable();
