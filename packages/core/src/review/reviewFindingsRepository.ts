@@ -103,7 +103,7 @@ const withReprosOf = (line: ReviewFinding, items: ReviewFindingItem[]): ReviewFi
   return { ...line, repros: itemsOfLine.map((item) => item.repro ?? NOT_REPRODUCED) };
 };
 
-const ITEM_COLUMNS ='report_id, position, ticket, step, severity, claim, sha, author_session_id, manager_session_id, created_at, repro_status, repro_command, repro_output';
+const ITEM_COLUMNS = 'report_id, position, ticket, step, severity, claim, sha, author_session_id, manager_session_id, created_at, repro_status, repro_command, repro_output';
 
 const COLUMNS = 'ticket, step, severity, claim, reasons_json, sha, author_session_id, manager_session_id, created_at';
 

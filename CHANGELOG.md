@@ -6,6 +6,7 @@ The MCP tool contract of the OpenFleet server. One section per `contract_version
 
 - TOOLING-OUTSIDE-REPO01, shared repo setting: a project can mark its repository as shared with a team (`sharedRepo`, `PATCH /api/projects/:id`; see `docs/shared-repo.md`). No tool schema changes. `insert_data_store_rows` on the "Manager backlog" table of such a project is refused to an agent that is not a manager with the new error code `backlog_write_refused` (`invalid_request`, retry `never`).
 - Worktrees of such a project get the fleet overlay linked as `.openfleet-overlay` and excluded from git; a failed overlay adds the warning `overlay_unavailable` to the worktree creation.
+- FINDINGS-HYGIENE: the gate skip command in the findings gate refusal text no longer carries the `-H "Content-Type: application/json"` header; the server ignores the request content type. No tool schema changes.
 
 Migrations: `054_project_shared_repo`: `projects.shared_repo`.
 
