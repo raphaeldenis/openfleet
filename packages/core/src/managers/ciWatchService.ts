@@ -121,11 +121,11 @@ export class CiWatchService {
     let snapshot: PullRequestSnapshot;
     try {
       snapshot = await this.deps.gh.snapshotOf(watched);
-    } catch (error) {
       if (!this.isStillWatched(watched)) return true;
+    } catch (error) {
+      if (this.hasBeenUnwatched(watched)) return true;
       return this.noteFailure(watched, error);
     }
-    if (!this.isStillWatched(watched)) return true;
     this.failuresOf.delete(watched.id);
     this.retryAtOf.delete(watched.id);
     if (watched.lastErrorCode !== undefined) this.deps.repository.recordError(watched.id, undefined);
@@ -135,6 +135,15 @@ export class CiWatchService {
 
   private isStillWatched(watched: WatchedPr): boolean {
     return this.deps.repository.activeOf(watched.managerId).some((active) => active.id === watched.id);
+  }
+
+  /** False when the registration cannot be read: the failure is then recorded like any other. */
+  private hasBeenUnwatched(watched: WatchedPr): boolean {
+    try {
+      return !this.isStillWatched(watched);
+    } catch {
+      return false;
+    }
   }
 
   private handle(watched: WatchedPr, snapshot: PullRequestSnapshot): void {
