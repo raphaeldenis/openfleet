@@ -11,7 +11,9 @@ const SKELETON_MAX_WIDTH_IN_REMS = 16;
 const HOME_SIDE_PADDING_IN_PIXELS = 24;
 const NO_PROJECTS = { items: [], total: 0, limit: 200, offset: 0 };
 
-const isTruncated = (region: Locator, text: string) => region.getByText(text, { exact: true }).evaluate((element) => element.scrollWidth > element.clientWidth);
+const MISSING_PROJECT_MESSAGE = '“scape-old” was deleted or never existed on this daemon.';
+
+const isTruncated =(region: Locator, text: string) => region.getByText(text, { exact: true }).evaluate((element) => element.scrollWidth > element.clientWidth);
 
 for (const theme of THEMES) {
   for (const viewport of VIEWPORTS) {
@@ -53,7 +55,18 @@ for (const theme of THEMES) {
       await page.goto('/project/scape-old');
 
       await expect(page.getByRole('heading', { level: 1, name: 'Project not found' })).toBeVisible();
-      await expect(page.getByRole('alert')).toContainText('“scape-old” was deleted or never existed on this daemon.');
+      await expect(page.getByTestId('project-home').getByRole('alert')).toContainText(MISSING_PROJECT_MESSAGE);
+    });
+
+    test(`the project home not found page ignores a daemon banner shown beside it ${scenario}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await signInAsAdmin(page, { theme });
+
+      await page.goto('/project/scape-old');
+      await expect(page.getByRole('heading', { level: 1, name: 'Project not found' })).toBeVisible();
+      await page.getByTestId('app-outlet').evaluate((outlet) => outlet.insertAdjacentHTML('beforebegin', '<div role="alert">The daemon hit a problem and is running degraded</div>'));
+
+      await expect(page.getByTestId('project-home').getByRole('alert')).toContainText(MISSING_PROJECT_MESSAGE);
     });
 
     test(`the project home empty list explains what a project groups ${scenario}`, async ({ page }) => {
