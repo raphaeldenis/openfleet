@@ -7,13 +7,26 @@ The MCP tool contract of the OpenFleet server. One section per `contract_version
 - TOOLING-OUTSIDE-REPO01, shared repo setting: a project can mark its repository as shared with a team (`sharedRepo`, `PATCH /api/projects/:id`; see `docs/shared-repo.md`). No tool schema changes. `insert_data_store_rows` on the "Manager backlog" table of such a project is refused to an agent that is not a manager with the new error code `backlog_write_refused` (`invalid_request`, retry `never`).
 - Worktrees of such a project get the fleet overlay linked as `.openfleet-overlay` and excluded from git; a failed overlay adds the warning `overlay_unavailable` to the worktree creation.
 - FINDINGS-HYGIENE: the gate skip command in the findings gate refusal text no longer carries the `-H "Content-Type: application/json"` header; the server ignores the request content type. No tool schema changes.
-- ESCALATION-LADDER01, slices E0 and E1, escalation setting: a project can set its escalation policy (`escalation`, `PATCH /api/projects/:id`, admin token; `null` clears it). `contract` and `security` always stay on the human list. No tool is added.
-- `get_argus_status`: `manager` gains one field, `escalationPolicy`, the policy of the manager's project (the defaults when the project sets none). Read only. No tool schema changes.
-- ESCALATION-LADDER01, slice E6, manager base v5 (a change to the template, not to a tool): §6 tells managers to send their questions with `submit_plan_questions`, to wait for the arbiter and the single human question, to call `approve_plan_criteria` and never to write `criteria_status`. §7 says the size of a change never pauses a manager. The delivery lint refuses a pause on a number of files.
-- ESCALATION-LADDER01, slice E8, ask-user gate: a call that succeeded before now fails. The harness tool `AskUserQuestion` is refused to a manager session, attended or not (command policy rule `manager-ask-user-via-ladder`, profile `manager`); the refusal points to `submit_plan_questions`. No MCP tool schema changes.
+
+Migrations: `054_project_shared_repo`: `projects.shared_repo`.
+
+## 15 — 2026-10-30
+
+ESCALATION-LADDER01, the escalation ladder: a manager sends its questions to the daemon, which answers the ones it can, asks an arbiter for the ones that need a second opinion and puts only the ones that need a human on the human list.
+
+- `submit_plan_questions` (manager): sends the questions of a plan note, each with a class; the daemon routes every question to the manager itself, to the arbiter or to the human. Answers the batch id and the route of each question.
+- `report_arbiter_opinion` (arbiter only): reports a decision per question of the batch and an opinion on the criteria (`favourable`, `unfavourable`, `not_asked`). The daemon writes the decisions, the plan note sections and the journal and tells the manager.
+- `approve_plan_criteria` (manager): asks the daemon to approve the criteria of a ticket; the daemon writes the `criteria_status` column itself.
+- Behaviour change, a call that succeeded before now fails: the harness tool `AskUserQuestion` is refused to a manager session, attended or not (command policy rule `manager-ask-user-via-ladder`, profile `manager`); the refusal points to `submit_plan_questions`.
+- Escalation setting: a project can set its escalation policy (`escalation`, `PATCH /api/projects/:id`, admin token; `null` clears it). `contract` and `security` always stay on the human list.
+- `get_argus_status`: `manager` gains one field, `escalationPolicy`, the policy of the manager's project (the defaults when the project sets none). Read only.
+- New error codes: `question_unclassified`, `escalation_open`, `criteria_stale`, `escalation_not_found`.
+- Manager base v5 (a change to the template, not to a tool): §6 tells managers to send their questions with `submit_plan_questions`, to wait for the arbiter and the single human question, to call `approve_plan_criteria` and never to write `criteria_status`. §7 says the size of a change never pauses a manager. The delivery lint refuses a pause on a number of files.
 - `update_working_state` from a manager: a new free-text item in `questions_for_human` (one that is not the `[esc:<id>]` item the daemon writes) is still accepted. The answer gains `question_unclassified_warning`, the daemon journals one `question_unclassified` line (author `daemon`) and counts the item per manager and week. The project setting `escalation.askUserGate` (`warn` by default, `off`, `enforce`) is read; `enforce` is stored and behaves as `warn` until a later slice.
 
-Migrations: `054_project_shared_repo`: `projects.shared_repo`. `056_escalation_ladder`: `projects.escalation_policy_json` and the tables `escalations`, `plan_question_batches`, `plan_questions`, `arbiter_decisions` (down script in `packages/core/src/db/migrations-down/`).
+Tools added: `submit_plan_questions`, `report_arbiter_opinion`, `approve_plan_criteria`.
+Tools changed: none.
+Migrations: `056_escalation_ladder`: `projects.escalation_policy_json` and the tables `escalations`, `plan_question_batches`, `plan_questions`, `arbiter_decisions` (down script in `packages/core/src/db/migrations-down/`).
 
 ## 14 — 2026-10-29
 
