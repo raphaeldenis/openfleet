@@ -13,7 +13,7 @@ const NO_PROJECTS = { items: [], total: 0, limit: 200, offset: 0 };
 
 const MISSING_PROJECT_MESSAGE = '“scape-old” was deleted or never existed on this daemon.';
 
-const isTruncated =(region: Locator, text: string) => region.getByText(text, { exact: true }).evaluate((element) => element.scrollWidth > element.clientWidth);
+const isTruncated = (region: Locator, text: string) => region.getByText(text, { exact: true }).evaluate((element) => element.scrollWidth > element.clientWidth);
 
 for (const theme of THEMES) {
   for (const viewport of VIEWPORTS) {
