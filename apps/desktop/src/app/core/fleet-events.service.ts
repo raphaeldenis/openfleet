@@ -32,7 +32,9 @@ export const silentBlockKey = ({ sessionId, waitingSince }: SilentBlock): string
 
 function parseServerEvent(text: string): ServerEvent | undefined {
   try {
-    return JSON.parse(text) as ServerEvent;
+    const parsed: unknown = JSON.parse(text);
+    const isObjectFrame = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+    return isObjectFrame ? (parsed as ServerEvent) : undefined;
   } catch {
     return undefined;
   }

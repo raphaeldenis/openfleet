@@ -202,6 +202,24 @@ describe('FleetEventsService', () => {
     });
   });
 
+  describe('a frame that is JSON but not an object', () => {
+    it.each([['a number', 123], ['a string', 'x'], ['null', null], ['an array', [{ type: 'session.created' }]]])(
+      'drops %s without throwing, and the frames after it are still applied',
+      async (_description, frame) => {
+        const service = new FleetEventsService();
+        await service.connect();
+        const socket = FakeWebSocket.instances[0]!;
+
+        socket.dispatchMessage({ type: 'snapshot', sessions: [session('s1')], approvals: [] });
+        const deliverFrame = () => socket.dispatchMessage(frame as never);
+        expect(deliverFrame).not.toThrow();
+        socket.dispatchMessage({ type: 'session.created', session: session('s2') });
+
+        expect(service.sessions().map((s) => s.id)).toEqual(['s1', 's2']);
+      },
+    );
+  });
+
   describe('reconnecting', () => {
     it('spreads the retry over the backoff window, so clients dropped together do not retry together', async () => {
       vi.spyOn(Math, 'random').mockReturnValue(0);
