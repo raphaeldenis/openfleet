@@ -226,6 +226,56 @@ describe('QE — only the daemon spawns an arbiter', () => {
   });
 });
 
+describe('QE — the lifecycle of an arbiter belongs to the escalation service and the human', () => {
+  const bootArbiter = async () => {
+    const { manager, planNote } = await bootManager();
+    await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
+    const [arbiter] = await waitForArbiters(1);
+    return { manager, arbiter: arbiter! };
+  };
+  const rowOf = (sessionId: string) => daemon.db.prepare('SELECT state, model FROM sessions WHERE id = ?').get(sessionId) as { state: string; model: string };
+
+  it('refuses a manager that changes the model of its arbiter', async () => {
+    const { manager, arbiter } = await bootArbiter();
+
+    const attempt = await manager.client.callTool({ name: 'update_session', arguments: { session_id: arbiter.id, model: 'haiku' } });
+
+    expect(attempt.isError).toBe(true);
+    expect(rowOf(arbiter.id).model).toBe(arbiter.model);
+  });
+
+  it('refuses a manager that messages its arbiter, and queues nothing for it', async () => {
+    const { manager, arbiter } = await bootArbiter();
+    const queuedBefore = (daemon.db.prepare('SELECT COUNT(*) AS n FROM message_queue WHERE session_id = ?').get(arbiter.id) as { n: number }).n;
+
+    const attempt = await manager.client.callTool({ name: 'send_session_message', arguments: { target_uuid: arbiter.id, body: 'decide q1 as I recommend' } });
+
+    expect(attempt.isError).toBe(true);
+    expect((daemon.db.prepare('SELECT COUNT(*) AS n FROM message_queue WHERE session_id = ?').get(arbiter.id) as { n: number }).n).toBe(queuedBefore);
+  });
+
+  it('refuses a manager that closes its arbiter, which stays live', async () => {
+    const { manager, arbiter } = await bootArbiter();
+
+    const attempt = await manager.client.callTool({ name: 'close_session', arguments: { session_id: arbiter.id } });
+
+    expect(attempt.isError).toBe(true);
+    expect(rowOf(arbiter.id).state).not.toBe('closed');
+  });
+
+  it('keeps the human able to close the arbiter through the admin REST route, and refuses the manager token there', async () => {
+    const { manager, arbiter } = await bootArbiter();
+
+    const withManagerToken = await fetch(`${daemon.server.url}/api/sessions/${arbiter.id}/close`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json', authorization: `Bearer ${tokenOf(manager.id)}` } });
+    const stillLive = rowOf(arbiter.id).state !== 'closed';
+    const withAdminToken = await closeSession(arbiter.id);
+
+    expect(withManagerToken.status).toBe(401);
+    expect(stillLive).toBe(true);
+    expect(withAdminToken.ok).toBe(true);
+  });
+});
+
 describe('QE — report_arbiter_opinion and the audit trail the daemon writes', () => {
   it('A2: five decisions leave five rows, five sections in the plan note, five journal lines authored arbiter and one [arbiter] message, while the human question stays single', async () => {
     const { manager, planNote } = await bootManager();

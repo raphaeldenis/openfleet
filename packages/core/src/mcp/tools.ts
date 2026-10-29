@@ -38,6 +38,9 @@ import type { ReviewFindingsRepository } from '../review/reviewFindingsRepositor
 import type { ScheduledEventService } from '../managers/scheduledEventService.js';
 import { scheduledEventView } from './scheduledEventTools.js';
 
+const isArbiter = (session: Session): boolean => session.role === ARBITER_ROLE;
+const refuseArbiterLifecycle = () => refuse('outside_lineage', 'an arbiter is run by the escalation service: only the daemon and the human open, message or close it');
+
 /** A child counts against the children cap while it is live or waiting for the daemon to restart it. */
 const isActiveChild = (child: Session): boolean => child.state !== 'closed' || child.restartPending === true;
 
@@ -208,6 +211,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     if (tooLong) return refuse('message_too_long', tooLong);
     const target = sessions.get(target_uuid);
     if (!target || !isInLineage(target) || target.id === caller.id) return refuse('outside_lineage', 'target not found or outside your lineage');
+    if (isArbiter(target)) return refuseArbiterLifecycle();
     return sendMessage(() => sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id, messageId: message_id }));
   });
 
@@ -398,6 +402,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     if (targetId !== caller.id) {
       const target = sessions.get(targetId);
       if (!target || target.parentId !== caller.id) return refuse('outside_lineage', 'you can only update yourself or your own child');
+      if (isArbiter(target)) return refuseArbiterLifecycle();
     }
     return ok(sessions.updateModel(targetId, resolveModel(modelTable, model)));
   });
@@ -435,6 +440,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('close_session', { description: 'Close one of your children', inputSchema: { session_id: z.string() } }, async ({ session_id }) => {
     const target = sessions.get(session_id);
     if (!target || target.parentId !== caller.id) return refuse('outside_lineage', 'not your child');
+    if (isArbiter(target)) return refuseArbiterLifecycle();
     await sessions.close(target.id, { closedByParent: true });
     return ok({ closed: target.id });
   });
