@@ -63,7 +63,7 @@ const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
     .option[data-selected='1'] { border-color: var(--accent); background: var(--accent-bg) }
     .danger-glyph { flex: none; margin-right: -.25rem; font-weight: 700; color: var(--state-error) }
     .option[data-dangerous='1'][data-selected='1'] { border-color: var(--state-error); background: color-mix(in oklch, var(--state-error) 12%, transparent) }
-    .option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px }
+    .option:has(input:focus-visible) { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     input { flex: none; margin: 0; accent-color: var(--accent) }
     .option[data-dangerous='1'][data-selected='1'] input { accent-color: var(--state-error) }
     .name { flex: none; width: 8rem; font-family: var(--mono); font-size: .75rem }

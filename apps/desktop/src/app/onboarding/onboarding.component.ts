@@ -92,7 +92,7 @@ function requestedUrlFrom(navigationState: unknown): string {
     .page { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); color: var(--fg) }
     .topbar { display: flex; flex: none; justify-content: flex-end; align-items: center; height: 2.75rem; padding: 0 .875rem }
     .skip { color: var(--mut); font-size: .75rem; text-decoration: none }
-    .skip:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem }
+    .skip:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
     .stepper { display: flex; flex: none; align-items: flex-start; gap: .25rem; width: 56rem; max-width: calc(100% - 4rem); margin: 0 auto; padding: 0 0 .5rem; box-sizing: border-box; list-style: none }
     .step { display: flex; flex: 1 1 0; flex-direction: column; gap: .375rem; min-width: 0; font-size: .6875rem; color: var(--mut) }
     .step .bar { height: .25rem; border-radius: .125rem; background: var(--line) }
