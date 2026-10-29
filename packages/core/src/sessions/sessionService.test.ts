@@ -488,6 +488,35 @@ describe('SessionService resume', () => {
     expect(restarted.get(session.id)!.state).toBe('starting');
   });
 
+  it('relaunches a session created with an effort with the same effort after a daemon restart', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const original = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'Lead', harness: 'fake', emoji: '🧭', effort: 'xhigh' });
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+
+    await restarted.resumeAll();
+
+    expect(restartHarness.launches[0]!.resuming).toBe(true);
+    expect(restartHarness.launches[0]!.effort).toBe('xhigh');
+    expect(restarted.get(session.id)!.effort).toBe('xhigh');
+  });
+
+  it('relaunches a session created without an effort without one', async () => {
+    const db = openDatabase(':memory:');
+    const bus = new EventBus();
+    const original = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' });
+    const session = await original.create({ directory: '/tmp', name: 'Lead', harness: 'fake', emoji: '🧭' });
+    const restartHarness = new FakeHarness();
+    const restarted = new SessionService({ db, bus, harnesses: [restartHarness], baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt', resumeTimeoutMs: 50 });
+
+    await restarted.resumeAll();
+
+    expect(restartHarness.launches[0]!.effort).toBeUndefined();
+    expect(restarted.get(session.id)!.effort).toBeUndefined();
+  });
+
   it('never resumes a session that was already closed', async () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();

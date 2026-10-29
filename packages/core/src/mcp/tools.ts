@@ -1,4 +1,4 @@
-import { MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
+import { effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { z } from 'zod';
@@ -160,7 +160,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return false;
   };
 
-  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree, branch and runtimeAttention when set; permissionMode and harness are not echoed';
+  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, effort, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree, branch and runtimeAttention when set; permissionMode and harness are not echoed';
 
   server.registerTool('get_session_status', { description: `State of your session or one in your lineage. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);
@@ -231,7 +231,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('create_session', { description: `Spawn a child coding session in a directory (use create_worktree first). ${COMPACT_SESSION}`, inputSchema: {
     directory: z.string(), name: z.string().refine((name) => name.trim().length > 0, 'name must not be blank'), emoji: z.string().optional(), model: ModelIdSchema.optional(),
     seeded_prompt: z.string().optional(), role: z.string().optional(), permission_mode: z.enum(PERMISSION_MODES).optional(),
-    allow_duplicate: z.boolean().optional(),
+    allow_duplicate: z.boolean().optional(), effort: z.string().optional(),
     manager: z.object({ pulse_seconds: ManagerSpecSchema.shape.pulseSeconds, children_cap: ManagerSpecSchema.shape.childrenCap, mission: z.string().min(1) }).optional(),
   } }, async (input) => {
     // A parentless caller is a human-launched root session (Raphaël's own Lead/Capitaine), always trusted to
@@ -248,6 +248,10 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       if (!isTrustedOrchestrator) return refuse('not_a_manager', 'only a manager or a root session may set permission_mode; a plain caller\'s children always get manual');
       if (input.permission_mode === 'bypassPermissions') return refuse('invalid_body', 'bypassPermissions cannot be set through MCP');
     }
+
+    // The child runs on the caller's harness, so that harness decides which effort levels exist.
+    const effortRefusal = input.effort === undefined ? undefined : effortRefusalOf(caller.harness, input.effort);
+    if (effortRefusal) return refuse('invalid_body', effortRefusal);
 
     // The directory must already exist: without this, a symlinked "..' segment could be lexically
     // collapsed back inside the root by path.resolve() while the OS actually opened somewhere else, and
@@ -336,7 +340,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
     const spec = {
       directory: realDirectory, name: input.name, emoji: input.emoji ?? '🤖', model: resolvedModel,
-      seededPrompt: input.seeded_prompt, role: input.role, parentId: caller.id, harness: caller.harness, permissionMode, projectId: caller.projectId,
+      seededPrompt: input.seeded_prompt, role: input.role, parentId: caller.id, harness: caller.harness, permissionMode, projectId: caller.projectId, effort: input.effort,
     };
 
     const child = input.manager

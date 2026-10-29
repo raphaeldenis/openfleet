@@ -1,4 +1,4 @@
-import { HOOK_EVENT_NAMES, isValidModelId } from '@openfleet/shared';
+import { effortRefusalOf, HOOK_EVENT_NAMES, isValidModelId } from '@openfleet/shared';
 import type { HarnessLaunch } from '../harness.js';
 import type { TokenFilePaths } from './tokenFiles.js';
 
@@ -29,6 +29,9 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch, tokenFilePaths: T
   if (launch.model !== undefined && !isValidModelId(launch.model)) {
     throw new Error(`refusing to launch with an invalid model id: "${launch.model}"`);
   }
+  // Same defence for --effort: only a level the claude-cli harness lists is passed on.
+  const effortRefusal = launch.effort === undefined ? undefined : effortRefusalOf('claude-cli', launch.effort);
+  if (effortRefusal) throw new Error(`refusing to launch: ${effortRefusal}`);
   const settings = { hooks: buildHooks(launch.hookUrl, tokenFilePaths.hookCurlConfigPath) };
   const mcpConfig = {
     mcpServers: {
@@ -47,6 +50,7 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch, tokenFilePaths: T
   const firstRunArgs = ['--session-id', conversationId, '--name', launch.displayName];
   const args = launch.resuming ? resumeArgs : firstRunArgs;
   if (launch.model) args.push('--model', launch.model);
+  if (launch.effort) args.push('--effort', launch.effort);
   if (launch.permissionMode) args.push('--permission-mode', launch.permissionMode);
   // AUD-28: a project's own .claude/settings.json can define an auto-approving PermissionRequest hook that
   // overrides OpenFleet's own deny — `--setting-sources user` drops project/local/managed settings from the
