@@ -4,7 +4,7 @@ import { ApiError } from './fleet-api.service';
 import { REFUSAL_COPY_BY_REASON, refusalReasonOf } from './worktree-refusal';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
-export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff' | 'save_project' | 'reopen_manager' | 'save_manager' | 'pause_manager' | 'load_worktrees' | 'remove_worktree' | 'save_project_hook' | 'save_project_escalation';
+export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff' | 'save_project' | 'reopen_manager' | 'save_manager' | 'pause_manager' | 'load_worktrees' | 'remove_worktree' | 'save_project_hook' | 'save_project_escalation' | 'retry_escalation_handover';
 
 export interface ErrorContext {
   action: ErrorAction;
@@ -224,6 +224,9 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
     invalid_body: { what: 'The daemon rejected this policy', fix: 'contract and security always stay on the list' },
     project_not_found: { what: 'That project no longer exists' },
   },
+  retry_escalation_handover: {
+    invalid_body: { what: 'The manager list is still full', fix: 'free a place in its questions_for_human, then retry' },
+  },
   load_worktrees: {},
   remove_worktree: {
     not_found: { what: 'That worktree no longer exists' },
@@ -247,6 +250,7 @@ const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   save_project: 'The project was not saved — try again.',
   save_project_hook: 'The hook was not saved — try again.',
   save_project_escalation: 'The escalation policy was not saved — try again.',
+  retry_escalation_handover: 'The hand-over was not retried — try again.',
   load_worktrees: 'The worktrees could not be listed — try again.',
   remove_worktree: 'The worktree was not removed — try again.',
 };
@@ -266,6 +270,7 @@ const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   save_project: 'The project was not saved — check your connection, then try again.',
   save_project_hook: 'The hook was not saved — check your connection, then try again.',
   save_project_escalation: 'The escalation policy was not saved — check your connection, then try again.',
+  retry_escalation_handover: 'The hand-over was not retried — check your connection, then try again.',
   load_worktrees: 'The worktrees could not be listed — check your connection, then try again.',
   remove_worktree: 'The worktree was not removed — check your connection, then try again.',
 };

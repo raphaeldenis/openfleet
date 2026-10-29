@@ -31,7 +31,7 @@ interface SetupOptions {
 
 async function setup(escalations: EscalationView[], { apiPatch = {}, onNoCardLeft = () => undefined }: SetupOptions = {}) {
   const daemon = await connectToScriptedDaemon({ sessions: [managerSession], managers: [managerView], escalations });
-  const api = { answerEscalation: vi.fn().mockResolvedValue({}), ...apiPatch };
+  const api = { answerEscalation: vi.fn().mockResolvedValue({}), retryEscalationHandover: vi.fn().mockResolvedValue({}), ...apiPatch };
   const { fixture } = await render(EscalationCardsComponent, {
     bindings: [outputBinding('noCardLeft', onNoCardLeft)],
     providers: [{ provide: FleetApiService, useValue: api }, { provide: FleetEventsService, useValue: daemon.events }],
@@ -195,6 +195,56 @@ describe('EscalationCardsComponent', () => {
       expect(await screen.findByTestId('escalation-error')).toHaveTextContent(copy);
       expect(answerField('Question q1?')).toHaveValue('Yes');
       expect(submitButton()).toBeEnabled();
+    });
+  });
+
+  describe('a hand-over the daemon could not list in the manager questions', () => {
+    const refused = (patch: Partial<NonNullable<EscalationView['handoverRefusal']>> = {}): EscalationView['handoverRefusal'] =>
+      ({ reason: 'arbiter_unavailable', refusal: 'questions_for_human already holds 20 items', at: new Date().toISOString(), ...patch });
+    const retryButton = () => screen.getByRole('button', { name: /^Retry hand-over/ });
+
+    it('says on the card why the escalation is not listed, and still lets the human answer', async () => {
+      await setup([escalationOf({ handoverRefusal: refused(), questions: [questionOf('q1')] })]);
+
+      const refusal = screen.getByTestId('escalation-handover-refusal');
+      expect(refusal).toHaveTextContent('arbiter_unavailable');
+      expect(refusal).toHaveTextContent('questions_for_human already holds 20 items');
+      expect(answerField('Question q1?')).toBeVisible();
+    });
+
+    it('shows no refusal and no retry button on a card that was listed', async () => {
+      await setup([escalationOf()]);
+
+      expect(screen.queryByTestId('escalation-handover-refusal')).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Retry hand-over/ })).toBeNull();
+    });
+
+    it('asks the daemon to retry the listing only when the human clicks the button', async () => {
+      const { api } = await setup([escalationOf({ handoverRefusal: refused() })]);
+      expect(api.retryEscalationHandover).not.toHaveBeenCalled();
+
+      await userEvent.click(retryButton());
+
+      expect(api.retryEscalationHandover).toHaveBeenCalledExactlyOnceWith('e1');
+    });
+
+    it('keeps the refusal and shows the copy of the failure when the list is still full', async () => {
+      const retryEscalationHandover = vi.fn().mockRejectedValue(new ApiError(400, 'invalid_body', 'invalid_body'));
+      await setup([escalationOf({ handoverRefusal: refused() })], { apiPatch: { retryEscalationHandover } });
+
+      await userEvent.click(retryButton());
+
+      expect(await screen.findByTestId('escalation-error')).toHaveTextContent('still full');
+      expect(screen.getByTestId('escalation-handover-refusal')).toBeVisible();
+      expect(retryButton()).toBeEnabled();
+    });
+
+    it('draws the refusal text of the daemon as inert plain text', async () => {
+      const hostile = `<img src=x onerror="window.pwned=1"> ${RIGHT_TO_LEFT_OVERRIDE}evil`;
+      await setup([escalationOf({ handoverRefusal: refused({ refusal: hostile }) })]);
+
+      expect(screen.getByTestId('escalation-handover-refusal').querySelector('img')).toBeNull();
+      expect(screen.getByTestId('escalation-handover-refusal').textContent).not.toContain(RIGHT_TO_LEFT_OVERRIDE);
     });
   });
 

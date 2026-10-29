@@ -187,6 +187,7 @@ export class FleetApiService {
   decide(id: string, behavior: 'allow' | 'deny') { return this.post<Approval>(`/api/approvals/${id}/decide`, { behavior }); }
   decideProposal(id: string, decision: ProposalDecision) { return this.post<GovernanceProposalView>(`/api/governance/proposals/${encodeURIComponent(id)}/decide`, decision); }
   answerEscalation(id: string, body: EscalationAnswerBody) { return this.post<EscalationView>(`/api/escalations/${encodeURIComponent(id)}/answer`, body); }
+  retryEscalationHandover(id: string) { return this.post<EscalationView>(`/api/escalations/${encodeURIComponent(id)}/retry-handover`, {}); }
   getManagerGovernance(managerId: string) { return this.call<ManagerGovernanceWithLawsView>(`/api/managers/${encodeURIComponent(managerId)}/governance`); }
   editLaw({ lawId, text, expectedRevision }: { lawId: string; text: string; expectedRevision: number }) {
     return this.patch<LawView>(`/api/governance/laws/${encodeURIComponent(lawId)}`, { text, expectedRevision });

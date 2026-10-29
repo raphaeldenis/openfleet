@@ -71,6 +71,12 @@ const classesLabelOf = ({ effectiveClasses, reason }: EscalationQuestionView): s
               </div>
             }
           </div>
+          @if (card.handoverRefusal; as refusal) {
+            <p class="refusal" data-testid="escalation-handover-refusal">Not listed in the manager's questions ({{ refusal.reason }}): {{ refusal.refusal }}</p>
+            <div class="actions">
+              <button type="button" class="of-btn" [attr.aria-label]="'Retry hand-over for ' + card.ticket" [disabled]="card.isRetrying" (click)="retryHandover(card.id)">Retry hand-over</button>
+            </div>
+          }
           <p class="hint" [id]="'escalation-hint-' + card.id">Answer every question to send.</p>
           <div class="actions">
             <button type="button" class="of-btn of-btn--primary" data-testid="escalation-submit" [attr.aria-label]="'Send answers for ' + card.ticket" [attr.aria-describedby]="'escalation-hint-' + card.id" [disabled]="!card.canSubmit || card.isPending" (click)="submit(card.id)">Send answers</button>
@@ -103,6 +109,7 @@ const classesLabelOf = ({ effectiveClasses, reason }: EscalationQuestionView): s
     .answer { width: 100%; box-sizing: border-box; padding: .375rem .5rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); color: var(--fg); font: inherit; resize: vertical; }
     .answer:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .hint { margin: 0; font-size: .75rem; color: var(--mut); }
+    .refusal { margin: 0; font-size: .75rem; color: var(--mut); white-space: pre-wrap; overflow-wrap: anywhere; }
     .actions { display: flex; flex-wrap: wrap; gap: .5rem; }
   `,
 })
@@ -116,6 +123,7 @@ export class EscalationCardsComponent {
   private readonly now = tickingNow();
   private readonly drafts = signal<Readonly<Record<string, string>>>({});
   private readonly pendingIds = signal<ReadonlySet<string>>(new Set());
+  private readonly retryingIds = signal<ReadonlySet<string>>(new Set());
   private readonly errorsById = signal<Readonly<Record<string, string>>>({});
   private cardIdsBeforeRender: readonly string[] = [];
   private cardKeepingFocusId: string | undefined;
@@ -169,6 +177,8 @@ export class EscalationCardsComponent {
         fields,
         canSubmit: areAllQuestionsAnswered,
         isPending: this.pendingIds().has(escalation.id),
+        handoverRefusal: escalation.handoverRefusal && { reason: showBidiControlsAsEscapes(escalation.handoverRefusal.reason), refusal: showBidiControlsAsEscapes(escalation.handoverRefusal.refusal) },
+        isRetrying: this.retryingIds().has(escalation.id),
         error: this.errorsById()[escalation.id],
       };
     });
@@ -191,6 +201,19 @@ export class EscalationCardsComponent {
       this.errorsById.update((errors) => ({ ...errors, [escalationId]: copyFor(error, { action: 'generic' }).text }));
     } finally {
       this.setPending(escalationId, false);
+    }
+  }
+
+  protected async retryHandover(escalationId: string): Promise<void> {
+    if (this.retryingIds().has(escalationId)) return;
+    this.retryingIds.update((ids) => new Set(ids).add(escalationId));
+    this.errorsById.update((errors) => Object.fromEntries(Object.entries(errors).filter(([id]) => id !== escalationId)));
+    try {
+      await this.api.retryEscalationHandover(escalationId);
+    } catch (error) {
+      this.errorsById.update((errors) => ({ ...errors, [escalationId]: copyFor(error, { action: 'retry_escalation_handover' }).text }));
+    } finally {
+      this.retryingIds.update((ids) => new Set([...ids].filter((id) => id !== escalationId)));
     }
   }
 
