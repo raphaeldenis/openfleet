@@ -27,6 +27,7 @@ import { clockTimeOf } from '../core/clock-time';
             #emojiInput
             class="emoji"
             data-testid="session-emoji-input"
+            aria-label="Session emoji"
             title="Change emoji"
             maxlength="8"
             [value]="session().emoji"

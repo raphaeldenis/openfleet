@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
@@ -62,18 +62,18 @@ describe('markDirectoryTrusted', () => {
     expect(config.projects[realDirectory].hasTrustDialogAccepted).toBe(true);
   });
 
-  it('skips writing the file when the directory is already trusted', async () => {
+  it('skips writing the file when the directory is already trusted', () => {
     const home = createScratchDirectory('of-claude-home-');
     const configPath = join(home, '.claude.json');
     const directory = createScratchDirectory('of-project-');
     const realDirectory = realpathSync(directory);
     writeFileSync(configPath, JSON.stringify({ projects: { [realDirectory]: { hasTrustDialogAccepted: true } } }));
-    const mtimeBefore = statSync(configPath).mtimeMs;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    const longAgo = new Date('2001-01-01T00:00:00Z');
+    utimesSync(configPath, longAgo, longAgo);
 
     markDirectoryTrusted(configPath, directory);
 
-    expect(statSync(configPath).mtimeMs).toBe(mtimeBefore);
+    expect(statSync(configPath).mtimeMs).toBe(longAgo.getTime());
   });
 
   it('writes atomically via a temp file and rename when trust is newly granted', () => {

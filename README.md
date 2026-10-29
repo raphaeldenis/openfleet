@@ -1,14 +1,30 @@
 # OpenFleet
 
+Open-source desktop workspace for fleets of AI coding agents: sessions in git worktrees, manager agents with a pulse, mission notes, tables, triggers and human governance.
+
+Status: version 0.1.0, pre-release, macOS first. It ships as a local, ad-hoc signed dmg (see [Build the dmg](#build-the-dmg)); the changes per version are in [CHANGELOG.md](CHANGELOG.md). Design documents live outside this repository.
+
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `packages/core` | `@openfleet/core`: the daemon (TypeScript on Node 26, `node:sqlite`, `node-pty`, REST + WebSocket + MCP server). It owns sessions, worktrees, notes, tables, triggers and governance. |
+| `packages/shared` | `@openfleet/shared`: zod schemas and pure helpers shared by the daemon and the app. It ships to the browser, so it imports nothing but zod. |
+| `apps/desktop` | `@openfleet/desktop`: the Angular app, plus `src-tauri/` (the Tauri shell: window, tray, notifications, launches the daemon as a sidecar) and `e2e/` (Playwright). |
+| `scripts` | Dev entry points (`scripts/dev`), release tooling (`scripts/release`), the pre-push hook, architecture and CI-parity tests. |
+| `docs` | Contracts and guides for individual features, plus [house rules](docs/house-rules.md) for contributors. |
+
+The daemon is a separate process: the business logic lives in it, and the app talks to it over HTTP and WebSocket on `127.0.0.1:7331`. Its data lives in `~/.openfleet` (override with `OPENFLEET_HOME`).
+
+Build, test and run commands are in [Dev](#dev). Before contributing, read [docs/house-rules.md](docs/house-rules.md).
+
+## MCP tools
+
 Scape-compatible session tools include `get_session_card` and `message_argus`; see [session MCP aliases](docs/mcp-session-aliases.md) for fields, target resolution and authorization.
 
 Table MCP reads include `describe_data_store`, `query_data_store`, and `get_data_store`. `get_data_store` returns projected schema and a page of rows ordered by update time descending, then binary row id ascending. It accepts `store`, optional `columns` (ids or display names), `limit` (default 100, 1–1000), and `offset` (default 0). Read `totalRowCount` for the table size and `next_offset` to continue; `truncated` means the 1 MiB JSON budget cut the page. A schema or first row exceeding that budget returns `invalid_body`.
 
-Open-source desktop workspace for fleets of AI coding agents: sessions in git worktrees, manager agents with a pulse, mission notes, tables, triggers and human governance.
-
 A manager equips its project with `bootstrap_project_profile`; see [the project profile skeleton](docs/project-profile-bootstrap.md) for what it creates and what it never does.
-
-Status: phase 1 (foundation). See `docs/` for the phase smoke checklist; design lives in the author's superpowers folder for now.
 
 ## Sleep protection
 
@@ -32,11 +48,13 @@ Limits you can hit:
 
 `POST /api/sessions/:id/reopen` with `{"mode": "fresh"}` relaunches a closed session of any role on a new conversation, in the same worktree and under the same identity. A manager gets its mission as the first prompt. Any other session gets the brief it was created with, stored as typed in `sessions.seeded_prompt` (plaintext, like the other tables, never returned by REST, WS or MCP). The handoff block merged into a brief at creation is not stored, so it is not replayed. A session created without a brief, or before the column existed, starts with no prompt, and the terminal says so; a stored brief above 64 KiB is not replayed either, and the terminal says that instead. A brief above 64 KiB is refused at creation with `invalid_body`. Only a fresh reopen replays a brief: a plain resume, or a relaunch after a lost conversation, never does for a non-manager. Its queued `[pulse]` lines from the daemon are dropped; messages from agents stay.
 
-## Dev
+## Table columns
 
 Table columns keep their base type and can carry an optional format: `datetime` for date, `longText` or `url` for text, and `rank` for number. `add_data_store_column` accepts `format`; store descriptions and REST schemas return it. New datetime values require an ISO time with `Z` or an explicit offset and display in the local timezone. URL cells remain text; only HTTP(S) links are clickable. Rank is a plain number. Scape imports preserve these formats, including row history; reimport restores formats lost by an older import when the column has no local edits.
 
 Edit rich cells from their grid Edit button or Row details above the history. Enter saves a single-line input; Ctrl/Command + Enter saves long text. Escape or Cancel discards the draft; Clear value saves an explicit null. Errors keep the input for retry, and successful changes refresh the selected row's history. Automatic columns and schema-mismatch rows stay read-only. Edits patch one cell; concurrent writes to the same cell use the last saved value.
+
+## Dev
 
 Requires Node >=26 — `nvm use` in this repo picks up Homebrew's Node via `.nvmrc` (`system`); on a shell where nvm's `default` alias points elsewhere, prefix commands with `PATH="/opt/homebrew/bin:$PATH"` instead of changing the global alias.
 
@@ -55,6 +73,13 @@ When 7331 is taken, `pnpm dev:core` listens on a free port instead and prints th
 Build budget: the production initial bundle measures about 425 kB (warning at 470 kB, error at 600 kB, set in `apps/desktop/angular.json`). Schemas import zod as `import * as z from 'zod'` so the bundler drops its unused locales and JSON-schema code; `import { z } from 'zod'` ships all of it (+330 kB).
 
 Once a packaged app runs on `~/.openfleet` and port 7331, start dev daemons on their own home and port: `OPENFLEET_HOME=~/.openfleet-dev OPENFLEET_PORT=7332 pnpm dev:core`. A dev daemon that migrates the packaged app's database makes the packaged app refuse to boot. The packaged app reuses any daemon it finds on 7331.
+
+Two environment variables select a daemon's data and port, and any script that starts a dev daemon (this repo ships none named `dev-servers.sh`; `pnpm dev:core` is the entry point) should export both:
+
+| Variable | Default | Dev daemon beside a packaged app |
+| --- | --- | --- |
+| `OPENFLEET_HOME` | `~/.openfleet` | `~/.openfleet-dev` |
+| `OPENFLEET_PORT` | `7331` (a free port when 7331 is taken and the variable is unset) | `7332` |
 
 ### Build the dmg
 

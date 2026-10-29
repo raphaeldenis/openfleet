@@ -1,10 +1,13 @@
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
-import { DatabaseSync } from 'node:sqlite';
+import { describe, expect, it } from 'vitest';
 import { DatabaseOpenError, openDatabase } from './database.js';
 import { applyMigrations } from './migrate.js';
+
+const LOCK_HELD_MS = 500;
 
 describe('openDatabase', () => {
   it('creates the schema and records applied migrations', () => {
@@ -30,16 +33,22 @@ describe('openDatabase', () => {
     expect(db.prepare('PRAGMA busy_timeout').get()).toEqual({ timeout: 5000 });
   });
 
-  it('sets busy_timeout before journal_mode so a locked boot waits instead of failing immediately', () => {
-    const execSpy = vi.spyOn(DatabaseSync.prototype, 'exec');
+  it('waits for another process holding the database locked instead of failing the boot immediately', async () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'of-db-locked-')), 'openfleet.db');
+    const lockHeldBriefly = `
+      const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync(process.argv[1]);
+      db.exec('CREATE TABLE held (id INTEGER); BEGIN EXCLUSIVE');
+      process.stdout.write('locked\\n');
+      setTimeout(() => { db.exec('COMMIT'); process.exit(0); }, ${LOCK_HELD_MS});
+    `;
+    const otherProcess = spawn(process.execPath, ['-e', lockHeldBriefly, dbPath], { stdio: ['ignore', 'pipe', 'inherit'] });
+    await once(otherProcess.stdout, 'data');
 
-    openDatabase(':memory:');
+    const opening = () => openDatabase(dbPath).close();
 
-    const pragmaBatch = execSpy.mock.calls[0]?.[0] as string;
-    expect(pragmaBatch.indexOf('busy_timeout')).toBeGreaterThanOrEqual(0);
-    expect(pragmaBatch.indexOf('busy_timeout')).toBeLessThan(pragmaBatch.indexOf('journal_mode'));
-
-    execSpy.mockRestore();
+    expect(opening).not.toThrow();
+    await once(otherProcess, 'exit');
   });
 
   it('forces the db file (and its -wal/-shm side files, once WAL creates them) to 0600 (AUD-05)', () => {
