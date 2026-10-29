@@ -510,7 +510,7 @@ export class SessionService {
     const now = new Date().toISOString();
     this.repo.insert({ id, name: spec.name, emoji: spec.emoji, directory: spec.directory, worktree: null, model: spec.model ?? null,
       parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken,
-      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, project_id: spec.projectId ?? null, effort: spec.effort ?? null, created_at: now });
+      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, project_id: spec.projectId ?? null, effort: spec.effort ?? null, config_dir: spec.configDir ?? null, created_at: now });
     // Captured now so a later reopen can tell a directory that still resolves the same way apart from an
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
@@ -526,7 +526,7 @@ export class SessionService {
       handle = harness.start({
         sessionId: id, directory: spec.directory, model: spec.model, seededPrompt,
         hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
-        permissionMode: spec.permissionMode, effort: spec.effort,
+        permissionMode: spec.permissionMode, effort: spec.effort, configDir: spec.configDir,
       });
     } catch (err) {
       // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
@@ -2068,6 +2068,7 @@ export class SessionService {
         directory: session.directory,
         model: session.model,
         effort: session.effort,
+        configDir: this.repo.configDirOf(session.id),
         hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`,
         mcpUrl: `${this.deps.baseUrl}/mcp`,
         mcpToken,
@@ -2153,7 +2154,7 @@ export class SessionService {
   // A conversation the harness cannot inspect is resumed as stored: only a file that is not there proves it gone.
   private conversationToLaunch(session: Session, harness: Harness): { cliSessionId: string; isResumed: boolean; isNewConversationAnnounced: boolean } {
     const currentCliSessionId = this.currentCliSessionIdOf(session.id);
-    const presence = harness.conversationExists?.({ cliSessionId: currentCliSessionId, directory: session.directory }) ?? 'present';
+    const presence = harness.conversationExists?.({ cliSessionId: currentCliSessionId, directory: session.directory, configDir: this.repo.configDirOf(session.id) }) ?? 'present';
     if (presence === 'present') return { cliSessionId: currentCliSessionId, isResumed: true, isNewConversationAnnounced: false };
     if (presence === 'unknown') {
       log('warn', `resume: conversation state unknown, resuming the stored one: session ${session.id}, conversation ${currentCliSessionId}`);

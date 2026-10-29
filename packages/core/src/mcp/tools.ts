@@ -1,6 +1,7 @@
-import { CONTRACT_VERSION, effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
+import { CONTRACT_VERSION, configDirHarnessRefusalOf, effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { z } from 'zod';
 import { createWorktreeWithHook, postCreateHookOf } from '../git/worktreeCreation.js';
 import { isPathWithin, sameGitRepository } from '../git/worktrees.js';
@@ -27,6 +28,7 @@ import { log } from '../logger.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { guardedFor, ok, refuse } from './toolResults.js';
 import { lineageSessionView, managerView, sessionView } from './toolViews.js';
+import { resolveConfigDir } from '../sessions/configDir.js';
 import type { HeldFor, SessionService } from '../sessions/sessionService.js';
 import { sessionLastMessage } from './sessionLastMessage.js';
 import { pendingPermissionViewOf, type PendingPermissionView } from './pendingPermissionView.js';
@@ -65,6 +67,8 @@ export interface RegisterToolsDeps {
   sessions: SessionService;
   caller: Session;
   worktreesRoot: string;
+  /** The home directory a config_dir must live under; absent, the OS home directory. */
+  homeDirectory?: string;
   projects: Pick<ProjectRepository, 'get'>;
   approvals: ApprovalService;
   managers: ManagerService;
@@ -242,7 +246,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('create_session', { description: `Spawn a child coding session in a directory (use create_worktree first). ${COMPACT_SESSION}`, inputSchema: {
     directory: z.string(), name: z.string().refine((name) => name.trim().length > 0, 'name must not be blank'), emoji: z.string().optional(), model: ModelIdSchema.optional(),
     seeded_prompt: z.string().optional(), role: z.string().optional(), permission_mode: z.enum(PERMISSION_MODES).optional(),
-    allow_duplicate: z.boolean().optional(), effort: z.string().optional(),
+    allow_duplicate: z.boolean().optional(), effort: z.string().optional(), config_dir: z.string().optional(),
     manager: z.object({ pulse_seconds: ManagerSpecSchema.shape.pulseSeconds, children_cap: ManagerSpecSchema.shape.childrenCap, mission: z.string().min(1) }).optional(),
   } }, async (input) => {
     // A parentless caller is a human-launched root session (Raphaël's own Lead/Capitaine), always trusted to
@@ -263,6 +267,13 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // The child runs on the caller's harness, so that harness decides which effort levels exist.
     const effortRefusal = input.effort === undefined ? undefined : effortRefusalOf(caller.harness, input.effort);
     if (effortRefusal) return refuse('invalid_body', effortRefusal);
+
+    // The account profile is chosen by the caller alone: nothing detects or picks one, and the refusal never repeats the requested path.
+    const configDirHarnessRefusal = input.config_dir === undefined ? undefined : configDirHarnessRefusalOf(caller.harness);
+    if (configDirHarnessRefusal) return refuse('invalid_body', configDirHarnessRefusal);
+    const configDirResolution = input.config_dir === undefined ? undefined : resolveConfigDir({ requested: input.config_dir, homeDirectory: deps.homeDirectory ?? homedir(), openfleetHome: process.env.OPENFLEET_HOME });
+    if (configDirResolution && 'refusal' in configDirResolution) return refuse('invalid_body', configDirResolution.refusal);
+    const configDir = configDirResolution?.realPath;
 
     // The directory must already exist: without this, a symlinked "..' segment could be lexically
     // collapsed back inside the root by path.resolve() while the OS actually opened somewhere else, and
@@ -362,7 +373,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
     const spec = {
       directory: realDirectory, name: input.name, emoji: input.emoji ?? '🤖', model: resolvedModel,
-      seededPrompt: input.seeded_prompt, role: input.role, parentId: caller.id, harness: caller.harness, permissionMode, projectId: caller.projectId, effort: input.effort,
+      seededPrompt: input.seeded_prompt, role: input.role, parentId: caller.id, harness: caller.harness, permissionMode, projectId: caller.projectId, effort: input.effort, configDir,
     };
 
     const child = input.manager

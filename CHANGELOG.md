@@ -2,6 +2,14 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 5 — 2026-10-29
+
+- PARITY-ACCT-01, `create_session`: new optional `config_dir`, an absolute path to an account profile directory, launched as `CLAUDE_CONFIG_DIR`. Accepted for the `claude-cli` harness only; any other harness is refused with `invalid_body` ("harness X does not support config_dir"). The path must exist, resolve (realpath) strictly under the home directory, and not be the `~/.claude` folder itself, nor `~/.openfleet` or the `OPENFLEET_HOME` folder or anything under them (compared as spelled and through realpath, so a symlinked dotfiles folder gives no way round, case-insensitively); otherwise `invalid_body`. Subfolders of `~/.claude` (for example `~/.claude/profiles/work`) are accepted. No file inside the directory is read, nothing picks a profile on the caller's behalf, and the path is never echoed. Session views (`create_session` ack, session listings) carry `configProfile`, the directory's last path segment, and never the path.
+
+Tools added: none.
+Tools changed: `create_session` (input schema and output field).
+Migrations: `044_session_config_dir` (additive `sessions.config_dir` column).
+
 ## 4 — 2026-10-29
 
 - PARITY-TBL-08, `list_row_changes`: optional `store` (id or display name, same resolution as the other table tools), `kind` (`insert`, `update` or `delete`), `since` (a `seq`; keeps the entries after it) and `order` (`desc` by default, or `asc` by `seq`). Each entry gains a stable integer `seq`. Without the new parameters the order (newest first) and the entry shape (plus `seq`) are unchanged. `seq` is global to the history table, increases with every recorded change and is never renumbered nor reused.

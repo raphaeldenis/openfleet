@@ -10,6 +10,7 @@ export * from './dataStores.js';
 export * from './models.js';
 export * from './docsRoot.js';
 export * from './effort.js';
+export * from './configDir.js';
 export * from './pagination.js';
 export * from './projects.js';
 export * from './workingState.js';

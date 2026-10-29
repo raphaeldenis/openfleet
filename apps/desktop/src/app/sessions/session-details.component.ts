@@ -66,6 +66,12 @@ import { clockTimeOf } from '../core/clock-time';
           <span class="fact-label">Directory</span>
           <span class="fact-value directory" data-testid="session-directory" [attr.title]="session().directory">{{ session().directory }}</span>
         </div>
+        @if (session().configProfile; as profileName) {
+          <div class="fact">
+            <span class="fact-label">Profile</span>
+            <span class="fact-value" data-testid="session-config-profile">{{ profileName }}</span>
+          </div>
+        }
         <div class="fact fact--field">
           <span class="fact-label">Model</span>
           <of-model-selector [sessionId]="session().id" />

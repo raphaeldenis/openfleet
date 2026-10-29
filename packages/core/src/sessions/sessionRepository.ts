@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
+import { configProfileOf } from './configDir.js';
 import { PERMISSION_MODES, parseReadinessFailureReason, parseSessionCloseReason, parseSessionReadiness, type ReadinessFailureReason, type SessionReadiness, type HarnessId, type PermissionMode, type Session, type SessionCloseReason, type SessionState } from '@openfleet/shared';
 
 interface Row {
@@ -8,11 +9,11 @@ interface Row {
   exit_code: number | null; close_reason: string | null; hook_token: string; mcp_token: string; permission_mode: string | null; branch: string | null;
   created_at: string; closed_at: string | null; project_id: string | null;
   resolved_model: string | null; cli_version: string | null; model_drifted_from: string | null; resolved_for_model: string | null;
-  context_notice_tokens: number | null; effort: string | null;
+  context_notice_tokens: number | null; effort: string | null; config_dir: string | null;
   readiness: string | null; readiness_reason: string | null; launch_retries: number;
 }
 
-type NewSessionRow = Omit<Row, 'exit_code' | 'close_reason' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model' | 'context_notice_tokens' | 'effort' | 'readiness' | 'readiness_reason' | 'launch_retries'> & { project_id?: string | null; effort?: string | null };
+type NewSessionRow = Omit<Row, 'exit_code' | 'close_reason' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model' | 'context_notice_tokens' | 'effort' | 'config_dir' | 'readiness' | 'readiness_reason' | 'launch_retries'> & { project_id?: string | null; effort?: string | null; config_dir?: string | null };
 
 export interface NormalizedPermissionMode { mode: PermissionMode | undefined; wasRecognized: boolean }
 
@@ -54,6 +55,7 @@ const toSession = (r: Row): Session => ({
   permissionMode: normalizePermissionMode(r.permission_mode).mode,
   effort: r.effort ?? undefined,
   readiness: parseSessionReadiness(r.readiness), readinessReason: parseReadinessFailureReason(r.readiness_reason),
+  configProfile: r.config_dir === null ? undefined : configProfileOf(r.config_dir),
   createdAt: r.created_at, closedAt: r.closed_at ?? undefined,
 });
 
@@ -61,9 +63,14 @@ export class SessionRepository {
   constructor(private readonly db: DatabaseSync) {}
 
   insert(row: NewSessionRow): void {
-    const rowWithProject = { ...row, project_id: row.project_id ?? null, effort: row.effort ?? null };
-    this.db.prepare(`INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, branch, project_id, effort, created_at)
-      VALUES (@id, @name, @emoji, @directory, @worktree, @model, @parent_id, @role, @harness, @state, @state_since, @hook_token, @mcp_token, @permission_mode, @branch, @project_id, @effort, @created_at)`).run(rowWithProject as never);
+    const rowWithProject = { ...row, project_id: row.project_id ?? null, effort: row.effort ?? null, config_dir: row.config_dir ?? null };
+    this.db.prepare(`INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, branch, project_id, effort, config_dir, created_at)
+      VALUES (@id, @name, @emoji, @directory, @worktree, @model, @parent_id, @role, @harness, @state, @state_since, @hook_token, @mcp_token, @permission_mode, @branch, @project_id, @effort, @config_dir, @created_at)`).run(rowWithProject as never);
+  }
+  /** The raw config directory a launch needs; it never leaves the daemon, the public Session carries only its profile name. */
+  configDirOf(id: string): string | undefined {
+    const row = this.db.prepare('SELECT config_dir FROM sessions WHERE id = ?').get(id) as { config_dir: string | null } | undefined;
+    return row?.config_dir ?? undefined;
   }
   get(id: string): Session | undefined {
     const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Row | undefined;

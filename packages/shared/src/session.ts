@@ -69,7 +69,10 @@ export const SessionSpecSchema = z.object({
   const refusal = effortRefusalOf(spec.harness, spec.effort);
   if (refusal) context.addIssue({ code: 'custom', message: refusal, path: ['effort'] });
 });
-export type SessionSpec = z.infer<typeof SessionSpecSchema>;
+export type SessionSpec = z.infer<typeof SessionSpecSchema> & {
+  /** A validated absolute config directory; set only by callers that resolved it, never parsed from a request body. */
+  configDir?: string;
+};
 
 export interface Session {
   id: string;
@@ -90,6 +93,8 @@ export interface Session {
   permissionMode?: PermissionMode;
   /** The effort level the session launches with; absent when none was chosen. */
   effort?: string;
+  /** The name (last path segment) of the config directory the session runs under; the path itself is never exposed. */
+  configProfile?: string;
   harness: HarnessId;
   /** How the command policy reaches this session's harness. Absent from a daemon that predates the policy. */
   policyEnforcement?: PolicyEnforcement;
