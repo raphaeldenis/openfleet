@@ -2,7 +2,7 @@ import type { DiagnosticsDocument } from '@openfleet/shared';
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DiagnosticsExport, type SaveBundleOutcome } from '../core/diagnostics-export';
+import { DiagnosticsExport, type ProjectedDaemonRecord, type SaveBundleOutcome } from '../core/diagnostics-export';
 import { DiagnosticsSettingsComponent } from './diagnostics-settings.component';
 
 const A_DOCUMENT: DiagnosticsDocument = {
@@ -16,10 +16,13 @@ const A_DOCUMENT: DiagnosticsDocument = {
   log: [{ level: 'error', id: 'aaaaaaaa' }, { level: 'error', id: 'bbbbbbbb' }],
 };
 
+const A_PROJECTED_RECORD: ProjectedDaemonRecord = { ts: '2026-10-04T09:00:00Z', level: 'error', event: 'daemon_line', fields: { id: 'aaaaaaaa', extra_fields: '0' } };
+
 function fakeExport(overrides: Partial<DiagnosticsExport> = {}) {
   return {
     isAvailable: true,
     readDesktopLog: vi.fn(() => Promise.resolve('desktop log line')),
+    projectDaemonRecords: vi.fn((records: unknown[]): Promise<ProjectedDaemonRecord[]> => Promise.resolve(records.map(() => A_PROJECTED_RECORD))),
     saveBundle: vi.fn((): Promise<SaveBundleOutcome> => Promise.resolve({ status: 'saved', path: '/Users/x/Desktop/bundle.zip' })),
     revealSavedBundle: vi.fn(() => Promise.resolve()),
     ...overrides,
@@ -76,6 +79,8 @@ describe('Settings → Diagnostics → export bundle', () => {
     expect(bundle.fileName).toMatch(/^openfleet-diagnostics-.*\.zip$/);
     expect(archiveText).toContain('"generatedAt": "2026-10-04T10:00:00.000Z"');
     expect(archiveText).toContain('desktop log line');
+    expect(exporter.projectDaemonRecords).toHaveBeenCalledWith(A_DOCUMENT.log);
+    expect(archiveText).toContain('"event": "daemon_line"');
     expect(screen.getByRole('button', { name: 'Reveal' })).toBeEnabled();
   });
 

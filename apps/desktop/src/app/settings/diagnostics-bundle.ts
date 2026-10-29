@@ -1,4 +1,6 @@
 import type { DiagnosticsDocument } from '@openfleet/shared';
+import type { ProjectedDaemonRecord } from '../core/diagnostics-export';
+import { allowlistedDaemonDocument } from './daemon-document-allowlist';
 import { zipOf } from './diagnostics-zip';
 
 export const DAEMON_DIAGNOSTICS_ENTRY = 'daemon-diagnostics.json';
@@ -17,10 +19,18 @@ export function bundleFileNameAt(moment: Date): string {
   return `openfleet-diagnostics-${day}-${twoDigits(moment.getHours())}${twoDigits(moment.getMinutes())}.zip`;
 }
 
-/** Zips the daemon's document and the desktop log: nothing else goes in. */
-export function buildBundle({ daemonDocument, desktopLog, at }: { daemonDocument: DiagnosticsDocument; desktopLog: string; at: Date }): DiagnosticsBundle {
+export type DaemonRecordProjection = (records: unknown[]) => Promise<ProjectedDaemonRecord[]>;
+
+/**
+ * Zips the daemon's document and the desktop log: nothing else goes in.
+ * The document keeps only the fields of its allowlist, and its log only the records the desktop projected.
+ */
+export async function buildBundle({ daemonDocument, desktopLog, at, projectDaemonRecords }: { daemonDocument: DiagnosticsDocument; desktopLog: string; at: Date; projectDaemonRecords: DaemonRecordProjection }): Promise<DiagnosticsBundle> {
+  const ringBuffer = Array.isArray(daemonDocument.log) ? daemonDocument.log : [];
+  const projectedLog = await projectDaemonRecords(ringBuffer);
+  const bundledDocument = { ...allowlistedDaemonDocument(daemonDocument), log: projectedLog };
   const entries = [
-    { name: DAEMON_DIAGNOSTICS_ENTRY, text: JSON.stringify(daemonDocument, null, 2) },
+    { name: DAEMON_DIAGNOSTICS_ENTRY, text: JSON.stringify(bundledDocument, null, 2) },
     { name: DESKTOP_LOG_ENTRY, text: desktopLog },
   ];
   return { fileName: bundleFileNameAt(at), bytes: zipOf(entries, at) };
