@@ -56,6 +56,13 @@ Build budget: the production initial bundle measures about 425 kB (warning at 47
 
 Once a packaged app runs on `~/.openfleet` and port 7331, start dev daemons on their own home and port: `OPENFLEET_HOME=~/.openfleet-dev OPENFLEET_PORT=7332 pnpm dev:core`. A dev daemon that migrates the packaged app's database makes the packaged app refuse to boot. The packaged app reuses any daemon it finds on 7331.
 
+Two environment variables select a daemon's data and port, and any script that starts a dev daemon (this repo ships none named `dev-servers.sh`; `pnpm dev:core` is the entry point) should export both:
+
+| Variable | Default | Dev daemon beside a packaged app |
+| --- | --- | --- |
+| `OPENFLEET_HOME` | `~/.openfleet` | `~/.openfleet-dev` |
+| `OPENFLEET_PORT` | `7331` (a free port when 7331 is taken and the variable is unset) | `7332` |
+
 ### Build the dmg
 
     rustup target add x86_64-apple-darwin   # once, for the Intel dmg
