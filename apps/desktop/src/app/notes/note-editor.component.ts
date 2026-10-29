@@ -2,6 +2,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, ElementRef, computed, input, output, signal, viewChild } from '@angular/core';
 import { countRenderCost, parseMarkdownBlocks, takeWithinRenderBudget } from './markdown-blocks';
 import { MarkdownTableComponent } from './markdown-table.component';
+import { ageLabel } from './note-age';
 import { displayTitleOf } from './note-title';
 import type { NoteView } from '@openfleet/shared';
 
@@ -18,6 +19,7 @@ const NODES_PER_CHUNK = 2000;
         <span class="path" data-testid="note-editor-path">{{ path }}</span>
       }
       <span class="spacer"></span>
+      <span class="last-change" data-testid="note-editor-last-change">Last change · rev {{ note().rev }} · {{ lastChangeAge() }}</span>
       <button
         #historyButton
         type="button"
@@ -104,6 +106,7 @@ const NODES_PER_CHUNK = 2000;
     .empty-body { color: var(--mut); font-style: italic }
     .path { font-family: var(--mono); font-size: .6875rem; color: var(--mut) }
     .spacer { flex: 1 }
+    .last-change { font-size: .75rem; color: var(--mut); white-space: nowrap }
     .history-toggle {
       height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel);
       color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer;
@@ -139,6 +142,7 @@ export class NoteEditorComponent {
   protected readonly blocks = computed(() => takeWithinRenderBudget(this.allBlocks(), this.renderBudget()));
   protected readonly hiddenItemCount = computed(() => countRenderCost(this.allBlocks()) - countRenderCost(this.blocks()));
   protected readonly displayTitle = computed(() => displayTitleOf(this.note().title));
+  protected readonly lastChangeAge = computed(() => ageLabel(this.note().updatedAt));
 
   protected showNextChunk(): void {
     this.chunksShown.update((chunks) => chunks + 1);

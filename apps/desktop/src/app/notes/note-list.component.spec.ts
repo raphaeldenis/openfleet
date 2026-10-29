@@ -48,6 +48,22 @@ describe('NoteListComponent', () => {
     expect(screen.getByTestId('note-list-item-n1')).toHaveTextContent('2 min ago');
   });
 
+  it('user sees notes grouped under their folder heading with the group count, shared notes under shared', async () => {
+    await renderList({
+      notes: [
+        aNoteSummary({ id: 'a', title: 'daemon-protocol', folder: 'specs' }),
+        aNoteSummary({ id: 'b', title: 'wire-format', folder: 'specs' }),
+        aNoteSummary({ id: 'c', title: 'release-checklist', folder: 'plans' }),
+        aNoteSummary({ id: 'd', title: 'voice', shared: true }),
+      ],
+    });
+
+    expect(screen.getByTestId('note-list-group-specs')).toHaveTextContent(/^specs\s*2$/);
+    expect(screen.getByTestId('note-list-group-plans')).toHaveTextContent(/^plans\s*1$/);
+    expect(screen.getByTestId('note-list-group-shared')).toHaveTextContent(/^shared\s*1$/);
+    expect(screen.queryByTestId('note-list-group-handoffs')).toBeNull();
+  });
+
   it('user can open a note by clicking it', async () => {
     const { selected } = await renderList();
 
@@ -115,6 +131,63 @@ describe('NoteListComponent', () => {
       await renderList({ selectedId: 'n2' });
 
       expect([tabIndexOf('n1'), tabIndexOf('n2'), tabIndexOf('n3')]).toEqual(['-1', '0', '-1']);
+    });
+
+    it('the tab stop is the first note displayed, not the first note of the received order', async () => {
+      await renderList({
+        notes: [
+          aNoteSummary({ id: 'shared-first', title: 'voice', shared: true }),
+          aNoteSummary({ id: 'plan', title: 'release-checklist', folder: 'plans' }),
+        ],
+      });
+
+      expect([tabIndexOf('shared-first'), tabIndexOf('plan')]).toEqual(['-1', '0']);
+    });
+
+    it('a shared note that also has a folder is displayed under shared, which comes after the folders', async () => {
+      await renderList({
+        notes: [
+          aNoteSummary({ id: 'shared-in-specs', title: 'voice', folder: 'specs', shared: true }),
+          aNoteSummary({ id: 'plan', title: 'release-checklist', folder: 'plans' }),
+        ],
+      });
+
+      expect(screen.queryByTestId('note-list-group-specs')).toBeNull();
+      expect(screen.getByTestId('note-list-group-shared')).toHaveTextContent(/^shared\s*1$/);
+      expect([tabIndexOf('shared-in-specs'), tabIndexOf('plan')]).toEqual(['-1', '0']);
+    });
+
+    it('a note without a folder is displayed last, so the tab stop goes to the first folder note', async () => {
+      await renderList({
+        notes: [
+          aNoteSummary({ id: 'loose', title: 'scratch', folder: null }),
+          aNoteSummary({ id: 'spec', title: 'daemon-protocol', folder: 'specs' }),
+        ],
+      });
+
+      expect([tabIndexOf('loose'), tabIndexOf('spec')]).toEqual(['-1', '0']);
+    });
+
+    it('the group counts and the tab stop follow the filter', async () => {
+      await renderList({
+        notes: [
+          aNoteSummary({ id: 'spec-a', title: 'daemon-protocol', folder: 'specs' }),
+          aNoteSummary({ id: 'spec-b', title: 'wire-format', folder: 'specs' }),
+          aNoteSummary({ id: 'plan', title: 'wire-plan', folder: 'plans' }),
+        ],
+      });
+
+      await userEvent.type(screen.getByTestId('note-list-filter'), 'wire');
+
+      expect(screen.getByTestId('note-list-group-specs')).toHaveTextContent(/^specs\s*1$/);
+      expect(screen.getByTestId('note-list-group-plans')).toHaveTextContent(/^plans\s*1$/);
+      expect([tabIndexOf('spec-b'), tabIndexOf('plan')]).toEqual(['0', '-1']);
+    });
+
+    it('the group headings are presentational, so the list owns only list items', async () => {
+      await renderList({ notes: [aNoteSummary({ id: 'spec', folder: 'specs' })] });
+
+      expect(screen.getByTestId('note-list-group-specs')).toHaveAttribute('role', 'presentation');
     });
 
     it('user moves through the notes with the arrow keys and the tab stop follows', async () => {

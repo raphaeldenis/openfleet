@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, ElementRef, computed, inject, input, model, output, signal } from '@angular/core';
 import { ageLabel } from './note-age';
 import { displayTitleOf } from './note-title';
-import type { NoteSummary } from '@openfleet/shared';
+import type { NoteFolder, NoteSummary } from '@openfleet/shared';
 
 function destinationIndex(key: string, current: number, count: number): number | null {
   switch (key) {
@@ -11,6 +11,15 @@ function destinationIndex(key: string, current: number, count: number): number |
     case 'End': return count - 1;
     default: return null;
   }
+}
+
+type GroupName = NoteFolder | 'shared' | null;
+interface NoteGroup { name: GroupName; notes: readonly NoteSummary[] }
+
+const GROUP_DISPLAY_ORDER: readonly GroupName[] = ['specs', 'plans', 'handoffs', 'reports', 'shared', null];
+
+function groupNameOf(note: NoteSummary): GroupName {
+  return note.shared ? 'shared' : note.folder;
 }
 
 @Component({
@@ -38,22 +47,30 @@ function destinationIndex(key: string, current: number, count: number): number |
       >+</button>
     </div>
     <div class="items" role="list" data-testid="note-list-items" (focusout)="forgetFocusedNoteWhenLeavingList($event)">
-      @for (note of visibleNotes(); track note.id) {
-        <div class="row" role="listitem">
-          <button
-            type="button"
-            class="item"
-            [attr.data-testid]="'note-list-item-' + note.id"
-            [attr.aria-current]="note.id === selectedId() ? 'true' : null"
-            [attr.tabindex]="note.id === tabStopId() ? 0 : -1"
-            (click)="selected.emit(note.id)"
-            (focus)="focusedId.set(note.id)"
-            (keydown)="moveFocusWithArrowKeys($event)"
-          >
-            <span class="title">{{ displayTitleOf(note.title) }}</span>
-            <span class="meta">{{ ageOf(note) }}</span>
-          </button>
-        </div>
+      @for (group of groups(); track group.name) {
+        @if (group.name; as groupName) {
+          <div class="group" role="presentation" [attr.data-testid]="'note-list-group-' + groupName">
+            <span>{{ groupName }}</span>
+            <span class="count">{{ group.notes.length }}</span>
+          </div>
+        }
+        @for (note of group.notes; track note.id) {
+          <div class="row" role="listitem">
+            <button
+              type="button"
+              class="item"
+              [attr.data-testid]="'note-list-item-' + note.id"
+              [attr.aria-current]="note.id === selectedId() ? 'true' : null"
+              [attr.tabindex]="note.id === tabStopId() ? 0 : -1"
+              (click)="selected.emit(note.id)"
+              (focus)="focusedId.set(note.id)"
+              (keydown)="moveFocusWithArrowKeys($event)"
+            >
+              <span class="title">{{ displayTitleOf(note.title) }}</span>
+              <span class="meta">{{ ageOf(note) }}</span>
+            </button>
+          </div>
+        }
       }
       @if (notes().length === 0) {
         @if (hasLoaded()) {
@@ -79,6 +96,11 @@ function destinationIndex(key: string, current: number, count: number): number |
     .new:focus-visible, .item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
     .items { flex: 1; min-height: 0; overflow: auto; padding: .375rem; display: flex; flex-direction: column }
     .row { display: flex; flex-direction: column }
+    .group {
+      display: flex; align-items: center; justify-content: space-between; padding: .5rem .5rem .125rem;
+      font-size: .6875rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--mut);
+    }
+    .count { font-weight: 400 }
     .item {
       display: flex; flex-direction: column; gap: .0625rem; padding: .4375rem .5rem; border: 0; border-radius: .375rem;
       background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
@@ -106,12 +128,19 @@ export class NoteListComponent {
     return this.notes().filter((note) => note.title.toLowerCase().includes(needle));
   });
 
+  protected readonly groups = computed<readonly NoteGroup[]>(() => {
+    const visible = this.visibleNotes();
+    const groups = GROUP_DISPLAY_ORDER.map((name) => ({ name, notes: visible.filter((note) => groupNameOf(note) === name) }));
+    return groups.filter((group) => group.notes.length > 0);
+  });
+
   protected readonly focusedId = signal<string | null>(null);
   protected readonly tabStopId = computed(() => {
-    const shownIds = this.visibleNotes().map((note) => note.id);
+    const shownIdsInDisplayOrder = this.groups().flatMap((group) => group.notes.map((note) => note.id));
     const preferredId = this.focusedId() ?? this.selectedId();
-    const isPreferredShown = preferredId !== null && shownIds.includes(preferredId);
-    return isPreferredShown ? preferredId : shownIds[0];
+    const isPreferredShown = preferredId !== null && shownIdsInDisplayOrder.includes(preferredId);
+    const firstShownId = this.groups()[0]?.notes[0]?.id;
+    return isPreferredShown ? preferredId : firstShownId;
   });
 
   protected readonly displayTitleOf = displayTitleOf;

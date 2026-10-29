@@ -33,6 +33,13 @@ describe('NoteEditorComponent', () => {
     expect(screen.getByTestId('note-editor-title')).toHaveTextContent('daemon-protocol');
   });
 
+  it('user sees the last change revision and age in the header', async () => {
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60_000).toISOString();
+    await renderEditor({ note: aNoteView({ rev: 12, updatedAt: twoMinutesAgo }) });
+
+    expect(screen.getByTestId('note-editor-last-change')).toHaveTextContent('Last change · rev 12 · 2 min ago');
+  });
+
   it('user sees an "Untitled" heading on a note without a title', async () => {
     await renderEditor({ note: aNoteView({ title: '' }) });
 

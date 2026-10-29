@@ -42,9 +42,9 @@ import type { NoteVersionSummary } from '@openfleet/shared';
     </div>
   `,
   styles: `
-    :host { display: flex; flex-direction: column; width: 17rem; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto }
+    :host { display: flex; flex-direction: column; width: 17rem; flex: none; border-left: 1px solid var(--line); background: var(--panel); min-height: 0; overflow: hidden }
     .title { padding: .625rem .875rem; border-bottom: 1px solid var(--line); font-weight: 600 }
-    .versions { list-style: none; margin: 0; padding: 0 }
+    .versions { flex: 1; min-height: 0; overflow: auto; list-style: none; margin: 0; padding: 0 }
     .version {
       display: flex; flex-direction: column; gap: .125rem; width: 100%; padding: .5rem .875rem; border: 0; border-bottom: 1px solid var(--line);
       background: transparent; color: inherit; font: inherit; font-size: .75rem; text-align: left; cursor: pointer;
@@ -56,7 +56,7 @@ import type { NoteVersionSummary } from '@openfleet/shared';
     .author { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .when, .rev { font-family: var(--mono); font-size: .6875rem; color: var(--mut) }
     .error { display: flex; flex-direction: column; gap: .5rem; padding: .625rem .875rem; font-size: .75rem; color: var(--mut) }
-    .actions { padding: .75rem .875rem }
+    .actions { flex: none; padding: .625rem .875rem; border-top: 1px solid var(--line); background: var(--panel) }
     .restore { width: 100% }
   `,
 })
