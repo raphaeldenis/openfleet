@@ -223,6 +223,14 @@ describe('QE — the findings gate on gh pr create, enforcing', () => {
     'glab --repo o/r mr create --fill',
     'glab -R=o/r mr new --fill',
     'glab --repo=o/r mr create --fill',
+    'gh api repos/o/r/pulls/?x=1 -f title=t',
+    'gh api "repos/o/r/pulls/?x=1#frag" -f title=t',
+    'gh api repos/o/r/pulls/#frag -f title=t',
+    'gh pr -R o/r create --fill',
+    'gh pr --repo=o/r create --fill',
+    'glab mr -R o/r create --fill',
+    'glab mr --repo o/r new --fill',
+    'gh -R o/r pr -R o/r create --fill',
   ])('refuses a child opening a request without findings through %s, with the same actionable message', async (command) => {
     const { directory, sessionId } = await bootInEnforce();
 
@@ -249,6 +257,12 @@ describe('QE — the findings gate on gh pr create, enforcing', () => {
     'gh api repos/o/r/pulls-foo?x=1 -f title=t',
     'glab -R o/r mr list',
     'glab --repo=o/r mr view 3',
+    'gh api repos/o/r/pulls/12/comments -f body=x',
+    'gh api repos/o/r/pulls/?x=1 -X GET -f state=open',
+    'gh api repos/o/r/pulls/12 -f title=renamed',
+    'glab mr -R o/r list',
+    'gh pr -R o/r view 3',
+    'gh pr --repo=o/r list',
   ])('never blocks %s: only a request creation is judged', async (command) => {
     const { directory, sessionId } = await bootInEnforce();
 
