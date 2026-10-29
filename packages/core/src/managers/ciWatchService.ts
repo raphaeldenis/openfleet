@@ -122,6 +122,7 @@ export class CiWatchService {
     try {
       snapshot = await this.deps.gh.snapshotOf(watched);
     } catch (error) {
+      if (!this.isStillWatched(watched)) return true;
       return this.noteFailure(watched, error);
     }
     if (!this.isStillWatched(watched)) return true;

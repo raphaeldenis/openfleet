@@ -281,6 +281,20 @@ describe('the CI watch service', () => {
 
       expect(world.scheduled).toEqual([]);
     });
+
+    it('records no failure for a pull request unwatched while its poll was failing', async () => {
+      let failThePoll: (error: Error) => void = () => undefined;
+      const world = buildWorld({ snapshotOf: () => new Promise<PullRequestSnapshot>((_resolve, reject) => { failThePoll = reject; }) });
+      world.service.watch({ managerId: 'lead', ...pullRequest });
+      const recordError = vi.spyOn(world.repository, 'recordError');
+      const pollInFlight = world.service.pollOnce();
+
+      world.service.unwatch({ managerId: 'lead', ...pullRequest });
+      failThePoll(ghFailure('gh_timeout'));
+      await pollInFlight;
+
+      expect([world.service['retryAtOf'].size, world.service['failuresOf'].size, recordError.mock.calls.length]).toEqual([0, 0, 0]);
+    });
   });
 
   describe('the polling loop', () => {
