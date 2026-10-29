@@ -169,10 +169,11 @@ fn known_code_of(value: &Value) -> KnownCode {
   KnownCode::from_name(value.as_str().unwrap_or(""))
 }
 
+/// Buckets the first 64 KiB of a daemon value, so the length field stays within the grammar for any size.
 fn bucketed_opaque_of(value: &Value, salt: Option<&Salt>) -> Opaque {
   match value.as_str() {
-    Some(text) => Opaque::bucketed(text.as_bytes(), salt),
-    None => Opaque::bucketed(value.to_string().as_bytes(), salt),
+    Some(text) => Opaque::bucketed(first_line_bytes_of(text.as_bytes()), salt),
+    None => Opaque::bucketed(first_line_bytes_of(value.to_string().as_bytes()), salt),
   }
 }
 
@@ -241,6 +242,21 @@ mod tests {
     for other in ["Error: boom", "x node: not at the start", "attention", ""] {
       assert!(!is_node_fatal_line(other), "{other}");
     }
+  }
+
+  #[test]
+  fn caps_a_message_and_an_error_message_at_the_line_limit_before_bucketing_them() {
+    let one_byte_past_the_eight_digit_bucket = (1 << 26) + 1;
+    let oversized = "x".repeat(one_byte_past_the_eight_digit_bucket);
+    let record = serde_json::json!({ "level": "info", "msg": oversized, "err": { "message": oversized } });
+    let capped_tag = Opaque::bucketed(&oversized.as_bytes()[..MAX_LINE_BYTES], Some(&salt())).to_string();
+
+    let projection = project_daemon_records(&[record], Some(&salt()), Ts::parse(NOW).unwrap());
+
+    assert_eq!(projection[0].event, "daemon_line");
+    assert_eq!(projection[0].fields.get("msg"), Some(&capped_tag));
+    assert_eq!(projection[0].fields.get("err_msg"), Some(&capped_tag));
+    assert!(capped_tag.starts_with("[text:65536:"), "{capped_tag}");
   }
 
   fn secret() -> String {
