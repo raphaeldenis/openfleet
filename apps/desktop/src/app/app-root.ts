@@ -4,6 +4,7 @@ import { Router, RouterOutlet } from '@angular/router';
 import { FleetApiService } from './core/fleet-api.service';
 import { FleetEventsService } from './core/fleet-events.service';
 import { NativeNotifications } from './core/native-notifications.service';
+import { ThemeService } from './core/theme.service';
 import { VersionsService } from './core/versions.service';
 
 @Component({
@@ -25,6 +26,8 @@ export class AppRoot {
   readonly notificationsStarted: Promise<void>;
 
   constructor() {
+    // Creating the service puts the chosen theme on the document, so routes outside the shell (onboarding) wear it too.
+    inject(ThemeService);
     void inject(FleetEventsService).connect();
     inject(DestroyRef).onDestroy(() => (this.isDestroyed = true));
     void inject(NativeNotifications).onBannerClick((route) => void this.router.navigateByUrl(route));

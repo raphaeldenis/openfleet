@@ -42,4 +42,27 @@ describe('AppRoot', () => {
 
     expect(connect).toHaveBeenCalledTimes(1);
   });
+
+  it('wears the remembered dark theme on any route, including the onboarding that lives outside the shell', async () => {
+    stubDaemonIsUp();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => (key === 'openfleet.theme' ? 'dark' : null), setItem: () => undefined });
+    document.documentElement.removeAttribute('data-theme');
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(routes),
+        {
+          provide: FleetEventsService,
+          useValue: { connect: vi.fn(), sessions: signal([]), approvals: signal([]), managers: signal([]), notificationTriggers: new Subject(), connected: signal(true), snapshotReceived: signal(true), ...silentWorkingStateSignals() },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(AppRoot);
+    fixture.detectChanges();
+    await fixture.componentInstance.notificationsStarted;
+    await TestBed.inject(Router).navigateByUrl('/onboarding');
+    fixture.detectChanges();
+
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+  });
 });
