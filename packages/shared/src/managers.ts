@@ -51,6 +51,7 @@ export const UpdateManagerSchema = ManagerSpecSchema.partial().extend({
   missionNoteId: z.string().min(1).nullable().optional(),
   pinMissionNote: z.boolean().optional(),
   pulseEnabled: z.boolean().optional(),
+  childAutoRestart: z.boolean().optional(),
   expertise: ManagerExpertiseSchema.optional(),
   pulseActions: ManagerPulseActionsSchema.optional(),
   expectedProfileRev: z.number().int().positive().optional(),
@@ -92,6 +93,8 @@ export interface ManagerView {
   pulseSeconds: number;
   /** False while the manager is paused: it receives no pulse until it is resumed. */
   pulseEnabled: boolean;
+  /** True when the daemon restarts a child of this manager that crashed on its own. Absent from an older daemon. */
+  childAutoRestart?: boolean;
   childrenCap: number;
   missionText: string;
   /** True while the mission is above the delta limit: it may shrink, never grow. Absent from an older daemon. */

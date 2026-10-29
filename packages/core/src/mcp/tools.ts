@@ -38,6 +38,9 @@ import type { ReviewFindingsRepository } from '../review/reviewFindingsRepositor
 import type { ScheduledEventService } from '../managers/scheduledEventService.js';
 import { scheduledEventView } from './scheduledEventTools.js';
 
+/** A child counts against the children cap while it is live or waiting for the daemon to restart it. */
+const isActiveChild = (child: Session): boolean => child.state !== 'closed' || child.restartPending === true;
+
 const MAX_AMBIGUITY_CANDIDATES = 4;
 const MAX_CANDIDATE_NAME_CHARS = 24;
 
@@ -345,7 +348,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       // inside sessions.create()/managers.createManagerSession() below: Node never interleaves another
       // callback into this handler before that insert happens, so two concurrent create_session calls
       // can never both pass this check before either session exists — see Review Focus #3.
-      const activeChildren = sessions.list().filter((s) => s.parentId === caller.id && s.state !== 'closed').length;
+      const activeChildren = sessions.list().filter((s) => s.parentId === caller.id && isActiveChild(s)).length;
       // A manager-role caller with no ManagerRecord (legacy data, a role forged before this guard existed,
       // a deleted record) is capped at 0 rather than treated as unlimited — defence in depth.
       const childrenCap = record ? record.childrenCap : 0;
@@ -402,9 +405,10 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       pendingPermission: pendingPermissionFor(child.id),
       queuedMessageCount: sessions.queuedMessageCount(child.id),
       ...(child.runtimeAttention && { runtimeAttention: child.runtimeAttention }),
+      ...(child.restartPending && { restartPending: true }),
     }));
     const record = caller.role === MANAGER_ROLE ? managers.get(caller.id) : undefined;
-    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed').length, deps.managerDenials?.countsOf(record.sessionId), managerBase)) : null;
+    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed' || c.restartPending).length, deps.managerDenials?.countsOf(record.sessionId), managerBase)) : null;
     const blockedTickets = (deps.reviewFindings?.latestAdversarialLinePerTicketOf(caller.id) ?? [])
       .filter((line) => line.severity === 'no-go')
       .map(({ ticket, sha, reasons }) => ({ ticket, sha, reasons }));

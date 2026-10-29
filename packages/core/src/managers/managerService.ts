@@ -87,7 +87,7 @@ export class ManagerService {
       committed: (record) => {
         this.announceUpdated(record);
         const changesExistingFields = Object.entries(validated).some(([key, value]) =>
-          value !== undefined && !['expertise', 'pulseActions', 'expectedProfileRev'].includes(key));
+          value !== undefined && !['expertise', 'pulseActions', 'childAutoRestart', 'expectedProfileRev'].includes(key));
         if (changesExistingFields) this.deps.scheduler.onManagerUpdated(record);
         if (isPulseEnabledChanged) this.deps.scheduler.onPulseEnabledChanged(record);
       },
@@ -97,14 +97,14 @@ export class ManagerService {
 
   private applyProfilePatch(stored: ManagerRecord, patch: UpdateManager): boolean {
     const sessionId = stored.sessionId;
-    const { mission, model, missionNoteId, pinMissionNote, pulseEnabled, expertise, pulseActions } = patch;
+    const { mission, model, missionNoteId, pinMissionNote, pulseEnabled, childAutoRestart, expertise, pulseActions } = patch;
     if (mission !== undefined) this.requireMissionWritable({ mission, storedMission: stored.missionText });
     const isLinkingNote = typeof missionNoteId === 'string';
     if (isLinkingNote) this.requireNoteOfManagerProject({ managerId: sessionId, noteId: missionNoteId });
     const currentFields = {
       pulseSeconds: stored.pulseSeconds, childrenCap: stored.childrenCap, mission: stored.missionText,
       model: this.deps.sessions.get(sessionId)?.model, missionNoteId: stored.missionNoteId ?? null,
-      pinMissionNote: stored.pinMissionNote === true, pulseEnabled: isPulseEnabled(stored),
+      pinMissionNote: stored.pinMissionNote === true, pulseEnabled: isPulseEnabled(stored), childAutoRestart: stored.childAutoRestart === true,
       expertise: stored.expertise ?? '', pulseActions: stored.pulseActions ?? [],
     };
     const hasChanges = Object.entries(currentFields).some(([key, value]) => {
@@ -117,6 +117,7 @@ export class ManagerService {
     if (missionNoteId !== undefined) this.deps.managers.setMissionNote(sessionId, missionNoteId);
     if (pinMissionNote !== undefined) this.deps.managers.setMissionNotePinned(sessionId, pinMissionNote);
     if (pulseEnabled !== undefined) this.deps.managers.setPulseEnabled(sessionId, pulseEnabled);
+    if (childAutoRestart !== undefined) this.deps.managers.setChildAutoRestart(sessionId, childAutoRestart);
     return true;
   }
 
@@ -222,7 +223,7 @@ export class ManagerService {
   }
 
   private view(record: ManagerRecord): ManagerView {
-    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && s.state !== 'closed').length;
+    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && (s.state !== 'closed' || s.restartPending === true)).length;
     return toManagerView(record, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId), this.deps.currentBase);
   }
 }

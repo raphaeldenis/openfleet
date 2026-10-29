@@ -13,7 +13,7 @@ describe('ManagerRepository', () => {
     insertSession(db, 's1');
     const repo = new ManagerRepository(db);
     repo.insert({ sessionId: 's1', pulseSeconds: 1800, childrenCap: 2, missionText: 'Ship it', createdAt: 't0' });
-    expect(repo.get('s1')).toEqual({ sessionId: 's1', pulseSeconds: 1800, childrenCap: 2, missionText: 'Ship it', lastPulseAt: undefined, createdAt: 't0', pinMissionNote: false, pulseEnabled: true, expertise: '', pulseActions: [], profileRev: 1 });
+    expect(repo.get('s1')).toEqual({ sessionId: 's1', pulseSeconds: 1800, childrenCap: 2, missionText: 'Ship it', lastPulseAt: undefined, createdAt: 't0', pinMissionNote: false, pulseEnabled: true, childAutoRestart: false, expertise: '', pulseActions: [], profileRev: 1 });
   });
 
   it('returns undefined for a session with no manager record', () => {

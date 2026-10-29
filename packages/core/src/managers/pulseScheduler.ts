@@ -382,7 +382,7 @@ export class PulseScheduler {
     const pulsedAt = new Date().toISOString();
     this.deps.managers.setLastPulseAt(record.sessionId, pulsedAt);
     const updated: ManagerRecord = { ...record, lastPulseAt: pulsedAt };
-    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && s.state !== 'closed').length;
+    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && (s.state !== 'closed' || s.restartPending === true)).length;
     this.deps.bus.emit({ type: 'manager.pulsed', manager: toManagerView(updated, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId), this.deps.managerBase) });
     this.arm(updated);
     this.managerIdsInFailureStreak.delete(record.sessionId);

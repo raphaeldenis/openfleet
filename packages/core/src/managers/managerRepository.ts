@@ -19,6 +19,8 @@ export interface ManagerRecord {
   logStoreId?: string;
   /** Absent on a new record: the manager starts enabled. False while paused. */
   pulseEnabled?: boolean;
+  /** Absent on a new record: the manager's children are not restarted when they crash. */
+  childAutoRestart?: boolean;
   /** The whole manager base the manager last read; absent while it never read it. */
   baseRead?: ManagerBaseRead;
   /** What the manager has read of its mission note since its context was last reset; absent while it read nothing. */
@@ -30,7 +32,7 @@ export interface ManagerRecord {
 interface Row {
   expertise: string | null; pulse_actions: string | null; profile_rev: number;
   session_id: string; pulse_seconds: number; children_cap: number; mission_text: string; last_pulse_at: string | null; created_at: string;
-  mission_note_id: string | null; pin_mission_note: number; log_store_id: string | null; pulse_enabled: number;
+  mission_note_id: string | null; pin_mission_note: number; log_store_id: string | null; pulse_enabled: number; child_auto_restart: number;
   base_version_read: number | null; base_sha_read: string | null; base_read_at: string | null;
   note_read: string | null; note_read_reset_at: string | null;
 }
@@ -74,6 +76,7 @@ const toManager = (r: Row): ManagerRecord => ({
   missionText: r.mission_text, lastPulseAt: r.last_pulse_at ?? undefined, createdAt: r.created_at,
   missionNoteId: r.mission_note_id ?? undefined, pinMissionNote: r.pin_mission_note === 1, logStoreId: r.log_store_id ?? undefined,
   pulseEnabled: r.pulse_enabled === 1,
+  childAutoRestart: r.child_auto_restart === 1,
   baseRead: baseReadOf(r),
   noteRead: noteReadOf(r), noteReadResetAt: r.note_read_reset_at ?? undefined,
 });
@@ -159,6 +162,9 @@ export class ManagerRepository {
   }
   setPulseEnabled(sessionId: string, isEnabled: boolean): void {
     this.db.prepare('UPDATE managers SET pulse_enabled = ? WHERE session_id = ?').run(Number(isEnabled), sessionId);
+  }
+  setChildAutoRestart(sessionId: string, isEnabled: boolean): void {
+    this.db.prepare('UPDATE managers SET child_auto_restart = ? WHERE session_id = ?').run(Number(isEnabled), sessionId);
   }
   /** Remembers the manager base the manager just read whole. */
   recordBaseRead(sessionId: string, { version, sha, readAt }: ManagerBaseRead): void {

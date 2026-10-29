@@ -19,6 +19,7 @@ describe('toManagerView', () => {
       sessionId: 'session-1',
       pulseSeconds: 60,
       pulseEnabled: true,
+      childAutoRestart: false,
       childrenCap: 4,
       missionText: 'Ship it',
       legacyMission: false,

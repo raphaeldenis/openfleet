@@ -64,6 +64,12 @@ export const EARLY_EXIT_WINDOW_MS = 3000;
 export const DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS = 30_000;
 // A launch that shows no sign of life is relaunched on its own this many times; the next stall stays failed.
 const MAX_AUTOMATIC_LAUNCH_RETRIES = 1;
+export interface LastProcessExit {
+  /** Milliseconds between the launch and the exit of the process. */
+  lifetimeMs: number;
+  /** Bytes the pty sent before the process ended. */
+  outputBytes: number;
+}
 const SIGNAL_EXIT_CODE_BASE = 128;
 const CLI_NOT_FOUND_HINT = 'Check that the claude CLI is installed and on the PATH the daemon runs with.';
 const REOPEN_HINT = 'reopen the session to resume the conversation.';
@@ -473,8 +479,10 @@ export class SessionService {
   // Cancels the wait a SessionEnd close gives the CLI to exit on its own (shutdown, a user close, the exit itself).
   private readonly cancelSessionEndGraces = new Map<string, () => void>();
   private readonly launchedAtBySessionId = new Map<string, number>();
+  private readonly lastExitBySessionId = new Map<string, LastProcessExit>();
   // Children their own parent asked to close, until the close lands: the parent already knows they ended.
   private readonly idsClosingByParent = new Set<string>();
+  private readonly closeRequestListeners = new Set<(sessionId: string) => void>();
   // The prompt the daemon handed each session at launch (a brief or a mission), for the process lifetime: a resume never replays it.
   private readonly seededPromptBySessionId = new Map<string, string>();
 
@@ -1014,6 +1022,11 @@ export class SessionService {
     this.launchedAtBySessionId.set(sessionId, this.now());
     handle.onExit((exitCode, { wasConversationNotFound }) => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // a stale process we already replaced
+      const launchedAt = this.launchedAtBySessionId.get(sessionId);
+      this.lastExitBySessionId.set(sessionId, {
+        lifetimeMs: launchedAt === undefined ? 0 : this.now() - launchedAt,
+        outputBytes: this.runtime.outputBytesOfLastEndedLaunch(sessionId) ?? 0,
+      });
       const reasonOfExit = this.reasonOfProcessExit(sessionId, exitCode);
       const isRefusedResume = wasConversationNotFound && reasonOfExit === 'harness_exit';
       this.markClosed(sessionId, { exitCode, reason: isRefusedResume ? 'conversation_not_found' : reasonOfExit });
@@ -1359,6 +1372,12 @@ export class SessionService {
 
 
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
+  /** Calls the listener each time a close is requested for a session, including one already closed, which emits no session.closed. */
+  onCloseRequested(listener: (sessionId: string) => void): () => void {
+    this.closeRequestListeners.add(listener);
+    return () => { this.closeRequestListeners.delete(listener); };
+  }
+
   isClosingByParent(sessionId: string): boolean {
     return this.idsClosingByParent.has(sessionId);
   }
@@ -1366,6 +1385,7 @@ export class SessionService {
   async close(sessionId: string, options?: { escalateAfterMs?: number; closedByParent?: boolean; cause?: CloseCause }): Promise<void> {
     const isSessionEndOfACloseAlreadyRequested = options?.cause === 'session_end' && this.isCloseRequested(sessionId);
     if (isSessionEndOfACloseAlreadyRequested) return;
+    this.closeRequestListeners.forEach((listener) => listener(sessionId));
     if (options?.closedByParent) this.idsClosingByParent.add(sessionId);
     const isExplicitClose = options?.cause === undefined;
     if (isExplicitClose) this.idsClosingForDaemonShutdown.delete(sessionId); // someone asked: the close is theirs, not the shutdown's
@@ -1481,6 +1501,10 @@ export class SessionService {
     return this.hasLiveLaunch(id) ? this.runtime.progress(id, this.trustedTranscriptFileOf(id)) : undefined;
   }
   setRuntimeAttention(id: string, attention: RuntimeAttention | undefined): void { this.runtime.setAttention(id, attention); }
+  /** How long the last process of the session lived and how many bytes its pty sent; undefined while no process exited since the daemon started. */
+  lastProcessExitOf(id: string): LastProcessExit | undefined { return this.lastExitBySessionId.get(id); }
+  /** Marks a closed session whose restart the daemon is waiting to make: its snapshot reads `restartPending`. */
+  setRestartPending(id: string, isPending: boolean): void { this.runtime.setRestartPending(id, isPending); }
   directoryRealpathOf(id: string): string | null | undefined { return this.repo.directoryRealpath(id); }
   /** Returns true when the prompt is the one the daemon launched the session with; the CLI may append to it. */
   isSeededPrompt(sessionId: string, prompt: string): boolean {

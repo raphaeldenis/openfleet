@@ -57,6 +57,8 @@ import { KnowledgeSearchService } from './knowledge/knowledgeSearchService.js';
 import { loadModelTable } from './models.js';
 import { DocsFolderService } from './notes/docsFolderService.js';
 import { registerHandoffOnClose } from './notes/handoffService.js';
+import { ChildAutoRestarter } from './managers/childAutoRestarter.js';
+import { ChildRestartLedger } from './managers/childRestartLedger.js';
 import { loadHandoffSettings } from './notes/handoffSettings.js';
 import { DocsRootSettings } from './notes/docsRootSettings.js';
 import { expandMentions } from './notes/mentionExpander.js';
@@ -128,6 +130,11 @@ export interface DaemonOptions {
   commandPolicy?: { settings?: CommandPolicySettings; evaluate?: PolicyEvaluate };
   /** Overrides the delay after which an undecided approval expires, so a test does not wait the nine minutes of the hook timeout. */
   approvalTimeoutMs?: number;
+  /** Replaces the clock and the timer of the automatic child restarts, so a test does not wait their delays. */
+  childRestart?: {
+    clock?: () => number;
+    schedule?: (callback: () => void, delayMs: number) => () => void;
+  };
   power?: {
     api?: PowerApi;
     clock?: () => number;
@@ -190,6 +197,10 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds, deniedCommandCountsOf, currentBase: shippedManagerBase,
     scapeImportStatusOf: (sessionId) => scapeImportStatusOfManager(db, sessionId),
     linkTargets: { noteProjectId: (noteId) => noteRepo.getProjectId(noteId), storeProjectId: (storeId) => storeRepo.findStore(storeId)?.projectId },
+  });
+  const childAutoRestarter = new ChildAutoRestarter({
+    bus, sessions, managers: managerRepository, ledger: new ChildRestartLedger(db),
+    clock: options.childRestart?.clock ?? Date.now, schedule: options.childRestart?.schedule ?? scheduleOnRealClock,
   });
   const governanceQueue = new GovernanceQueueService({
     db, bus, clock: () => new Date().toISOString(), newId,
@@ -287,6 +298,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     unwatchDatabase();
     pulseScheduler.stop();
     scheduledEvents.stop();
+    childAutoRestarter.stop();
     contextNotice.stop();
     silentBlocks.stop();
     stopHandoffOnClose();

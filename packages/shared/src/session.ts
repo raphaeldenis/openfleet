@@ -104,6 +104,8 @@ export interface Session {
   /** Absent for a session launched before readiness was tracked. A launch that produced no sign of life is failed, whatever its state says. */
   readiness?: SessionReadiness;
   readinessReason?: ReadinessFailureReason;
+  /** True while the daemon waits to restart this closed child after a crash; absent otherwise. */
+  restartPending?: boolean;
   exitCode?: number;
   /** Why the session is closed; absent while it is live, for a close recorded before the reason was stored, and for a reason this version does not know. */
   closeReason?: SessionCloseReason;

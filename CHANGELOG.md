@@ -2,6 +2,20 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 8 — 2026-10-29
+
+PARITY-ARGUS-07a, automatic restart of crashed children. No tool is added; the answer of `get_argus_status` changes.
+
+- `get_argus_status`: `manager.childAutoRestart` (boolean, default `false`) tells whether the daemon restarts a child of the manager that crashed on its own; each entry of `children` carries `restartPending` (boolean), true while the daemon waits to restart that closed child. A child waiting for its restart counts against `children_cap`.
+- The `Session` view of the REST API carries the optional `restartPending` field with the same meaning; `PATCH /api/managers/:id` accepts `childAutoRestart`.
+- The daemon tells the manager through its message queue, with a daemon line (no sender) that starts with `[child_restarted]`, `[child_restart_exhausted]` or `[harness_exited]`.
+
+Tools added: none.
+Tools changed: `get_argus_status` (answer shape only).
+Migrations: `050_child_auto_restart`: `managers.child_auto_restart`, table `child_restarts`.
+
+The guard test pins input schemas only, so it does not see the output fields; the pin changes only in its `contractVersion`.
+
 ## 7 — 2026-10-29
 
 Scheduled manager events: a manager sends a message to itself at a chosen time.

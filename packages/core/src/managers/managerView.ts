@@ -24,6 +24,7 @@ export function toManagerView(record: ManagerRecord, childrenCount: number, deni
     sessionId: record.sessionId,
     pulseSeconds: record.pulseSeconds,
     pulseEnabled: isPulseEnabled(record),
+    childAutoRestart: record.childAutoRestart === true,
     childrenCap: record.childrenCap,
     missionText: record.missionText,
     legacyMission: isLegacyMission(record.missionText),
