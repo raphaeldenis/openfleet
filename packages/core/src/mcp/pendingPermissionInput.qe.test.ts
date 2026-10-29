@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -7,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
 import { FakeHarness, type FakeHandle } from '../harness/fakeHarness.js';
+import { makeRepo } from '../git/testRepo.js';
+import { childEnvironmentForGit } from '../process/childEnvironment.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 import { PENDING_PERMISSION_INPUT_LIMIT, PENDING_PERMISSION_TRUNCATION_MARKER } from './pendingPermissionView.js';
@@ -39,9 +42,13 @@ async function connectAs(sessionId: string): Promise<Client> {
   return client;
 }
 
-const childDirectory = (name: string) => {
+const git = (cwd: string, ...args: string[]) =>
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, env: childEnvironmentForGit(process.env), encoding: 'utf8' }).trim();
+
+const worktreeOf = (projectRepository: string, name: string) => {
   const directory = join(config.worktreesRoot, name);
-  mkdirSync(directory, { recursive: true });
+  mkdirSync(config.worktreesRoot, { recursive: true });
+  git(projectRepository, 'worktree', 'add', '-b', name, directory);
   return directory;
 };
 
@@ -51,14 +58,15 @@ interface ManagerAndChild { client: Client; managerId: string; childId: string; 
 
 /** A manager (read through MCP) and its child, whose CLI the fake harness drives through the real PermissionRequest hook. */
 async function managerWithChild(): Promise<ManagerAndChild> {
-  const created = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'Root', harness: 'fake', emoji: '🧭' }) })).json()) as { id: string };
+  const projectRepository = makeRepo();
+  const created = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: projectRepository, name: 'Root', harness: 'fake', emoji: '🧭' }) })).json()) as { id: string };
   new ProjectRepository(daemon.db).insert({ id: 'p1', name: 'One', docsFolderPath: null, createdAt: 't0' });
   daemon.db.prepare('UPDATE sessions SET project_id = ? WHERE id = ?').run('p1', created.id);
   const root = await connectAs(created.id);
-  const lead = JSON.parse(rawText(await root.callTool({ name: 'create_session', arguments: { directory: childDirectory('lead'), name: 'Lead', manager: { pulse_seconds: 3600, children_cap: 2, mission: 'm' } } })));
+  const lead = JSON.parse(rawText(await root.callTool({ name: 'create_session', arguments: { directory: worktreeOf(projectRepository, 'lead'), name: 'Lead', manager: { pulse_seconds: 3600, children_cap: 2, mission: 'm' } } })));
   const client = await connectAs(lead.id);
   await client.callTool({ name: 'get_manager_base', arguments: {} });
-  const child = JSON.parse(rawText(await client.callTool({ name: 'create_session', arguments: { directory: childDirectory('worker'), name: 'Worker' } })));
+  const child = JSON.parse(rawText(await client.callTool({ name: 'create_session', arguments: { directory: worktreeOf(projectRepository, 'worker'), name: 'Worker' } })));
   const handle = fakeHarness().handles.at(-1)!;
   // The test daemon listens on an ephemeral port, which the launch's hook URL does not carry.
   handle.hookUrl = `${daemon.server.url}${new URL(handle.hookUrl!).pathname}`;
