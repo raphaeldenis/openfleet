@@ -52,6 +52,9 @@ const NUMBER_COLUMN_WIDTH_REM = 3;
   `,
   styles: `
     .grid { border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); overflow-x: auto; overflow-y: hidden }
+    .grid::-webkit-scrollbar { height: .5rem }
+    .grid::-webkit-scrollbar-track { background: var(--sunk) }
+    .grid::-webkit-scrollbar-thumb { background: var(--mut); border-radius: .25rem }
     .header, .row {
       display: flex; min-width: var(--grid-min-width); box-sizing: border-box;
       padding: 0 .75rem; align-items: center; border-bottom: 1px solid var(--line);

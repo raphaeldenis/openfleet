@@ -74,6 +74,23 @@ test('the Docs folder root row of General shows the root read from the daemon in
   await expect(page.getByTestId('general-docs-root-save')).not.toHaveAttribute('aria-disabled', 'true');
 });
 
+for (const viewport of [{ width: 1200, height: 800 }, { width: 1440, height: 900 }]) {
+  test(`the Docs folder root field takes the room left by the Save button at ${viewport.width}×${viewport.height}`, async ({ page }) => {
+    const MINIMUM_FIELD_WIDTH = 400;
+    await page.setViewportSize(viewport);
+    await openSettings(page);
+
+    const docsRoot = page.getByTestId('general-docs-root');
+    await expect(docsRoot).toBeEnabled();
+    const fieldWidth = (await docsRoot.boundingBox())!.width;
+    const saveButtonRight = (await page.getByTestId('general-docs-root-save').boundingBox())!;
+    const rowRight = (await page.getByTestId('general-docs-root').locator('xpath=ancestor::of-settings-row').boundingBox())!;
+
+    expect(fieldWidth).toBeGreaterThanOrEqual(MINIMUM_FIELD_WIDTH);
+    expect(saveButtonRight.x + saveButtonRight.width).toBeLessThanOrEqual(rowRight.x + rowRight.width);
+  });
+}
+
 test('the Daemon section shows the log and the hand-edited config file as read-only text', async ({ page }) => {
   await openSettings(page);
 

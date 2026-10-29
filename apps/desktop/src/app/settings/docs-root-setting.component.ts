@@ -14,7 +14,7 @@ const UNREADABLE: UnavailableSetting = { testId: 'general-docs-root', value: 'â€
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [SettingsRowComponent, ErrorLineComponent],
   template: `
-    <of-settings-row name="Docs folder root" detail="Each project gets <root>/<project>/ with specs, plans, handoffs, reports" [unavailable]="unavailableSetting()">
+    <of-settings-row layout="stacked" name="Docs folder root" detail="Each project gets <root>/<project>/ with specs, plans, handoffs, reports" [unavailable]="unavailableSetting()">
       <div class="editor">
         <div class="controls">
           <input class="value mono" type="text" data-testid="general-docs-root" aria-label="Docs folder root" [value]="draft()" [readonly]="isSaving()" [attr.aria-invalid]="failureText() ? 'true' : null" (input)="edit($event)" (keydown.enter)="save()" />
@@ -32,7 +32,7 @@ const UNREADABLE: UnavailableSetting = { testId: 'general-docs-root', value: 'â€
   styles: `
     ${SETTINGS_VALUE_STYLES}
     :host { display: block; border-bottom: 1px solid var(--line); }
-    .editor { flex: 0 1 26rem; min-width: 0; display: flex; flex-direction: column; gap: .375rem; align-items: flex-end; }
+    .editor { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: .375rem; align-items: flex-end; }
     .controls { width: 100%; display: flex; gap: .5rem; }
     input.value { flex: 1; min-width: 0; }
     button.value { flex: none; }

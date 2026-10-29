@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { readE2eAdminToken } from '../../../scripts/e2e/e2eHome';
-import { api } from './support/daemon';
+import { api, fulfillWithJson, interceptDaemonGet } from './support/daemon';
 
 const token = readE2eAdminToken();
 
@@ -112,6 +112,63 @@ for (const theme of THEMES) {
       await page.getByRole('option', { name: /bypassPermissions/ }).click();
 
       await expectDangerButtonReadable(page, 'permission-mode-bypass-confirm');
+    });
+  }
+}
+
+for (const theme of THEMES) {
+  for (const viewport of VIEWPORTS) {
+    test(`the Back to Sessions link of the 404 page takes the accent token and reaches 4.5:1 under the ${theme} theme at ${viewport.width}×${viewport.height}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.addInitScript(([adminToken, apiUrl, chosenTheme]) => {
+        localStorage.setItem('openfleet.adminToken', adminToken);
+        localStorage.setItem('openfleet.apiUrl', apiUrl);
+        document.documentElement.setAttribute('data-theme', chosenTheme);
+      }, [token, api, theme satisfies Theme]);
+
+      await page.goto('/no-such-page');
+      await page.evaluate((chosenTheme) => document.documentElement.setAttribute('data-theme', chosenTheme), theme);
+
+      const backLink = page.getByTestId('not-found').getByRole('link', { name: 'Back to Sessions' });
+      await expect(backLink).toBeVisible();
+      await expect(backLink).toHaveCSS('color', await resolveTokenFillColor(page, '--accent'));
+      expect(await measureContrastRatio(page, '[data-testid="not-found"] a')).toBeGreaterThanOrEqual(MINIMUM_TEXT_CONTRAST);
+    });
+  }
+}
+
+const WARNED_PROJECT = {
+  id: '3f2b8c1e-5d4a-4b6e-9a7c-1d2e3f4a5b6c',
+  name: 'Fleet',
+  docsFolderPath: '/work/fleet-docs',
+  docsFolderSharedWith: ['Armada'],
+  rowGuardWarning: 'The row guard does not check "done needs a pr_url" on a status column that is not a select.',
+};
+
+for (const theme of THEMES) {
+  for (const viewport of VIEWPORTS) {
+    test(`the project warnings of Settings sit inside the project card, aligned with its name and reach 4.5:1 under the ${theme} theme at ${viewport.width}×${viewport.height}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.addInitScript(([adminToken, apiUrl, chosenTheme]) => {
+        localStorage.setItem('openfleet.adminToken', adminToken);
+        localStorage.setItem('openfleet.apiUrl', apiUrl);
+        document.documentElement.setAttribute('data-theme', chosenTheme);
+      }, [token, api, theme satisfies Theme]);
+      await interceptDaemonGet(page, '/api/projects', (route) => fulfillWithJson(route, 200, { items: [WARNED_PROJECT], total: 1, limit: 200, offset: 0 }));
+
+      await page.goto('/settings?tab=general');
+      await page.evaluate((chosenTheme) => document.documentElement.setAttribute('data-theme', chosenTheme), theme);
+
+      const card = page.getByTestId('project-card');
+      const projectName = card.getByText('Fleet', { exact: true });
+      await expect(projectName).toBeVisible();
+      for (const warningTestId of ['project-row-guard-warning', 'project-shared-folder-warning']) {
+        const warning = card.getByTestId(warningTestId);
+        await expect(warning).toBeVisible();
+        const warningTextLeft = (await warning.boundingBox())!.x + parseFloat(await warning.evaluate((element) => getComputedStyle(element).paddingLeft));
+        expect(warningTextLeft).toBeCloseTo((await projectName.boundingBox())!.x, 0);
+        expect(await measureContrastRatio(page, `[data-testid="${warningTestId}"]`)).toBeGreaterThanOrEqual(MINIMUM_TEXT_CONTRAST);
+      }
     });
   }
 }

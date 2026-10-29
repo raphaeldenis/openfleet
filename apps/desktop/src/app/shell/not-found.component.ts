@@ -13,6 +13,8 @@ import { RouterLink } from '@angular/router';
   `,
   styles: `
     .empty { flex: 1; display: flex; flex-direction: column; gap: .5rem; align-items: center; justify-content: center; color: var(--mut); text-align: center; padding: 2rem; }
+    a { color: var(--accent); text-decoration: none }
+    a:hover, a:focus-visible { text-decoration: underline }
   `,
 })
 export class NotFoundComponent {}

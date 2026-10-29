@@ -14,6 +14,7 @@ let nextReasonSequence = 0;
 @Component({
   selector: 'of-settings-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { '[attr.data-layout]': 'layout()' },
   template: `
     <div class="label">
       <span class="name">{{ name() }}</span>
@@ -34,6 +35,8 @@ let nextReasonSequence = 0;
     ${SETTINGS_VALUE_STYLES}
     :host { display: flex; align-items: center; gap: 1rem; padding: .75rem 1rem; border-bottom: 1px solid var(--line); }
     :host(:last-child) { border-bottom: 0; }
+    :host([data-layout='stacked']) { flex-wrap: wrap; }
+    :host([data-layout='stacked']) .label { flex-basis: 100%; }
     .label { flex: 1 0 12rem; display: flex; flex-direction: column; }
     .name { font-weight: 500; }
     .detail { font-size: .75rem; color: var(--mut); overflow-wrap: anywhere; }
@@ -46,6 +49,8 @@ export class SettingsRowComponent {
   readonly name = input.required<string>();
   readonly detail = input<string>();
   readonly unavailable = input<UnavailableSetting>();
+  /** `stacked` puts the projected value under the label on the full row width, for values that need room such as paths. */
+  readonly layout = input<'inline' | 'stacked'>('inline');
 
   protected readonly reasonId = `settings-row-reason-${nextReasonSequence++}`;
 }

@@ -38,6 +38,7 @@ async function renderSettings(api: ReturnType<typeof fakeApi>) {
 const projectsSection = () => screen.getByTestId('settings-projects');
 const createTrigger = () => screen.getByRole('button', { name: 'Create a project…' });
 const rowOf = (name: string) => within(projectsSection()).getByText(name).closest('of-settings-row') as HTMLElement;
+const cardOf = (name: string) => rowOf(name).closest('[data-testid="project-card"]') as HTMLElement;
 const editTriggerOf = (name: string) => screen.getByRole('button', { name: `Edit docs folder of ${name}` });
 const nameField = () => screen.getByRole<HTMLInputElement>('textbox', { name: 'Name' });
 const docsFolderField = () => screen.getByRole<HTMLInputElement>('textbox', { name: 'Docs folder' });
@@ -60,6 +61,7 @@ describe('Settings → General → Projects', () => {
 
       expect(warning).toHaveTextContent('This docs folder is also used by Armada, Fleet bis');
       expect(screen.getAllByTestId('project-shared-folder-warning')).toHaveLength(1);
+      expect(within(cardOf('Fleet')).getByTestId('project-shared-folder-warning')).toBe(warning);
     });
 
     it('shows the row guard warning of a project under its row', async () => {
@@ -70,6 +72,8 @@ describe('Settings → General → Projects', () => {
 
       expect(shown).toHaveTextContent(warning);
       expect(screen.getAllByTestId('project-row-guard-warning')).toHaveLength(1);
+      expect(within(cardOf('Fleet')).getByTestId('project-row-guard-warning')).toBe(shown);
+      expect(within(cardOf('Armada')).queryByTestId('project-row-guard-warning')).not.toBeInTheDocument();
     });
 
     it('shows a very long docs folder path in full, so that the user can read it', async () => {
