@@ -55,4 +55,7 @@ The floor classes (`computeFloorClasses`) are a heuristic on paths and keywords.
 ## Limits
 
 - Two batches of one ticket that reuse the same `question_id` in the same open escalation share one answer: the answer applies to both.
-- The `[esc:<id>]` item stays in `questions_for_human` after the answer; the manager removes it with `update_working_state`.
+- The `[esc:<id>]` item stays in `questions_for_human` after the answer; the manager removes it with `update_working_state`. The desktop UI hides the answered `[esc:<id>]` items.
+- The arbiter's decision binds. The reopening of a decision (one reopen with new evidence, then an `arbiter_dispute` to the human, decision F8A of the design) is not built: a manager that disagrees with the arbiter raises it to the human through a new question of an escalating class.
+- The touched paths of a question are the `paths` the manager provides, and only those. The daemon does not read the git diff of the ticket worktree, so a file the plan touches but the manager does not list is not scanned by the floor classes.
+- The ticket is an identifier of letters, digits, dots, underscores and hyphens, at most 40 characters; any other text is refused with `invalid_body`.
