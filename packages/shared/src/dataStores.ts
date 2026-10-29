@@ -207,6 +207,6 @@ export type InsertRowsRequest = z.infer<typeof InsertRowsRequestSchema>;
 
 export const UpdateRowsRequestSchema = z.object({
   projectId: z.string().min(1),
-  updates: z.array(z.object({ rowId: z.string().min(1), patch: CellsSchema })).max(MAX_ROW_BATCH),
+  updates: z.array(z.object({ rowId: z.string().min(1), patch: CellsSchema, expectedRev: z.number().int().positive().optional() })).max(MAX_ROW_BATCH),
 });
 export type UpdateRowsRequest = z.infer<typeof UpdateRowsRequestSchema>;
