@@ -59,11 +59,12 @@ async function renderFormWhoseFirstNavigationFails(api = fakeApi()) {
 }
 
 const radio = (name: string) => screen.getByRole('radio', { name });
+const modelRadio = (rung: string) => within(screen.getByRole('radiogroup', { name: 'Model rung' })).getByRole('radio', { name: rung });
 const submitButton = () => screen.getByTestId('new-session-submit');
 const formError = () => screen.queryByTestId('new-session-form-error');
 const nextMacrotask = () => new Promise((resolve) => setTimeout(resolve));
 const focusModelSelectThenTabIntoPermissionModes = async () => {
-  screen.getByTestId('new-session-model').focus();
+  modelRadio('sonnet').focus();
   await userEvent.tab();
 };
 
@@ -95,7 +96,7 @@ describe('NewSessionFormComponent', () => {
       await fillSessionFields();
       await userEvent.clear(screen.getByTestId('new-session-emoji'));
       await userEvent.type(screen.getByTestId('new-session-emoji'), '⚔️');
-      await userEvent.selectOptions(screen.getByTestId('new-session-model'), 'opus');
+      await userEvent.click(modelRadio('opus'));
       await userEvent.click(submitButton());
 
       expect(api.createSession).toHaveBeenCalledWith({
@@ -424,7 +425,7 @@ describe('NewSessionFormComponent', () => {
     it('user toggling to manager and back keeps every typed value', async () => {
       await renderForm(fakeApi());
       await fillSessionFields();
-      await userEvent.selectOptions(screen.getByTestId('new-session-model'), 'opus');
+      await userEvent.click(modelRadio('opus'));
       await userEvent.click(radio('plan'));
       await userEvent.click(screen.getByTestId('new-session-mode-manager'));
       await setNumberField('manager-pulse-seconds', '900');
@@ -439,14 +440,14 @@ describe('NewSessionFormComponent', () => {
       expect(screen.getByTestId('manager-children-cap')).toHaveValue(4);
       expect(screen.getByTestId('new-session-directory')).toHaveValue('/tmp/wt');
       expect(screen.getByTestId('new-session-name')).toHaveValue('Gimli');
-      expect(screen.getByTestId('new-session-model')).toHaveValue('opus');
+      expect(modelRadio('opus')).toBeChecked();
       expect(radio('plan')).toBeChecked();
     });
 
     it('a model picked in session mode survives the round trip through manager mode into the manager payload', async () => {
       const api = fakeApi();
       await renderForm(api);
-      await userEvent.selectOptions(screen.getByTestId('new-session-model'), 'fable');
+      await userEvent.click(modelRadio('fable'));
       await userEvent.click(screen.getByTestId('new-session-mode-manager'));
       await fillSessionFields({ name: 'Lead' });
       await fillManagerMission();
@@ -749,13 +750,13 @@ describe('NewSessionFormComponent', () => {
     it('user can only pick Claude Code as harness, the others are shown as not available yet', async () => {
       await renderForm(fakeApi());
 
-      const harnessOptions = Array.from(screen.getByTestId('new-session-harness').querySelectorAll('option'));
-      const enabledLabels = harnessOptions.filter((option) => !option.disabled).map((option) => option.value);
-      const disabledOptions = harnessOptions.filter((option) => option.disabled);
+      const harnessCards = within(screen.getByRole('radiogroup', { name: 'Harness' })).getAllByRole('radio');
+      const enabledValues = harnessCards.filter((card) => !(card as HTMLInputElement).disabled).map((card) => card.getAttribute('value'));
+      const disabledCards = harnessCards.filter((card) => (card as HTMLInputElement).disabled);
 
-      expect(enabledLabels).toEqual(['claude-cli']);
-      expect(disabledOptions.length).toBe(3);
-      disabledOptions.forEach((option) => expect(option).toHaveAttribute('title', 'not available yet'));
+      expect(enabledValues).toEqual(['claude-cli']);
+      expect(disabledCards.length).toBe(3);
+      disabledCards.forEach((card) => expect(card.closest('label')).toHaveAttribute('title', 'not available yet'));
     });
 
     it.each([
@@ -768,7 +769,7 @@ describe('NewSessionFormComponent', () => {
       await fillSessionFields({ name: 'Lead' });
       if (isManager) await fillManagerMission();
 
-      await userEvent.selectOptions(screen.getByTestId('new-session-model'), rung);
+      await userEvent.click(modelRadio(rung));
       await userEvent.click(submitButton());
 
       const createCall = isManager ? api.createManagerSession : api.createSession;
@@ -1383,13 +1384,14 @@ describe('NewSessionFormComponent', () => {
       resolveCreate({ id: 's-new' });
     });
 
-    it('the model select keeps the value the create was sent with while it is pending', async () => {
+    it('the model rung keeps the value the create was sent with while it is pending', async () => {
       const { resolveCreate } = await renderFormWithPendingCreate();
       await userEvent.click(submitButton());
 
-      await userEvent.selectOptions(screen.getByTestId('new-session-model'), 'opus');
+      await userEvent.click(modelRadio('opus'));
 
-      expect(screen.getByTestId('new-session-model')).toHaveValue('sonnet');
+      expect(modelRadio('sonnet')).toBeChecked();
+      expect(modelRadio('opus')).not.toBeChecked();
       resolveCreate({ id: 's-new' });
     });
 
@@ -1433,7 +1435,7 @@ describe('NewSessionFormComponent', () => {
 
       expect(create).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'plan' }));
       expect(radio('plan')).toHaveFocus();
-      screen.getAllByRole('radio').forEach((each) => {
+      within(screen.getByRole('radiogroup', { name: /permission mode/i })).getAllByRole('radio').forEach((each) => {
         expect(each).not.toHaveAttribute('disabled');
         expect(each).toHaveAttribute('aria-disabled', 'true');
       });
@@ -1700,8 +1702,8 @@ describe('NewSessionFormComponent', () => {
       ['textbox', /directory/i],
       ['textbox', /name/i],
       ['textbox', /emoji/i],
-      ['combobox', /harness/i],
-      ['combobox', /model/i],
+      ['radiogroup', /harness/i],
+      ['radiogroup', /model rung/i],
       ['radiogroup', /permission mode/i],
       ['spinbutton', /pulse cadence/i],
       ['spinbutton', /children cap/i],

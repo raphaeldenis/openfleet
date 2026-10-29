@@ -6,6 +6,7 @@ import { ActivatedRoute, type ParamMap, Router, RouterLink } from '@angular/rout
 import { type HarnessId, type Project, type Session } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { ErrorLineComponent } from '../design/error-line.component';
+import { type ChoiceCard, ChoiceCardsComponent } from './choice-cards.component';
 import { ManagerFieldsComponent } from '../managers/manager-fields.component';
 import { ProjectFormComponent } from '../projects/project-form.component';
 import { createdButNotOpenedMessage, createSessionErrorMessage } from './create-session-error';
@@ -24,11 +25,11 @@ const NO_PROJECT_ID = '';
 const PROJECT_CREATED_NOTICE = 'Project created';
 const SESSION_DEFAULT_EMOJI = '🤖';
 const MANAGER_DEFAULT_EMOJI = '🧭';
-const HARNESS_OPTIONS: ReadonlyArray<{ id: string; label: string; isAvailable: boolean }> = [
-  { id: 'claude-cli', label: 'Claude Code', isAvailable: true },
-  { id: 'codex', label: 'Codex', isAvailable: false },
-  { id: 'opencode', label: 'opencode', isAvailable: false },
-  { id: 'generic-pty', label: 'Generic PTY', isAvailable: false },
+const HARNESS_CARDS: ReadonlyArray<ChoiceCard> = [
+  { value: 'claude-cli', label: 'Claude Code' },
+  { value: 'codex', label: 'Codex', isAvailable: false, unavailableReason: NOT_AVAILABLE_YET },
+  { value: 'opencode', label: 'opencode', isAvailable: false, unavailableReason: NOT_AVAILABLE_YET },
+  { value: 'generic-pty', label: 'Generic PTY', hint: 'any command', isAvailable: false, unavailableReason: NOT_AVAILABLE_YET },
 ];
 
 // A host page that embeds the form provides this in its view providers: it owns the heading, the way out and the kind
@@ -51,7 +52,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
 @Component({
   selector: 'of-new-session-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ErrorLineComponent, FormsModule, RouterLink, ManagerFieldsComponent, PermissionModeListComponent, ProjectFormComponent, HandoffPickerComponent],
+  imports: [ChoiceCardsComponent, ErrorLineComponent, FormsModule, RouterLink, ManagerFieldsComponent, PermissionModeListComponent, ProjectFormComponent, HandoffPickerComponent],
   host: { '[class.embedded]': 'isEmbedded' },
   template: `
     <form class="of-form" data-testid="new-session-form" [attr.aria-busy]="pending() || null" (ngSubmit)="submit()" novalidate>
@@ -96,28 +97,10 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
       @if (hasProjectsLoadFailed()) {
         <p class="project-note" role="status" data-testid="new-session-project-note">Couldn't load your projects. You can still create a session without one.</p>
       }
-      @if (!isManagerMode()) {
-        <of-handoff-picker [project]="selectedProject()" [file]="handoffFile()" [isLocked]="pending()" (fileChange)="handoffFile.set($event)" />
-      }
-
       <div class="of-section-title">Agent</div>
-      <label class="of-field">
-        <span class="of-label">Harness</span>
-        <select class="of-input" data-testid="new-session-harness" name="harness" [attr.disabled]="pending() ? '' : null" [ngModel]="harness()" (ngModelChange)="harness.set($event)">
-          @for (option of harnessOptions; track option.id) {
-            <option [value]="option.id" [disabled]="!option.isAvailable" [attr.title]="option.isAvailable ? null : notAvailableYet">{{ option.label }}</option>
-          }
-        </select>
-      </label>
+      <of-choice-cards class="of-field" data-testid="new-session-harness" label="Harness" [cards]="harnessCards" [value]="harness()" (valueChange)="chooseHarness($event)" [isLocked]="pending()" />
       <div class="of-row">
-        <label class="of-field">
-          <span class="of-label">Model</span>
-          <select class="of-input" data-testid="new-session-model" name="model" [attr.disabled]="pending() ? '' : null" [ngModel]="model()" (ngModelChange)="model.set($event)">
-            @for (rung of modelRungs; track rung) {
-              <option [value]="rung">{{ rung }}</option>
-            }
-          </select>
-        </label>
+        <of-choice-cards class="of-field" data-testid="new-session-model" label="Model rung" [cards]="modelCards" [(value)]="model" [isLocked]="pending()" />
         <of-permission-mode-list class="of-field" [(value)]="permissionMode" [isLocked]="pending()" />
       </div>
 
@@ -135,6 +118,10 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
           }
         </div>
       </div>
+
+      @if (!isManagerMode()) {
+        <of-handoff-picker [project]="selectedProject()" [file]="handoffFile()" [isLocked]="pending()" (fileChange)="handoffFile.set($event)" />
+      }
 
       @if (isManagerMode()) {
         <div class="of-section-title">Manager</div>
@@ -200,9 +187,8 @@ export class NewSessionFormComponent {
   private readonly projectSelect = viewChild<ElementRef<HTMLSelectElement>>('projectSelect');
   private readonly createProjectTrigger = viewChild<ElementRef<HTMLButtonElement>>('createProjectTrigger');
   private hasBeenDestroyed = false;
-  protected readonly harnessOptions = HARNESS_OPTIONS;
-  protected readonly notAvailableYet = NOT_AVAILABLE_YET;
-  protected readonly modelRungs = MODEL_RUNGS;
+  protected readonly harnessCards = HARNESS_CARDS;
+  protected readonly modelCards: ReadonlyArray<ChoiceCard> = MODEL_RUNGS.map((rung) => ({ value: rung, label: rung }));
   protected readonly noProjectLabel = NO_PROJECT_LABEL;
   protected readonly noProjectId = NO_PROJECT_ID;
 
@@ -315,6 +301,10 @@ export class NewSessionFormComponent {
     this.isCreatingProject.set(false);
     this.projectCreatedNotice.set(PROJECT_CREATED_NOTICE);
     this.focusAfterRender(() => this.projectSelect()?.nativeElement.focus());
+  }
+
+  protected chooseHarness(chosenHarness: string): void {
+    this.harness.set(chosenHarness as HarnessId);
   }
 
   protected chooseMode(chosenMode: CreationMode): void {
