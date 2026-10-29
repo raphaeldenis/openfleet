@@ -281,6 +281,35 @@ describe('the CI watch service', () => {
 
       expect(world.scheduled).toEqual([]);
     });
+
+    it('records no failure for a pull request unwatched while its poll was failing', async () => {
+      let failThePoll: (error: Error) => void = () => undefined;
+      const world = buildWorld({ snapshotOf: () => new Promise<PullRequestSnapshot>((_resolve, reject) => { failThePoll = reject; }) });
+      world.service.watch({ managerId: 'lead', ...pullRequest });
+      const recordError = vi.spyOn(world.repository, 'recordError');
+      const pollInFlight = world.service.pollOnce();
+
+      world.service.unwatch({ managerId: 'lead', ...pullRequest });
+      failThePoll(ghFailure('gh_timeout'));
+      await pollInFlight;
+
+      expect([world.service['retryAtOf'].size, world.service['failuresOf'].size, recordError.mock.calls.length]).toEqual([0, 0, 0]);
+    });
+
+    it('backs off a pull request whose registration check throws, and keeps polling the others', async () => {
+      const port = scriptedPort([open(['pending'])]);
+      const world = buildWorld(port);
+      world.service.watch({ managerId: 'lead', ...pullRequest });
+      world.service.watch({ managerId: 'lead', repo: 'acme/widgets', number: 8 });
+      const databaseIsLocked = () => { throw new Error('database is locked'); };
+      vi.spyOn(world.repository, 'activeOf').mockImplementationOnce(databaseIsLocked).mockImplementationOnce(databaseIsLocked);
+
+      await world.service.pollOnce();
+      const callsAfterFirstPass = port.calls;
+      await world.service.pollOnce();
+
+      expect([callsAfterFirstPass, port.calls]).toEqual([2, 3]);
+    });
   });
 
   describe('the polling loop', () => {
