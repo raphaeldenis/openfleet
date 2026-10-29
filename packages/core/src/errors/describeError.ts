@@ -72,6 +72,7 @@ const REOPEN_ENTRY_BY_CODE: Record<SessionReopenError['code'], Omit<Entry, 'code
 // A failed git command stays internal: its message is git's own output.
 const WORKTREE_ENTRY_BY_CODE: Record<WorktreeError['code'], (error: WorktreeError) => Entry | undefined> = {
   invalid_branch: asIs('invalid_branch_name'),
+  invalid_base_ref: asIs('invalid_body'),
   exists: () => ({ code: 'worktree_exists', message: 'the worktree already exists.' }),
   git_failed: () => undefined,
   directory_missing: () => ({ code: 'directory_missing', message: 'the repository directory does not exist.', hint: 'Check the repository path, then create the session again.' }),

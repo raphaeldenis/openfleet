@@ -125,6 +125,7 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['InvalidDocsFolderError', () => new InvalidDocsFolderError(), 'invalid_body'],
   ['HandoffNotFoundError', () => new HandoffNotFoundError('2026-10-04-gimli.md'), 'handoff_not_found'],
   ['WorktreeError invalid_branch', () => new WorktreeError('invalid_branch', 'invalid branch name: a b'), 'invalid_branch_name'],
+  ['WorktreeError invalid_base_ref', () => new WorktreeError('invalid_base_ref', 'base_ref must be the name of a branch or tag, or a commit sha, that already exists in this repository.'), 'invalid_body'],
   ['WorktreeError git_failed', () => new WorktreeError('git_failed', 'fatal: /w/a is not a repository'), 'internal_error'],
   ['WorktreeError exists',() => new WorktreeError('exists', 'worktree already exists: /w/a'), 'worktree_exists'],
   ['PayloadTooLargeError', () => new PayloadTooLargeError('body exceeds 1 bytes'), 'payload_too_large'],

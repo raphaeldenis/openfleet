@@ -1,5 +1,5 @@
 {
-  "contractVersion": 8,
+  "contractVersion": 9,
   "tools": [
     { "name": "add_data_store_column", "inputSchemaHash": "968cbac3975a27b9" },
     { "name": "append_to_note", "inputSchemaHash": "e8b3f62130a1ad87" },
@@ -10,7 +10,7 @@
     { "name": "create_data_store_view", "inputSchemaHash": "66973211394d9016" },
     { "name": "create_note", "inputSchemaHash": "c6d8b5c60615800d" },
     { "name": "create_session", "inputSchemaHash": "23433a56b3678baa" },
-    { "name": "create_worktree", "inputSchemaHash": "981891ec363357c5" },
+    { "name": "create_worktree", "inputSchemaHash": "ecaec3dce3161fbd" },
     { "name": "delete_data_store_column", "inputSchemaHash": "de7824b49327a8d6" },
     { "name": "delete_data_store_row", "inputSchemaHash": "889f97ed266a5ae1" },
     { "name": "delete_data_store_view", "inputSchemaHash": "95859637cd639a4e" },

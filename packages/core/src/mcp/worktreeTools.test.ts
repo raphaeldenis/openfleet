@@ -208,6 +208,37 @@ describe('create_worktree and the project post-create hook', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  describe('with base_ref', () => {
+    const createFromBaseRef = async (branchName: string, baseRef: string) =>
+      (await connect(leadToken)).callTool({ name: 'create_worktree', arguments: { repo_path: repoPath, branch_name: branchName, base_ref: baseRef } });
+    const anIntegrationBranchAhead = (): string => {
+      git(repoPath, 'branch', 'integration');
+      git(repoPath, 'checkout', 'integration');
+      git(repoPath, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'integration work');
+      git(repoPath, 'checkout', 'main');
+      return git(repoPath, 'rev-parse', 'integration').trim();
+    };
+
+    it('starts the worktree at the commit of the given branch', async () => {
+      const integrationSha = anIntegrationBranchAhead();
+
+      const result = await createFromBaseRef('task/based', 'integration');
+
+      expect(isError(result)).toBe(false);
+      expect(git(jsonOf<{ path: string }>(result).path, 'rev-parse', 'HEAD').trim()).toBe(integrationSha);
+    });
+
+    it.each(['no-such-ref', '', '-x', 'main\nintegration'])('refuses the base_ref %j with invalid_body, no path in the message, and creates nothing', async (baseRef) => {
+      const result = await createFromBaseRef('task/refused', baseRef);
+
+      expect(isError(result)).toBe(true);
+      expect(textOf(result)).toContain('error invalid_body');
+      expect(textOf(result)).toContain('base_ref');
+      expect(textOf(result)).not.toContain(repoPath);
+      expect(existsSync(join(worktreesRoot, 'task-refused'))).toBe(false);
+    });
+  });
+
   it('does not run the hook when the worktree could not be created', async () => {
     const marker = join(tempDirs.make('of-mcp-out-'), 'ran.txt');
     configureHook(aHookScript(`touch "${marker}"`));

@@ -2,6 +2,16 @@
 
 OpenFleet creates a git worktree per task (`create_worktree`, or `POST /api/sessions` with `repoPath` and `branchName`) under `<OPENFLEET_HOME>/worktrees`. This page covers what runs after creation and how worktrees are listed and removed.
 
+## Starting point (`base_ref`)
+
+`create_worktree` takes an optional `base_ref`: a branch, tag or commit sha that already exists in the repository. The new branch starts at the commit it resolves to, instead of the current HEAD of `repo_path`. A manager uses it to cut a worktree from an integration branch or from `origin/main` after a fetch.
+
+- Only a plain spelling is accepted: letters, digits, `.`, `_`, `-` and `/`, not starting with `-` or `.`. An empty ref, a ref with whitespace or control characters, a revision expression (`main~1`, `HEAD^`, `a:b`, `@{u}`) and a ref that names no commit are refused with `invalid_body`, before anything is created.
+- The ref is resolved by git with `rev-parse --verify --end-of-options` (no shell), and the worktree is cut from the resolved sha.
+- `base_ref` applies to a new branch. For a branch name that already exists the call is refused with `invalid_body`: the branch keeps its own commit.
+- The refusal message names neither the repository path nor the ref.
+- Without `base_ref`, nothing changes.
+
 ## Git hooks directory
 
 When the repository sets `core.hooksPath` to a relative path (husky: `.husky/_`), git looks for the hooks in that path inside each worktree. A generated, untracked directory such as `.husky/_` does not exist in a fresh worktree, and git then runs no hook at all, without any error: a push skips the pre-push checks.

@@ -30,6 +30,10 @@ Example: version 6 added `required`, `displayColumnId`, `config`, `displayWidth`
 
 One pull request that adds or changes tools does all three.
 
+## Example: an optional parameter
+
+`create_worktree` gained the optional `base_ref` at version 6. An added optional parameter is a changed input schema: the pin changed and the version rose by one, with the `CHANGELOG.md` section "6".
+
 ## The guard test
 
 `packages/core/src/mcp/contractGuard.test.ts` boots a real daemon, connects an MCP client as a manager and lists the tools. It sorts them by name and hashes each canonicalized input schema (object keys sorted; parameter descriptions included, the tool's own description not part of the input schema), then compares the result to `contract.pinned.json`. It fails when:

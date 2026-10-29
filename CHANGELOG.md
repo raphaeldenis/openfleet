@@ -2,6 +2,14 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 9 — 2026-10-29
+
+- TEAM-09, `create_worktree`: new optional `base_ref`, the branch, tag or commit sha the new branch starts from (default: the current HEAD of `repo_path`, unchanged). The ref must already resolve to a commit of the repository; it is checked with `git rev-parse --verify --end-of-options` and the worktree is cut from the resolved sha. Only plain branch, tag or sha spellings are accepted: an empty ref, a ref starting with `-`, a ref with whitespace or control characters, a revision expression (`~`, `^`, `:`, `@`), a range (`..`) or an unknown ref is refused with `invalid_body` before the worktree is created, and so is a `base_ref` given for a branch that already exists. The refusal names neither the repository path nor the ref.
+
+Tools added: none.
+Tools changed: `create_worktree` (input schema).
+Migrations: none.
+
 ## 8 — 2026-10-29
 
 PARITY-ARGUS-07a, automatic restart of crashed children. No tool is added; the answer of `get_argus_status` changes.

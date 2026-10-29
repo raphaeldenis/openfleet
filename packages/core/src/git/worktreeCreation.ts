@@ -30,7 +30,7 @@ export interface CreatedWorktree {
  * directory or a failing hook is reported as a warning and never fails the creation: the worktree exists whatever happened after.
  * A worktree that could not be created runs no hook.
  */
-export async function createWorktreeWithHook(input: { repoPath: string; branchName: string; worktreesRoot: string; env?: NodeJS.ProcessEnv; hook?: PostCreateHook }): Promise<CreatedWorktree> {
+export async function createWorktreeWithHook(input: { repoPath: string; branchName: string; baseRef?: string; worktreesRoot: string; env?: NodeJS.ProcessEnv; hook?: PostCreateHook }): Promise<CreatedWorktree> {
   const { path, branch } = await createWorktree(input);
   const hooksWarning = await provideHooksDirectory({ repoPath: input.repoPath, worktreePath: path, env: input.env });
   const hookWarning = input.hook && await runPostCreateHook({
