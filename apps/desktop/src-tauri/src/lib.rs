@@ -159,7 +159,7 @@ pub fn run() {
         let _ = window.hide();
       }
     })
-    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, open_external_url, read_desktop_log, save_diagnostics_bundle, reveal_diagnostics_bundle, show_native_notification, set_dock_badge])
+    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, open_external_url, read_desktop_log, diagnostics_bundle::project_daemon_records, save_diagnostics_bundle, reveal_diagnostics_bundle, show_native_notification, set_dock_badge])
     .setup(|app| {
       #[cfg(target_os = "macos")]
       focus_window_and_send_route_on_banner_click(app.handle().clone());
