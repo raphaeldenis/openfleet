@@ -11,6 +11,8 @@ export interface ProjectRecord {
   postCreateHookTimeoutSeconds?: number;
   /** Present and true when the project's rows are guarded; absent means off. */
   rowGuardEnabled?: true;
+  /** Present and true when the project's repository is shared with a team; absent means it is the fleet's own. */
+  sharedRepo?: true;
 }
 
 /** A field left out keeps its value; `null` clears the ones that can be cleared. */
@@ -20,11 +22,12 @@ export interface ProjectPatch {
   postCreateHookScript?: string | null;
   postCreateHookTimeoutSeconds?: number | null;
   rowGuardEnabled?: boolean;
+  sharedRepo?: boolean;
 }
 
 interface Row {
   id: string; name: string; docs_folder_path: string | null; created_at: string;
-  post_create_hook_script: string | null; post_create_hook_timeout_seconds: number | null; row_guard_enabled: number;
+  post_create_hook_script: string | null; post_create_hook_timeout_seconds: number | null; row_guard_enabled: number; shared_repo: number;
 }
 
 const toProject = (r: Row): ProjectRecord => ({
@@ -32,6 +35,7 @@ const toProject = (r: Row): ProjectRecord => ({
   ...(r.post_create_hook_script !== null && { postCreateHookScript: r.post_create_hook_script }),
   ...(r.post_create_hook_timeout_seconds !== null && { postCreateHookTimeoutSeconds: r.post_create_hook_timeout_seconds }),
   ...(r.row_guard_enabled === 1 && { rowGuardEnabled: true as const }),
+  ...(r.shared_repo === 1 && { sharedRepo: true as const }),
 });
 
 const keptWhenUndefined = <T>(patched: T | undefined, current: T): T => (patched === undefined ? current : patched);
@@ -50,13 +54,14 @@ export class ProjectRepository {
   update(id: string, patch: ProjectPatch): void {
     const current = this.get(id);
     if (!current) return;
-    this.db.prepare('UPDATE projects SET name = ?, docs_folder_path = ?, post_create_hook_script = ?, post_create_hook_timeout_seconds = ?, row_guard_enabled = ? WHERE id = ?')
+    this.db.prepare('UPDATE projects SET name = ?, docs_folder_path = ?, post_create_hook_script = ?, post_create_hook_timeout_seconds = ?, row_guard_enabled = ?, shared_repo = ? WHERE id = ?')
       .run(
         patch.name ?? current.name,
         patch.docsFolderPath ?? current.docsFolderPath,
         keptWhenUndefined(patch.postCreateHookScript, current.postCreateHookScript ?? null),
         keptWhenUndefined(patch.postCreateHookTimeoutSeconds, current.postCreateHookTimeoutSeconds ?? null),
         Number(keptWhenUndefined(patch.rowGuardEnabled, current.rowGuardEnabled === true)),
+        Number(keptWhenUndefined(patch.sharedRepo, current.sharedRepo === true)),
         id,
       );
   }

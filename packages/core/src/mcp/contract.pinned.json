@@ -1,5 +1,5 @@
 {
-  "contractVersion": 12,
+  "contractVersion": 13,
   "tools": [
     { "name": "add_data_store_column", "inputSchemaHash": "968cbac3975a27b9" },
     { "name": "append_to_note", "inputSchemaHash": "e8b3f62130a1ad87" },
@@ -47,8 +47,8 @@
     { "name": "query_data_store", "inputSchemaHash": "9bbbfe4951eb72f1" },
     { "name": "remove_worktree", "inputSchemaHash": "b7a9a88bad697a08" },
     { "name": "reorder_data_store_columns", "inputSchemaHash": "896dd316b4cfb029" },
-    { "name": "report_ship_verdict", "inputSchemaHash": "b266e2d9afc1aa9a" },
-    { "name": "report_step_finding", "inputSchemaHash": "768ec4ba9f1dfeac" },
+    { "name": "report_ship_verdict", "inputSchemaHash": "b78108a92677a909" },
+    { "name": "report_step_finding", "inputSchemaHash": "c0d0f0b4b711fff7" },
     { "name": "request_resource_access", "inputSchemaHash": "e1c54ea9715e4a93" },
     { "name": "restore_note_version", "inputSchemaHash": "6a64ff62fd86fdd0" },
     { "name": "schedule_argus_event", "inputSchemaHash": "1e1bc6a7ee1f2559" },

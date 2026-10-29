@@ -74,7 +74,12 @@ async function bootReviewerInDevWorktree(branch = 'CCM-123-verdict') {
   return { root, lead, leadClient, devDirectory, reviewer, reviewerClient: await connectAs(reviewer.id) };
 }
 
-const reportVerdict = (client: Client, verdict: { verdict: string; reasons: string[]; sha: string }) => client.callTool({ name: 'report_ship_verdict', arguments: verdict });
+const readInCode = (claim: string) => ({ claim, status: 'not_reproduced' });
+const provenClaim = (claim: string) => ({ claim, status: 'proven', command: 'pnpm vitest run migrate.test.ts', output: 'FAIL down migration\nexpected the table back' });
+const verifiedRun = { claim: 'adversarial: no blocking defect found', status: 'proven', command: 'pnpm test', output: '321 passed' };
+const fakeToken =['gh', 'p_'].join('') + 'abcdefghijklmnopqrstuvwxyz0123456789';
+const storedRepros = () => daemon.db.prepare('SELECT step, claim, repro_status AS status, repro_command AS command, repro_output AS output FROM review_finding_items ORDER BY id').all() as Record<string, unknown>[];
+const reportVerdict = (client: Client, verdict: { verdict: string; reasons: unknown[]; sha: string }) => client.callTool({ name: 'report_ship_verdict', arguments: verdict });
 const findingRows = () => daemon.db.prepare('SELECT ticket, step, severity, claim, sha, author_session_id AS authorSessionId, manager_session_id AS managerSessionId FROM review_findings ORDER BY id').all() as Record<string, unknown>[];
 const messagesQueuedFor = (sessionId: string) => (daemon.db.prepare("SELECT body, from_session_id AS fromSessionId FROM message_queue WHERE session_id = ? AND body LIKE '%[verdict]%'").all(sessionId) as { body: string; fromSessionId: string | null }[]);
 const verdictLinesOf = (body: string) => body.split('\n').filter((line) => line.startsWith('[verdict]'));
@@ -93,11 +98,11 @@ describe('QE — report_ship_verdict on a booted daemon', () => {
     const { reviewer, reviewerClient, lead, devDirectory } = await bootReviewerInDevWorktree();
     const head = headOf(devDirectory);
 
-    const result = await reportVerdict(reviewerClient, { verdict: 'go', reasons: [], sha: head });
+    const result = await reportVerdict(reviewerClient, { verdict: 'go', reasons: [verifiedRun], sha: head });
 
     expect(result.isError).toBeFalsy();
     expect(parsed(result)).toEqual({ recorded: true, gate: 'open' });
-    expect(findingRows()).toEqual([{ ticket: 'CCM-123', step: 'adversarial', severity: 'go', claim: '', sha: head, authorSessionId: reviewer.id, managerSessionId: lead.id }]);
+    expect(findingRows()).toEqual([{ ticket: 'CCM-123', step: 'adversarial', severity: 'go', claim: 'adversarial: no blocking defect found', sha: head, authorSessionId: reviewer.id, managerSessionId: lead.id }]);
     expect(messagesQueuedFor(lead.id)).toEqual([]);
   });
 
@@ -105,12 +110,13 @@ describe('QE — report_ship_verdict on a booted daemon', () => {
     const { leadClient, lead, reviewer, reviewerClient, devDirectory } = await bootReviewerInDevWorktree();
     const head = headOf(devDirectory);
 
-    const result = await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: ['migration 033 cannot be rolled back', 'the new env var is undocumented'], sha: head });
+    const result = await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: [provenClaim('migration 033 cannot be rolled back'), readInCode('the new env var is undocumented')], sha: head });
 
     expect(parsed(result)).toEqual({ recorded: true, gate: 'blocked' });
     expect(findingRows()).toMatchObject([{ ticket: 'CCM-123', severity: 'no-go', claim: 'migration 033 cannot be rolled back; the new env var is undocumented', sha: head }]);
     const [message] = messagesQueuedFor(lead.id);
-    expect(verdictLinesOf(message!.body)).toEqual([`[verdict] no-go CCM-123 @ ${head.slice(0, 8)}: migration 033 cannot be rolled back; the new env var is undocumented`]);
+    expect(verdictLinesOf(message!.body)).toEqual([`[verdict] no-go CCM-123 @ ${head.slice(0, 8)}: migration 033 cannot be rolled back [PROUVÉ]; the new env var is undocumented [NON REPRODUIT]`]);
+    expect(message!.body).not.toContain('expected the table back');
     expect(message!.fromSessionId).toBe(reviewer.id);
     const status = parsed(await leadClient.callTool({ name: 'get_argus_status', arguments: {} }));
     expect(status.blockedTickets).toEqual([{ ticket: 'CCM-123', sha: head, reasons: ['migration 033 cannot be rolled back', 'the new env var is undocumented'] }]);
@@ -119,10 +125,10 @@ describe('QE — report_ship_verdict on a booted daemon', () => {
 
   it('a later go on the new head lifts the ticket from blockedTickets', async () => {
     const { leadClient, reviewerClient, devDirectory } = await bootReviewerInDevWorktree();
-    await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: ['broken'], sha: headOf(devDirectory) });
+    await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: [readInCode('broken')], sha: headOf(devDirectory) });
     commitIn(devDirectory);
 
-    await reportVerdict(reviewerClient, { verdict: 'go', reasons: [], sha: headOf(devDirectory) });
+    await reportVerdict(reviewerClient, { verdict: 'go', reasons: [verifiedRun], sha: headOf(devDirectory) });
 
     const status = parsed(await leadClient.callTool({ name: 'get_argus_status', arguments: {} }));
     expect(status.blockedTickets).toEqual([]);
@@ -141,7 +147,7 @@ describe('QE — report_ship_verdict on a booted daemon', () => {
     const staleHead = headOf(devDirectory);
     commitIn(devDirectory);
 
-    const result = await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: ['too late'], sha: staleHead });
+    const result = await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: [readInCode('too late')], sha: staleHead });
 
     expect(result.isError).toBe(true);
     expect(rawText(result)).toMatch(/^error verdict_stale: .* \(retry: never\)$/);
@@ -152,31 +158,61 @@ describe('QE — report_ship_verdict on a booted daemon', () => {
   it('a reason with a secret and a line break reaches the manager masked on one line', async () => {
     const { lead, reviewerClient, devDirectory } = await bootReviewerInDevWorktree();
 
-    await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: ['token ghp_abcdefghijklmnopqrstuvwxyz0123456789 leaked\nin the log'], sha: headOf(devDirectory) });
+    await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: [readInCode(`token ${fakeToken} leaked\nin the log`)], sha: headOf(devDirectory) });
 
     const [message] = messagesQueuedFor(lead.id);
-    expect(message!.body).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789');
+    expect(message!.body).not.toContain(fakeToken);
     expect(verdictLinesOf(message!.body)).toHaveLength(1);
     expect(verdictLinesOf(message!.body)[0]).toContain('in the log');
   });
 
   it.each([
-    ['a no-go without reason', { verdict: 'no-go', reasons: [] as string[] }],
-    ['six reasons', { verdict: 'no-go', reasons: ['a', 'b', 'c', 'd', 'e', 'f'] }],
-    ['an unknown verdict', { verdict: 'maybe', reasons: [] as string[] }],
+    ['a no-go without reason', { verdict: 'no-go', reasons: [] as unknown[] }],
+    ['six reasons', { verdict: 'no-go', reasons: ['a', 'b', 'c', 'd', 'e', 'f'].map(readInCode) }],
+    ['a go without claim', { verdict: 'go', reasons: [] as unknown[] }],
+    ['a go whose claims were only read in the code', { verdict: 'go', reasons: [readInCode('src/a.ts is fine')] }],
+    ['a go whose only claim is made of invisible characters', { verdict: 'go', reasons: [{ ...verifiedRun, claim: '​‮' }] }],
+    ['a no-go whose reason is made of invisible characters', { verdict: 'no-go', reasons: [readInCode('﻿⁠')] }],
+    ['an unknown verdict', { verdict: 'maybe', reasons: [] as unknown[] }],
+    ['a plain text reason', { verdict: 'no-go', reasons: ['broken'] }],
+    ['a proven reason without output', { verdict: 'no-go', reasons: [{ claim: 'c', status: 'proven', command: 'pnpm test' }] }],
+    ['a reason without status', { verdict: 'no-go', reasons: [{ claim: 'c', command: 'pnpm test', output: 'red' }] }],
   ])('refuses %s with invalid_body and writes nothing', async (_name, shape) => {
-    const { reviewerClient, devDirectory } = await bootReviewerInDevWorktree();
+    const { lead, reviewerClient, devDirectory } = await bootReviewerInDevWorktree();
 
     const result = await reportVerdict(reviewerClient, { ...shape, sha: headOf(devDirectory) });
 
     expect(result.isError).toBe(true);
+    expect(rawText(result)).toMatch(/^error invalid_body: /);
     expect(findingRows()).toEqual([]);
+    expect(storedRepros()).toEqual([]);
+    expect(messagesQueuedFor(lead.id)).toEqual([]);
+  });
+
+  it('shows a complete example of the new form to a reviewer that still sends plain text reasons', async () => {
+    const { reviewerClient, devDirectory } = await bootReviewerInDevWorktree();
+
+    const result = await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: ['broken'], sha: headOf(devDirectory) });
+
+    expect(rawText(result)).toMatch(/\{ claim: ".*", status: "proven", command: ".*", output: ".*" \}/);
+  });
+
+  it('records the reproduction of each reason next to its adversarial item, masked and without the secret', async () => {
+    const { reviewerClient, devDirectory } = await bootReviewerInDevWorktree();
+    const leaking = { claim: 'leak', status: 'proven', command: `curl -H "x: ${fakeToken}"`, output: `sent ${fakeToken}\nsecond line` };
+
+    await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: [provenClaim('migration 033 cannot be rolled back'), leaking], sha: headOf(devDirectory) });
+
+    const [first, second] = storedRepros();
+    expect(first).toEqual({ step: 'adversarial', claim: 'migration 033 cannot be rolled back', status: 'proven', command: 'pnpm vitest run migrate.test.ts', output: 'FAIL down migration\nexpected the table back' });
+    expect(JSON.stringify(second)).not.toContain(fakeToken);
+    expect(second!.output).toMatch(/\nsecond line$/);
   });
 
   it('refuses a sha that is not 40 lowercase hex characters', async () => {
     const { reviewerClient } = await bootReviewerInDevWorktree();
 
-    const result = await reportVerdict(reviewerClient, { verdict: 'go', reasons: [], sha: 'abc1234' });
+    const result = await reportVerdict(reviewerClient, { verdict: 'go', reasons: [verifiedRun], sha: 'abc1234' });
 
     expect(result.isError).toBe(true);
     expect(findingRows()).toEqual([]);
@@ -185,7 +221,7 @@ describe('QE — report_ship_verdict on a booted daemon', () => {
   it('refuses a worktree whose branch names no ticket and tells how to name it', async () => {
     const { reviewerClient, devDirectory } = await bootReviewerInDevWorktree('cleanup-without-ticket');
 
-    const result = await reportVerdict(reviewerClient, { verdict: 'go', reasons: [], sha: headOf(devDirectory) });
+    const result = await reportVerdict(reviewerClient, { verdict: 'go', reasons: [verifiedRun], sha: headOf(devDirectory) });
 
     expect(rawText(result)).toMatch(/^error invalid_body: .*ticket/i);
     expect(findingRows()).toEqual([]);
@@ -196,7 +232,7 @@ describe('QE — report_ship_verdict on a booted daemon', () => {
     const worker = parsed(await leadClient.callTool({ name: 'create_session', arguments: { directory: emptyDirectory('worker'), name: 'Worker' } }));
     const workerClient = await connectAs(worker.id);
 
-    const result = await reportVerdict(workerClient, { verdict: 'go', reasons: [], sha: headOf(devDirectory) });
+    const result = await reportVerdict(workerClient, { verdict: 'go', reasons: [verifiedRun], sha: headOf(devDirectory) });
 
     expect(rawText(result)).toMatch(/^error not_a_manager: /);
     expect(findingRows()).toEqual([]);
@@ -210,7 +246,7 @@ describe('QE — report_ship_verdict on a booted daemon', () => {
     const impostor = parsed(await workerClient.callTool({ name: 'create_session', arguments: { directory: devDirectory, name: 'Impostor', role: 'reviewer' } }));
     const impostorClient = await connectAs(impostor.id);
 
-    const result = await reportVerdict(impostorClient, { verdict: 'go', reasons: [], sha: headOf(devDirectory) });
+    const result = await reportVerdict(impostorClient, { verdict: 'go', reasons: [verifiedRun], sha: headOf(devDirectory) });
 
     expect(rawText(result)).toMatch(/^error not_a_manager: /);
     expect(findingRows()).toEqual([]);

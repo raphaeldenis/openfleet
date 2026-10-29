@@ -49,7 +49,8 @@ async function bootTeam(branch = 'CCM-321-items') {
   return { devDirectory, spawn, headSha: git(devDirectory, 'rev-parse', 'HEAD') };
 }
 
-const reportStep = (client: Client, report: { step: string; severity: string; claims: string[]; sha: string }) => client.callTool({ name: 'report_step_finding', arguments: report });
+const readInCode = (claim: string) => ({ claim, status: 'not_reproduced' });
+const reportStep = (client: Client, report: { step: string; severity: string; claims: unknown[]; sha: string }) => client.callTool({ name: 'report_step_finding', arguments: report });
 const listedItems = async (ticket: string) => ((await (await adminApi(`/api/review-findings/items?ticket=${ticket}`)).json()) as { items: { reportId: string; position: number; step: string; severity: string; claim: string }[] }).items;
 
 beforeEach(async () => {
@@ -63,7 +64,7 @@ describe('QE — structured reports create one finding row each', () => {
     const { spawn, headSha } = await bootTeam();
     const qe = await spawn('qe');
 
-    await reportStep(qe.client, { step: 'qe', severity: 'findings', claims: ['the filter is missing', 'a 500 on the stream'], sha: headSha });
+    await reportStep(qe.client, { step: 'qe', severity: 'findings', claims: [readInCode('the filter is missing'), readInCode('a 500 on the stream')], sha: headSha });
 
     const items = await listedItems('CCM-321');
     expect(items.map((item) => [item.position, item.step, item.severity, item.claim])).toEqual([[0, 'qe', 'no-go', 'the filter is missing'], [1, 'qe', 'no-go', 'a 500 on the stream']]);
@@ -73,7 +74,7 @@ describe('QE — structured reports create one finding row each', () => {
   it('the same report replayed creates no 2 rows more', async () => {
     const { spawn, headSha } = await bootTeam();
     const qe = await spawn('qe');
-    const report = { step: 'qe', severity: 'findings', claims: ['the filter is missing', 'a 500 on the stream'], sha: headSha };
+    const report = { step: 'qe', severity: 'findings', claims: [readInCode('the filter is missing'), readInCode('a 500 on the stream')], sha: headSha };
 
     await reportStep(qe.client, report);
     await reportStep(qe.client, report);
@@ -81,20 +82,20 @@ describe('QE — structured reports create one finding row each', () => {
     expect(await listedItems('CCM-321')).toHaveLength(2);
   });
 
-  it('a qa report with 0 finding creates the explicit "0 findings" row', async () => {
+  it('a clean qa report creates one item per verified claim, with its run', async () => {
     const { spawn, headSha } = await bootTeam();
     const qa = await spawn('qa');
 
-    await reportStep(qa.client, { step: 'qa', severity: 'clean', claims: [], sha: headSha });
+    await reportStep(qa.client, { step: 'qa', severity: 'clean', claims: [{ claim: 'qa: the page renders', status: 'proven', command: 'pnpm test', output: '12 passed' }], sha: headSha });
 
-    expect(await listedItems('CCM-321')).toMatchObject([{ step: 'qa', severity: 'clean', claim: '0 findings' }]);
+    expect(await listedItems('CCM-321')).toMatchObject([{ step: 'qa', severity: 'clean', claim: 'qa: the page renders', repro: { status: 'proven', command: 'pnpm test', output: '12 passed' } }]);
   });
 
   it('a reviewer verdict with reasons creates one adversarial row per reason', async () => {
     const { spawn, headSha } = await bootTeam();
     const reviewer = await spawn('reviewer');
 
-    await reviewer.client.callTool({ name: 'report_ship_verdict', arguments: { verdict: 'no-go', reasons: ['a race', 'a leak'], sha: headSha } });
+    await reviewer.client.callTool({ name: 'report_ship_verdict', arguments: { verdict: 'no-go', reasons: [readInCode('a race'), readInCode('a leak')], sha: headSha } });
 
     expect((await listedItems('CCM-321')).map((item) => [item.step, item.claim])).toEqual([['adversarial', 'a race'], ['adversarial', 'a leak']]);
   });

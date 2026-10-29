@@ -2,6 +2,28 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## Unreleased — no contract_version change
+
+- TOOLING-OUTSIDE-REPO01, shared repo setting: a project can mark its repository as shared with a team (`sharedRepo`, `PATCH /api/projects/:id`; see `docs/shared-repo.md`). No tool schema changes. `insert_data_store_rows` on the "Manager backlog" table of such a project is refused to an agent that is not a manager with the new error code `backlog_write_refused` (`invalid_request`, retry `never`).
+- Worktrees of such a project get the fleet overlay linked as `.openfleet-overlay` and excluded from git; a failed overlay adds the warning `overlay_unavailable` to the worktree creation.
+
+Migrations: `054_project_shared_repo`: `projects.shared_repo`.
+
+## 13 — 2026-10-29
+
+ALWAYS-REPRO01, every claim of a review report cites a reproduction or says it is not reproduced. A breaking change, on purpose.
+
+- `report_step_finding`: `claims` is no longer a list of strings. Each claim is an object `{ claim, status, command, output }`: `claim` is at most 300 characters; `status` is `proven`, `plausible` or `not_reproduced` (labels PROUVÉ, PLAUSIBLE, NON REPRODUIT); `command` is at most 300 characters (one line) and `output` at most 1500 characters (line breaks kept). `proven` and `plausible` need both `command` and `output`; a `not_reproduced` claim needs neither and says where it was read. A `clean` report carries at least one claim that is not `not_reproduced`: it says what was verified (for example `qe: 321 tests green`) with the command and output of the run; a `findings` report carries one to five claims of any status.
+- `report_ship_verdict`: `reasons` takes the same objects. A `go` carries at least one reason that is not `not_reproduced` (what the reviewer verified, with its command and output); a `no-go` carries one to five reasons of any status. A claim made only of invisible characters (control, bidi, zero-width) is refused with `invalid_body`.
+- Refused with `invalid_body`, nothing written: a plain text claim (the message shows a complete example of the new form), a claim without `status` or with another status, a `proven` or `plausible` claim without `command` or `output` (also when the output is only terminal sequences), an over-long `command` or `output`. No new error code.
+- `command` and `output` are stored as data: secrets masked, terminal colour sequences and control characters removed, CRLF turned into LF. The daemon never copies an `output` into a message; the no-go message to the manager names each reason with its status label, such as `[PROUVÉ]`.
+- GATE-FAIL-CLOSED01, evidence required on every line: a claim or reason that shows nothing once cleaned (blank, invisible or Unicode-space characters only) is refused with `invalid_body`. The findings gate reads the same rule on lines already stored: a qe, qa, ponytail or adversarial-go line with no non-blank claim is treated as absent, and the refusal says `<step> line has no evidence` (`<steps> lines have no evidence` for several). Lines stored without evidence therefore keep the gate closed until the step is reported again; no migration rewrites them. Its refusal text shows the new claim shape.
+- The input schema of both tools takes `unknown` items so a client that still sends strings gets this message instead of a generic validation error.
+
+Tools added: none.
+Tools changed: `report_step_finding`, `report_ship_verdict`.
+Migrations: `053_review_finding_repro`: three nullable columns on `review_finding_items` (`repro_status`, `repro_command`, `repro_output`); earlier items read as no reproduction recorded.
+
 ## 12 — 2026-10-29
 
 CI-WAIT-WAKE01, wake a manager when the CI of a pull request it watches finishes.

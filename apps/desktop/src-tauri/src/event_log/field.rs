@@ -573,7 +573,7 @@ const KNOWN_CODES: &[&str] = &[
   "SQLITE_BUSY", "SQLITE_CANTOPEN", "SQLITE_CONSTRAINT", "SQLITE_CORRUPT", "SQLITE_ERROR", "SQLITE_FULL", "SQLITE_IOERR", "SQLITE_LOCKED", "SQLITE_MISUSE",
   "SQLITE_NOTADB", "SQLITE_READONLY",
   // shared error codes (packages/shared/src/errors.ts)
-  "invalid_body", "invalid_json", "invalid_url", "invalid_branch_name", "invalid_mode", "unknown_harness", "constraint_violation", "log_kind_not_allowed", "message_too_long", "query_too_long",
+  "invalid_body", "invalid_json", "invalid_url", "invalid_branch_name", "invalid_mode", "unknown_harness", "constraint_violation", "log_kind_not_allowed", "backlog_write_refused", "message_too_long", "query_too_long",
   "outside_own_repository", "unauthorized", "not_found", "project_not_found", "no_state", "session_not_found", "note_not_found", "store_not_found",
   "view_not_found", "row_not_found", "manager_not_found", "handoff_not_found", "session_closed", "stale_revision", "file_backed", "file_unreadable",
   "path_escapes_docs_folder", "duplicate_name", "worktree_exists", "not_closed", "directory_missing", "directory_changed", "directory_unreadable",

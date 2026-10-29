@@ -211,3 +211,39 @@ describe('PATCH /api/projects/:id: the row guard setting', () => {
     expect(await res.json()).toEqual({ ...project, name: 'Renamed', rowGuardEnabled: true });
   });
 });
+
+describe('PATCH /api/projects/:id: the shared repo setting', () => {
+  it('is absent from a new project: the repository is not shared by default', async () => {
+    const project = await createProject();
+
+    expect(project).not.toHaveProperty('sharedRepo');
+  });
+
+  it('marks the repository as shared and lists it with the project', async () => {
+    const project = await createProject();
+
+    const res = await patchProject(project.id, { sharedRepo: true });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ...project, sharedRepo: true });
+    expect(await listProjects()).toEqual([{ ...project, sharedRepo: true }]);
+  });
+
+  it('marks the repository as not shared again', async () => {
+    const project = await createProject();
+    await patchProject(project.id, { sharedRepo: true });
+
+    const res = await patchProject(project.id, { sharedRepo: false });
+
+    expect(await res.json()).toEqual(project);
+  });
+
+  it('keeps the setting when only the row guard changes, and the row guard when only the setting changes', async () => {
+    const project = await createProject();
+    await patchProject(project.id, { sharedRepo: true });
+
+    const res = await patchProject(project.id, { rowGuardEnabled: true });
+
+    expect(await res.json()).toEqual({ ...project, sharedRepo: true, rowGuardEnabled: true });
+  });
+});

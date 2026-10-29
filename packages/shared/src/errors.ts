@@ -26,6 +26,8 @@ export const ERROR_CODES = {
   constraint_violation: { kind: 'invalid_request' },
   // A manager log row carries a kind outside the closed list MANAGER_LOG_KINDS: another kind from the list makes the same write succeed.
   log_kind_not_allowed: { kind: 'invalid_request' },
+  // An agent that is not a manager inserted a row into the backlog of a project whose repository is shared with a team: the finding goes to the manager.
+  backlog_write_refused: { kind: 'invalid_request' },
   message_too_long: { kind: 'invalid_request' },
   query_too_long: { kind: 'invalid_request' },
   outside_own_repository: { kind: 'invalid_request' },

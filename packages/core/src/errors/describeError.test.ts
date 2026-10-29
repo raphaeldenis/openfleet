@@ -22,7 +22,7 @@ import { AmbiguousColumnReferenceError, DuplicateNameError, RowNotFoundError, St
 import {
   CellValueRejectedError, ColumnIsDisplayColumnError, ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, OptionsHeldByRowsError, NaturalKeyConflictError, NaturalKeyMissingError, NaturalKeyNotFoundError, NaturalKeyNotUniqueError, NaturalKeyOnSeveralRowsError,
   ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError, NoNaturalKeyError, AmbiguousNaturalKeyError,
-  InvalidViewConfigError, LogKindNotAllowedError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError, JournalShortenedError, DoneWithoutPrUrlError, RowGuardViolationError,
+  BacklogWriteRefusedError, InvalidViewConfigError, LogKindNotAllowedError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError, JournalShortenedError, DoneWithoutPrUrlError, RowGuardViolationError,
 } from '../stores/dataStoreService.js';
 import { DocsFolderNotWritableError, InvalidDocsFolderError, NoteIsNotFileBackedError, ProjectHasNoDocsFolderError } from '../notes/docsFolderService.js';
 import { HandoffNotFoundError, SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
@@ -89,6 +89,7 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['JournalShortenedError', () => new JournalShortenedError(), 'row_guard_violation'],
   ['DoneWithoutPrUrlError', () => new DoneWithoutPrUrlError(), 'row_guard_violation'],
   ['LogKindNotAllowedError', () => new LogKindNotAllowedError('wibble'), 'log_kind_not_allowed'],
+  ['BacklogWriteRefusedError', () => new BacklogWriteRefusedError(), 'backlog_write_refused'],
   ['DaemonSetColumnError', () => new DaemonSetColumnError('x'), 'invalid_body'],
   ['InvalidCellValueError', () => new InvalidCellValueError('c1'), 'invalid_body'],
   ['InvalidNameError', () => new InvalidNameError('x'), 'invalid_body'],

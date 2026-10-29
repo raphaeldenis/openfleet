@@ -341,6 +341,12 @@ export class DataStoreRepository {
     return project?.row_guard_enabled === 1;
   }
 
+  /** Whether the project's repository is shared with a team; a missing project is not. */
+  isSharedRepo(projectId: string): boolean {
+    const project = this.db.prepare('SELECT shared_repo FROM projects WHERE id = ?').get(projectId) as { shared_repo: number } | undefined;
+    return project?.shared_repo === 1;
+  }
+
   findRow(rowId: string, storeId: string): DsRow | undefined {
     const row = this.db.prepare('SELECT * FROM ds_rows WHERE id = ? AND store_id = ?').get(rowId, storeId) as RowRow | undefined;
     return row ? toRow(row) : undefined;

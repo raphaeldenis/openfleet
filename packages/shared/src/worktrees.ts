@@ -16,8 +16,13 @@ export interface HooksPathMissingWarning {
   hooksPath: string;
 }
 
+/** The project shares its repository with a team and the new worktree could not receive the fleet's overlay directory: the fleet's tooling has no place to live there. */
+export interface OverlayUnavailableWarning {
+  type: 'overlay_unavailable';
+}
+
 /** What went wrong after a worktree was created; the worktree itself exists whatever the warning says. */
-export type WorktreeWarning = PostCreateHookWarning | HooksPathMissingWarning;
+export type WorktreeWarning = PostCreateHookWarning | HooksPathMissingWarning | OverlayUnavailableWarning;
 
 /** Why a worktree cannot be removed; `in_use` is answered as `directory_in_use`, every other reason as `constraint_violation` with `detail.reason`. */
 export const WORKTREE_REFUSAL_REASONS = ['main', 'detached', 'locked', 'dirty', 'in_use', 'outside_root', 'submodules', 'status_failed', 'missing', 'removal_refused'] as const;

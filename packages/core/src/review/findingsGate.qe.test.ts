@@ -57,8 +57,10 @@ const runCommand = async (sessionId: string, directory: string, command: string)
   })).json()) as HookAnswer;
 const openPullRequest = (sessionId: string, directory: string) => runCommand(sessionId, directory, 'gh pr create --fill');
 
-const line = (ticket: string, step: FindingStep, severity: FindingSeverity, sha: string) => new ReviewFindingsRepository(daemon!.db)
-  .record({ ticket, step, severity, claim: '', reasons: [], sha, authorSessionId: 'reviewer', managerSessionId: null, createdAt: '2026-10-17T10:00:00.000Z' });
+const EVIDENCE = ['ran the checks of the step'];
+const line = (ticket: string, step: FindingStep, severity: FindingSeverity, sha: string, reasons: string[] = EVIDENCE) => new ReviewFindingsRepository(daemon!.db)
+  .record({ ticket, step, severity, claim: reasons.join('; '), reasons, sha, authorSessionId: 'reviewer', managerSessionId: null, createdAt: '2026-10-17T10:00:00.000Z' });
+const lineWithoutEvidence = (ticket: string, step: FindingStep, severity: FindingSeverity, sha: string) => line(ticket, step, severity, sha, []);
 const journalRows = () => daemon!.db.prepare('SELECT rule_id AS ruleId, outcome FROM denied_commands ORDER BY rowid').all() as { ruleId: string; outcome: string }[];
 const JOURNALING_AFTER_THE_ANSWER_MS = 100;
 /** The hook answers first and journals on the next turn of the event loop. */
@@ -105,6 +107,71 @@ describe('QE — the findings gate on gh pr create, enforcing', () => {
 
     expect(answer).toEqual({});
     expect(await journaledGateRows()).toEqual([]);
+  });
+
+  it.each([
+    ['qe', 'clean'],
+    ['qa', 'clean'],
+    ['ponytail', 'clean'],
+    ['adversarial', 'go'],
+  ] as const)('refuses a %s line that carries no evidence, as if the step were not logged', async (step, severity) => {
+    const { directory, sessionId } = await bootInEnforce();
+    const head = headOf(directory);
+    const otherSteps = (['qe', 'qa', 'ponytail'] as const).filter((other) => other !== step);
+    otherSteps.forEach((other) => line('CCM-7', other, 'clean', head));
+    if (step !== 'adversarial') line('CCM-7', 'adversarial', 'go', head);
+    lineWithoutEvidence('CCM-7', step, severity, head);
+
+    const answer = await openPullRequest(sessionId, directory);
+
+    expect(answer.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('findings_required');
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain(`${step} line has no evidence`);
+  });
+
+  it('refuses a line whose only reason is blank', async () => {
+    const { directory, sessionId } = await bootInEnforce();
+    allStepsOpenAt('CCM-7', headOf(directory));
+    line('CCM-7', 'qa', 'clean', headOf(directory), [' \n']);
+
+    const answer = await openPullRequest(sessionId, directory);
+
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('qa line has no evidence');
+  });
+
+  it.each([
+    ['a zero width space', '​'],
+    ['a zero width non-joiner', '‌'],
+    ['a zero width joiner', '‍'],
+    ['a word joiner', '⁠'],
+    ['a soft hyphen', '­'],
+    ['a braille blank', '⠀'],
+    ['a byte order mark', '﻿'],
+    ['an em space', ' '],
+  ])('refuses a line whose only reason is %s', async (_name, invisibleReason) => {
+    const { directory, sessionId } = await bootInEnforce();
+    allStepsOpenAt('CCM-7', headOf(directory));
+    line('CCM-7', 'qa', 'clean', headOf(directory), [invisibleReason]);
+
+    const answer = await openPullRequest(sessionId, directory);
+
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('qa line has no evidence');
+  });
+
+  it('keeps a gate closed on a line stored without evidence before the rule, until the step is reported again with evidence', async () => {
+    const { directory, sessionId } = await bootInEnforce();
+    const head = headOf(directory);
+    lineWithoutEvidence('CCM-7', 'qe', 'clean', head);
+    line('CCM-7', 'qa', 'clean', head);
+    line('CCM-7', 'ponytail', 'clean', head);
+    line('CCM-7', 'adversarial', 'go', head);
+    const closed = await openPullRequest(sessionId, directory);
+
+    line('CCM-7', 'qe', 'clean', head);
+    const reopened = await openPullRequest(sessionId, directory);
+
+    expect(closed.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(reopened).toEqual({});
   });
 
   it('opens through a pipeline or an && chain the same way it refuses one', async () => {

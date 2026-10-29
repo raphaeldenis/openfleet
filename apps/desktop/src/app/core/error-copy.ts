@@ -106,6 +106,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   payload_too_large: { what: 'The request is too large', fix: 'shorten it' },
   note_too_large: { what: 'This note is too large', fix: 'shorten it' },
   log_kind_not_allowed: { what: 'That kind is not allowed in a manager log', fix: 'pick one of the permitted kinds' },
+  backlog_write_refused: { what: 'This project shares its repository with a team, so an agent that is not a manager cannot add to its backlog', fix: 'send the finding to the manager, who adds it if it belongs there' },
   row_cap: { what: 'This table reached its row limit', fix: 'delete some rows first' },
   row_guard_violation: { what: 'This project keeps a row journal append-only and a done row linked to a pull request', fix: 'resend the previous journal with a new line added, or set the pull request link first' },
   state_too_large: { what: 'The working state is too large', fix: 'shorten it' },
