@@ -126,6 +126,30 @@ const BLOCKED_FROM_FEATURE_CHECKOUT_BY_TARGET_DIRECTORY = [
   'cd $SOMEWHERE && git push',
 ];
 
+const BLOCKED_FROM_FEATURE_CHECKOUT_BY_HOOK_SKIPPING = [
+  'HUSKY=0 git push origin x',
+  'HUSKY=0 git commit -m x',
+  'HUSKY_SKIP_HOOKS=1 git commit -m x',
+  'env HUSKY=0 git push origin x',
+  'export HUSKY=0 && git commit -m x',
+  'git -c core.hooksPath=/dev/null commit -m x',
+  'git -c core.hooksPath=/dev/null push origin x',
+  'git -c core.hookspath=/dev/null commit -m x',
+  'git -c CORE.HOOKSPATH=/dev/null push origin x',
+  'git -ccore.hooksPath=/dev/null commit -m x',
+  'git --config-env=core.hooksPath=NOHOOKS commit -m x',
+  'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x',
+  'GIT_DIR=<main>/.git git push',
+  'git config core.hooksPath /dev/null',
+];
+
+const ALLOWED_DESPITE_RESEMBLING_HOOK_SKIPPING = [
+  'HUSKY=0 pnpm install',
+  'git -c user.name=x commit -m y',
+  'git commit -m "docs: HUSKY=0 skips the hooks"',
+  'git config user.name x',
+];
+
 describe('block-dangerous-git hook', () => {
   it.each(ALLOWED_FROM_FEATURE_CHECKOUT)('allows %j', (command) => {
     expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
@@ -137,6 +161,16 @@ describe('block-dangerous-git hook', () => {
 
   it('blocks a malformed payload (fails closed)', () => {
     expect(runHookOnRawPayload('{not json').status).toBe(EXIT_BLOCKED);
+  });
+
+  describe('hook-skipping forms', () => {
+    it.each(BLOCKED_FROM_FEATURE_CHECKOUT_BY_HOOK_SKIPPING)('blocks %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
+    });
+
+    it.each(ALLOWED_DESPITE_RESEMBLING_HOOK_SKIPPING)('allows %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
+    });
   });
 
   describe('branch check follows the directory git runs in', () => {

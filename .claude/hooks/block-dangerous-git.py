@@ -14,8 +14,9 @@ import sys
 PROTECTED_BRANCHES = {"main", "master"}
 SEGMENT_SEPARATORS = ("&&", "||", ";", "\n", "|", "&")
 SHELL_PROGRAMS = {"sh", "bash", "zsh", "dash", "ksh"}
-COMMAND_WRAPPERS = {"command", "env", "rtk", "proxy", "sudo", "time", "nice", "exec", "nohup"}
-GIT_GLOBAL_OPTIONS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+COMMAND_WRAPPERS = {"command", "env", "export", "rtk", "proxy", "sudo", "time", "nice", "exec", "nohup"}
+GIT_GLOBAL_OPTIONS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+HOOK_DISABLING_VARIABLE = re.compile(r"HUSKY|^GIT_(CONFIG|DIR|WORK_TREE)", re.IGNORECASE)
 SHELL_INLINE_SCRIPT_FLAGS = {"-c", "-lc", "-ic", "-ec"}
 
 
@@ -64,14 +65,26 @@ def program_name(token):
 
 
 def strip_wrappers(tokens):
+    """Returns (environment assignments, remaining tokens) once leading assignments and command wrappers are skipped."""
+    assignments = []
     index = 0
     while index < len(tokens):
         token = tokens[index]
-        if is_environment_assignment(token) or program_name(token) in COMMAND_WRAPPERS:
-            index += 1
-            continue
-        break
-    return tokens[index:]
+        if is_environment_assignment(token):
+            assignments.append(token)
+        elif program_name(token) not in COMMAND_WRAPPERS:
+            break
+        index += 1
+    return assignments, tokens[index:]
+
+
+def disables_repository_hooks(assignments):
+    names = [assignment.split("=", 1)[0] for assignment in assignments]
+    return any(HOOK_DISABLING_VARIABLE.search(name) for name in names)
+
+
+def mentions_hooks_path(text):
+    return "core.hookspath" in text.lower()
 
 
 def resolve_directory(base_directory, path):
@@ -94,6 +107,10 @@ def split_git_invocation(tokens, working_directory):
     while index < len(tokens):
         token = tokens[index]
         value = tokens[index + 1] if index + 1 < len(tokens) else ""
+        takes_value = token in GIT_GLOBAL_OPTIONS_WITH_VALUE
+        sets_hooks_path = mentions_hooks_path(token) or (takes_value and mentions_hooks_path(value))
+        if sets_hooks_path:
+            refuse("hooks-path", "overriding core.hooksPath skips the repository hooks, fix what the hook reports.")
         if token == "-C":
             directory = resolve_directory(directory, value)
             index += 2
@@ -103,7 +120,7 @@ def split_git_invocation(tokens, working_directory):
         elif token.startswith("--git-dir="):
             git_directory = resolve_directory(directory, token.split("=", 1)[1])
             index += 1
-        elif token in GIT_GLOBAL_OPTIONS_WITH_VALUE:
+        elif takes_value:
             index += 2
         elif token.startswith("-"):
             index += 1
@@ -233,6 +250,11 @@ def check_restore(arguments, _repository):
         refuse("restore-discard", "git restore discards working-tree changes, only --staged is allowed.")
 
 
+def check_config(arguments, _repository):
+    if any(mentions_hooks_path(a) for a in arguments):
+        refuse("hooks-path", "git config core.hooksPath turns the repository hooks off, fix what the hook reports.")
+
+
 def check_worktree(arguments, _repository):
     is_removal = positionals(arguments)[:1] == ["remove"]
     forces = "f" in short_flag_letters(arguments) or has_long_flag(arguments, "--force")
@@ -255,6 +277,7 @@ GIT_SUBCOMMAND_CHECKS = {
     "checkout": check_checkout,
     "restore": check_restore,
     "worktree": check_worktree,
+    "config": check_config,
     "filter-branch": refuse_history_rewrite,
     "filter-repo": refuse_history_rewrite,
 }
@@ -281,10 +304,15 @@ def is_unanalysable_program(tokens):
 
 
 class ShellState:
-    """The directory the next command runs in; None once a `cd` makes it impossible to know."""
+    """What earlier commands leave behind: the directory the next command runs in (None once a `cd`
+    makes it impossible to know) and whether a hook-disabling variable is exported."""
 
-    def __init__(self, working_directory):
+    def __init__(self, working_directory, hook_variable_exported=False):
         self.working_directory = working_directory
+        self.hook_variable_exported = hook_variable_exported
+
+    def nested(self):
+        return ShellState(self.working_directory, self.hook_variable_exported)
 
 
 def change_directory(tokens, shell_state):
@@ -295,12 +323,14 @@ def change_directory(tokens, shell_state):
 
 def check_segment(segment, shell_state):
     try:
-        tokens = strip_wrappers(shlex.split(segment))
+        assignments, tokens = strip_wrappers(shlex.split(segment))
     except ValueError:
         if re.search(r"\bgit\b", segment):
             refuse("unparsable", "this git command cannot be analysed, simplify the quoting.")
         return
+    sets_hook_variable = disables_repository_hooks(assignments)
     if not tokens:
+        shell_state.hook_variable_exported = shell_state.hook_variable_exported or sets_hook_variable
         return
 
     if is_unanalysable_program(tokens):
@@ -308,13 +338,15 @@ def check_segment(segment, shell_state):
 
     script = inline_shell_script(tokens)
     if script is not None:
-        check_command(script, ShellState(shell_state.working_directory))
+        check_command(script, shell_state.nested())
         return
     if program_name(tokens[0]) in ("cd", "pushd"):
         change_directory(tokens, shell_state)
         return
     if program_name(tokens[0]) != "git":
         return
+    if sets_hook_variable or shell_state.hook_variable_exported:
+        refuse("hooks-skipped", "HUSKY, GIT_CONFIG*, GIT_DIR and GIT_WORK_TREE variables skip or redirect the repository hooks, unset them.")
 
     subcommand, arguments, repository = split_git_invocation(tokens, shell_state.working_directory)
     check_for_subcommand = GIT_SUBCOMMAND_CHECKS.get(subcommand)
