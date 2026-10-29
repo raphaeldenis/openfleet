@@ -96,7 +96,7 @@ const NO_LIMIT = -1;
 const FIRST_ROW_REV = 1;
 export const STALE_ROW_RESOURCE = 'data_store_row';
 
-const staleRowRevision = (row: DsRow) => new OpenFleetError('stale_revision', 'the row has changed since the revision you read.', {
+const staleRowRevision = (row: DsRow) => new OpenFleetError('stale_revision', `the row has changed since the revision you read, current rev: ${row.rev}.`, {
   hint: 'reload the row, then write again.',
   detail: { resource: STALE_ROW_RESOURCE, rowId: row.id, currentRev: row.rev },
 });

@@ -9,6 +9,22 @@ The MCP tool contract of the OpenFleet server. One section per `contract_version
 
 Migrations: `054_project_shared_repo`: `projects.shared_repo`.
 
+## 14 — 2026-10-29
+
+TABLES-ROW-CAS01, optimistic concurrency on table row writes: the last write no longer wins silently when a writer says which revision it read.
+
+- Every row carries `rev`: 1 for a new row, raised by one with each write that changes a cell (a write that changes nothing keeps it; deleting a column that clears a cell raises it).
+- `query_data_store` and `get_data_store` return `rev` in every row (`{id, data, rev, updatedAt}`). A columnar `query_data_store` row ends with `rev`, and the `columns` and `names` headers end with `rev`.
+- `update_data_store_rows` (list mode): each update takes an optional `expected_rev`. An update whose row is at another revision fails alone as `row N: the row has changed since the revision you read, current rev: M.`; the other updates commit. Filter mode has no `expected_rev`.
+- `update_data_store_row`: optional `expected_rev`. A different revision is refused with `stale_revision` (retry `after_refresh`), the current rev in the message, and nothing is written.
+- Without `expected_rev` nothing changes: the write overwrites whatever the row holds.
+- REST `PATCH /api/data-stores/:id/rows`: each update takes an optional `expectedRev`. A stale one refuses the whole batch with `409 stale_revision` and `detail: { resource: 'data_store_row', rowId, currentRev }` for the first stale row; nothing is written. The rows of the responses carry `rev`.
+- No new error code: `stale_revision` already exists; `detail.resource` (`manager_profile`, `data_store_row`; the detail of a note conflict has none) tells which resource moved.
+
+Tools added: none.
+Tools changed: `update_data_store_rows`, `update_data_store_row` (input); `query_data_store`, `get_data_store` (output).
+Migrations: `055_ds_row_rev`: `ds_rows.rev INTEGER NOT NULL DEFAULT 1`; existing rows start at 1.
+
 ## 13 — 2026-10-29
 
 ALWAYS-REPRO01, every claim of a review report cites a reproduction or says it is not reproduced. A breaking change, on purpose.

@@ -56,15 +56,17 @@ export const rowView = (row: DsRow, { columnIds, includeUpdatedAt, cellOf }: Row
   return {
     id: row.id,
     data: Object.fromEntries(keptColumnIds.map((columnId) => [columnId, cellOf(columnId, row.data[columnId])])),
+    rev: row.rev,
     ...(includeUpdatedAt ? { updatedAt: row.updatedAt } : {}),
   };
 };
 
-/** A row as `[rowId, updatedAt?, ...one cell per column id]`, an empty cell being null; the result header names every one of these positions. */
+/** A row as `[rowId, updatedAt?, ...one cell per column id, rev]`, an empty cell being null; the result header names every one of these positions. */
 export const columnarRowView = (row: DsRow, { columnIds, includeUpdatedAt, cellOf }: Required<RowProjection>) => [
   row.id,
   ...(includeUpdatedAt ? [row.updatedAt] : []),
   ...columnIds.map((columnId) => cellOf(columnId, row.data[columnId] ?? null)),
+  row.rev,
 ];
 
 export const rowChangeView = (entry: DsRowHistoryEntry) => ({
