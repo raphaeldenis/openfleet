@@ -3,6 +3,7 @@
 mod admin_token;
 mod app_exit;
 mod daemon;
+mod daemon_status_line;
 mod daemon_version;
 mod diagnostics_bundle;
 mod event_log;
@@ -13,8 +14,6 @@ mod log_file;
 mod notifications;
 mod panic_hook;
 mod path_repair;
-mod redaction;
-mod status_line;
 
 pub use event_log::{EventName, Level, LineBuilder, LogValue, Pid, SanitizedLine, Ts};
 

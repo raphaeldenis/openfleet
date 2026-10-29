@@ -8,12 +8,8 @@ const DISK_ADAPTERS: [(&str, &str); 3] = [
   ("event_log/salt.rs", "write_private_file"),
   ("diagnostics_bundle.rs", "write_private_file"),
 ];
-/// The pattern masker and the admin-token secret list are frozen: they serve only the status line shown to the webview.
-const FROZEN_MASKER_USERS: [(&str, &[&str]); 2] = [
-  ("redaction", &["status_line.rs"]),
-  ("admin_token_secrets", &["daemon.rs", "admin_token.rs"]),
-];
-const MASKER_NAMES_BANNED_ON_THE_WRITER: [&str; 5] = ["redaction", "redact", "admin_token_secrets", "poll_secrets", "refresh_secrets"];
+/// No source masks text by pattern or keeps a list of secrets: every surface is built from typed values.
+const MASKER_NAMES_BANNED_EVERYWHERE: [&str; 5] = ["redaction", "redact", "admin_token_secrets", "poll_secrets", "refresh_secrets"];
 const OUTPUT_MACROS: [&str; 5] = ["println", "eprintln", "print", "eprint", "dbg"];
 const FILE_WRITERS: [&str; 3] = ["OpenOptions", "write", "copy"];
 
@@ -26,10 +22,6 @@ struct SourcePolicy<'a> {
 impl SourcePolicy<'_> {
   fn is_disk_adapter(&self) -> bool {
     DISK_ADAPTERS.contains(&(self.file, self.function.as_str()))
-  }
-
-  fn is_on_the_writer(&self) -> bool {
-    self.file == "log_file.rs" || self.file.starts_with("event_log/")
   }
 
   fn reject(&mut self, name: &str) {
@@ -114,9 +106,8 @@ impl<'ast> Visit<'ast> for SourcePolicy<'_> {
     if is_foreign_logging && self.file != "event_log/foreign.rs" {
       self.reject(&names.join("::"));
     }
-    let uses_frozen_masker_outside_its_users = FROZEN_MASKER_USERS.iter().any(|(frozen_name, users)| names.iter().any(|name| name == frozen_name) && !users.contains(&self.file));
-    let masks_on_the_writer = self.is_on_the_writer() && names.iter().any(|name| MASKER_NAMES_BANNED_ON_THE_WRITER.contains(&name.as_str()));
-    if uses_frozen_masker_outside_its_users || masks_on_the_writer {
+    let uses_a_pattern_masker = names.iter().any(|name| MASKER_NAMES_BANNED_EVERYWHERE.contains(&name.as_str()));
+    if uses_a_pattern_masker {
       self.reject(&names.join("::"));
     }
     let exposes_raw_writer = names.iter().any(|name| name == "DiskFs" || name == "LogFs");
@@ -220,7 +211,7 @@ fn detects_console_logging_and_file_writes_in_new_sources() {
 }
 
 #[test]
-fn keeps_the_frozen_masker_and_secret_list_off_the_writer() {
+fn keeps_a_pattern_masker_and_a_secret_list_off_the_writer() {
   for (file, source) in [
     ("log_file.rs", "use crate::redaction::redact;"),
     ("log_file.rs", "fn run() { crate::redaction::redact(line, secrets); }"),
@@ -231,14 +222,20 @@ fn keeps_the_frozen_masker_and_secret_list_off_the_writer() {
     ("lib.rs", "use crate::redaction::redact;"),
     ("path_repair.rs", "fn run() { crate::admin_token::admin_token_secrets(path); }"),
   ] {
-    assert!(!violations_in(file, source).is_empty(), "{file} reaches the frozen masker: {source}");
+    assert!(!violations_in(file, source).is_empty(), "{file} reaches a pattern masker: {source}");
   }
 }
 
 #[test]
-fn leaves_the_frozen_masker_to_the_status_line_and_the_secret_list_to_its_scrub_scope() {
-  assert!(violations_in("status_line.rs", "use crate::redaction::redact; fn run() { redact(line, secrets); }").is_empty());
-  assert!(violations_in("daemon.rs", "use crate::admin_token::admin_token_secrets; fn run() { admin_token_secrets(path); }").is_empty());
+fn rejects_a_pattern_masker_or_a_secret_list_in_any_source() {
+  for (file, source) in [
+    ("status_line.rs", "use crate::redaction::redact; fn run() { redact(line, secrets); }"),
+    ("daemon.rs", "use crate::admin_token::admin_token_secrets; fn run() { admin_token_secrets(path); }"),
+    ("daemon_status_line.rs", "fn run() { crate::redaction::redact(line, secrets); }"),
+    ("admin_token.rs", "fn run() { poll_secrets(); }"),
+  ] {
+    assert!(!violations_in(file, source).is_empty(), "{file} reaches a pattern masker: {source}");
+  }
 }
 
 #[test]
