@@ -294,7 +294,7 @@ fn write_daemon_line(line: &mut LineBuilder, fields: &DaemonLineFields) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::event_log::grammar::{fields_of, validate};
+  use crate::event_log::grammar::{fields_of, validate, MAX_LINE_BYTES};
   use crate::event_log::salt::{Salt, SALT_LEN};
   use crate::linear_growth::{assert_linear_growth, thread_cpu_time_of, LinearGrowthBudget};
   use std::collections::HashSet;
@@ -470,6 +470,53 @@ mod tests {
         for key in keys {
           assert!(fields_of(event.name()).iter().any(|field| field.key == key), "{key} of {}", event.name());
         }
+      }
+    }
+
+    #[test]
+    fn every_registered_key_is_rendered_by_some_sample() {
+      let rendered_keys: HashSet<String> = sample_events()
+        .iter()
+        .flat_map(|event| {
+          let line = event.render(now());
+          let keys: Vec<&str> = line.as_str().split(' ').skip(3).filter_map(|pair| pair.split('=').next()).collect();
+          keys.into_iter().map(|key| format!("{}.{key}", event.name())).collect::<Vec<_>>()
+        })
+        .collect();
+
+      let never_rendered: Vec<String> = EventName::ALL
+        .iter()
+        .flat_map(|name| fields_of(*name).iter().map(move |field| format!("{name}.{}", field.key)))
+        .filter(|registered| !rendered_keys.contains(registered))
+        .collect();
+
+      assert!(never_rendered.is_empty(), "registered keys no sample renders: {never_rendered:?}");
+    }
+
+    #[test]
+    fn no_line_exceeds_the_maximum_line_length() {
+      const EIGHT_DIGIT_LENGTH: usize = 10_000_000;
+      let longest_daemon_line = DaemonLineFields {
+        level: Level::Warn,
+        daemon_ts: Ts::parse("2026-10-04T11:59:58.123Z"),
+        id: ShortId::parse("ffffffff"),
+        session: SessionId::parse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        code: Some(KnownCode::from_name("docs_folder_not_writable")),
+        message: Some(DaemonMessage::Unlisted(Opaque::of(&vec![b'x'; EIGHT_DIGIT_LENGTH], Some(&salt())))),
+        error_name: Some(KnownErrorName::from_name("ReferenceError")),
+        error_code: Some(KnownCode::from_name("docs_folder_not_writable")),
+        error_message: Some(Opaque::of(&vec![b'y'; EIGHT_DIGIT_LENGTH], Some(&salt()))),
+        frames: Some(frames_at(&[(123, 456), (123, 456), (123, 456), (123, 456), (123, 456), (123, 456), (123, 456), (1234, 456)])),
+        extra_fields: Count(u64::MAX),
+      };
+      let mut events = sample_events();
+      events.push(DesktopEvent::DaemonLine(longest_daemon_line));
+
+      for event in events {
+        let line = event.render(now());
+
+        assert!(!line.is_rejection(), "{event:?}");
+        assert!(line.as_str().len() <= MAX_LINE_BYTES, "{} bytes: {line}", line.as_str().len());
       }
     }
 

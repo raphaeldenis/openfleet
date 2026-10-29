@@ -1,3 +1,5 @@
+use super::EventName;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use syn::visit::{self, Visit};
 
@@ -274,6 +276,143 @@ fn clippy_configuration_bans_console_macros_and_file_creation() {
   for root in [include_str!("../lib.rs"), include_str!("../main.rs")] {
     assert!(root.contains("#![deny(clippy::disallowed_macros, clippy::disallowed_methods)]"));
   }
+}
+
+/// Events no production code emits; the row that emits or deletes them empties this list.
+const EVENTS_WITHOUT_A_PRODUCTION_CALL_SITE: [&str; 2] = ["IssueReportOpened", "BundleSaved"];
+const EVENT_ENUM_DEFINITION_FILE: &str = "event_log/event.rs";
+const REJECTION_FUNCTION: (&str, &str) = ("event_log/grammar.rs", "seal_under");
+
+/// Collects the events the non-test code builds: `DesktopEvent::<Variant>` in an expression, and the rejected record the grammar writes itself.
+struct EventEmitters<'a> {
+  file: &'a str,
+  function: String,
+  emitted: BTreeSet<String>,
+}
+
+impl EventEmitters<'_> {
+  fn is_the_rejection_function(&self) -> bool {
+    (self.file, self.function.as_str()) == REJECTION_FUNCTION
+  }
+
+  fn record_path(&mut self, path: &syn::Path) {
+    let names: Vec<String> = path.segments.iter().map(|segment| segment.ident.to_string()).collect();
+    let [enum_name, variant] = names.as_slice() else { return };
+    let builds_a_desktop_event = enum_name == "DesktopEvent" && self.file != EVENT_ENUM_DEFINITION_FILE;
+    let writes_the_rejected_record = enum_name == "EventName" && self.is_the_rejection_function();
+    if builds_a_desktop_event || writes_the_rejected_record {
+      self.emitted.insert(variant.clone());
+    }
+  }
+
+  fn record_macro_tokens(&mut self, tokens: proc_macro2::TokenStream) {
+    use proc_macro2::TokenTree;
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    for token in &tokens {
+      if let TokenTree::Group(group) = token {
+        self.record_macro_tokens(group.stream());
+      }
+    }
+    let identifiers_after_two_colons = tokens.windows(4).filter_map(|window| match window {
+      [TokenTree::Ident(enum_name), TokenTree::Punct(first), TokenTree::Punct(second), TokenTree::Ident(variant)] if first.as_char() == ':' && second.as_char() == ':' => {
+        Some(format!("{enum_name}::{variant}"))
+      }
+      _ => None,
+    });
+    for path in identifiers_after_two_colons {
+      if let Ok(path) = syn::parse_str::<syn::Path>(&path) {
+        self.record_path(&path);
+      }
+    }
+  }
+}
+
+impl<'ast> Visit<'ast> for EventEmitters<'_> {
+  fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+    if !is_test_module(module) {
+      visit::visit_item_mod(self, module);
+    }
+  }
+
+  fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+    let enclosing = std::mem::replace(&mut self.function, function.sig.ident.to_string());
+    visit::visit_item_fn(self, function);
+    self.function = enclosing;
+  }
+
+  fn visit_impl_item_fn(&mut self, function: &'ast syn::ImplItemFn) {
+    let enclosing = std::mem::replace(&mut self.function, function.sig.ident.to_string());
+    visit::visit_impl_item_fn(self, function);
+    self.function = enclosing;
+  }
+
+  /// A pattern matches an event, it does not build one (syn types a unit-variant pattern as an expression path).
+  fn visit_pat(&mut self, _: &'ast syn::Pat) {}
+
+  fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
+    self.record_path(&expression.path);
+    visit::visit_expr_path(self, expression);
+  }
+
+  fn visit_expr_struct(&mut self, expression: &'ast syn::ExprStruct) {
+    self.record_path(&expression.path);
+    visit::visit_expr_struct(self, expression);
+  }
+
+  fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+    self.record_macro_tokens(invocation.tokens.clone());
+    visit::visit_macro(self, invocation);
+  }
+}
+
+fn events_emitted_in(file: &str, source: &str) -> BTreeSet<String> {
+  let syntax = syn::parse_file(source).expect("valid Rust source");
+  let mut emitters = EventEmitters { file, function: String::new(), emitted: BTreeSet::new() };
+  emitters.visit_file(&syntax);
+  emitters.emitted
+}
+
+fn events_emitted_by_production_code() -> BTreeSet<String> {
+  let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+  let mut emitted = BTreeSet::new();
+  for path in rust_sources(&root) {
+    let relative = path.strip_prefix(&root).unwrap().to_str().unwrap();
+    emitted.extend(events_emitted_in(relative, &std::fs::read_to_string(&path).unwrap()));
+  }
+  emitted
+}
+
+#[test]
+fn every_event_name_has_a_production_call_site() {
+  let emitted = events_emitted_by_production_code();
+
+  let without_call_site: BTreeSet<String> = EventName::ALL.iter().map(|name| format!("{name:?}")).filter(|name| !emitted.contains(name)).collect();
+
+  let known_to_be_dead: BTreeSet<String> = EVENTS_WITHOUT_A_PRODUCTION_CALL_SITE.iter().map(|name| name.to_string()).collect();
+  assert_eq!(without_call_site, known_to_be_dead, "events nothing emits (left), against the list of events known to be dead (right)");
+}
+
+#[test]
+fn the_call_site_scan_counts_expressions_of_production_code_only() {
+  let emitted = |file: &str, source: &str| -> Vec<String> { events_emitted_in(file, source).into_iter().collect() };
+
+  assert_eq!(emitted("a.rs", "fn run() { sink(DesktopEvent::DaemonReused); }"), ["DaemonReused"]);
+  assert_eq!(emitted("a.rs", "fn run() { sink(DesktopEvent::PanicRecorded { line, column }); }"), ["PanicRecorded"]);
+  assert_eq!(emitted("a.rs", "fn run() { sink(DesktopEvent::SidecarFailed(reason)); }"), ["SidecarFailed"]);
+  assert_eq!(emitted("a.rs", "fn run() { record!(DesktopEvent::WriterDropped { count }); }"), ["WriterDropped"]);
+  assert_eq!(emitted("a.rs", "impl Daemon { fn stop(&self) { sink(DesktopEvent::DaemonStopped { outcome }); } }"), ["DaemonStopped"]);
+  assert_eq!(emitted("a.rs", "fn run() { match event { DesktopEvent::DaemonReused => {} } }"), Vec::<String>::new());
+  assert_eq!(emitted("a.rs", "#[cfg(test)] mod tests { fn fixture() { sink(DesktopEvent::DaemonReused); } }"), Vec::<String>::new());
+  assert_eq!(emitted(EVENT_ENUM_DEFINITION_FILE, "fn name() { DesktopEvent::DaemonReused; }"), Vec::<String>::new());
+}
+
+#[test]
+fn the_rejected_record_counts_only_where_the_grammar_writes_it() {
+  let writes = "fn seal_under() { let rejection = EventName::RejectedRecord; }";
+
+  assert_eq!(events_emitted_in(REJECTION_FUNCTION.0, writes).into_iter().collect::<Vec<_>>(), ["RejectedRecord"]);
+  assert!(events_emitted_in(REJECTION_FUNCTION.0, "fn fields_of() { EventName::RejectedRecord; }").is_empty());
+  assert!(events_emitted_in("a.rs", writes).is_empty());
 }
 
 #[test]
