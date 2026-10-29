@@ -57,6 +57,19 @@ const noHumanQuestionsUnattended: PolicyRule = {
   alternative: 'Report to your manager with `message_parent` and continue with the safest reading of the task.',
 };
 
+export const ASK_USER_QUESTION_TOOL = 'AskUserQuestion';
+export const MANAGER_ASK_USER_RULE_ID = 'manager-ask-user-via-ladder';
+
+const managerAskUserViaLadder: PolicyRule = {
+  id: MANAGER_ASK_USER_RULE_ID,
+  tools: [ASK_USER_QUESTION_TOOL],
+  presence: 'any',
+  decision: 'deny',
+  when: {},
+  reason: 'A manager does not ask the human in free text: the ladder routes its questions by class.',
+  alternative: 'Submit your plan questions with `submit_plan_questions`; the daemon sends a human only the ones that need one.',
+};
+
 const delegateHeavyCommands: PolicyRule = {
   id: 'delegate-heavy-commands',
   tools: ['Bash'],
@@ -195,10 +208,11 @@ export const DEFAULT_COMMAND_POLICY: CommandPolicyDocument = {
     qe: { extends: 'default', rules: [allowDeclaredCommands.id], mode: 'observe' },
     qa: { extends: 'default', rules: [noGitPublish.id], mode: 'observe' },
     review: { extends: 'default', rules: [noFileWrites.id, noGitMutations.id], mode: 'observe' },
+    manager: { extends: 'default', rules: [managerAskUserViaLadder.id] },
   },
-  roleToProfile: { DEV: 'dev', QE: 'qe', QA: 'qa', ADV: 'review', REVIEW: 'review' },
+  roleToProfile: { DEV: 'dev', QE: 'qe', QA: 'qa', ADV: 'review', REVIEW: 'review', manager: 'manager' },
   rules: [
     noForcedRecursiveRm, noForcedGitClean, noWriteIntoGitDir, noFindDeleteOnBroadPaths, noHumanQuestionsUnattended,
-    noShellFileWrites, findingsGatePrCreate, noGenericSendMessageToFleetSession, delegateHeavyCommands, allowReadOnlyPipelines, allowDeclaredCommands, noGitPublish, noGitMutations, noFileWrites,
+    noShellFileWrites, findingsGatePrCreate, noGenericSendMessageToFleetSession, managerAskUserViaLadder, delegateHeavyCommands, allowReadOnlyPipelines, allowDeclaredCommands, noGitPublish, noGitMutations, noFileWrites,
   ],
 };
