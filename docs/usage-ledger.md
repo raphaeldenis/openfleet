@@ -11,6 +11,10 @@
 - `buildLedgerRows({ sessionId, biller, rows, billingCodeOf })` stamps rows with the session id, the `biller` (`'subscription'` or `'api'`) and the billing code, which is the id of the root session of the lineage. The caller supplies all three; the module infers none of them.
 - `aggregateBySession`, `aggregateByLineage` (by billing code), `aggregateByDayUtc` (key `YYYY-MM-DD`, UTC day of the timestamp) and `aggregateByModel` return a `Map` of totals: message count, the four token sums, `reportedCostUsd` and `unpricedMessageCount`. `reportedCostUsd` adds reported costs only; an unpriced message is counted apart and never adds zero to the cost.
 
+## Real-shape fixture
+
+`packages/core/src/usage/__fixtures__/real-shape-usage.jsonl` is a real-shape fixture, reduced to usage fields, ids synthetic. It comes from one Claude Code transcript and keeps only the usage fields of assistant lines (model, timestamp, the four token counts and the `cache_creation` breakdown, `isSidechain`); message and session ids are replaced by `m1` and `s1`, and every other key is dropped. `parseUsageLines.realShape.test.ts` parses it. The real lines carry no `costUSD`, so a real row reads as `unpriced`.
+
 ## Limits
 
 - Sums are plain numbers. A total past `Number.MAX_SAFE_INTEGER` (about 9e15) stays a number but is approximate. A single row can never exceed that limit, since the parser rejects unsafe counts.
