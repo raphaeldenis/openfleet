@@ -74,10 +74,16 @@ fn unstructured_text(stream: Stream, line: &[u8], salt: Option<&Salt>) -> Deskto
   DesktopEvent::DaemonText { stream, class: text_class_of(line), text: Opaque::of(line, salt) }
 }
 
+/// True when `line`, ignoring leading whitespace, opens like a Node.js fatal error report.
+pub fn is_node_fatal_line(line: &str) -> bool {
+  let text = line.trim_start();
+  NODE_FATAL_PREFIXES.iter().any(|prefix| text.starts_with(prefix))
+}
+
 fn text_class_of(line: &[u8]) -> DaemonTextClass {
   let Some(text) = std::str::from_utf8(line).ok().map(str::trim_start) else { return DaemonTextClass::Other };
   let is_boot_refusal = text.starts_with(BOOT_REFUSAL_PREFIX);
-  let is_node_fatal = NODE_FATAL_PREFIXES.iter().any(|prefix| text.starts_with(prefix));
+  let is_node_fatal = is_node_fatal_line(text);
   match (is_boot_refusal, is_node_fatal) {
     (true, _) => DaemonTextClass::BootRefusal,
     (false, true) => DaemonTextClass::NodeFatal,
@@ -225,6 +231,17 @@ mod tests {
   use crate::linear_growth::{assert_linear_growth, cpu_time_to_run_on_repeated, LinearGrowthBudget};
 
   const NOW: &str = "2026-10-04T12:00:00Z";
+
+  #[test]
+  fn tells_a_node_fatal_report_from_other_text_ignoring_leading_whitespace() {
+    for fatal in ["node:internal/errors:1", "  Node.js v22.11.0", "FATAL ERROR: heap", "<--- Last few GCs --->", "\tat run (daemon.mjs:1:1)"] {
+      assert!(is_node_fatal_line(fatal), "{fatal}");
+      assert_eq!(text_class_of(fatal.as_bytes()), DaemonTextClass::NodeFatal, "{fatal}");
+    }
+    for other in ["Error: boom", "x node: not at the start", "attention", ""] {
+      assert!(!is_node_fatal_line(other), "{other}");
+    }
+  }
 
   fn secret() -> String {
     format!("{}AB", github_token())

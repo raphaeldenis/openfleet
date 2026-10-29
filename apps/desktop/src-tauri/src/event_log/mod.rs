@@ -16,7 +16,7 @@ mod salt;
 #[cfg(test)]
 pub(crate) mod synthetic_tokens;
 
-pub use daemon_line::{project_daemon_records, DaemonLineAssembler, ProjectedRecord};
+pub use daemon_line::{is_node_fatal_line, project_daemon_records, DaemonLineAssembler, ProjectedRecord};
 pub use event::{DaemonLineFields, DaemonTextClass, DesktopEvent, ForeignTarget, LineBuilder, SpawnFailure};
 pub use field::{
   Bool, CatalogueId, Count, DaemonMessage, DaemonPhase, DurationMs, EventName, ExitCode, IoFailure, IoKind, JsonFailure, KnownCode, KnownErrorName,

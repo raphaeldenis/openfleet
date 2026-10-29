@@ -1,11 +1,10 @@
 //! The line the webview shows about a daemon that did not start, built from typed causes only: no daemon text reaches it.
 
-use crate::event_log::{ExitCode, Opaque, SpawnFailure};
+use crate::event_log::{is_node_fatal_line, ExitCode, Opaque, SpawnFailure};
 use serde::ser::{SerializeMap, Serializer};
 use serde::Serialize;
 
 const BOOT_REFUSAL_PREFIX: &str = "openfleet: refusing to boot";
-const NODE_FATAL_PREFIXES: [&str; 5] = ["node:", "Node.js v", "FATAL ERROR:", "<--- ", "at "];
 const REFUSAL_CATALOGUE: &str = include_str!("../boot_refusals.txt");
 const HINT_OPENING: &str = " (";
 const SAVE_A_BUNDLE: &str = "Settings → Diagnostics → Export diagnostics bundle";
@@ -84,7 +83,7 @@ impl StatusLine {
   pub fn of_stderr_line(line: &str, opaque: Opaque) -> Self {
     let text = line.trim_start();
     let is_boot_refusal = text.starts_with(BOOT_REFUSAL_PREFIX);
-    let is_node_fatal = NODE_FATAL_PREFIXES.iter().any(|prefix| text.starts_with(prefix));
+    let is_node_fatal = is_node_fatal_line(text);
     match (is_boot_refusal, is_node_fatal) {
       (true, _) => StatusLine::BootRefusal(RefusalReason::of_refusal_line(text, opaque)),
       (false, true) => StatusLine::NodeFatal,
@@ -180,6 +179,13 @@ mod tests {
     assert_eq!(status_line_of("FATAL ERROR: Reached heap limit Allocation failed"), StatusLine::NodeFatal);
     assert_eq!(status_line_of("Node.js v22.11.0"), StatusLine::NodeFatal);
     assert_eq!(status_line_of("Error: boom"), StatusLine::Unrecognised(opaque("Error: boom")));
+  }
+
+  #[test]
+  fn calls_a_line_node_fatal_exactly_when_the_log_classifier_does() {
+    for line in ["node:internal/errors:1", "  Node.js v22.11.0", "<--- Last few GCs --->", "at run (daemon.mjs:1:1)", "Error: boom", "attention", "x node:"] {
+      assert_eq!(status_line_of(line) == StatusLine::NodeFatal, is_node_fatal_line(line), "{line}");
+    }
   }
 
   #[test]

@@ -387,6 +387,18 @@ fn every_event_name_has_a_production_call_site() {
 }
 
 #[test]
+fn the_node_fatal_markers_are_defined_in_one_place() {
+  let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+  let definitions: Vec<String> = rust_sources(&root)
+    .into_iter()
+    .filter(|path| std::fs::read_to_string(path).unwrap().lines().any(|line| line.trim_start().starts_with("const NODE_FATAL_")))
+    .map(|path| path.strip_prefix(&root).unwrap().display().to_string())
+    .collect();
+
+  assert_eq!(definitions, ["event_log/daemon_line.rs"], "files defining their own node fatal markers");
+}
+
+#[test]
 fn the_call_site_scan_counts_expressions_of_production_code_only() {
   let emitted = |file: &str, source: &str| -> Vec<String> { events_emitted_in(file, source).into_iter().collect() };
 
