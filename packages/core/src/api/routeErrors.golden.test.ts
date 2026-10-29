@@ -184,6 +184,11 @@ const THROWN_ERROR_SCENARIOS: { name: string; thrown: () => unknown; expected: E
   { name: 'a spawn by a manager that has not read its mission note in full', thrown: () => new OpenFleetError('note_not_read', 'read the mission note first.'), expected: { status: 409, error: 'note_not_read' } },
   { name: 'a pull request without the findings of its ticket', thrown: () => new OpenFleetError('findings_required', 'the findings are missing.'), expected: { status: 409, error: 'findings_required' } },
   { name: 'a verdict on a commit that is no longer the head', thrown: () => new OpenFleetError('verdict_stale', 'the verdict is for an older commit.'), expected: { status: 409, error: 'verdict_stale' } },
+  { name: 'a docs root that cannot be used', thrown: () => new OpenFleetError('docs_root_invalid', 'the docs root must be an absolute path.'), expected: { status: 400, error: 'docs_root_invalid' } },
+  { name: 'a docs root that is a folder kept by OpenFleet', thrown: () => new OpenFleetError('docs_root_forbidden', 'the docs root is a reserved folder.'), expected: { status: 400, error: 'docs_root_forbidden' } },
+  { name: 'a docs root that is not writable', thrown: () => new OpenFleetError('docs_root_not_writable', 'the docs root is not writable.'), expected: { status: 409, error: 'docs_root_not_writable' } },
+  { name: 'a spawn with a broken harness binary', thrown: () => new OpenFleetError('harness_binary_broken', 'the claude binary fails its version check.'), expected: { status: 503, error: 'harness_binary_broken' } },
+  { name: 'a spawn in a directory that belongs to no project', thrown: () => new OpenFleetError('directory_not_in_project', 'the directory belongs to no project.'), expected: { status: 409, error: 'directory_not_in_project' } },
 ];
 
 describe('golden: every error answer of a real request keeps its wire value and gains the envelope', () => {
