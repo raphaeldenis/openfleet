@@ -1,5 +1,5 @@
 use super::field::{
-  closed_enum_names, log_values, Literal, LogValue, Bool, Bytes, Count, DaemonMessage, DaemonPhase, EventName, ExitCode, IoFailure, KnownCode, KnownErrorName, Level, Opaque, PathClass, PathSource, Pid,
+  closed_enum_names, log_values, Literal, LogValue, Bool, Count, DaemonMessage, DaemonPhase, EventName, ExitCode, IoFailure, KnownCode, KnownErrorName, Level, Opaque, PathClass, PathSource, Pid,
   SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
 use super::grammar::{seal, SanitizedLine};
@@ -86,8 +86,6 @@ pub enum DesktopEvent {
   DaemonText { stream: Stream, class: DaemonTextClass, text: Opaque },
   DaemonLine(DaemonLineFields),
   PathRepaired { source: PathSource },
-  IssueReportOpened { lines: Count, url_bytes: Bytes },
-  BundleSaved { bytes: Bytes },
   WriterDropped { count: Count },
   WriterLost { count: Count, failure: IoFailure },
   WriterHeader { started: Ts },
@@ -168,8 +166,6 @@ impl DesktopEvent {
       DesktopEvent::DaemonText { .. } => EventName::DaemonText,
       DesktopEvent::DaemonLine(_) => EventName::DaemonLine,
       DesktopEvent::PathRepaired { .. } => EventName::PathRepaired,
-      DesktopEvent::IssueReportOpened { .. } => EventName::IssueReportOpened,
-      DesktopEvent::BundleSaved { .. } => EventName::BundleSaved,
       DesktopEvent::WriterDropped { .. } => EventName::WriterDropped,
       DesktopEvent::WriterLost { .. } => EventName::WriterLost,
       DesktopEvent::WriterHeader { .. } => EventName::WriterHeader,
@@ -187,8 +183,6 @@ impl DesktopEvent {
       | DesktopEvent::DaemonLogFlushed { .. }
       | DesktopEvent::DaemonPhaseChanged { .. }
       | DesktopEvent::PathRepaired { .. }
-      | DesktopEvent::IssueReportOpened { .. }
-      | DesktopEvent::BundleSaved { .. }
       | DesktopEvent::WriterHeader { .. } => Level::Info,
       DesktopEvent::DaemonExited { .. } | DesktopEvent::WriterDropped { .. } => Level::Warn,
       DesktopEvent::DaemonSpawnFailed { .. }
@@ -238,11 +232,6 @@ impl DesktopEvent {
       }
       DesktopEvent::DaemonLine(fields) => write_daemon_line(line, fields),
       DesktopEvent::PathRepaired { source } => line.pair("source", source),
-      DesktopEvent::IssueReportOpened { lines, url_bytes } => {
-        line.pair("lines", lines);
-        line.pair("url_bytes", url_bytes);
-      }
-      DesktopEvent::BundleSaved { bytes } => line.pair("bytes", bytes),
       DesktopEvent::WriterDropped { count } => line.pair("count", count),
       DesktopEvent::WriterLost { count, failure } => {
         line.pair("count", count);
@@ -372,8 +361,6 @@ mod tests {
         ..daemon_line(text)
       }),
       DesktopEvent::PathRepaired { source: PathSource::Fallback },
-      DesktopEvent::IssueReportOpened { lines: Count(50), url_bytes: Bytes(7_500) },
-      DesktopEvent::BundleSaved { bytes: Bytes(1 << 20) },
       DesktopEvent::WriterDropped { count: Count(12) },
       DesktopEvent::WriterLost { count: Count(3), failure: io_failure(13) },
       DesktopEvent::WriterHeader { started: now() },
@@ -686,8 +673,6 @@ mod tests {
           frames: Some(frames_at(&[(words[0] as u32, words[1] as u32)])),
           extra_fields: Count(words[2]),
         }),
-        DesktopEvent::IssueReportOpened { lines: Count(words[0]), url_bytes: Bytes(words[1]) },
-        DesktopEvent::BundleSaved { bytes: Bytes(words[2]) },
         DesktopEvent::WriterLost { count: Count(words[0]), failure: IoFailure::of(&error) },
         DesktopEvent::WriterHeader { started: some_ts(random).unwrap_or(now()) },
         DesktopEvent::ForeignRecords { level: Level::Debug, target: ForeignTarget::Other, count: Count(u64::MAX) },

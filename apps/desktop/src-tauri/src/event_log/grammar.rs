@@ -251,8 +251,6 @@ const DAEMON_LINE_FIELDS: &[FieldSpec] = &[
   field!("extra_fields", FieldKind::Decimal, 20),
 ];
 const PATH_REPAIRED_FIELDS: &[FieldSpec] = &[field!("source", FieldKind::Enum(&PathSource::NAMES), 8)];
-const ISSUE_REPORT_OPENED_FIELDS: &[FieldSpec] = &[field!("lines", FieldKind::Decimal, 20), field!("url_bytes", FieldKind::Decimal, 20)];
-const BUNDLE_SAVED_FIELDS: &[FieldSpec] = &[field!("bytes", FieldKind::Decimal, 20)];
 const WRITER_DROPPED_FIELDS: &[FieldSpec] = &[field!("count", FieldKind::Decimal, 20)];
 const WRITER_LOST_FIELDS: &[FieldSpec] = &[
   field!("count", FieldKind::Decimal, 20),
@@ -278,8 +276,6 @@ pub fn fields_of(event: EventName) -> &'static [FieldSpec] {
     EventName::DaemonText => DAEMON_TEXT_FIELDS,
     EventName::DaemonLine => DAEMON_LINE_FIELDS,
     EventName::PathRepaired => PATH_REPAIRED_FIELDS,
-    EventName::IssueReportOpened => ISSUE_REPORT_OPENED_FIELDS,
-    EventName::BundleSaved => BUNDLE_SAVED_FIELDS,
     EventName::WriterDropped => WRITER_DROPPED_FIELDS,
     EventName::WriterLost => WRITER_LOST_FIELDS,
     EventName::WriterHeader => WRITER_HEADER_FIELDS,
@@ -551,8 +547,6 @@ mod tests {
         (EventName::DaemonSpawnFailed, "cause=io kind=timed_out errno=none"),
         (EventName::DaemonSpawnFailed, "cause=unclassified text=[text:9]"),
         (EventName::PathRepaired, "source=fallback"),
-        (EventName::IssueReportOpened, "lines=50 url_bytes=7500"),
-        (EventName::BundleSaved, "bytes=1048576"),
         (EventName::WriterDropped, "count=0"),
         (EventName::WriterLost, "count=3 kind=storage_full errno=28"),
         (EventName::WriterLost, "count=3 kind=other errno=none"),

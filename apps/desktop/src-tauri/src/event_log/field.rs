@@ -113,8 +113,6 @@ pub enum EventName {
   DaemonText,
   DaemonLine,
   PathRepaired,
-  IssueReportOpened,
-  BundleSaved,
   WriterDropped,
   WriterLost,
   WriterHeader,
@@ -124,7 +122,7 @@ pub enum EventName {
 }
 
 impl EventName {
-  pub const ALL: [EventName; 19] = [
+  pub const ALL: [EventName; 17] = [
     EventName::DaemonReused,
     EventName::DaemonSpawnFailed,
     EventName::DaemonStopRequested,
@@ -136,8 +134,6 @@ impl EventName {
     EventName::DaemonText,
     EventName::DaemonLine,
     EventName::PathRepaired,
-    EventName::IssueReportOpened,
-    EventName::BundleSaved,
     EventName::WriterDropped,
     EventName::WriterLost,
     EventName::WriterHeader,
@@ -159,8 +155,6 @@ impl EventName {
       EventName::DaemonText => "daemon_text",
       EventName::DaemonLine => "daemon_line",
       EventName::PathRepaired => "path_repaired",
-      EventName::IssueReportOpened => "issue_report_opened",
-      EventName::BundleSaved => "bundle_saved",
       EventName::WriterDropped => "writer_dropped",
       EventName::WriterLost => "writer_lost",
       EventName::WriterHeader => "writer_header",
@@ -171,7 +165,7 @@ impl EventName {
   }
 }
 
-names_of_all!(EventName, 19);
+names_of_all!(EventName, 17);
 
 impl fmt::Display for EventName {
   fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -395,7 +389,6 @@ macro_rules! decimal_field {
 
 decimal_field!(Count(u64));
 decimal_field!(DurationMs(u64));
-decimal_field!(Bytes(u64));
 decimal_field!(Pid(u32));
 decimal_field!(ExitCode(i32));
 
@@ -859,7 +852,7 @@ impl fmt::Display for Opaque {
 }
 
 log_values!(
-  Literal, EventName, Ts, ShortId, SessionId, Count, DurationMs, Bytes, Pid, ExitCode, Bool, DaemonPhase, StopOutcome, PathSource, Stream, PathClass, Opaque,
+  Literal, EventName, Ts, ShortId, SessionId, Count, DurationMs, Pid, ExitCode, Bool, DaemonPhase, StopOutcome, PathSource, Stream, PathClass, Opaque,
   KnownCode, KnownErrorName, DaemonMessage, StackFrames,
 );
 
@@ -908,8 +901,6 @@ mod tests {
         | EventName::DaemonText
         | EventName::DaemonLine
         | EventName::PathRepaired
-        | EventName::IssueReportOpened
-        | EventName::BundleSaved
         | EventName::WriterDropped
         | EventName::WriterLost
         | EventName::WriterHeader
@@ -1093,7 +1084,6 @@ mod tests {
     fn render_their_extremes_in_decimal() {
       assert_eq!(Count(u64::MAX).to_string(), "18446744073709551615");
       assert_eq!(DurationMs(0).to_string(), "0");
-      assert_eq!(Bytes(5 * 1024 * 1024).to_string(), "5242880");
       assert_eq!(Pid(u32::MAX).to_string(), "4294967295");
       assert_eq!(ExitCode(i32::MIN).to_string(), "-2147483648");
       assert_eq!(ExitCode(i32::MAX).to_string(), "2147483647");

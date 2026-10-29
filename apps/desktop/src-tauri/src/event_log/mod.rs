@@ -19,7 +19,7 @@ pub(crate) mod synthetic_tokens;
 pub use daemon_line::{project_daemon_records, DaemonLineAssembler, ProjectedRecord};
 pub use event::{DaemonLineFields, DaemonTextClass, DesktopEvent, ForeignTarget, LineBuilder, SpawnFailure};
 pub use field::{
-  Bool, Bytes, CatalogueId, Count, DaemonMessage, DaemonPhase, DurationMs, EventName, ExitCode, IoFailure, IoKind, JsonFailure, KnownCode, KnownErrorName,
+  Bool, CatalogueId, Count, DaemonMessage, DaemonPhase, DurationMs, EventName, ExitCode, IoFailure, IoKind, JsonFailure, KnownCode, KnownErrorName,
   KnownPaths, Level, Literal, LogValue, Opaque, PathClass, PathSource, Pid, SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
 pub use foreign::{install_foreign_logger, AllowlistLogger, FOREIGN_RECORDS};

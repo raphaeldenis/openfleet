@@ -275,8 +275,6 @@ fn clippy_configuration_bans_console_macros_and_file_creation() {
   }
 }
 
-/// Events no production code emits; the row that emits or deletes them empties this list.
-const EVENTS_WITHOUT_A_PRODUCTION_CALL_SITE: [&str; 2] = ["IssueReportOpened", "BundleSaved"];
 const EVENT_ENUM_DEFINITION_FILE: &str = "event_log/event.rs";
 const REJECTION_FUNCTION: (&str, &str) = ("event_log/grammar.rs", "seal_under");
 
@@ -383,10 +381,9 @@ fn events_emitted_by_production_code() -> BTreeSet<String> {
 fn every_event_name_has_a_production_call_site() {
   let emitted = events_emitted_by_production_code();
 
-  let without_call_site: BTreeSet<String> = EventName::ALL.iter().map(|name| format!("{name:?}")).filter(|name| !emitted.contains(name)).collect();
+  let without_call_site: Vec<String> = EventName::ALL.iter().map(|name| format!("{name:?}")).filter(|name| !emitted.contains(name)).collect();
 
-  let known_to_be_dead: BTreeSet<String> = EVENTS_WITHOUT_A_PRODUCTION_CALL_SITE.iter().map(|name| name.to_string()).collect();
-  assert_eq!(without_call_site, known_to_be_dead, "events nothing emits (left), against the list of events known to be dead (right)");
+  assert!(without_call_site.is_empty(), "events nothing emits: {without_call_site:?}");
 }
 
 #[test]
