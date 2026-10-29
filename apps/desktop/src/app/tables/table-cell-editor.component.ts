@@ -1,4 +1,4 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, ElementRef, input, output, signal, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, input, output, signal, viewChild } from '@angular/core';
 import type { DsColumn } from '@openfleet/shared';
 import { displayValue } from './table-cells';
 import { editedCellValue } from './table-cell-editor-values';
@@ -56,7 +56,9 @@ export class TableCellEditorComponent {
   private readonly dialog = viewChild.required<ElementRef<HTMLElement>>('dialog');
   protected readonly draft = signal('');
   protected readonly clearsValue = signal(false);
+  private readonly injector = inject(Injector);
   private hasEditedDraft = false;
+  private wasSaving = false;
   protected readonly validationError = signal<string | null>(null);
   protected readonly inputType = computed(() => this.column().format === 'rank' ? 'number' : this.column().format === 'url' ? 'url' : 'text');
   protected readonly help = computed(() => {
@@ -74,8 +76,29 @@ export class TableCellEditorComponent {
     afterNextRender(() => {
       const value = this.initialValue();
       this.draft.set(value === null || value === undefined ? '' : String(value));
-      this.dialog().nativeElement.querySelector<HTMLElement>('input, textarea')?.focus();
+      this.focusDraftField();
     });
+    effect(() => {
+      const isSaving = this.saving();
+      const hasJustFinishedSaving = this.wasSaving && !isSaving;
+      this.wasSaving = isSaving;
+      if (hasJustFinishedSaving) this.restoreFocusAfterRender();
+    });
+  }
+
+  private focusDraftField(): void {
+    this.dialog().nativeElement.querySelector<HTMLElement>('input, textarea')?.focus();
+  }
+
+  /** The fields are disabled while saving, which drops the focus on the page body, out of reach of Escape and Tab containment. */
+  private restoreFocusAfterRender(): void {
+    afterNextRender(
+      () => {
+        const isFocusInsideDialog = this.dialog().nativeElement.contains(document.activeElement);
+        if (!isFocusInsideDialog) this.focusDraftField();
+      },
+      { injector: this.injector },
+    );
   }
 
   protected changeDraft(value: string): void {

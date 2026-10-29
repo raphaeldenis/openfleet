@@ -1,4 +1,4 @@
-import { inputBinding, outputBinding } from '@angular/core';
+import { inputBinding, outputBinding, signal } from '@angular/core';
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import type { ColumnFormat, DsColumn } from '@openfleet/shared';
@@ -18,6 +18,13 @@ async function openEditor(format: ColumnFormat, value: unknown = '') {
   return { input, submitted, cancelled };
 }
 
+/** A browser moves the focus of a field that becomes disabled onto the body; jsdom keeps it, so the same state is built by hand. */
+function dropFocusOnBody(): void {
+  const stray = document.body.appendChild(document.createElement('button'));
+  stray.focus();
+  stray.remove();
+}
+
 describe('rich cell editor', () => {
   it('names the dialog, contains focus, cancels with Escape and preserves multiline input', async () => {
     const { input, submitted, cancelled } = await openEditor('longText', 'Original');
@@ -30,6 +37,27 @@ describe('rich cell editor', () => {
     await userEvent.type(input, 'First{Enter}Second');
     expect(input).toHaveValue('First\nSecond');
     expect(submitted).not.toHaveBeenCalled();
+    await userEvent.keyboard('{Escape}');
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
+
+  it('brings the focus back to the field when a refused save ends, so Escape still cancels', async () => {
+    const saving = signal(false);
+    const cancelled = vi.fn();
+    await render(TableCellEditorComponent, { bindings: [
+      inputBinding('column', () => column('longText')), inputBinding('initialValue', () => 'Original'), inputBinding('rowTitle', () => 'Task'),
+      inputBinding('saving', saving), outputBinding('cancelled', cancelled),
+    ] });
+    const input = screen.getByLabelText('Value');
+    await vi.waitFor(() => expect(input).toHaveFocus());
+    saving.set(true);
+    await vi.waitFor(() => expect(input).toBeDisabled());
+    dropFocusOnBody();
+    expect(document.body).toHaveFocus();
+
+    saving.set(false);
+
+    await vi.waitFor(() => expect(input).toHaveFocus());
     await userEvent.keyboard('{Escape}');
     expect(cancelled).toHaveBeenCalledOnce();
   });
