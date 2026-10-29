@@ -23,6 +23,8 @@ const MAX_REFUSED_OPINIONS = 3;
 /** The first failure of a batch is retried once; the second one fails closed. */
 const FAILURES_BEFORE_FAIL_CLOSED = 2;
 const ARBITER_EMOJI = '⚖️';
+const MAX_CLOSE_ATTEMPTS = 3;
+const CLOSE_RETRY_DELAY_MS = 30_000;
 
 const BATCH_TAG_LENGTH = 8;
 /** The end of an arbiter's name that tells which batch it answers for, so a resumed arbiter is matched to its batch. */
@@ -104,7 +106,9 @@ export class ArbiterRunner {
   /** The opinion of the arbiter is recorded: its timer is cancelled and the daemon closes it. */
   settle(arbiterSessionId: string): void {
     const run = this.forget(arbiterSessionId);
-    if (run !== undefined) this.closeQuietly(arbiterSessionId);
+    if (run === undefined) return;
+    this.failuresByBatchId.delete(run.batchId);
+    void this.closeQuietly(arbiterSessionId);
   }
 
   /** Counts a refused opinion; the arbiter that keeps sending them is closed and replaced, then given up on. */
@@ -129,6 +133,8 @@ export class ArbiterRunner {
       harness: managerSession.harness, permissionMode: 'plan', ...(managerSession.projectId && { projectId: managerSession.projectId }),
       seededPrompt: arbiterPromptOf({ batch, questions: repository.questionsOfBatch(batchId).filter((question) => question.route === 'arbiter' && question.status === 'open') }),
     });
+    const hasClosedWhileStarting = sessions.get(arbiter.id)?.state === 'closed';
+    if (hasClosedWhileStarting) throw new Error(`arbiter ${arbiter.id} closed while it was starting`);
     this.track({ arbiterSessionId: arbiter.id, batchId, manager });
   }
 
@@ -143,6 +149,7 @@ export class ArbiterRunner {
    */
   recover(): void {
     const { repository, sessions, managers } = this.deps;
+    const liveArbitersBeforeRecovery = sessions.list().filter((session) => session.role === ARBITER_ROLE && session.state !== 'closed');
     for (const batchId of repository.batchIdsWithOpenArbiterQuestions()) {
       const batch = repository.findBatch(batchId)!;
       const manager = managers.get(batch.managerId);
@@ -150,6 +157,8 @@ export class ArbiterRunner {
       if (manager !== undefined && resumedArbiter !== undefined) { this.track({ arbiterSessionId: resumedArbiter.id, batchId, manager }); continue; }
       void this.onArbiterLost(batchId).catch((error) => log('error', `arbiter: batch ${batchId} could not be recovered at boot`, error));
     }
+    const untrackedArbiters = liveArbitersBeforeRecovery.filter((session) => !this.runBySessionId.has(session.id));
+    for (const { id } of untrackedArbiters) void this.closeQuietly(id);
   }
 
   /** The worktree of the ticket when one of the manager's children works on it, else the directory of the manager. */
@@ -182,6 +191,7 @@ export class ArbiterRunner {
   }
 
   private failClosed(batchId: string, reason: string): LaunchOutcome {
+    this.failuresByBatchId.delete(batchId);
     const escalated = this.deps.escalations.escalateBatchToHuman({ batchId, reason });
     if (isHumanListRefusal(escalated)) return { status: 'refused', reason, ...escalated };
     return { status: 'escalated', reason, ...(escalated && { escalated }) };
@@ -195,11 +205,14 @@ export class ArbiterRunner {
     return run;
   }
 
-  private async closeQuietly(sessionId: string): Promise<void> {
+  /** Closes the session; a close that fails is tried again later, so a live arbiter never outlives its run. */
+  private async closeQuietly(sessionId: string, attempt = 1): Promise<void> {
     try {
       await this.deps.sessions.close(sessionId);
     } catch (error) {
-      log('warn', `arbiter: session ${sessionId} could not be closed`, error);
+      log('warn', `arbiter: session ${sessionId} could not be closed (attempt ${attempt})`, error);
+      const hasAttemptsLeft = attempt < MAX_CLOSE_ATTEMPTS;
+      if (hasAttemptsLeft) this.deps.schedule(() => void this.closeQuietly(sessionId, attempt + 1), CLOSE_RETRY_DELAY_MS);
     }
   }
 }
