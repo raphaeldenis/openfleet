@@ -16,7 +16,7 @@ it.each(['grid', 'kanban'] as const)('opens %s links through the native boundary
   vi.stubGlobal('__TAURI_INTERNALS__', {});
   const selected = vi.fn();
   const columns = [{ id: 'url', storeId: 'store', displayName: 'Link', columnType: 'text' as const, format: 'url' as const, sortOrder: 0, options: null }];
-  const row = { id: 'row', storeId: 'store', createdAt: 'now', updatedAt: 'now', data: { url: 'https://example.com/task' } };
+  const row = { id: 'row', storeId: 'store', rev: 1, createdAt: 'now', updatedAt: 'now', data: { url: 'https://example.com/task' } };
   const bindings = [inputBinding('columns', () => columns), outputBinding('rowSelected', selected)];
   if (layout === 'grid') await render(TableGridComponent, { bindings: [...bindings, inputBinding('rows', () => [row])] });
   else await render(TableKanbanComponent, { bindings: [...bindings, inputBinding('groups', () => [{ option: { id: 'todo', label: 'Todo' }, rows: [row] }])] });

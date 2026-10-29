@@ -260,7 +260,7 @@ export class FleetApiService {
   insertRows(request: StoreScope & { rows: Record<string, unknown>[] }) {
     return this.post<{ items: DsRow[] }>(`${storePath(request.storeId)}/rows`, { projectId: request.projectId, rows: request.rows });
   }
-  updateRows(request: StoreScope & { updates: { rowId: string; patch: Record<string, unknown> }[] }) {
+  updateRows(request: StoreScope & { updates: { rowId: string; patch: Record<string, unknown>; expectedRev?: number }[] }) {
     return this.patch<{ items: DsRow[] }>(`${storePath(request.storeId)}/rows`, { projectId: request.projectId, updates: request.updates });
   }
   listRowChanges(request: StoreScope & { rowId: string; limit?: number }) {

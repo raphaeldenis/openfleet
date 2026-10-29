@@ -15,7 +15,7 @@ const columns: DsColumn[] = [
   { id: 'rank', storeId: 'store', displayName: 'Rank', columnType: 'number', format: 'rank', sortOrder: 4, options: null },
 ];
 const row: DsRow = {
-  id: 'row', storeId: 'store', createdAt: 'now', updatedAt: 'now',
+  id: 'row', storeId: 'store', rev: 1, createdAt: 'now', updatedAt: 'now',
   data: { title: 'Task', when: '2026-10-06T08:09:10Z', details: 'First line\nSecond line <script>', url: 'https://example.com/task', rank: 2 },
 };
 const DateTimeFormat = Intl.DateTimeFormat;
