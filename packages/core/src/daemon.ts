@@ -9,6 +9,8 @@ import { buildDiagnosticsDocument } from './diagnostics/diagnosticsDocument.js';
 import { describeError } from './errors/describeError.js';
 import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
+import { ArbiterRunner } from './escalation/arbiterRunner.js';
+import { AuditWriter } from './escalation/auditWriter.js';
 import { EscalationRepository } from './escalation/escalationRepository.js';
 import { EscalationService } from './escalation/escalationService.js';
 import { GovernanceQueueService } from './governance/governanceQueueService.js';
@@ -143,6 +145,10 @@ export interface DaemonOptions {
   /** Replaces the clock and the timer of the automatic child restarts, so a test does not wait their delays. */
   childRestart?: {
     clock?: () => number;
+    schedule?: (callback: () => void, delayMs: number) => () => void;
+  };
+  /** Replaces the timer of the arbiter expiry, so a test does not wait the two pulses of the manager. */
+  arbiter?: {
     schedule?: (callback: () => void, delayMs: number) => () => void;
   };
   power?: {
@@ -280,7 +286,13 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   bus.subscribe((event) => silentBlocks.handle(event));
   const handoffSettings = loadHandoffSettings(modelConfigPath);
   const reviewFindings = new ReviewFindingsRepository(db);
-  const escalations = new EscalationService({ db, repository: new EscalationRepository(db), workingStates, clock: () => new Date().toISOString(), newId });
+  const escalationRepository = new EscalationRepository(db);
+  const escalationAudit = new AuditWriter({ notes, noteRepo, managers, sessions, stores, storeRepo });
+  const escalations = new EscalationService({ db, repository: escalationRepository, workingStates, audit: escalationAudit, clock: () => new Date().toISOString(), newId });
+  const arbiters = new ArbiterRunner({
+    sessions, bus, managers, projects, repository: escalationRepository, escalations, modelTable,
+    schedule: options.arbiter?.schedule ?? scheduleOnRealClock, ticketPattern: findingsGateSettings.ticketPattern,
+  });
   const usageLedger = new UsageLedgerService(db);
   const findingsGate = {
     gate: new FindingsGate({ findings: reviewFindings, ticketPattern: findingsGateSettings.ticketPattern }),
@@ -303,7 +315,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
   const scheduledEvents = new ScheduledEventService({ repository: new ScheduledEventRepository(db), sessions, managers: managerRepository, bus });
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ escalations, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -340,6 +352,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     docsFolders.start();
     sleepGuard.start();
     await sessions.resumeAll();
+    arbiters.recover();
     pulseScheduler.start();
     scheduledEvents.start();
     sleepHandoff.start();

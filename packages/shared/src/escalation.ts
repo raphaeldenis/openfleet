@@ -1,6 +1,9 @@
 import * as z from 'zod';
 import { ReproClaimSchema } from './reproClaim.js';
 
+/** The role of the session the daemon spawns to decide the technical questions of a batch. */
+export const ARBITER_ROLE = 'arbiter';
+
 /** Classes whose questions the manager decides with the arbiter, never with a human. */
 const ARBITRABLE_CLASSES = ['factual', 'technical'] as const;
 

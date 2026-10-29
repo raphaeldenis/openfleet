@@ -164,6 +164,12 @@ export class EscalationRepository {
     return (this.db.prepare('SELECT * FROM plan_questions WHERE batch_id = ? ORDER BY rowid').all(batchId) as unknown as QuestionRow[]).map(toQuestion);
   }
 
+  /** The batches that still have a question waiting for the arbiter, oldest first. */
+  batchIdsWithOpenArbiterQuestions(): string[] {
+    const rows = this.db.prepare("SELECT DISTINCT batch_id FROM plan_questions WHERE route = 'arbiter' AND status = 'open' ORDER BY rowid").all() as { batch_id: string }[];
+    return rows.map(({ batch_id }) => batch_id);
+  }
+
   /** The questions an escalation carries, across the batches that joined it, oldest first. */
   questionsOfEscalation(escalationId: string): StoredQuestion[] {
     return (this.db.prepare('SELECT * FROM plan_questions WHERE escalation_id = ? ORDER BY rowid').all(escalationId) as unknown as QuestionRow[]).map(toQuestion);
@@ -176,6 +182,13 @@ export class EscalationRepository {
     const { changes } = this.db.prepare(`UPDATE plan_questions SET status = ?, reason = coalesce(?, reason), human_answer = coalesce(?, human_answer), answered_at = coalesce(?, answered_at)
       WHERE batch_id = ? AND question_id = ? AND status = ?`)
       .run(to, reason ?? null, humanAnswer ?? null, answeredAt ?? null, batchId, questionId, from);
+    return changes === 1;
+  }
+
+  /** Hands a question that is still open to the human with the given classes in one statement; false when it was no longer open. */
+  deferOpenQuestionToHuman({ batchId, questionId, effectiveClasses, reason }: { batchId: string; questionId: string; effectiveClasses: EscalatingClass[]; reason: string }): boolean {
+    const { changes } = this.db.prepare("UPDATE plan_questions SET status = 'pending_human', reason = ?, effective_classes_json = ? WHERE batch_id = ? AND question_id = ? AND status = 'open'")
+      .run(reason, JSON.stringify(effectiveClasses), batchId, questionId);
     return changes === 1;
   }
 
