@@ -11,7 +11,7 @@ A gate that cannot tell "the check passed" from "the check never ran" is worse t
 - Stdin is closed (`ignore`): a command that waits for input sees the end of the stream at once.
 - `isReportParsable` must return exactly `true`: a promise, a string, a number, `undefined` or `null` is `unparsable_report`.
 - "Blank" is judged by `isBlankText` in `packages/shared/src/isBlankText.ts`: whitespace, Unicode spaces, format characters (U+200B, U+200C, U+200D, U+2060, U+00AD, U+FEFF) and U+2800. It guards the step finding claims, the ship verdict reasons, the evidence check of the findings gate and the stdout of a gate step.
-- The findings gate refuses a qe, qa, ponytail or adversarial-go line that states no evidence (`findings_required`, "<step> line has no evidence"), and the report tools refuse to write one (`invalid_body`).
+- The findings gate refuses a qe, qa, ponytail or adversarial-go line that states no evidence (`findings_required`, "<step> line has no evidence"), and the report tools refuse to write one (`invalid_body`). A clean or go line states evidence only with a claim whose status is `proven` or `plausible`: a line stored in the old text form, or with only `not_reproduced` claims, does not pass.
 
 ## What does not exist yet
 

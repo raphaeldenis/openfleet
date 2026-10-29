@@ -59,7 +59,7 @@ const openPullRequest = (sessionId: string, directory: string) => runCommand(ses
 
 const EVIDENCE = ['ran the checks of the step'];
 const line = (ticket: string, step: FindingStep, severity: FindingSeverity, sha: string, reasons: string[] = EVIDENCE) => new ReviewFindingsRepository(daemon!.db)
-  .record({ ticket, step, severity, claim: reasons.join('; '), reasons, sha, authorSessionId: 'reviewer', managerSessionId: null, createdAt: '2026-10-17T10:00:00.000Z' });
+  .record({ ticket, step, severity, claim: reasons.join('; '), reasons, repros: reasons.map(() => ({ status: 'proven' as const, command: 'pnpm test', output: '321 passed' })), sha, authorSessionId: 'reviewer', managerSessionId: null, createdAt: '2026-10-17T10:00:00.000Z' });
 const lineWithoutEvidence = (ticket: string, step: FindingStep, severity: FindingSeverity, sha: string) => line(ticket, step, severity, sha, []);
 const journalRows = () => daemon!.db.prepare('SELECT rule_id AS ruleId, outcome FROM denied_commands ORDER BY rowid').all() as { ruleId: string; outcome: string }[];
 const JOURNALING_AFTER_THE_ANSWER_MS = 100;

@@ -77,14 +77,21 @@ describe('the reproduction of each finding item', () => {
     expect(repository.itemsOf({ ticket: 'CCM-1' })).toMatchObject([{ claim: '0 findings', repro: null }]);
   });
 
-  it('keeps the report line the findings gate reads as it was', () => {
+  it('reads the report line the findings gate judges with the reproduction of its claims', () => {
     const { repository } = migratedRepository();
-
-    const { repros: _repros, ...reportLine } = qeReport;
 
     repository.record(qeReport);
 
-    expect(repository.linesOf({ ticket: 'CCM-1' })).toEqual([reportLine]);
+    expect(repository.linesOf({ ticket: 'CCM-1' })).toEqual([qeReport]);
+  });
+
+  it('reads a line recorded without reproduction with no repros', () => {
+    const { repository } = migratedRepository();
+    const { repros: _repros, ...legacyReport } = qeReport;
+
+    repository.record(legacyReport);
+
+    expect(repository.linesOf({ ticket: 'CCM-1' })).toEqual([legacyReport]);
   });
 
   it('refuses a status outside proven, plausible and not_reproduced', () => {

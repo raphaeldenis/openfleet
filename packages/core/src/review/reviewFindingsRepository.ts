@@ -89,7 +89,21 @@ const toItem = (row: ItemRow): ReviewFindingItem => ({
   authorSessionId: row.author_session_id, managerSessionId: row.manager_session_id, createdAt: row.created_at, repro: toRepro(row),
 });
 
-const ITEM_COLUMNS = 'report_id, position, ticket, step, severity, claim, sha, author_session_id, manager_session_id, created_at, repro_status, repro_command, repro_output';
+const NOT_REPRODUCED: ReproEvidence = { status: 'not_reproduced' };
+
+/** The report id ignores the date, so a report sent again keeps the items of the first one: the match leaves the date out. */
+const isItemOfLine = (line: ReviewFinding) => (item: ReviewFindingItem): boolean =>
+  item.step === line.step && item.sha === line.sha && item.severity === line.severity && item.authorSessionId === line.authorSessionId;
+
+/** A line with no recorded reproduction on any of its items keeps no `repros`: it is an old-form line. */
+const withReprosOf = (line: ReviewFinding, items: ReviewFindingItem[]): ReviewFinding => {
+  const itemsOfLine = items.filter(isItemOfLine(line)).sort((first, second) => first.position - second.position);
+  const hasRecordedRepro = itemsOfLine.some((item) => item.repro !== null);
+  if (!hasRecordedRepro) return line;
+  return { ...line, repros: itemsOfLine.map((item) => item.repro ?? NOT_REPRODUCED) };
+};
+
+const ITEM_COLUMNS ='report_id, position, ticket, step, severity, claim, sha, author_session_id, manager_session_id, created_at, repro_status, repro_command, repro_output';
 
 const COLUMNS = 'ticket, step, severity, claim, reasons_json, sha, author_session_id, manager_session_id, created_at';
 
@@ -130,10 +144,11 @@ export class ReviewFindingsRepository {
     });
   }
 
-  /** Every line of a ticket, oldest first. */
+  /** Every line of a ticket, oldest first, with the reproduction of its claims when the report recorded one. */
   linesOf({ ticket }: { ticket: string }): ReviewFinding[] {
     const rows = this.db.prepare(`SELECT ${COLUMNS} FROM review_findings WHERE ticket = ? ORDER BY id`).all(ticket) as unknown as Row[];
-    return rows.map(toFinding);
+    const items = this.itemsOf({ ticket });
+    return rows.map((row) => withReprosOf(toFinding(row), items));
   }
 
   recordSkip(skip: StepSkip): void {
