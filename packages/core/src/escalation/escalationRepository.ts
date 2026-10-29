@@ -138,6 +138,11 @@ export class EscalationRepository {
     return row ? toBatch(row) : undefined;
   }
 
+  /** Every batch a manager submitted on a ticket, oldest first. */
+  batchesOfTicket({ managerId, ticket }: { managerId: string; ticket: string }): StoredBatch[] {
+    return (this.db.prepare('SELECT * FROM plan_question_batches WHERE manager_id = ? AND ticket = ? ORDER BY rowid').all(managerId, ticket) as unknown as BatchRow[]).map(toBatch);
+  }
+
   addArbiterRun(batchId: string): void {
     this.db.prepare('UPDATE plan_question_batches SET arbiter_runs = arbiter_runs + 1 WHERE id = ?').run(batchId);
   }

@@ -503,7 +503,7 @@ export class DataStoreService {
     });
   }
 
-  updateRow(storeId: string, rowId: string, input: Scope & { patch: Record<string, unknown>; actor: RowActor }): DsRow {
+  updateRow(storeId: string, rowId: string, input: Scope & { patch: Record<string, unknown>; actor: RowActor; writtenByDaemon?: boolean }): DsRow {
     this.authorize(storeId, input.projectId);
     this.refuseDaemonSetCells(storeId, input.patch);
     const columns = this.repo.listColumns(storeId);
