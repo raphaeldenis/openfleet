@@ -21,6 +21,6 @@ pub use field::{
   KnownPaths, Level, Opaque, PathClass, PathSource, Pid, SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
 pub use foreign::{install_foreign_logger, AllowlistLogger, FOREIGN_RECORDS};
-pub use grammar::{allowed_keys_of, validate, GrammarViolation, SanitizedLine};
+pub use grammar::{fields_of, validate, FieldKind, FieldSpec, GrammarViolation, SanitizedLine, MAX_LINE_BYTES, MAX_VALUE_BYTES};
 pub use hash::Hash8;
 pub use salt::{Salt, SALT_FILE_NAME};

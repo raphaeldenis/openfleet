@@ -5,6 +5,59 @@ use std::fmt;
 use std::io;
 use std::path::{Component, Path};
 
+/// Gives a closed enum its `ALL` list, its `as_str` names, the `NAMES` array the field registry matches against and its `Display`.
+/// The names and the variants are listed once, and the `as_str` match has no wildcard, so the registry cannot drift from the renderer.
+macro_rules! closed_enum_names {
+  ($type:ident { $($variant:ident => $name:literal),+ $(,)? }) => {
+    impl $type {
+      pub const ALL: [$type; [$($name),+].len()] = [$($type::$variant),+];
+      pub const NAMES: [&'static str; [$($name),+].len()] = [$($name),+];
+
+      pub const fn as_str(self) -> &'static str {
+        match self {
+          $($type::$variant => $name),+
+        }
+      }
+    }
+
+    impl fmt::Display for $type {
+      fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+      }
+    }
+  };
+}
+pub(super) use closed_enum_names;
+
+/// Fills `NAMES` of an enum that already lists its `ALL` variants and its `as_str` names.
+macro_rules! names_of_all {
+  ($type:ident, $count:literal) => {
+    impl $type {
+      pub const NAMES: [&'static str; $count] = {
+        let mut names = [""; $count];
+        let mut index = 0;
+        while index < $count {
+          names[index] = $type::ALL[index].as_str();
+          index += 1;
+        }
+        names
+      };
+    }
+  };
+}
+
+/// Returns `names` followed by `extra`; `N` is `names.len() + 1`.
+pub(super) const fn with_extra<const N: usize>(names: &[&'static str], extra: &'static str) -> [&'static str; N] {
+  assert!(names.len() + 1 == N);
+  let mut all = [extra; N];
+  let mut index = 0;
+  while index < names.len() {
+    all[index] = names[index];
+    index += 1;
+  }
+  all
+}
+
 /// Every event a log line can name.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EventName {
@@ -52,7 +105,7 @@ impl EventName {
     EventName::RejectedRecord,
   ];
 
-  pub fn as_str(self) -> &'static str {
+  pub const fn as_str(self) -> &'static str {
     match self {
       EventName::DaemonReused => "daemon_reused",
       EventName::DaemonSpawnFailed => "daemon_spawn_failed",
@@ -76,6 +129,8 @@ impl EventName {
     }
   }
 }
+
+names_of_all!(EventName, 19);
 
 impl fmt::Display for EventName {
   fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -322,17 +377,7 @@ pub enum DaemonPhase {
   Reused,
 }
 
-impl fmt::Display for DaemonPhase {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      DaemonPhase::Starting => "starting",
-      DaemonPhase::Slow => "slow",
-      DaemonPhase::Ready => "ready",
-      DaemonPhase::Failed => "failed",
-      DaemonPhase::Reused => "reused",
-    })
-  }
-}
+closed_enum_names!(DaemonPhase { Starting => "starting", Slow => "slow", Ready => "ready", Failed => "failed", Reused => "reused" });
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StopOutcome {
@@ -340,14 +385,7 @@ pub enum StopOutcome {
   KilledAfterGrace,
 }
 
-impl fmt::Display for StopOutcome {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      StopOutcome::ExitedOnSigterm => "exited_on_sigterm",
-      StopOutcome::KilledAfterGrace => "killed_after_grace",
-    })
-  }
-}
+closed_enum_names!(StopOutcome { ExitedOnSigterm => "exited_on_sigterm", KilledAfterGrace => "killed_after_grace" });
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PathSource {
@@ -355,14 +393,7 @@ pub enum PathSource {
   Fallback,
 }
 
-impl fmt::Display for PathSource {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      PathSource::Shell => "shell",
-      PathSource::Fallback => "fallback",
-    })
-  }
-}
+closed_enum_names!(PathSource { Shell => "shell", Fallback => "fallback" });
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Stream {
@@ -370,14 +401,7 @@ pub enum Stream {
   Err,
 }
 
-impl fmt::Display for Stream {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      Stream::Out => "out",
-      Stream::Err => "err",
-    })
-  }
-}
+closed_enum_names!(Stream { Out => "out", Err => "err" });
 
 /// The failure kinds the log names; `io::ErrorKind` is `non_exhaustive`, so anything unlisted is `Other`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -440,7 +464,7 @@ impl IoKind {
     IoKind::Other,
   ];
 
-  pub fn as_str(self) -> &'static str {
+  pub const fn as_str(self) -> &'static str {
     match self {
       IoKind::NotFound => "not_found",
       IoKind::PermissionDenied => "permission_denied",
@@ -509,6 +533,8 @@ impl IoKind {
     }
   }
 }
+
+names_of_all!(IoKind, 26);
 
 /// What the log keeps of an `io::Error`: its kind and its OS error number. The message is never read.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -589,6 +615,9 @@ const KNOWN_CODES: &[&str] = &[
 
 const OTHER_CODE: &str = "other";
 
+/// Every text a `KnownCode` renders: the table and `other`.
+pub(super) const CODE_VALUES: [&str; KNOWN_CODES.len() + 1] = with_extra(KNOWN_CODES, OTHER_CODE);
+
 /// A code from the closed table of errno names, SQLite results and shared error codes; every other text is `other`.
 /// The table, not a shape rule, decides: a token such as an `AKIA...` key has the shape of an errno name.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -613,6 +642,9 @@ fn listed_or_other(list: &'static [&'static str], name: &str) -> &'static str {
 const KNOWN_ERROR_NAMES: &[&str] = &[
   "Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError", "AggregateError", "SqliteError", "AbortError", "TimeoutError",
 ];
+
+/// Every text a `KnownErrorName` renders: the list and `other`.
+pub(super) const ERROR_NAME_VALUES: [&str; KNOWN_ERROR_NAMES.len() + 1] = with_extra(KNOWN_ERROR_NAMES, OTHER_CODE);
 
 /// An `Error.name` from the closed list of JavaScript built-ins and the database driver; every other name is `other`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -656,7 +688,7 @@ impl fmt::Display for DaemonMessage {
   }
 }
 
-const MAX_FRAMES: usize = 8;
+pub(super) const MAX_FRAMES: usize = 8;
 const MAX_FRAMES_RENDERED_BYTES: usize = 64;
 const FRAME_SEPARATOR_BYTES: usize = 1;
 
@@ -745,18 +777,14 @@ impl PathClass {
   }
 }
 
-impl fmt::Display for PathClass {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      PathClass::OpenfleetHome => "openfleet_home",
-      PathClass::LogsDir => "logs_dir",
-      PathClass::AdminToken => "admin_token",
-      PathClass::DaemonBundle => "daemon_bundle",
-      PathClass::UserHome => "user_home",
-      PathClass::Other => "other",
-    })
-  }
-}
+closed_enum_names!(PathClass {
+  OpenfleetHome => "openfleet_home",
+  LogsDir => "logs_dir",
+  AdminToken => "admin_token",
+  DaemonBundle => "daemon_bundle",
+  UserHome => "user_home",
+  Other => "other",
+});
 
 /// Free text reduced to its byte length and, when the install has a salt, a 4-byte keyed tag.
 /// The source text is dropped inside `of`: the value holds no text, so no `Debug` or `Display` can print it.

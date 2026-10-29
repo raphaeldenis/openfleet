@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "leaks into")]
+    #[should_panic(expected = "left: Err(ValueShapeMismatch)")]
     fn turns_red_when_the_uuid_is_also_copied_into_another_field() {
       let uuid = random_uuid();
       let scenario = scenario_of(&uuid, FreeTextKind::SessionId, Placement::SoleValue);
@@ -1219,13 +1219,31 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "leaks into")]
+    #[should_panic(expected = "left: Err(ValueShapeMismatch)")]
     fn turns_red_when_the_exception_is_widened_to_the_id_kind() {
       let uuid = random_uuid();
       let scenario = scenario_of(&uuid, FreeTextKind::Id, Placement::SoleValue);
       let sink = FixedLinesSink(vec![line_with(&format!("id={}", uuid.secret))]);
 
       assert_allowlist_property(&sink, [scenario]);
+    }
+
+    #[test]
+    fn the_leak_detector_alone_sees_the_uuid_copied_into_another_field() {
+      let uuid = random_uuid();
+      let session_field = format!("session={}", uuid.secret);
+      let line = line_with(&format!("{session_field} msg={}", uuid.secret));
+      let line_without_the_typed_id = line.replacen(&session_field, "", 1);
+
+      assert!(leaked_form_in(&[line_without_the_typed_id], &uuid.secret).is_some());
+    }
+
+    #[test]
+    fn the_leak_detector_alone_sees_the_uuid_widened_to_the_id_field() {
+      let uuid = random_uuid();
+      let line = line_with(&format!("id={}", uuid.secret));
+
+      assert!(leaked_form_in(&[line], &uuid.secret).is_some());
     }
 
     #[test]

@@ -138,10 +138,18 @@ fn message_of(value: &Value, salt: Option<&Salt>) -> DaemonMessage {
 }
 
 /// Each catalogue line is `<id> <literal>`: the id has no space, the literal is the rest of the line.
+fn catalogue_entries() -> impl Iterator<Item = (&'static str, &'static str)> {
+  MESSAGE_CATALOGUE.lines().filter_map(|entry| entry.split_once(' '))
+}
+
 fn catalogue_id_of(literal: &str) -> Option<CatalogueId> {
-  let entries = MESSAGE_CATALOGUE.lines().filter_map(|entry| entry.split_once(' '));
-  let (id, _) = entries.into_iter().find(|(_, listed_literal)| *listed_literal == literal)?;
+  let (id, _) = catalogue_entries().find(|(_, listed_literal)| *listed_literal == literal)?;
   Some(CatalogueId::new(id))
+}
+
+/// True when `candidate` is the id of a catalogued daemon message.
+pub(super) fn is_catalogue_id(candidate: &str) -> bool {
+  catalogue_entries().any(|(id, _)| id == candidate)
 }
 
 fn bundle_frames_of(stack: &str) -> StackFrames {

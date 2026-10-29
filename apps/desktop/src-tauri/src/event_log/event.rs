@@ -1,5 +1,5 @@
 use super::field::{
-  Bool, Bytes, Count, DaemonMessage, DaemonPhase, EventName, ExitCode, IoFailure, KnownCode, KnownErrorName, Level, Opaque, PathClass, PathSource, Pid,
+  closed_enum_names, Bool, Bytes, Count, DaemonMessage, DaemonPhase, EventName, ExitCode, IoFailure, KnownCode, KnownErrorName, Level, Opaque, PathClass, PathSource, Pid,
   SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
 use super::grammar::{seal, SanitizedLine};
@@ -18,20 +18,16 @@ pub enum ForeignTarget {
   Other,
 }
 
-impl Display for ForeignTarget {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      ForeignTarget::Tauri => "tauri",
-      ForeignTarget::Tao => "tao",
-      ForeignTarget::Wry => "wry",
-      ForeignTarget::Tokio => "tokio",
-      ForeignTarget::Hyper => "hyper",
-      ForeignTarget::TauriPluginShell => "tauri_plugin_shell",
-      ForeignTarget::App => "app",
-      ForeignTarget::Other => "other",
-    })
-  }
-}
+closed_enum_names!(ForeignTarget {
+  Tauri => "tauri",
+  Tao => "tao",
+  Wry => "wry",
+  Tokio => "tokio",
+  Hyper => "hyper",
+  TauriPluginShell => "tauri_plugin_shell",
+  App => "app",
+  Other => "other",
+});
 
 /// What kind of non-JSON text the daemon wrote.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,15 +37,7 @@ pub enum DaemonTextClass {
   Other,
 }
 
-impl Display for DaemonTextClass {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      DaemonTextClass::BootRefusal => "boot_refusal",
-      DaemonTextClass::NodeFatal => "node_fatal",
-      DaemonTextClass::Other => "other",
-    })
-  }
-}
+closed_enum_names!(DaemonTextClass { BootRefusal => "boot_refusal", NodeFatal => "node_fatal", Other => "other" });
 
 /// Why the daemon did not start, in the terms the log keeps.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -272,7 +260,7 @@ fn write_daemon_line(line: &mut LineBuilder, fields: &DaemonLineFields) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::event_log::grammar::{allowed_keys_of, validate};
+  use crate::event_log::grammar::{fields_of, validate};
   use crate::event_log::salt::{Salt, SALT_LEN};
   use crate::linear_growth::{assert_linear_growth, thread_cpu_time_of, LinearGrowthBudget};
   use std::collections::HashSet;
@@ -393,7 +381,7 @@ mod tests {
 
         let keys = line.as_str().split(' ').skip(3).filter_map(|pair| pair.split('=').next());
         for key in keys {
-          assert!(allowed_keys_of(event.name()).contains(&key), "{key} of {}", event.name());
+          assert!(fields_of(event.name()).iter().any(|field| field.key == key), "{key} of {}", event.name());
         }
       }
     }
