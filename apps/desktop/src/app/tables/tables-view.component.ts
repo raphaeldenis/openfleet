@@ -157,8 +157,9 @@ const describeCellFailure = (error: unknown): string => {
             <of-row-details [row]="row" [columns]="columns()" [readonly]="mismatches().length > 0" (editRequested)="startEditing($event)" />
           }
           @if (historyFailed()) {
-            <div class="history-error" role="status" data-testid="tables-history-error"><of-error-line>{{ historyRefreshAfterSaveFailed() ? 'Saved; history could not be refreshed.' : 'The history of this row could not be loaded.' }}</of-error-line></div>
-            <button type="button" (click)="retryHistory()">Retry history</button>
+            <div class="history-error" role="status" data-testid="tables-history-error"><of-error-line>{{ historyRefreshAfterSaveFailed() ? 'Saved; history could not be refreshed.' : 'The history of this row could not be loaded.' }}</of-error-line>
+              <button type="button" class="of-btn of-btn--secondary of-btn--compact" (click)="retryHistory()">Retry history</button>
+            </div>
           } @else {
             <of-row-history [entries]="history()" [columns]="columns()" [heading]="selectedRowTitle()" [identifier]="selectedRowIdentifier()" />
           }
@@ -205,7 +206,7 @@ const describeCellFailure = (error: unknown): string => {
     .muted { color: var(--mut) }
     .actions { display: flex; gap: .5rem }
     .history { position: relative; width: 20rem; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; display: flex; flex-direction: column }
-    .history-error { padding: 2.5rem .875rem .875rem }
+    .history-error { display: flex; flex-direction: column; align-items: flex-start; gap: .5rem; padding: 2.5rem .875rem .875rem }
     .close { position: absolute; top: .5rem; right: .5rem; border: 0; background: transparent; color: var(--mut); cursor: pointer }
     .banner { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin-bottom: .75rem; padding: .5rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); font-size: .75rem }
   `,

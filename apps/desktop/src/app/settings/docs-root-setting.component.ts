@@ -32,9 +32,10 @@ const UNREADABLE: UnavailableSetting = { testId: 'general-docs-root', value: 'â€
   styles: `
     ${SETTINGS_VALUE_STYLES}
     :host { display: block; border-bottom: 1px solid var(--line); }
-    .editor { display: flex; flex-direction: column; gap: .375rem; align-items: flex-end; }
-    .controls { display: flex; gap: .5rem; }
-    input.value { min-width: 18rem; }
+    .editor { flex: 0 1 26rem; min-width: 0; display: flex; flex-direction: column; gap: .375rem; align-items: flex-end; }
+    .controls { width: 100%; display: flex; gap: .5rem; }
+    input.value { flex: 1; min-width: 0; }
+    button.value { flex: none; }
     button.value[aria-disabled='true'] { opacity: .6; cursor: not-allowed; }
   `,
 })

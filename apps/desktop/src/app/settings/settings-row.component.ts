@@ -34,7 +34,7 @@ let nextReasonSequence = 0;
     ${SETTINGS_VALUE_STYLES}
     :host { display: flex; align-items: center; gap: 1rem; padding: .75rem 1rem; border-bottom: 1px solid var(--line); }
     :host(:last-child) { border-bottom: 0; }
-    .label { flex: 1; display: flex; flex-direction: column; }
+    .label { flex: 1 0 12rem; display: flex; flex-direction: column; }
     .name { font-weight: 500; }
     .detail { font-size: .75rem; color: var(--mut); overflow-wrap: anywhere; }
     .reason { display: flex; align-items: center; gap: .375rem; font-size: .75rem; color: var(--mut); }

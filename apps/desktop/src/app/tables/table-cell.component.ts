@@ -21,8 +21,8 @@ const NEUTRAL_CHIP_COLOR = 'var(--mut)';
   `,
   styles: `
     :host { min-width: 0 }
-    .chip { display: inline-flex; align-items: center; gap: .25rem; padding: 0 .375rem; border-radius: .25rem; font-size: .6875rem; color: var(--fg) }
-    .chip-dot { flex: none; width: .375rem; height: .375rem; border-radius: 50% }
+    .chip { display: inline-flex; align-items: center; gap: .25rem; padding: 0 .375rem; border-radius: .25rem; font-size: .6875rem; color: var(--fg); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--fg) 12%, transparent) }
+    .chip-dot { flex: none; width: .375rem; height: .375rem; border-radius: 50%; box-shadow: 0 0 0 1px color-mix(in oklch, var(--fg) 30%, transparent) }
     a { color: var(--accent); overflow-wrap: anywhere }
     a:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
     .multiline {
