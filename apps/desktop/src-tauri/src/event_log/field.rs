@@ -827,6 +827,8 @@ closed_enum_names!(PathClass {
   Other => "other",
 });
 
+const SMALLEST_LENGTH_BUCKET: usize = 16;
+
 /// Free text reduced to its byte length and, when the install has a salt, a 4-byte keyed tag.
 /// The source text is dropped inside `of`: the value holds no text, so no `Debug` or `Display` can print it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -838,6 +840,12 @@ pub struct Opaque {
 impl Opaque {
   pub fn of(text: &[u8], salt: Option<&Salt>) -> Self {
     Self { length: text.len(), tag: salt.map(|salt| Hash8::of(salt, text)) }
+  }
+
+  /// Like `of`, but the length is the upper bound of its power-of-two bucket (16 at least): a token's exact length fingerprints its provider.
+  pub fn bucketed(text: &[u8], salt: Option<&Salt>) -> Self {
+    let bucket_upper_bound = text.len().max(SMALLEST_LENGTH_BUCKET).next_power_of_two();
+    Self { length: bucket_upper_bound, ..Self::of(text, salt) }
   }
 }
 
@@ -859,7 +867,7 @@ log_values!(
 mod tests {
   use super::*;
   use crate::event_log::salt::SALT_LEN;
-  use crate::event_log::synthetic_tokens::{aws_key_id, aws_session_key_id, github_token, openai_key};
+  use crate::event_log::synthetic_tokens::{anthropic_key, aws_key_id, aws_session_key_id, github_token, openai_key};
   use crate::linear_growth::{assert_linear_growth, cpu_time_to_run_on_repeated, LinearGrowthBudget};
   use std::path::PathBuf;
 
@@ -1373,6 +1381,31 @@ mod tests {
     #[test]
     fn renders_the_length_alone_without_a_salt() {
       assert_eq!(Opaque::of(b"disk full", None).to_string(), "[text:9]");
+    }
+
+    #[test]
+    fn a_bucketed_text_renders_the_upper_bound_of_its_power_of_two_bucket() {
+      let lengths_and_buckets = [(0, 16), (1, 16), (16, 16), (17, 32), (36, 64), (40, 64), (64, 64), (65, 128), (70_000, 131_072)];
+
+      for (length, bucket) in lengths_and_buckets {
+        assert_eq!(Opaque::bucketed(&vec![b'a'; length], None).to_string(), format!("[text:{bucket}]"), "{length}");
+      }
+    }
+
+    #[test]
+    fn two_token_lengths_of_one_bucket_render_the_same_length_field() {
+      let salt = salt_of(1);
+      let length_field_of = |text: &str| Opaque::bucketed(text.as_bytes(), Some(&salt)).to_string().split(':').nth(1).map(str::to_string);
+
+      assert_eq!(length_field_of(&github_token()), length_field_of(&anthropic_key()));
+      assert_ne!(github_token().len(), anthropic_key().len());
+    }
+
+    #[test]
+    fn a_bucketed_text_keeps_the_tag_of_the_whole_text() {
+      let salt = salt_of(1);
+
+      assert_eq!(Opaque::bucketed(b"disk full", Some(&salt)).to_string(), format!("[text:16:{}]", Hash8::of(&salt, b"disk full")));
     }
 
     #[test]

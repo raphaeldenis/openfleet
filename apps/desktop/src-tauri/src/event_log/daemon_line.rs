@@ -112,7 +112,7 @@ fn project_record(record: &Map<String, Value>, stream: Stream, salt: Option<&Sal
     message,
     error_name: error.and_then(|error| error.get("name")).map(|name| KnownErrorName::from_name(name.as_str().unwrap_or(""))),
     error_code: error.and_then(|error| error.get("code")).map(known_code_of),
-    error_message: error.and_then(|error| error.get("message")).map(|message| opaque_of(message, salt)),
+    error_message: error.and_then(|error| error.get("message")).map(|message| bucketed_opaque_of(message, salt)),
     frames: error.and_then(|error| error.get("stack")).and_then(Value::as_str).map(bundle_frames_of).filter(|frames| !frames.is_empty()),
     extra_fields,
   }
@@ -122,10 +122,10 @@ fn known_code_of(value: &Value) -> KnownCode {
   KnownCode::from_name(value.as_str().unwrap_or(""))
 }
 
-fn opaque_of(value: &Value, salt: Option<&Salt>) -> Opaque {
+fn bucketed_opaque_of(value: &Value, salt: Option<&Salt>) -> Opaque {
   match value.as_str() {
-    Some(text) => Opaque::of(text.as_bytes(), salt),
-    None => Opaque::of(value.to_string().as_bytes(), salt),
+    Some(text) => Opaque::bucketed(text.as_bytes(), salt),
+    None => Opaque::bucketed(value.to_string().as_bytes(), salt),
   }
 }
 
@@ -133,7 +133,7 @@ fn message_of(value: &Value, salt: Option<&Salt>) -> DaemonMessage {
   let catalogue_id = value.as_str().and_then(catalogue_id_of);
   match catalogue_id {
     Some(id) => DaemonMessage::Catalogued(id),
-    None => DaemonMessage::Unlisted(opaque_of(value, salt)),
+    None => DaemonMessage::Unlisted(bucketed_opaque_of(value, salt)),
   }
 }
 
@@ -180,7 +180,7 @@ mod tests {
   use super::*;
   use crate::event_log::grammar::validate;
   use crate::event_log::salt::SALT_LEN;
-  use crate::event_log::synthetic_tokens::{aws_key_id, github_token};
+  use crate::event_log::synthetic_tokens::{anthropic_key, aws_key_id, github_token};
   use crate::linear_growth::{assert_linear_growth, cpu_time_to_run_on_repeated, LinearGrowthBudget};
 
   const NOW: &str = "2026-10-04T12:00:00Z";
@@ -195,6 +195,10 @@ mod tests {
 
   fn tag_of(text: &str) -> String {
     Opaque::of(text.as_bytes(), Some(&salt())).to_string()
+  }
+
+  fn bucketed_tag_of(text: &str) -> String {
+    Opaque::bucketed(text.as_bytes(), Some(&salt())).to_string()
   }
 
   fn rendered(events: Vec<DesktopEvent>) -> Vec<String> {
@@ -233,8 +237,9 @@ mod tests {
 
       let expected = format!(
         "2026-10-04T11:59:58Z warn daemon_line id=0a1b2c3d session=123e4567-e89b-42d3-a456-426614174000 code=session_not_found msg=ws_write_failed err_name=TypeError err_code=ENOENT err_msg={} frames=120:5/88:13 extra_fields=0",
-        tag_of("boom")
+        bucketed_tag_of("boom")
       );
+      assert!(line.contains(" err_msg=[text:16:"), "{line}");
       assert_eq!(line, expected);
     }
 
@@ -245,8 +250,17 @@ mod tests {
 
       let line = line_of(&serde_json::json!({ "level": "error", "msg": message }).to_string());
 
-      assert!(line.ends_with(&format!("msg={} extra_fields=0", tag_of(&message))), "{line}");
+      assert!(line.ends_with(&format!("msg={} extra_fields=0", bucketed_tag_of(&message))), "{line}");
       assert!(!line.contains("ghp_"), "{line}");
+    }
+
+    #[test]
+    fn renders_the_bucket_of_a_message_and_an_error_message_length_not_the_exact_length() {
+      let record = serde_json::json!({ "level": "error", "msg": github_token(), "err": { "name": "Error", "message": anthropic_key() } });
+
+      let line = line_of(&record.to_string());
+
+      assert!(line.contains(" msg=[text:64:") && line.contains(" err_msg=[text:64:"), "{line}");
     }
 
     #[test]
@@ -334,7 +348,7 @@ mod tests {
     fn hashes_a_message_that_is_not_a_string() {
       let line = line_of(r#"{"level":"info","msg":{"a":1}}"#);
 
-      assert!(line.contains(&format!("msg={}", tag_of(r#"{"a":1}"#))), "{line}");
+      assert!(line.contains(&format!("msg={}", bucketed_tag_of(r#"{"a":1}"#))), "{line}");
     }
 
     #[test]
@@ -343,7 +357,7 @@ mod tests {
 
       let lines = rendered(assembler.push_chunk(b"{\"level\":\"info\",\"msg\":\"hello\"}\n", None));
 
-      assert_eq!(lines, vec![format!("{NOW} info daemon_line msg=[text:5] extra_fields=0")]);
+      assert_eq!(lines, vec![format!("{NOW} info daemon_line msg=[text:16] extra_fields=0")]);
     }
 
     #[test]

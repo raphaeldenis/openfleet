@@ -644,7 +644,7 @@ mod tests {
       fs.lines(LOG),
       vec![
         format!("{EPOCH_PREFIX} info daemon_text stream=out class=other text=[text:5]"),
-        format!("{EPOCH_PREFIX} warn daemon_line msg=[text:5] extra_fields=0"),
+        format!("{EPOCH_PREFIX} warn daemon_line msg=[text:16] extra_fields=0"),
         format!("{EPOCH_PREFIX} warn daemon_text stream=err class=other text=[text:13]"),
       ]
     );
