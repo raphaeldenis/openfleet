@@ -70,6 +70,7 @@ export function registerEscalationTools(server: McpServer, deps: RegisterEscalat
     const policy = escalationPolicyOf(projects, caller.projectId);
     const submitted = escalations.submitBatch({ managerId: caller.id, ticket, planNoteId, planNoteRev: planNote.rev, questions, policy });
     const arbiterLaunch = await arbiters.launch(submitted.batchId);
+    if (arbiterLaunch.status === 'refused') return refuse('invalid_body', arbiterLaunch.refusal, arbiterLaunch.hint);
 
     const handedToTheHuman = arbiterLaunch.status === 'escalated' ? arbiterLaunch.escalated : undefined;
     const humanQuestionIds = [...(submitted.human?.questionIds ?? []), ...(handedToTheHuman?.questionIds ?? [])];

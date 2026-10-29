@@ -37,6 +37,15 @@ export interface EscalatedToHuman {
   questionIds: string[];
 }
 
+/** The human list had no room: the questions stay with the arbiter's batch, and this says why. */
+export interface HumanListRefusal {
+  refusal: string;
+  hint?: string;
+}
+
+export const isHumanListRefusal = (outcome: EscalatedToHuman | HumanListRefusal | undefined): outcome is HumanListRefusal =>
+  outcome !== undefined && 'refusal' in outcome;
+
 export interface PlanQuestionBatch {
   managerId: string;
   ticket: string;
@@ -119,24 +128,47 @@ export class EscalationService {
     return { ...recorded.result, warnings: [...recorded.result.warnings, ...journalWarnings] };
   }
 
-  /** Hands the questions of a batch that still wait for the arbiter to the human, in the single open escalation, with the reason the human reads. Answers undefined when none was waiting. */
-  escalateBatchToHuman({ batchId, reason }: { batchId: string; reason: string }): EscalatedToHuman | undefined {
+  /**
+   * Hands the questions of a batch that still wait for the arbiter to the human, in the single open escalation, with the reason the human reads. Answers undefined when none was waiting.
+   * When the human list has no room, nothing is handed over, the questions stay open, the manager is told why, and the answer carries the refusal.
+   */
+  escalateBatchToHuman({ batchId, reason }: { batchId: string; reason: string }): EscalatedToHuman | HumanListRefusal | undefined {
     const batch = this.deps.repository.findBatch(batchId);
     if (batch === undefined) return undefined;
 
-    const escalated = inTransaction(this.deps.db, 'escalation_escalate_batch', () => {
-      const waiting = this.deps.repository.questionsOfBatch(batchId).filter((question) => question.route === 'arbiter' && question.status === 'open');
-      const handed = waiting.filter((question) => this.deps.repository.deferOpenQuestionToHuman({ batchId, questionId: question.questionId, effectiveClasses: question.effectiveClasses, reason }));
-      const hasNothingToHand = handed.length === 0;
-      if (hasNothingToHand) return undefined;
-      return this.joinEscalation({ batchId, managerId: batch.managerId, ticket: batch.ticket, questionIds: handed.map((question) => question.questionId) });
-    });
+    let escalated: EscalatedToHuman | undefined;
+    try {
+      escalated = this.handWaitingQuestionsToHuman({ batch, reason });
+    } catch (error) {
+      const isHumanListFull = error instanceof OpenFleetError && error.code === 'invalid_body';
+      if (!isHumanListFull) throw error;
+      return this.refuseHandOver({ batch, reason, refusal: error.message, hint: error.options.hint });
+    }
     if (escalated === undefined) return undefined;
 
     const { managerId, ticket } = batch;
     this.deps.audit.journal({ managerId, entries: [`${ticket} ${escalated.questionIds.join(',')} escalated to the human: ${reason}`] });
     this.deps.audit.tellManager({ managerId, body: `[arbiter] escalated ${escalated.questionIds.join(',')} on ${ticket} to the human: ${reason}` });
     return escalated;
+  }
+
+  private refuseHandOver({ batch, reason, refusal, hint }: { batch: StoredBatch; reason: string; refusal: string; hint: string | undefined }): HumanListRefusal {
+    const { managerId, ticket } = batch;
+    const line = `${ticket} could not be handed to the human (${reason}): ${refusal}`;
+    this.deps.audit.journal({ managerId, entries: [line] });
+    this.deps.audit.tellManager({ managerId, body: `[arbiter] ${line}${hint ? ` ${hint}` : ''}` });
+    return { refusal, ...(hint && { hint }) };
+  }
+
+  private handWaitingQuestionsToHuman({ batch, reason }: { batch: StoredBatch; reason: string }): EscalatedToHuman | undefined {
+    const batchId = batch.id;
+    return inTransaction(this.deps.db, 'escalation_escalate_batch', () => {
+      const waiting = this.deps.repository.questionsOfBatch(batchId).filter((question) => question.route === 'arbiter' && question.status === 'open');
+      const handed = waiting.filter((question) => this.deps.repository.deferOpenQuestionToHuman({ batchId, questionId: question.questionId, effectiveClasses: question.effectiveClasses, reason }));
+      const hasNothingToHand = handed.length === 0;
+      if (hasNothingToHand) return undefined;
+      return this.joinEscalation({ batchId, managerId: batch.managerId, ticket: batch.ticket, questionIds: handed.map((question) => question.questionId) });
+    });
   }
 
   private assertOpinionDecidesTheArbiterQuestions({ opinion, questions }: { opinion: ArbiterOpinion; questions: readonly StoredQuestion[] }): void {
