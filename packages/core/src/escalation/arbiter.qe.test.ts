@@ -534,3 +534,77 @@ describe('QE — the arbiter is unavailable: the batch fails closed to the singl
     expect(arbiterRows()).toHaveLength(3);
   });
 });
+
+describe('QE — the human list is full (questions_for_human holds 20 items)', () => {
+  const FULL_LIST_SIZE = 20;
+  const fillHumanList = (client: Client) => client.callTool({
+    name: 'update_working_state',
+    arguments: { plan: [], todo: [], remaining: [], internal_questions: [], blockers: [], questions_for_human: Array.from({ length: FULL_LIST_SIZE }, (_, index) => `an open question ${index}`) },
+  });
+
+  it('refuses the quota fallback with invalid_body and the reason, leaves the question open and tells the manager', async () => {
+    setPolicy({ maxArbiterRunsPerTicket: 1 });
+    const { manager, planNote } = await bootManager();
+    await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
+    await waitForArbiters(1);
+    await fillHumanList(manager.client);
+
+    const result = await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q2')] });
+
+    expect(result.isError).toBe(true);
+    expect(rawText(result)).toMatch(/^error invalid_body: .*questions_for_human/);
+    expect(statusOf('q2').status).toBe('open');
+    expect(escalationRows()).toEqual([]);
+    expect(questionsForHumanOf(manager.id)).toHaveLength(FULL_LIST_SIZE);
+    expect(arbiterMessagesTo(manager.id).join('\n')).toContain('questions_for_human');
+    expect(journalEntries().join('\n')).toContain('questions_for_human');
+  });
+
+  it('tells the manager, without throwing, when the arbiter fails closed on a full list: the batch stays open', async () => {
+    const { manager, planNote } = await bootManager();
+    await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
+    const [first] = await waitForArbiters(1);
+    await fillHumanList(manager.client);
+
+    await closeSession(first!.id);
+    const [, second] = await waitForArbiters(2);
+    await closeSession(second!.id);
+
+    await vi.waitFor(() => expect(arbiterMessagesTo(manager.id).join('\n')).toContain('questions_for_human'), { timeout: 5000 });
+    expect(statusOf('q1').status).toBe('open');
+    expect(escalationRows()).toEqual([]);
+  });
+});
+
+describe('QE — the arbiter prompt stays under the spawn limit', () => {
+  const MAX_SPAWN_PROMPT_BYTES = 64 * 1024;
+  const maximalQuestion = (index: number) => ({
+    id: `q${index}`, class: 'technical', text: 'a'.repeat(300), recommendation: 'b'.repeat(300),
+    options: ['c', 'd', 'e', 'f'].map((letter) => letter.repeat(300)),
+    paths: Array.from({ length: 20 }, (_, pathIndex) => `src/${'g'.repeat(290)}${pathIndex}`),
+  });
+
+  it('spawns the arbiter for 20 questions with maximal paths, with an explicit truncation marker and every question id present', async () => {
+    const { manager, planNote } = await bootManager();
+    const questions = Array.from({ length: 20 }, (_, index) => maximalQuestion(index + 1));
+
+    const answer = parsed(await submit(manager.client, { plan_note_id: planNote.id, questions }));
+
+    expect(answer.arbiter.status).toBe('pending');
+    const [arbiter] = await waitForArbiters(1);
+    const prompt = arbiter!.seeded_prompt!;
+    expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(MAX_SPAWN_PROMPT_BYTES);
+    expect(prompt).toContain('[truncated]');
+    expect(prompt).toContain('report_arbiter_opinion');
+    for (let index = 1; index <= 20; index += 1) expect(prompt).toContain(`"id":"q${index}"`);
+  });
+
+  it('does not mark a prompt that fits as truncated', async () => {
+    const { manager, planNote } = await bootManager();
+
+    await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
+
+    const [arbiter] = await waitForArbiters(1);
+    expect(arbiter!.seeded_prompt).not.toContain('[truncated]');
+  });
+});
