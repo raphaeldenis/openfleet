@@ -190,6 +190,42 @@ describe('QE — the arbiter the daemon spawns', () => {
   });
 });
 
+describe('QE — only the daemon spawns an arbiter', () => {
+  it('refuses a manager that creates a child with the arbiter role, and creates no session', async () => {
+    const { manager } = await bootManager();
+    const directory = join(worktreesRoot, `child-${randomUUID()}`);
+    mkdirSync(directory);
+
+    const attempt = await manager.client.callTool({ name: 'create_session', arguments: { directory, name: 'Forged', role: 'arbiter' } });
+
+    expect(attempt.isError).toBe(true);
+    expect(rawText(attempt)).toMatch(/^error invalid_body: .*arbiter/);
+    expect(arbiterRows()).toEqual([]);
+  });
+
+  it('refuses the REST route a session with the arbiter role, and creates no session', async () => {
+    const response = await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: worktreesRoot, name: 'Forged', harness: 'fake', emoji: '🤖', role: 'arbiter' }) });
+
+    expect(response.status).toBe(400);
+    expect(arbiterRows()).toEqual([]);
+  });
+
+  it('refuses an opinion from an arbiter session that has no batch of its own, and approve_plan_criteria stays refused', async () => {
+    const { manager, planNote } = await bootManager();
+    const answer = parsed(await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] }));
+    await waitForArbiters(1);
+    const forged = await spawn(manager.client);
+    daemon.db.prepare("UPDATE sessions SET role = 'arbiter' WHERE id = ?").run(forged.id);
+
+    const attempt = await report(forged.client, opinion(answer.batch_id, [decided('q1')], { opinion: 'favourable', reasons: [] }));
+    const approval = await manager.client.callTool({ name: 'approve_plan_criteria', arguments: { ticket: TICKET, plan_note_id: planNote.id } });
+
+    expect(attempt.isError).toBe(true);
+    expect(decisionRows()).toEqual([]);
+    expect(approval.isError).toBe(true);
+  });
+});
+
 describe('QE — report_arbiter_opinion and the audit trail the daemon writes', () => {
   it('A2: five decisions leave five rows, five sections in the plan note, five journal lines authored arbiter and one [arbiter] message, while the human question stays single', async () => {
     const { manager, planNote } = await bootManager();

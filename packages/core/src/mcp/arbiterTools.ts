@@ -36,7 +36,7 @@ export function registerArbiterTools(server: McpServer, deps: RegisterArbiterToo
     const opinion = parsedOpinion.data;
 
     const runBatchId = arbiters.batchOf(caller.id);
-    const isBatchOfAnotherRun = runBatchId !== undefined && runBatchId !== opinion.batch_id;
+    const isBatchOfAnotherRun = runBatchId !== opinion.batch_id;
     if (isBatchOfAnotherRun) return refuse('escalation_not_found', 'this batch is not the one you were given');
 
     try {

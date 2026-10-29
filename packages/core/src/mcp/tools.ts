@@ -1,4 +1,4 @@
-import { CONTRACT_VERSION, configDirHarnessRefusalOf, DEFAULT_ESCALATION_POLICY, effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
+import { ARBITER_ROLE, CONTRACT_VERSION, configDirHarnessRefusalOf, DEFAULT_ESCALATION_POLICY, effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -265,6 +265,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // mode: a plain MCP-spawned child gets neither privilege.
     const isTrustedOrchestrator = isRootSession || caller.role === MANAGER_ROLE;
     const resolvedTargetRole = input.manager ? MANAGER_ROLE : input.role;
+    if (resolvedTargetRole === ARBITER_ROLE) return refuse('invalid_body', 'role "arbiter" is spawned by the daemon only');
     if (resolvedTargetRole === MANAGER_ROLE && !input.manager) return refuse('invalid_body', 'role "manager" requires a manager spec');
     if (input.manager && !isTrustedOrchestrator) return refuse('not_a_manager', 'only an existing manager may create another manager');
 
