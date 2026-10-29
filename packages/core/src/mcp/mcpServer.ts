@@ -24,6 +24,7 @@ import type { ManagerDenials } from '../policy/managerDenials.js';
 import type { DenialJournal } from '../policy/ports.js';
 import { registerDeniedCommandTools } from './deniedCommandTools.js';
 import type { ArbiterRunner } from '../escalation/arbiterRunner.js';
+import type { AskUserGate } from '../escalation/askUserGate.js';
 import type { CriteriaApproval } from '../escalation/criteriaApproval.js';
 import type { EscalationService } from '../escalation/escalationService.js';
 import { ARBITER_TOOL_NAMES, registerArbiterTools } from './arbiterTools.js';
@@ -74,7 +75,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
+export function createMcpHandler(deps: { askUserGate?: AskUserGate; criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -109,7 +110,7 @@ export function createMcpHandler(deps: { criteria?: CriteriaApproval; escalation
     registerNoteVersionTools(toolServer, noteToolDeps);
     registerProjectTools(toolServer, { projects: deps.projects, noteRepo: deps.noteRepo, caller });
     registerWorktreeTools(toolServer, { worktrees: new WorktreeService({ projects: deps.projects, sessions: deps.sessions, worktreesRoot: deps.worktreesRoot }), caller });
-    registerWorkingStateTools(toolServer, { workingStates: deps.workingStates, sessions: deps.sessions, caller });
+    registerWorkingStateTools(toolServer, { workingStates: deps.workingStates, sessions: deps.sessions, caller, ...(deps.askUserGate && { askUserGate: deps.askUserGate }) });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => { void transport.close(); void server.close(); });
     await server.connect(transport);

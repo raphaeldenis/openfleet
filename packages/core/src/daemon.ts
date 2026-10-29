@@ -10,6 +10,7 @@ import { describeError } from './errors/describeError.js';
 import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
 import { ArbiterRunner } from './escalation/arbiterRunner.js';
+import { AskUserGate } from './escalation/askUserGate.js';
 import { AuditWriter } from './escalation/auditWriter.js';
 import { CriteriaApproval } from './escalation/criteriaApproval.js';
 import { CriteriaStatusGuard } from './escalation/criteriaStatusGuard.js';
@@ -121,6 +122,7 @@ export interface Daemon {
   governanceQueue: GovernanceQueueService;
   scheduledEvents: ScheduledEventService;
   ciWatch: CiWatchService;
+  askUserGate: AskUserGate;
   criteriaStatusGuard: CriteriaStatusGuard;
   harnesses: Harness[];
   close: () => Promise<void>;
@@ -316,6 +318,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     enforcement: options.findingsGateEnforcement ?? findingsGateSettings.enforcement ?? FINDINGS_GATE_ENFORCEMENT,
   };
   const denialJournal = new SqliteDenialJournal({ db, clock: () => new Date().toISOString() });
+  const askUserGate = new AskUserGate({ db, projects, repository: escalationRepository, audit: escalationAudit, denials: denialJournal, clock: () => new Date().toISOString() });
   const commandPolicy = new ClaudePolicyHooks({
     settings: () => commandPolicyService.settings(),
     evaluate: evaluatePolicy,
@@ -332,7 +335,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
   const scheduledEvents = new ScheduledEventService({ repository: new ScheduledEventRepository(db), sessions, managers: managerRepository, bus });
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -380,5 +383,5 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     throw error;
   }
 
-  return { server, db, degraded, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, harnesses, close };
+  return { server, db, degraded, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, harnesses, close };
 }

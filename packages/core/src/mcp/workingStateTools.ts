@@ -1,6 +1,7 @@
 import { WorkingStateSectionsSchema, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import type { AskUserGate } from '../escalation/askUserGate.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { guardedFor, ok, refuse } from './toolResults.js';
@@ -10,12 +11,13 @@ export interface RegisterWorkingStateToolsDeps {
   workingStates: WorkingStateService;
   sessions: SessionService;
   caller: Session;
+  askUserGate?: AskUserGate;
 }
 
 const sectionShape = WorkingStateSectionsSchema.shape;
 
 export function registerWorkingStateTools(server: McpServer, deps: RegisterWorkingStateToolsDeps): void {
-  const { workingStates, sessions, caller } = deps;
+  const { workingStates, sessions, caller, askUserGate } = deps;
   const guarded = guardedFor(caller);
   const isInLineage = (target: Session) => target.id === caller.id || target.parentId === caller.id || target.id === caller.parentId;
 
@@ -27,8 +29,10 @@ export function registerWorkingStateTools(server: McpServer, deps: RegisterWorki
     },
   }, async ({ plan, todo, remaining, questions_for_human, internal_questions, blockers }) => {
     return guarded(() => {
+      const askedBefore = workingStates.get(caller.id)?.questionsForHuman ?? [];
       const { updatedAt, mirrorWarning } = workingStates.update(caller.id, { plan, todo, remaining, questionsForHuman: questions_for_human, internalQuestions: internal_questions, blockers });
-      return { updated_at: updatedAt, ...(mirrorWarning ? { mirror_warning: mirrorWarning } : {}) };
+      const questionWarning = askUserGate?.review({ manager: caller, askedBefore, askedNow: questions_for_human });
+      return { updated_at: updatedAt, ...(mirrorWarning ? { mirror_warning: mirrorWarning } : {}), ...(questionWarning ? { question_unclassified_warning: questionWarning } : {}) };
     });
   });
 
