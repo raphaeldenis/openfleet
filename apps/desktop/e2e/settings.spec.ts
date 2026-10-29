@@ -7,7 +7,6 @@ interface UnavailableRow { testId: string; value: string; reason: string }
 
 const DISABLED_ROWS: Record<string, UnavailableRow[]> = {
   General: [
-    { testId: 'general-docs-root', value: '—', reason: 'Not configurable in this build yet' },
     { testId: 'general-handoff-on-close', value: 'Set in config.json', reason: 'Set handoff.writeOnClose in config.json' },
     { testId: 'general-reply-language', value: '—', reason: 'Not available yet — no language setting in the daemon' },
   ],
@@ -59,6 +58,21 @@ for (const [section, rows] of Object.entries(DISABLED_ROWS)) {
     }
   });
 }
+
+test('the Docs folder root row of General shows the root read from the daemon in an editable field with a Save button', async ({ page }) => {
+  await openSettings(page);
+
+  const docsRoot = page.getByTestId('general-docs-root');
+
+  await expect(docsRoot).toBeEnabled();
+  await expect(docsRoot).toHaveValue(/\/Documents\/OpenFleet$/);
+  await expect(docsRoot).not.toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByTestId('general-docs-root-save')).toHaveAttribute('aria-disabled', 'true');
+
+  await docsRoot.fill('/tmp/openfleet-docs-root');
+
+  await expect(page.getByTestId('general-docs-root-save')).not.toHaveAttribute('aria-disabled', 'true');
+});
 
 test('the Daemon section shows the log and the hand-edited config file as read-only text', async ({ page }) => {
   await openSettings(page);
