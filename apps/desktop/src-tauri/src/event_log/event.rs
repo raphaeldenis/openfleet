@@ -1,9 +1,15 @@
 use super::field::{
-  closed_enum_names, Bool, Bytes, Count, DaemonMessage, DaemonPhase, EventName, ExitCode, IoFailure, KnownCode, KnownErrorName, Level, Opaque, PathClass, PathSource, Pid,
+  closed_enum_names, log_values, Literal, LogValue, Bool, Bytes, Count, DaemonMessage, DaemonPhase, EventName, ExitCode, IoFailure, KnownCode, KnownErrorName, Level, Opaque, PathClass, PathSource, Pid,
   SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
 use super::grammar::{seal, SanitizedLine};
-use std::fmt::{self, Display};
+use std::fmt;
+
+pub const SPAWN_CAUSE_BUNDLE_NOT_FOUND: Literal = Literal::new("bundle_not_found");
+pub const SPAWN_CAUSE_IO: Literal = Literal::new("io");
+pub const SPAWN_CAUSE_UNCLASSIFIED: Literal = Literal::new("unclassified");
+pub const OUTCOME_NOTHING_TO_STOP: Literal = Literal::new("nothing_to_stop");
+pub const ABSENT: Literal = Literal::new("none");
 
 /// The classes of crate a foreign `log::` record is counted under.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,6 +44,8 @@ pub enum DaemonTextClass {
 }
 
 closed_enum_names!(DaemonTextClass { BootRefusal => "boot_refusal", NodeFatal => "node_fatal", Other => "other" });
+
+log_values!(ForeignTarget, DaemonTextClass);
 
 /// Why the daemon did not start, in the terms the log keeps.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -88,31 +96,57 @@ pub enum DesktopEvent {
   RejectedRecord { event: EventName },
 }
 
-struct LineBuilder {
+/// Builds the text of a candidate line; the only values it accepts are the typed fields of the log vocabulary, never a string.
+pub struct LineBuilder {
   text: String,
 }
 
 impl LineBuilder {
-  fn start(timestamp: Ts, level: Level, event: EventName) -> Self {
+  pub fn start(timestamp: Ts, level: Level, event: EventName) -> Self {
     Self { text: format!("{timestamp} {level} {event}") }
   }
 
-  fn pair(&mut self, key: &'static str, value: impl Display) {
+  /// Appends ` key=value` for a typed value.
+  ///
+  /// ```
+  /// use app_lib::{EventName, Level, LineBuilder, Pid, Ts};
+  /// let timestamp = Ts::parse("2026-10-04T12:00:00Z").unwrap();
+  /// let mut line = LineBuilder::start(timestamp, Level::Info, EventName::DaemonStopRequested);
+  /// line.pair("pid", Pid(42));
+  /// ```
+  ///
+  /// A free string is not a log value:
+  ///
+  /// ```compile_fail,E0277
+  /// use app_lib::{EventName, Level, LineBuilder, Ts};
+  /// let timestamp = Ts::parse("2026-10-04T12:00:00Z").unwrap();
+  /// let mut line = LineBuilder::start(timestamp, Level::Error, EventName::SidecarFailed);
+  /// let token_shaped = ["gh", "p_", "0123456789abcdefghijklmnopqrstuvwxyz"].concat();
+  /// line.pair("text", &token_shaped);
+  /// ```
+  ///
+  /// ```compile_fail,E0277
+  /// use app_lib::{EventName, Level, LineBuilder, Ts};
+  /// let timestamp = Ts::parse("2026-10-04T12:00:00Z").unwrap();
+  /// let mut line = LineBuilder::start(timestamp, Level::Error, EventName::SidecarFailed);
+  /// line.pair("text", "a literal");
+  /// ```
+  pub fn pair(&mut self, key: &'static str, value: impl LogValue) {
     self.text.push_str(&format!(" {key}={value}"));
   }
 
-  /// Appends a value that already renders as `key=value` pairs.
-  fn pairs(&mut self, group: impl Display) {
-    self.text.push_str(&format!(" {group}"));
+  /// Appends the `kind=<kind> errno=<errno>` pairs of an io failure.
+  fn pairs(&mut self, failure: &IoFailure) {
+    self.text.push_str(&format!(" {failure}"));
   }
 
-  fn pair_if_present(&mut self, key: &'static str, value: Option<impl Display>) {
+  fn pair_if_present(&mut self, key: &'static str, value: Option<impl LogValue>) {
     if let Some(value) = value {
       self.pair(key, value);
     }
   }
 
-  fn pair_or(&mut self, key: &'static str, value: Option<impl Display>, absent: &'static str) {
+  fn pair_or(&mut self, key: &'static str, value: Option<impl LogValue>, absent: Literal) {
     match value {
       Some(value) => self.pair(key, value),
       None => self.pair(key, absent),
@@ -189,13 +223,13 @@ impl DesktopEvent {
       DesktopEvent::DaemonReused => {}
       DesktopEvent::DaemonSpawnFailed { failure } => write_spawn_failure(line, failure),
       DesktopEvent::DaemonStopRequested { pid } => line.pair("pid", pid),
-      DesktopEvent::DaemonStopped { outcome } => line.pair_or("outcome", *outcome, "nothing_to_stop"),
+      DesktopEvent::DaemonStopped { outcome } => line.pair_or("outcome", *outcome, OUTCOME_NOTHING_TO_STOP),
       DesktopEvent::DaemonLogFlushed { drained } => line.pair("drained", drained),
       DesktopEvent::DaemonPhaseChanged { from, to } => {
         line.pair("from", from);
         line.pair("to", to);
       }
-      DesktopEvent::DaemonExited { code } => line.pair_or("code", *code, "none"),
+      DesktopEvent::DaemonExited { code } => line.pair_or("code", *code, ABSENT),
       DesktopEvent::SidecarFailed { reason } => line.pair("reason", reason),
       DesktopEvent::DaemonText { stream, class, text } => {
         line.pair("stream", stream);
@@ -231,15 +265,15 @@ impl DesktopEvent {
 fn write_spawn_failure(line: &mut LineBuilder, failure: &SpawnFailure) {
   match failure {
     SpawnFailure::BundleNotFound(path_class) => {
-      line.pair("cause", "bundle_not_found");
+      line.pair("cause", SPAWN_CAUSE_BUNDLE_NOT_FOUND);
       line.pair("path_class", path_class);
     }
     SpawnFailure::Io(io_failure) => {
-      line.pair("cause", "io");
+      line.pair("cause", SPAWN_CAUSE_IO);
       line.pairs(io_failure);
     }
     SpawnFailure::Unclassified(text) => {
-      line.pair("cause", "unclassified");
+      line.pair("cause", SPAWN_CAUSE_UNCLASSIFIED);
       line.pair("text", text);
     }
   }
@@ -350,6 +384,59 @@ mod tests {
 
   fn sample_events() -> Vec<DesktopEvent> {
     events_carrying("some daemon text")
+  }
+
+  mod log_values_are_sealed {
+    use super::*;
+    use std::borrow::Cow;
+
+    trait AmbiguousIfImplemented<Marker> {
+      fn probe() {}
+    }
+    impl<T: ?Sized> AmbiguousIfImplemented<()> for T {}
+
+    /// Compiles only when the type does NOT implement the bound: an implementation makes `probe` ambiguous.
+    macro_rules! assert_not_implemented {
+      ($type:ty: $bound:path) => {
+        const _: fn() = || {
+          struct Implemented;
+          impl<T: ?Sized + $bound> AmbiguousIfImplemented<Implemented> for T {}
+          let _ = <$type as AmbiguousIfImplemented<_>>::probe;
+        };
+      };
+    }
+
+    assert_not_implemented!(str: LogValue);
+    assert_not_implemented!(&'static str: LogValue);
+    assert_not_implemented!(String: LogValue);
+    assert_not_implemented!(&'static String: LogValue);
+    assert_not_implemented!(Cow<'static, str>: LogValue);
+    assert_not_implemented!(u64: LogValue);
+    assert_not_implemented!(i32: LogValue);
+    assert_not_implemented!(bool: LogValue);
+
+    fn assert_copy<T: Copy>() {}
+
+    #[test]
+    fn a_free_string_or_a_raw_number_is_not_a_log_value() {
+      // The assertions above are the proof: this crate does not compile if one of them is implemented.
+    }
+
+    #[test]
+    fn a_desktop_event_holds_no_string_because_it_is_copy() {
+      assert_copy::<DesktopEvent>();
+      assert_copy::<DaemonLineFields>();
+      assert_copy::<SpawnFailure>();
+    }
+
+    #[test]
+    fn a_literal_is_one_of_the_consts_of_the_event_module() {
+      let words = [SPAWN_CAUSE_BUNDLE_NOT_FOUND, SPAWN_CAUSE_IO, SPAWN_CAUSE_UNCLASSIFIED, OUTCOME_NOTHING_TO_STOP, ABSENT];
+
+      let rendered: Vec<String> = words.iter().map(|word| word.to_string()).collect();
+
+      assert_eq!(rendered, ["bundle_not_found", "io", "unclassified", "nothing_to_stop", "none"]);
+    }
   }
 
   mod rendering {

@@ -46,6 +46,47 @@ macro_rules! names_of_all {
   };
 }
 
+pub(super) mod sealed {
+  /// Names the types allowed to be log values; the module is unreachable outside `event_log`, so no other crate or module can implement `LogValue`.
+  pub trait Sealed {}
+}
+
+/// A value a log line can hold: a typed field of this vocabulary or a `Literal`. A `str` or a `String` is not one.
+pub trait LogValue: sealed::Sealed + fmt::Display {}
+
+impl<T: LogValue> sealed::Sealed for &T {}
+impl<T: LogValue> LogValue for &T {}
+
+macro_rules! log_values {
+  ($($type:ty),+ $(,)?) => {
+    $(
+      impl super::field::sealed::Sealed for $type {}
+      impl super::field::LogValue for $type {}
+    )+
+  };
+}
+pub(super) use log_values;
+
+/// A fixed word of the log vocabulary. Its field is private and `new` is visible inside `event_log` only, so the words are the consts of `event.rs`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Literal(&'static str);
+
+impl Literal {
+  pub(super) const fn new(text: &'static str) -> Self {
+    Self(text)
+  }
+
+  pub const fn text(self) -> &'static str {
+    self.0
+  }
+}
+
+impl fmt::Display for Literal {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter.write_str(self.0)
+  }
+}
+
 /// Returns `names` followed by `extra`; `N` is `names.len() + 1`.
 pub(super) const fn with_extra<const N: usize>(names: &[&'static str], extra: &'static str) -> [&'static str; N] {
   assert!(names.len() + 1 == N);
@@ -808,6 +849,11 @@ impl fmt::Display for Opaque {
     }
   }
 }
+
+log_values!(
+  Literal, EventName, Ts, ShortId, SessionId, Count, DurationMs, Bytes, Pid, ExitCode, Bool, DaemonPhase, StopOutcome, PathSource, Stream, PathClass, Opaque,
+  KnownCode, KnownErrorName, DaemonMessage, StackFrames,
+);
 
 #[cfg(test)]
 mod tests {

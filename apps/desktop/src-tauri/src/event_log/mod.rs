@@ -15,10 +15,10 @@ mod hostile_corpus;
 mod salt;
 
 pub use daemon_line::DaemonLineAssembler;
-pub use event::{DaemonLineFields, DaemonTextClass, DesktopEvent, ForeignTarget, SpawnFailure};
+pub use event::{DaemonLineFields, DaemonTextClass, DesktopEvent, ForeignTarget, LineBuilder, SpawnFailure};
 pub use field::{
   Bool, Bytes, CatalogueId, Count, DaemonMessage, DaemonPhase, DurationMs, EventName, ExitCode, IoFailure, IoKind, JsonFailure, KnownCode, KnownErrorName,
-  KnownPaths, Level, Opaque, PathClass, PathSource, Pid, SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
+  KnownPaths, Level, Literal, LogValue, Opaque, PathClass, PathSource, Pid, SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
 pub use foreign::{install_foreign_logger, AllowlistLogger, FOREIGN_RECORDS};
 pub use grammar::{fields_of, validate, FieldKind, FieldSpec, GrammarViolation, SanitizedLine, MAX_LINE_BYTES, MAX_VALUE_BYTES};

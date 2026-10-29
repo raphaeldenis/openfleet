@@ -1,5 +1,5 @@
 use super::daemon_line::is_catalogue_id;
-use super::event::{DaemonTextClass, ForeignTarget};
+use super::event::{DaemonTextClass, ForeignTarget, ABSENT, OUTCOME_NOTHING_TO_STOP, SPAWN_CAUSE_BUNDLE_NOT_FOUND, SPAWN_CAUSE_IO, SPAWN_CAUSE_UNCLASSIFIED};
 use super::field::{
   with_extra, DaemonPhase, EventName, IoKind, Level, PathClass, PathSource, SessionId, ShortId, StopOutcome, Stream, Ts, CODE_VALUES, ERROR_NAME_VALUES, MAX_FRAMES,
 };
@@ -9,7 +9,7 @@ use std::fmt;
 pub const MAX_LINE_BYTES: usize = 512;
 /// The ceiling of every `FieldSpec::max_bytes`.
 pub const MAX_VALUE_BYTES: usize = 64;
-const NONE_VALUE: &[u8] = b"none";
+const NONE_VALUE: &[u8] = ABSENT.text().as_bytes();
 const SEPARATOR: u8 = b' ';
 const ASSIGNMENT: u8 = b'=';
 const HEADER_TOKENS: usize = 3;
@@ -217,8 +217,8 @@ macro_rules! field {
   };
 }
 
-const SPAWN_CAUSES: [&str; 3] = ["bundle_not_found", "io", "unclassified"];
-const STOP_OUTCOME_VALUES: [&str; StopOutcome::NAMES.len() + 1] = with_extra(&StopOutcome::NAMES, "nothing_to_stop");
+const SPAWN_CAUSES: [&str; 3] = [SPAWN_CAUSE_BUNDLE_NOT_FOUND.text(), SPAWN_CAUSE_IO.text(), SPAWN_CAUSE_UNCLASSIFIED.text()];
+const STOP_OUTCOME_VALUES: [&str; StopOutcome::NAMES.len() + 1] = with_extra(&StopOutcome::NAMES, OUTCOME_NOTHING_TO_STOP.text());
 
 const DAEMON_SPAWN_FAILED_FIELDS: &[FieldSpec] = &[
   field!("cause", FieldKind::Enum(&SPAWN_CAUSES), 16),

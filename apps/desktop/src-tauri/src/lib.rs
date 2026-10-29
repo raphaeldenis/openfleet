@@ -15,7 +15,7 @@ mod path_repair;
 mod redaction;
 mod status_line;
 
-pub use event_log::SanitizedLine;
+pub use event_log::{EventName, Level, LineBuilder, LogValue, Pid, SanitizedLine, Ts};
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
