@@ -116,6 +116,11 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   harness_exited: { what: 'The agent process ended', fix: 'resume the session' },
   claude_not_found: { what: 'The claude command is not on the daemon’s PATH', fix: 'install it, or start the daemon from a shell that has it' },
   git_unavailable: { what: 'Git is not available to the daemon', fix: 'install it' },
+  gh_unavailable: { what: 'The GitHub CLI is not available to the daemon', fix: 'install gh' },
+  gh_not_authenticated: { what: 'The GitHub CLI is not signed in', fix: 'run gh auth login' },
+  gh_bad_output: { what: 'The GitHub CLI answered something unreadable' },
+  gh_timeout: { what: 'The GitHub CLI took too long to answer' },
+  too_many_watched_prs: { what: 'This manager watches too many pull requests', fix: 'unwatch one' },
   harness_binary_broken: { what: 'The agent command fails its version check', fix: 'reinstall it, then spawn again' },
 
   internal_error: { what: 'The daemon hit an unexpected error' },

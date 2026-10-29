@@ -117,6 +117,14 @@ export const ERROR_CODES = {
   // A missing binary on the daemon PATH: only installing it, or starting the daemon from a shell that has it, helps.
   claude_not_found: { kind: 'unavailable', retry: 'never' },
   git_unavailable: { kind: 'unavailable', retry: 'never' },
+  // The GitHub CLI is missing from the daemon PATH, or not logged in: only installing it or running `gh auth login` helps.
+  gh_unavailable: { kind: 'unavailable', retry: 'never' },
+  gh_not_authenticated: { kind: 'unavailable', retry: 'never' },
+  // GitHub or the network may answer correctly on the next poll.
+  gh_bad_output: { kind: 'unavailable', retry: 'later' },
+  gh_timeout: { kind: 'unavailable', retry: 'later' },
+  // Unwatching a pull request frees a place, or the manager waits for one to merge.
+  too_many_watched_prs: { kind: 'conflict', retry: 'later' },
   // The binary answers `--version` with a failure: repairing or reinstalling it, then waiting out the 60 s health cache, lets the same spawn succeed.
   harness_binary_broken: { kind: 'unavailable', retry: 'later' },
 

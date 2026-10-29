@@ -2,6 +2,21 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 12 — 2026-10-29
+
+CI-WAIT-WAKE01, wake a manager when the CI of a pull request it watches finishes.
+
+- `watch_pr` added: `{ repo, number }`, `repo` as `owner/name`. The daemon polls the checks of the pull request with the user's GitHub CLI (`gh pr view --json state,headRefOid,statusCheckRollup`, fixed argument list, no shell; the daemon reads no token) and tells the manager once per head sha through a scheduled event titled `ci.finished`, delivered late rather than lost. Watching the same pull request twice is a no-op. A manager watches at most 5 pull requests (`too_many_watched_prs`, retry `later`); watching stops by itself when the pull request is merged or closed. A `repo` that is not `owner/name` and a `number` that is not a positive integer are refused with `invalid_body` before gh runs.
+- gh runs with only `PATH`, `HOME`, `GH_PROMPT_DISABLED`, `GH_NO_UPDATE_NOTIFIER` and `NO_COLOR`: `GH_TOKEN`, `XDG_CONFIG_HOME` and proxy variables of the daemon do not reach it, so gh authenticates from the `HOME` configuration only. gh is found through the `PATH` of the daemon, not of the manager. The `repo` is at most 39 characters of owner and 100 of name.
+- `unwatch_pr` added: `{ repo, number }`, answers `{ unwatched: boolean }`.
+- `list_watched_prs` added: the watched pull requests of the caller with their address, the last notified sha and, after a failed poll, `last_error: { code, at }`.
+- The event text is `ci.finished status=<success|failure|skipped> pr=<https://github.com/owner/name/pull/N> sha=<40 hex>` and nothing else: no check name, no log. `failure` means every check is done and one failed; `skipped` means the pull request has no check (the same empty answer twice in a row); while a check is running no event is sent.
+- New error codes: `gh_unavailable` (gh missing from the daemon PATH), `gh_not_authenticated` (gh exits with 4: run `gh auth login`), `gh_bad_output`, `gh_timeout` (the polling retries on its own with a backoff from 60 s to 5 min) and `too_many_watched_prs`. The four gh codes appear as `last_error` of `list_watched_prs`; they are never thrown by a tool call.
+
+Tools added: `watch_pr`, `unwatch_pr`, `list_watched_prs`.
+Tools changed: none.
+Migrations: `052_watched_prs`: table `watched_prs`.
+
 ## 11 — 2026-10-29
 
 - PARITY-ARGUS-07b, `get_argus_status`: the `manager` record gains `mode` (`watching`, `sleeping` or `disabled`), `modeChangedAt`, `sleepHandoffPending` and `sleepHandoffDeliveredAt`. `pulseEnabled` stays and reads true only while the mode is `watching`. There is no tool to change the mode: a manager never changes its own, the human does it with `PATCH /api/managers/:id`.

@@ -49,6 +49,9 @@ import { IdleChildWatcher } from './managers/idleChildWatcher.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
 import { ScheduledEventRepository } from './managers/scheduledEventRepository.js';
 import { ScheduledEventService } from './managers/scheduledEventService.js';
+import { CiWatchService } from './managers/ciWatchService.js';
+import { WatchedPrRepository } from './managers/watchedPrRepository.js';
+import { createGhPullRequestPort, type GhPullRequestPort } from './github/ghPullRequestPort.js';
 import { staleInProgressRowLabelsOfProject } from './managers/staleRows.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { pendingPermissionViewOf } from './mcp/pendingPermissionView.js';
@@ -110,6 +113,7 @@ export interface Daemon {
   degraded: DegradedRegistry;
   governanceQueue: GovernanceQueueService;
   scheduledEvents: ScheduledEventService;
+  ciWatch: CiWatchService;
   harnesses: Harness[];
   close: () => Promise<void>;
 }
@@ -128,6 +132,8 @@ export interface DaemonOptions {
   findingsGateEnforcement?: FindingsGateEnforcement;
   /** Replaces the base this build ships, so a test can boot a daemon that ships a newer version. */
   managerBase?: ManagerBase;
+  /** Replaces the GitHub CLI the daemon polls the checks of watched pull requests with, so a test needs no network and no login. */
+  gh?: GhPullRequestPort;
   /** The injection point of the command policy: the settings the daemon enforces and the evaluator that applies them. */
   commandPolicy?: { settings?: CommandPolicySettings; evaluate?: PolicyEvaluate };
   /** Overrides the delay after which an undecided approval expires, so a test does not wait the nine minutes of the hook timeout. */
@@ -293,7 +299,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
   const scheduledEvents = new ScheduledEventService({ repository: new ScheduledEventRepository(db), sessions, managers: managerRepository, bus });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ scheduledEvents, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -306,6 +313,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     unwatchDatabase();
     pulseScheduler.stop();
     scheduledEvents.stop();
+    await ciWatch.stop();
     childAutoRestarter.stop();
     idleChildWatcher.stop();
     contextNotice.stop();
@@ -332,11 +340,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     pulseScheduler.start();
     scheduledEvents.start();
     sleepHandoff.start();
+    ciWatch.start();
     idleChildWatcher.start();
   } catch (error) {
     await closeWithin({ timeoutMs: REFUSED_BOOT_CLOSE_TIMEOUT_MS, close });
     throw error;
   }
 
-  return { server, db, degraded, governanceQueue, scheduledEvents, harnesses, close };
+  return { server, db, degraded, governanceQueue, scheduledEvents, ciWatch, harnesses, close };
 }

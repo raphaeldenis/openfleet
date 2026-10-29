@@ -1,5 +1,5 @@
 {
-  "contractVersion": 11,
+  "contractVersion": 12,
   "tools": [
     { "name": "add_data_store_column", "inputSchemaHash": "968cbac3975a27b9" },
     { "name": "append_to_note", "inputSchemaHash": "e8b3f62130a1ad87" },
@@ -36,6 +36,7 @@
     { "name": "list_projects", "inputSchemaHash": "7a014b717a77aac9" },
     { "name": "list_row_changes", "inputSchemaHash": "c198a80c0f787453" },
     { "name": "list_sessions", "inputSchemaHash": "7a014b717a77aac9" },
+    { "name": "list_watched_prs", "inputSchemaHash": "7a014b717a77aac9" },
     { "name": "list_worktrees", "inputSchemaHash": "38765eae9115169d" },
     { "name": "message_argus", "inputSchemaHash": "5d5bf4ab4bf3778a" },
     { "name": "message_parent", "inputSchemaHash": "5d163946d3a4e1f2" },
@@ -57,6 +58,7 @@
     { "name": "set_argus_log_store", "inputSchemaHash": "65f351dcc2b17dee" },
     { "name": "set_data_store_natural_key", "inputSchemaHash": "52bcb5a45e813580" },
     { "name": "set_manager_profile", "inputSchemaHash": "eef2e69ca8f02e7c" },
+    { "name": "unwatch_pr", "inputSchemaHash": "dcedbd8fad2b0fc9" },
     { "name": "update_data_store_column", "inputSchemaHash": "c3b4f8816e3709e7" },
     { "name": "update_data_store_row", "inputSchemaHash": "61764808ad6acf19" },
     { "name": "update_data_store_rows", "inputSchemaHash": "80fcf44f8711978e" },
@@ -65,6 +67,7 @@
     { "name": "update_note_section", "inputSchemaHash": "b7f8632f3e734a7f" },
     { "name": "update_session", "inputSchemaHash": "7db147253defd711" },
     { "name": "update_working_state", "inputSchemaHash": "0901c8cd5ca3b294" },
+    { "name": "watch_pr", "inputSchemaHash": "dcedbd8fad2b0fc9" },
     { "name": "withdraw_proposal", "inputSchemaHash": "7dc764f43bea9b0e" }
   ]
 }

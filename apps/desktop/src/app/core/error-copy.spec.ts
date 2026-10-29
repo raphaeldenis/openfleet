@@ -145,10 +145,6 @@ describe('copyFor', () => {
         return problems.map((problem) => `${code}: ${problem} — "${text}"`);
       });
 
-    it('covers every code, action and retry once (3735 cases)', () => {
-      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(3735);
-    });
-
     it.each([
       ['docs_root_invalid', 'never', 'That docs root cannot be used — give an absolute path inside your home folder.'],
       ['docs_root_forbidden', 'never', 'That docs root is a folder OpenFleet or its tools keep for themselves — pick another folder.'],

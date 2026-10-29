@@ -25,9 +25,9 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `invalid_request` | 400 | 15 |
 | `unauthorized` | 401 | 1 |
 | `not_found` | 404 | 12 |
-| `conflict` | 409 | 40 |
+| `conflict` | 409 | 41 |
 | `too_large` | 413 | 4 |
-| `unavailable` | 503 | 7 |
+| `unavailable` | 503 | 11 |
 | `internal` | 500 | 4 |
 
 ## Codes
@@ -119,6 +119,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `not_file_backed` | 409 | `never` |
 | `docs_folder_not_writable` | 409 | `later` |
 | `docs_root_not_writable` | 409 | `later` |
+| `too_many_watched_prs` | 409 | `later` |
 
 ### too_large
 
@@ -139,6 +140,10 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `harness_exited` | 503 | `never` |
 | `claude_not_found` | 503 | `never` |
 | `git_unavailable` | 503 | `never` |
+| `gh_unavailable` | 503 | `never` |
+| `gh_not_authenticated` | 503 | `never` |
+| `gh_bad_output` | 503 | `later` |
+| `gh_timeout` | 503 | `later` |
 | `harness_binary_broken` | 503 | `later` |
 
 ### internal
