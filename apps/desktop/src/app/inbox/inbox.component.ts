@@ -1,6 +1,6 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, linkedSignal, signal, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { MANAGER_ROLE } from '@openfleet/shared';
+import { MANAGER_ROLE, type Approval } from '@openfleet/shared';
 import { ReplyDraftStore } from '../sessions/reply-draft.store';
 import { detailsTextOf } from '../core/copy-details';
 import { decideApproval } from '../core/decide-approval';
@@ -286,32 +286,38 @@ export class InboxComponent {
     });
   }
 
-  private formattedInputsById = new Map<string, FormattedInput>();
-
   private readonly sessionsById = computed(() => new Map(this.events.sessions().map((session) => [session.id, session])));
+
+  /** Each approval's formatted tool input; an input that did not change since the last approvals is not formatted again. */
+  private readonly formattedInputsById = linkedSignal<Approval[], ReadonlyMap<string, FormattedInput>>({
+    source: () => this.events.approvals(),
+    computation: (approvals, previous) => {
+      const previousFormattedInputs = previous?.value ?? new Map<string, FormattedInput>();
+      return new Map(
+        approvals.map((approval): [string, FormattedInput] => {
+          const previousFormattedInput = previousFormattedInputs.get(approval.id);
+          const isUnchanged = previousFormattedInput !== undefined && previousFormattedInput.toolInput === approval.toolInput;
+          return [approval.id, isUnchanged ? previousFormattedInput : formatInput(approval.toolInput)];
+        }),
+      );
+    },
+  });
 
   private readonly gates = computed(() => {
     const sessionsById = this.sessionsById();
-    const previousFormattedInputs = this.formattedInputsById;
-    const currentFormattedInputs = new Map<string, FormattedInput>();
-    const gates = this.events.approvals().map((approval) => {
+    const formattedInputsById = this.formattedInputsById();
+    return this.events.approvals().map((approval) => {
       const session = sessionsById.get(approval.sessionId);
       const sessionName = session ? session.name : approval.sessionId;
       const sessionEmoji = session ? session.emoji : '';
-      const previous = previousFormattedInputs.get(approval.id);
-      const isUnchanged = previous !== undefined && previous.toolInput === approval.toolInput;
-      const formattedInput = isUnchanged ? previous : formatInput(approval.toolInput);
-      currentFormattedInputs.set(approval.id, formattedInput);
       return {
         ...approval,
         toolName: showBidiControlsAsEscapes(approval.toolName),
         sessionName: showInvisibleControlsAsEscapes(sessionName),
         sessionEmoji,
-        formattedInput: formattedInput.text,
+        formattedInput: formattedInputsById.get(approval.id)!.text,
       };
     });
-    this.formattedInputsById = currentFormattedInputs;
-    return gates;
   });
 
   private readonly openEscalationIds = computed(() => new Set(this.events.escalations().map(({ id }) => id)));

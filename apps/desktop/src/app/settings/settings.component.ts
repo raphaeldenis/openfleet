@@ -64,7 +64,7 @@ const SETTINGS_TABS: ReadonlyArray<{ key: SettingsTab; label: string }> = [
     .tabs { width: 13rem; flex: none; padding: .75rem .5rem; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: .0625rem; }
     .tab { height: 1.75rem; display: flex; align-items: center; padding: 0 .625rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
     .tab.active { background: var(--active); }
-    .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .tab:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem; }
     .content { flex: 1; min-width: 0; overflow: auto; padding: 1.25rem 1.5rem 3rem; }
     .loading { margin: 0; font-size: .75rem; color: var(--mut); }
   `,

@@ -31,6 +31,10 @@ class FakeWebSocket {
     for (const listener of this.listeners['message'] ?? []) listener({ data: JSON.stringify(payload) });
   }
 
+  dispatchRawText(text: string): void {
+    for (const listener of this.listeners['message'] ?? []) listener({ data: text });
+  }
+
   dispatchOpen(): void {
     this.readyState = FakeWebSocket.OPEN;
     for (const listener of this.listeners['open'] ?? []) listener({} as { data: string });
@@ -180,6 +184,54 @@ describe('FleetEventsService', () => {
       socket.dispatchMessage({ type: 'notification.future_kind', sessionId: 's1' });
 
       expect(received).toEqual([]);
+    });
+  });
+
+  describe('a frame that is not JSON', () => {
+    it('is skipped without throwing, and the frames after it are still applied', async () => {
+      const service = new FleetEventsService();
+      await service.connect();
+      const socket = FakeWebSocket.instances[0]!;
+
+      const deliverGarbage = () => socket.dispatchRawText('<html>proxy error</html>');
+      socket.dispatchMessage({ type: 'snapshot', sessions: [session('s1')], approvals: [] });
+      expect(deliverGarbage).not.toThrow();
+      socket.dispatchMessage({ type: 'session.created', session: session('s2') });
+
+      expect(service.sessions().map((s) => s.id)).toEqual(['s1', 's2']);
+    });
+  });
+
+  describe('a frame that is JSON but not an object', () => {
+    it.each([['a number', 123], ['a string', 'x'], ['null', null], ['an array', [{ type: 'session.created' }]]])(
+      'drops %s without throwing, and the frames after it are still applied',
+      async (_description, frame) => {
+        const service = new FleetEventsService();
+        await service.connect();
+        const socket = FakeWebSocket.instances[0]!;
+
+        socket.dispatchMessage({ type: 'snapshot', sessions: [session('s1')], approvals: [] });
+        const deliverFrame = () => socket.dispatchMessage(frame as never);
+        expect(deliverFrame).not.toThrow();
+        socket.dispatchMessage({ type: 'session.created', session: session('s2') });
+
+        expect(service.sessions().map((s) => s.id)).toEqual(['s1', 's2']);
+      },
+    );
+  });
+
+  describe('reconnecting', () => {
+    it('spreads the retry over the backoff window, so clients dropped together do not retry together', async () => {
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      const service = new FleetEventsService();
+      await service.connect();
+      FakeWebSocket.instances[0]!.dispatchClose();
+      fetchMock.mockClear();
+
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      vi.restoreAllMocks();
     });
   });
 
@@ -543,8 +595,10 @@ describe('FleetEventsService reconnect', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ticket: 'fake-ticket' }) }));
     vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(1);
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 

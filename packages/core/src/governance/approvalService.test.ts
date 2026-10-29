@@ -29,9 +29,10 @@ describe('ApprovalService', () => {
   it('falls back to ask on timeout and refuses a late decision', async () => {
     const { service } = setup(10);
     const pending = service.request({ sessionId: 's1', toolName: 'Bash', toolInput: {} });
+    const timedOutApprovalId = service.listPending()[0]!.id;
     await expect(pending).resolves.toBe('ask');
-    const id = (service as never as { lastId: string }).lastId;
-    expect(() => service.decide({ approvalId: id, behavior: 'allow' })).toThrow(ApprovalError);
+    expect(service.listPending()).toEqual([]);
+    expect(() => service.decide({ approvalId: timedOutApprovalId, behavior: 'allow' })).toThrow(ApprovalError);
   });
 
   it('throws not_found for an unknown approval', () => {

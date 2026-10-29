@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   COLUMN_TYPES,
   COLUMN_FORMATS,
@@ -130,8 +130,7 @@ describe('data-store records', () => {
   });
 
   it('type-level check, guarded by pnpm typecheck: a row change kind other than create or delete does not compile', () => {
-    // @ts-expect-error 'purge' is neither a known change kind nor a column diff
-    const unknownKind: DsRowChange = { kind: 'purge' };
-    expect(unknownKind).toEqual({ kind: 'purge' });
+    expectTypeOf<{ kind: 'purge' }>().not.toExtend<DsRowChange>();
+    expectTypeOf<{ kind: 'create' }>().toExtend<DsRowChange>();
   });
 });

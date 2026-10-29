@@ -1,5 +1,6 @@
 import { render, waitFor } from '@testing-library/angular/zoneless';
 import { inputBinding, signal, type WritableSignal } from '@angular/core';
+import type { Terminal } from '@xterm/xterm';
 import { Subject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { TerminalComponent } from './terminal.component';
@@ -26,6 +27,11 @@ function fakeEventsService() {
     reconnectCount: signal(0),
   };
 }
+
+const visibleText = (terminal: Terminal): string => {
+  const lines = Array.from({ length: terminal.rows }, (_, row) => terminal.buffer.active.getLine(row)?.translateToString(true) ?? '');
+  return lines.join('\n').trim();
+};
 
 describe('TerminalComponent', () => {
   it('shrinks instead of claiming its full flex height, so a sibling like the permission gate card stays visible', async () => {
@@ -79,24 +85,22 @@ describe('TerminalComponent', () => {
       bindings: [inputBinding('sessionId', sessionId)],
       providers: [{ provide: FleetEventsService, useValue: fake }],
     });
-    const firstTerminal = fixture.componentInstance.terminal!;
-    const firstWriteSpy = vi.spyOn(firstTerminal, 'write');
 
     sessionId.set('s2');
     await fixture.whenStable();
     sessionId.set('s3');
     await fixture.whenStable();
-    const currentWriteSpy = vi.spyOn(fixture.componentInstance.terminal!, 'write');
 
     fake.output('s1').next('stale for s1');
     fake.output('s2').next('stale for s2');
-    await fixture.whenStable();
-    expect(firstWriteSpy).not.toHaveBeenCalled();
-
     fake.output('s3').next('current live');
-    await fixture.whenStable();
-    expect(currentWriteSpy).toHaveBeenCalledTimes(1);
-    expect(currentWriteSpy).toHaveBeenCalledWith('current live');
+
+    await waitFor(() => {
+      expect(visibleText(fixture.componentInstance.terminal!)).toBe('current live');
+    });
+    expect(fake.output('s1').observed).toBe(false);
+    expect(fake.output('s2').observed).toBe(false);
+    expect(fake.output('s3').observed).toBe(true);
   });
 
   it('clears the terminal and re-attaches to the current session on reconnect', async () => {
@@ -106,12 +110,17 @@ describe('TerminalComponent', () => {
       providers: [{ provide: FleetEventsService, useValue: fake }],
     });
     expect(fake.sendAttach).toHaveBeenCalledTimes(1);
-    const clearSpy = vi.spyOn(fixture.componentInstance.terminal!, 'clear');
+    fake.output('s1').next('stale before the drop\r\n'); // xterm's clear() keeps the cursor line, so the text sits on the line above it
+    await waitFor(() => {
+      expect(visibleText(fixture.componentInstance.terminal!)).toBe('stale before the drop');
+    });
 
     fake.reconnectCount.set(1);
     await fixture.whenStable();
 
-    expect(clearSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(visibleText(fixture.componentInstance.terminal!)).toBe('');
+    });
     expect(fake.sendAttach).toHaveBeenCalledTimes(2);
     expect(fake.sendAttach).toHaveBeenLastCalledWith('s1');
   });
