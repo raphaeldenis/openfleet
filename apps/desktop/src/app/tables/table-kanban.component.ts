@@ -18,7 +18,7 @@ export interface KanbanGroup {
     @for (group of groups(); track group.option.id) {
       <section class="column" [attr.data-testid]="'kanban-column-' + group.option.id">
         <header class="column-header">
-          <span class="dot">●</span>
+          <span class="dot" aria-hidden="true" [style.color]="group.option.color ?? null" [attr.data-testid]="'kanban-dot-' + group.option.id">●</span>
           <span class="label">{{ group.option.label }}</span>
           <span class="count" [attr.data-testid]="'kanban-count-' + group.option.id">{{ group.rows.length }}</span>
         </header>

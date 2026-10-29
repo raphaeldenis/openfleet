@@ -1032,6 +1032,17 @@ describe('TablesViewComponent', () => {
       expect(screen.getByTestId('history-heading')).toHaveTextContent('Desktop reconnect');
     });
 
+    it('user sees the table name and row number above the title of the opened row', async () => {
+      const api = fakeApi({ rows: twoRows });
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('grid-row-r2'));
+
+      const identifier = await screen.findByTestId('history-identifier');
+      expect(identifier).toHaveTextContent(/^\S.* #2$/);
+    });
+
     it('user opens the history of a card from the kanban', async () => {
       await renderView(fakeApi({ rows: twoRows }));
       await screen.findByTestId('table-grid');

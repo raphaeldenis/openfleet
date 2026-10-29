@@ -160,7 +160,7 @@ const describeCellFailure = (error: unknown): string => {
             <div class="history-error" role="status" data-testid="tables-history-error"><of-error-line>{{ historyRefreshAfterSaveFailed() ? 'Saved; history could not be refreshed.' : 'The history of this row could not be loaded.' }}</of-error-line></div>
             <button type="button" (click)="retryHistory()">Retry history</button>
           } @else {
-            <of-row-history [entries]="history()" [columns]="columns()" [heading]="selectedRowTitle()" />
+            <of-row-history [entries]="history()" [columns]="columns()" [heading]="selectedRowTitle()" [identifier]="selectedRowIdentifier()" />
           }
         </aside>
       }
@@ -318,6 +318,11 @@ export class TablesViewComponent {
   protected readonly selectedRowTitle = computed(() => {
     const selectedRow = this.rows().find((row) => row.id === this.selectedRowId());
     return selectedRow ? titleOf(this.columns(), selectedRow) || null : null;
+  });
+  protected readonly selectedRowIdentifier = computed(() => {
+    const rowIndex = this.rows().findIndex((row) => row.id === this.selectedRowId());
+    const isLoaded = rowIndex >= 0;
+    return isLoaded ? `${this.activeStoreName()} #${rowIndex + 1}` : null;
   });
 
   constructor() {

@@ -5,6 +5,7 @@ import { TableCellComponent } from './table-cell.component';
 import { canEditCell, type CellEditRequest } from './table-cell-editor-values';
 
 const MIN_COLUMN_WIDTH_REM = 8;
+const NUMBER_COLUMN_WIDTH_REM = 3;
 
 @Component({
   selector: 'of-table-grid',
@@ -13,11 +14,12 @@ const MIN_COLUMN_WIDTH_REM = 8;
   template: `
     <div class="grid" role="grid" data-testid="table-grid" [style.--grid-min-width]="gridMinWidth()">
       <div class="header" role="row" data-testid="grid-head">
+        <span class="number" role="columnheader">#</span>
         @for (column of orderedColumns(); track column.id) {
           <span class="cell" role="columnheader" [attr.title]="column.displayName" [attr.data-testid]="'grid-header-' + column.id">{{ column.displayName }}</span>
         }
       </div>
-      @for (row of rows(); track row.id) {
+      @for (row of rows(); track row.id; let rowIndex = $index) {
         <div
           class="row"
           role="row"
@@ -33,12 +35,13 @@ const MIN_COLUMN_WIDTH_REM = 8;
           (keydown.arrowdown)="focusNeighbour($event, 'next')"
           (keydown.arrowup)="focusNeighbour($event, 'previous')"
         >
+          <span class="number" role="gridcell" [attr.data-testid]="'grid-number-' + row.id">{{ rowIndex + 1 }}</span>
           @for (column of orderedColumns(); track column.id) {
             <span class="cell" role="gridcell" [attr.title]="text(column, row)" [attr.data-testid]="'grid-cell-' + row.id + '-' + column.id">
               <span class="cell-content">
                 <of-table-cell [column]="column" [value]="row.data[column.id]" />
                 @if (!readonly() && canEdit(column)) {
-                  <button type="button" [attr.aria-label]="'Edit ' + column.displayName + ' in row ' + row.id" (keydown)="$event.stopPropagation()" (click)="requestEdit($event, row.id, column)">Edit</button>
+                  <button type="button" class="of-btn of-btn--secondary of-btn--compact" [attr.aria-label]="'Edit ' + column.displayName + ' in row ' + row.id" (keydown)="$event.stopPropagation()" (click)="requestEdit($event, row.id, column)">Edit</button>
                 }
               </span>
             </span>
@@ -60,7 +63,9 @@ const MIN_COLUMN_WIDTH_REM = 8;
     .cell { flex-grow: 1; flex-shrink: 1; flex-basis: 0%; min-width: 8rem; padding-right: .5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .cell-content { display: flex; align-items: center; gap: .375rem; min-width: 0 }
     of-table-cell { flex: 1; overflow: hidden; text-overflow: ellipsis }
-    button { flex: none; padding: .125rem .375rem; font: inherit; color: var(--fg); background: var(--sunk); border: .0625rem solid var(--line); border-radius: .25rem; cursor: pointer }
+    .number { flex: 0 0 3rem; min-width: 0; font-family: var(--mono); color: var(--mut) }
+    .header .number { font-family: inherit }
+    button { flex: none }
     button:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
   `,
 })
@@ -85,7 +90,7 @@ export class TableGridComponent {
     return preferredRowId && rowIds.includes(preferredRowId) ? preferredRowId : rowIds[0];
   });
   protected readonly orderedColumns = computed(() => sortedColumns(this.columns()));
-  protected readonly gridMinWidth = computed(() => `${this.orderedColumns().length * MIN_COLUMN_WIDTH_REM}rem`);
+  protected readonly gridMinWidth = computed(() => `${this.orderedColumns().length * MIN_COLUMN_WIDTH_REM + NUMBER_COLUMN_WIDTH_REM}rem`);
   protected readonly text = cellText;
 
   protected openFromKeyboard(event: Event, rowId: string): void {
