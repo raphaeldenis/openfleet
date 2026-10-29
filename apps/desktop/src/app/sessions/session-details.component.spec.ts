@@ -54,6 +54,14 @@ describe('SessionDetailsComponent', () => {
     expect(getComputedStyle(screen.getByTestId('session-name-input')).textOverflow).toBe('ellipsis');
   });
 
+  it('gives the emoji field and the name field each an accessible name', async () => {
+    const session = baseSession();
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+    expect(screen.getByRole('textbox', { name: 'Session emoji' })).toBe(screen.getByTestId('session-emoji-input'));
+    expect(screen.getByRole('textbox', { name: 'Session name' })).toBe(screen.getByTestId('session-name-input'));
+  });
+
   it('renames the session when the name field is committed', async () => {
     const session = baseSession();
     const api = fakeApi({ renameSession: vi.fn().mockResolvedValue({ ...session, name: 'Gimli · T7' }) });
