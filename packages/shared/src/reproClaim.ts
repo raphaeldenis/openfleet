@@ -13,9 +13,9 @@ export const REPRO_STATUS_LABELS: Readonly<Record<ReproStatus, string>> = { prov
 export const REPRO_CLAIM_EXAMPLE = '{ claim: "the filter is missing", status: "proven", command: "pnpm vitest run filter.test.ts", output: "FAIL filter.test.ts > shows the filter" }';
 
 const statusesUnion = REPRO_STATUSES.join(' | ');
-const SHAPE_MESSAGE = `a claim is an object { claim, status, command, output }, for example ${REPRO_CLAIM_EXAMPLE}. status is ${statusesUnion}; command and output are the run you executed and what it printed (required for proven and plausible); a claim you did not execute is not_reproduced and says where you read it.`;
+export const SHAPE_MESSAGE = `a claim is { claim, status, command, output }; status is ${statusesUnion}; proven and plausible need the command you ran and its output; not_reproduced says where you read it.`;
 const STATUS_MESSAGE = `status is ${statusesUnion}. ${SHAPE_MESSAGE}`;
-export const EVIDENCE_MESSAGE = `a proven or plausible claim carries the command you ran and its output; label a claim you did not execute not_reproduced. ${SHAPE_MESSAGE}`;
+export const EVIDENCE_MESSAGE = `a proven or plausible claim needs the command you ran and its output. ${SHAPE_MESSAGE}`;
 
 const isGiven = (text: string | undefined): text is string => text !== undefined && text !== '';
 

@@ -8,6 +8,7 @@ import type { ReviewFindingsRepository } from '../review/reviewFindingsRepositor
 import { BLANK_CLAIM_MESSAGE, hasBlankClaim, lacksExecutedEvidence, sanitizedReproClaim } from '../review/sanitizedReproClaim.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { DEFAULT_TICKET_PATTERN, gitOutput, ticketOfBranch } from '../review/worktreeGit.js';
+import { refuseInvalidBody } from './claimRefusal.js';
 import { ok, refuse } from './toolResults.js';
 
 export const REVIEWER_ROLE = 'reviewer';
@@ -45,7 +46,7 @@ export function registerShipVerdictTools(server: McpServer, deps: RegisterShipVe
     if (!isReviewerOfAManager) return refuse('not_a_manager', 'only a reviewer spawned by a manager can report a ship verdict');
 
     const parsedVerdict = ShipVerdictSchema.safeParse(input);
-    if (!parsedVerdict.success) return refuse('invalid_body', parsedVerdict.error.issues.map((issue) => issue.message).join('; '));
+    if (!parsedVerdict.success) return refuseInvalidBody(parsedVerdict.error.issues.map((issue) => issue.message));
     const shipVerdict: ShipVerdict = parsedVerdict.data;
 
     const branch = await gitOutput(['rev-parse', '--abbrev-ref', 'HEAD'], caller.directory);
@@ -58,7 +59,7 @@ export function registerShipVerdictTools(server: McpServer, deps: RegisterShipVe
     const sanitizedReasons = shipVerdict.reasons.map(sanitizedReproClaim);
     if (sanitizedReasons.some(hasBlankClaim)) return refuse('invalid_body', BLANK_CLAIM_MESSAGE);
     const hasReasonWithoutEvidence = sanitizedReasons.some(lacksExecutedEvidence);
-    if (hasReasonWithoutEvidence) return refuse('invalid_body', EVIDENCE_MESSAGE);
+    if (hasReasonWithoutEvidence) return refuseInvalidBody([EVIDENCE_MESSAGE]);
 
     const reasons = sanitizedReasons.map((sanitizedReason) => sanitizedReason.claim);
     reviewFindings.record({

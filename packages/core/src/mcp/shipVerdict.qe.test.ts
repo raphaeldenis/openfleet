@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
+import { E2E_FLAG_ENV, E2E_FLAG_ON, REPRO_CLAIM_EXAMPLE, SHAPE_MESSAGE } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
@@ -195,6 +195,16 @@ describe('QE — report_ship_verdict on a booted daemon', () => {
     const result = await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: ['broken'], sha: headOf(devDirectory) });
 
     expect(rawText(result)).toMatch(/\{ claim: ".*", status: "proven", command: ".*", output: ".*" \}/);
+  });
+
+  it('keeps the whole instruction of the new form when three former plain text reasons are refused', async () => {
+    const { reviewerClient, devDirectory } = await bootReviewerInDevWorktree();
+
+    const result = await reportVerdict(reviewerClient, { verdict: 'no-go', reasons: ['broken', 'slow', 'leaky'], sha: headOf(devDirectory) });
+
+    expect(rawText(result)).toContain(SHAPE_MESSAGE);
+    expect(rawText(result)).toContain(REPRO_CLAIM_EXAMPLE);
+    expect(rawText(result)).not.toContain('…');
   });
 
   it('records the reproduction of each reason next to its adversarial item, masked and without the secret', async () => {

@@ -5,6 +5,7 @@ import type { ManagerService } from '../managers/managerService.js';
 import type { FindingSeverity, FindingStep, ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
 import { BLANK_CLAIM_MESSAGE, hasBlankClaim, lacksExecutedEvidence, sanitizedReproClaim } from '../review/sanitizedReproClaim.js';
 import { DEFAULT_TICKET_PATTERN, gitOutput, ticketOfBranch } from '../review/worktreeGit.js';
+import { refuseInvalidBody } from './claimRefusal.js';
 import { ok, refuse } from './toolResults.js';
 
 /** Each reporting role writes the line of its own step and no other. */
@@ -37,7 +38,7 @@ export function registerStepFindingTools(server: McpServer, deps: RegisterStepFi
     if (!isReporterOfAManager) return refuse('not_a_manager', 'only a qe, qa or ponytail session spawned by a manager can report a step finding');
 
     const parsedFinding = StepFindingSchema.safeParse(input);
-    if (!parsedFinding.success) return refuse('invalid_body', parsedFinding.error.issues.map((issue) => issue.message).join('; '));
+    if (!parsedFinding.success) return refuseInvalidBody(parsedFinding.error.issues.map((issue) => issue.message));
     const stepFinding = parsedFinding.data;
     if (stepFinding.step !== stepOfCaller) return refuse('not_a_manager', `a ${caller.role} session reports the ${stepOfCaller} step only`);
 
@@ -54,7 +55,7 @@ export function registerStepFindingTools(server: McpServer, deps: RegisterStepFi
     const sanitizedClaims = stepFinding.claims.map(sanitizedReproClaim);
     if (sanitizedClaims.some(hasBlankClaim)) return refuse('invalid_body', BLANK_CLAIM_MESSAGE);
     const hasClaimWithoutEvidence = sanitizedClaims.some(lacksExecutedEvidence);
-    if (hasClaimWithoutEvidence) return refuse('invalid_body', EVIDENCE_MESSAGE);
+    if (hasClaimWithoutEvidence) return refuseInvalidBody([EVIDENCE_MESSAGE]);
 
     const claims = sanitizedClaims.map((sanitizedClaim) => sanitizedClaim.claim);
     reviewFindings.record({
