@@ -100,3 +100,43 @@ export const EscalationPolicySchema = z.strictObject({
 export type EscalationPolicy = z.infer<typeof EscalationPolicySchema>;
 
 export const DEFAULT_ESCALATION_POLICY: EscalationPolicy = EscalationPolicySchema.parse({});
+
+export const ESCALATION_STATUSES = ['pending', 'answered'] as const;
+export type EscalationStatus = (typeof ESCALATION_STATUSES)[number];
+
+const MAX_HUMAN_ANSWER_CHARS = 2000;
+
+/** One answer per question of the escalation; the daemon refuses an answer set that leaves a question out or names one the escalation does not carry. */
+export const EscalationAnswerBodySchema = z.strictObject({
+  answers: z.array(z.strictObject({
+    question_id: z.string().min(1).max(MAX_QUESTION_ID_CHARS),
+    answer: z.string().trim().min(1).max(MAX_HUMAN_ANSWER_CHARS),
+  })).min(1).max(MAX_QUESTIONS_PER_BATCH),
+});
+export type EscalationAnswerBody = z.infer<typeof EscalationAnswerBodySchema>;
+
+export interface EscalationQuestionView {
+  questionId: string;
+  text: string;
+  declaredClass: string;
+  effectiveClasses: EscalatingClass[];
+  /** Set when the question reached the human for a reason other than its class, for example `unclassified`. */
+  reason?: string;
+  options?: string[];
+  recommendation?: string;
+  status: 'pending_human' | 'answered';
+  humanAnswer?: string;
+  answeredAt?: string;
+}
+
+/** What the Inbox shows and what the WebSocket carries: the escalation the daemon wrote, with the questions it carries. */
+export interface EscalationView {
+  id: string;
+  managerId: string;
+  ticket: string;
+  status: EscalationStatus;
+  body: string;
+  createdAt: string;
+  resolvedAt?: string;
+  questions: EscalationQuestionView[];
+}

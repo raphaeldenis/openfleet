@@ -217,6 +217,15 @@ export class EscalationRepository {
     return row ? toEscalation(row) : undefined;
   }
 
+  /** The escalations of every manager in the given status, oldest first. */
+  escalationsWithStatus(status: StoredEscalation['status']): StoredEscalation[] {
+    return (this.db.prepare('SELECT * FROM escalations WHERE status = ? ORDER BY created_at, rowid').all(status) as unknown as EscalationRow[]).map(toEscalation);
+  }
+
+  escalationsOfManager(managerId: string): StoredEscalation[] {
+    return (this.db.prepare('SELECT * FROM escalations WHERE manager_id = ? ORDER BY created_at, rowid').all(managerId) as unknown as EscalationRow[]).map(toEscalation);
+  }
+
   updateEscalationBody({ id, body }: { id: string; body: string }): void {
     this.db.prepare("UPDATE escalations SET body = ? WHERE id = ? AND status = 'pending'").run(body, id);
   }

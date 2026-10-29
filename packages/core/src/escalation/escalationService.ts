@@ -1,6 +1,7 @@
-import { EVIDENCE_MESSAGE, OpenFleetError, WORKING_STATE_MAX_ITEMS_PER_SECTION, type ArbiterOpinion, type EscalatingClass, type EscalationPolicy, type PlanQuestion, type ReproClaim, type WorkingState, type WorkingStateSections } from '@openfleet/shared';
+import { EVIDENCE_MESSAGE, OpenFleetError, WORKING_STATE_MAX_ITEMS_PER_SECTION, type ArbiterOpinion, type EscalatingClass, type EscalationAnswerBody, type EscalationPolicy, type EscalationQuestionView, type EscalationStatus, type EscalationView, type PlanQuestion, type ReproClaim, type WorkingState, type WorkingStateSections } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
+import type { EventBus } from '../events/eventBus.js';
 import { BLANK_CLAIM_MESSAGE, hasBlankClaim, lacksExecutedEvidence, sanitizedReproClaim } from '../review/sanitizedReproClaim.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import type { AuditWriter, AuditedDecision } from './auditWriter.js';
@@ -20,6 +21,10 @@ export interface EscalationServiceDeps {
   audit: AuditWriter;
   clock: () => string;
   newId: () => string;
+  /** Receives `escalation.raised` and `escalation.resolved`; without it the service emits nothing. */
+  bus?: Pick<EventBus, 'emit'>;
+  /** Called after a human answer is committed, to tell the manager. */
+  notifyAnswer?: (escalation: EscalationView) => void;
 }
 
 export interface RecordedOpinion {
@@ -92,6 +97,14 @@ const sectionsOf = (state: WorkingState | undefined): WorkingStateSections => ({
   questionsForHuman: state?.questionsForHuman ?? [], internalQuestions: state?.internalQuestions ?? [], blockers: state?.blockers ?? [],
 });
 
+const questionViewOf = (question: StoredQuestion): EscalationQuestionView => {
+  const { questionId, text, declaredClass, effectiveClasses, reason, options, recommendation, humanAnswer, answeredAt } = question;
+  return {
+    questionId, text, declaredClass, effectiveClasses, status: question.status === 'answered' ? 'answered' : 'pending_human',
+    ...(reason && { reason }), ...(options && { options }), ...(recommendation && { recommendation }), ...(humanAnswer && { humanAnswer }), ...(answeredAt && { answeredAt }),
+  };
+};
+
 const readableOptional =(text: string | undefined) => (text === undefined ? undefined : humanReadableText(text));
 
 /** Routes the questions a manager submits, stores the batch, and keeps the single open escalation of a ticket in step with the questions that need a human. */
@@ -101,6 +114,7 @@ export class EscalationService {
   submitBatch(batch: PlanQuestionBatch): SubmittedPlanQuestions {
     const submitted = this.storeBatch(batch);
     this.journalSelfResolved({ managerId: batch.managerId, ticket: batch.ticket, submitted });
+    if (submitted.human) this.deps.bus?.emit({ type: 'escalation.raised', escalation: this.viewOf(submitted.human.escalationId) });
     return submitted;
   }
 
@@ -256,6 +270,64 @@ export class EscalationService {
     const selfResolved = this.deps.repository.questionsOfBatch(submitted.batchId).filter((question) => question.route === 'self');
     const entries = selfResolved.map(({ questionId, resolution }) => `${ticket} ${questionId} self-resolved: ${resolution!.claim} (${resolution!.status}${resolution!.command ? `, ${resolution!.command}` : ''})`);
     this.deps.audit.journal({ managerId, entries });
+  }
+
+  /** The escalations of every manager in the given status, oldest first. */
+  listByStatus(status: EscalationStatus): EscalationView[] {
+    return this.deps.repository.escalationsWithStatus(status).map((escalation) => this.viewOfStored(escalation));
+  }
+
+  listOfManager(managerId: string): EscalationView[] {
+    return this.deps.repository.escalationsOfManager(managerId).map((escalation) => this.viewOfStored(escalation));
+  }
+
+  /** A human answers every pending question of the escalation at once; the answer closes it. */
+  answer({ escalationId, answers }: { escalationId: string; answers: EscalationAnswerBody['answers'] }): EscalationView {
+    const { repository } = this.deps;
+    inTransaction(this.deps.db, 'escalation_answer', () => {
+      const escalation = repository.findEscalation(escalationId);
+      if (!escalation) throw new OpenFleetError('escalation_not_found', 'the escalation does not exist.');
+      if (escalation.status === 'answered') throw new OpenFleetError('already_resolved', 'the escalation is already answered.');
+
+      const pendingQuestions = repository.questionsOfEscalation(escalationId).filter(({ status }) => status === 'pending_human');
+      this.requireOneAnswerPerQuestion({ pendingQuestions, answers });
+      const answeredAt = this.deps.clock();
+      for (const { question_id: questionId, answer } of answers) {
+        for (const question of pendingQuestions.filter((pending) => pending.questionId === questionId)) {
+          repository.transitionQuestion({ batchId: question.batchId, questionId, from: 'pending_human', to: 'answered', humanAnswer: humanReadableText(answer), answeredAt });
+        }
+      }
+      repository.answerEscalationIfPending({ id: escalationId, resolvedAt: answeredAt });
+    });
+    const resolved = this.viewOf(escalationId);
+    this.deps.bus?.emit({ type: 'escalation.resolved', escalation: resolved });
+    this.deps.notifyAnswer?.(resolved);
+    return resolved;
+  }
+
+  private requireOneAnswerPerQuestion({ pendingQuestions, answers }: { pendingQuestions: readonly StoredQuestion[]; answers: EscalationAnswerBody['answers'] }): void {
+    const expectedIds = new Set(pendingQuestions.map(({ questionId }) => questionId));
+    const answeredIds = answers.map(({ question_id }) => question_id);
+    const unknownIds = answeredIds.filter((id) => !expectedIds.has(id));
+    const repeatedIds = answeredIds.filter((id, index) => answeredIds.indexOf(id) !== index);
+    const missingIds = [...expectedIds].filter((id) => !answeredIds.includes(id));
+    const problems = [
+      unknownIds.length > 0 && `the escalation does not carry ${unknownIds.join(', ')}`,
+      repeatedIds.length > 0 && `${repeatedIds.join(', ')} is answered twice`,
+      missingIds.length > 0 && `no answer for ${missingIds.join(', ')}`,
+    ].filter(Boolean);
+    if (problems.length === 0) return;
+    throw new OpenFleetError('invalid_body', `the answers do not match the questions: ${problems.join('; ')}`, { hint: 'Send one answer for each question of the escalation.' });
+  }
+
+  private viewOf(escalationId: string): EscalationView {
+    return this.viewOfStored(this.deps.repository.findEscalation(escalationId)!);
+  }
+
+  private viewOfStored(escalation: StoredEscalation): EscalationView {
+    const questions = this.deps.repository.questionsOfEscalation(escalation.id).map(questionViewOf);
+    const { managerId, ticket, status, body, createdAt, resolvedAt } = escalation;
+    return { id: escalation.id, managerId, ticket, status, body, createdAt, ...(resolvedAt && { resolvedAt }), questions };
   }
 
   private storeBatch(batch: PlanQuestionBatch): SubmittedPlanQuestions {

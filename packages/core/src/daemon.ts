@@ -16,7 +16,8 @@ import { CriteriaStatusGuard } from './escalation/criteriaStatusGuard.js';
 import { EscalationRepository } from './escalation/escalationRepository.js';
 import { EscalationService } from './escalation/escalationService.js';
 import { GovernanceQueueService } from './governance/governanceQueueService.js';
-import { decisionNotification } from './governance/decisionNotification.js';
+import type { EscalationView } from '@openfleet/shared';
+import { decisionNotification, escalationAnswerNotification } from './governance/decisionNotification.js';
 import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
 import { ClaudeCliHarness } from './harness/claudeCli/claudeCliHarness.js';
@@ -289,9 +290,19 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   bus.subscribe((event) => silentBlocks.handle(event));
   const handoffSettings = loadHandoffSettings(modelConfigPath);
   const reviewFindings = new ReviewFindingsRepository(db);
+  const tellManagerOfEscalationAnswer = (escalation: EscalationView) => {
+    const sessionId = escalation.managerId;
+    const isOpen = sessions.get(sessionId)?.state !== 'closed';
+    if (!isOpen) return;
+    try {
+      sessions.sendMessage({ sessionId, messageId: `escalation-${escalation.id}`, body: escalationAnswerNotification(escalation) });
+    } catch (error) {
+      log('warn', `escalation: the manager could not be told: ${describeError(error).error}`, sessionId);
+    }
+  };
   const escalationRepository = new EscalationRepository(db);
   const escalationAudit = new AuditWriter({ notes, noteRepo, managers, sessions, stores, storeRepo });
-  const escalations = new EscalationService({ db, repository: escalationRepository, workingStates, audit: escalationAudit, clock: () => new Date().toISOString(), newId });
+  const escalations = new EscalationService({ db, repository: escalationRepository, workingStates, audit: escalationAudit, clock: () => new Date().toISOString(), newId, bus, notifyAnswer: tellManagerOfEscalationAnswer });
   const criteriaStatusGuard = new CriteriaStatusGuard({ projects, managers, sessions, audit: escalationAudit });
   stores.observeRowWrites(criteriaStatusGuard);
   const criteria = new CriteriaApproval({ repository: escalationRepository, noteRepo, stores, storeRepo, audit: escalationAudit });
@@ -321,7 +332,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
   const scheduledEvents = new ScheduledEventService({ repository: new ScheduledEventRepository(db), sessions, managers: managerRepository, bus });
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

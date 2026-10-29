@@ -7,6 +7,7 @@ import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { describeError } from '../errors/describeError.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { GovernanceQueueService } from '../governance/governanceQueueService.js';
+import type { EscalationService } from '../escalation/escalationService.js';
 import type { SilentBlockDetector } from '../governance/silentBlockDetector.js';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
@@ -95,7 +96,7 @@ export interface WsHandler {
 const DEFAULT_WS_CLOSE_GRACE_MS = 250;
 const NO_CLIENT_ISSUE_EXPIRY_MS = 5 * 60_000;
 
-export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; governanceQueue?: GovernanceQueueService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number; degraded?: DegradedRegistry; todos?: TodoTracker; silentBlocks?: SilentBlockDetector; clock?: () => number }): WsHandler {
+export function createWsHandler(deps: { bus: EventBus; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; governanceQueue?: GovernanceQueueService; escalations?: EscalationService; wsTickets: WsTicketStore; wsCloseGraceMs?: number; workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number; degraded?: DegradedRegistry; todos?: TodoTracker; silentBlocks?: SilentBlockDetector; clock?: () => number }): WsHandler {
   const wss = new WebSocketServer({ noServer: true });
   const clock = deps.clock ?? Date.now;
   const isBroadcastIssueOlderThanExpiry = () => {
@@ -159,6 +160,7 @@ export function createWsHandler(deps: { bus: EventBus; sessions: SessionService;
     send(socket, {
       type: 'snapshot', sessions: deps.sessions.list(), approvals: deps.approvals.listPending(), managers: deps.managers.listViews(),
       ...(deps.governanceQueue && { proposals: deps.governanceQueue.listByStatus('pending'), queuedCounts: deps.governanceQueue.queuedCounts() }),
+      ...(deps.escalations && { escalations: deps.escalations.listByStatus('pending') }),
       ...workingStateSnapshotFields(),
       ...(deps.degraded && { daemonIssues: deps.degraded.list() }),
       ...(deps.todos ? { todoSummaries: deps.todos.summaries() } : {}),
