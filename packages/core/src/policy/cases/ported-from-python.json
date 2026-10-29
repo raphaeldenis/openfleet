@@ -9,11 +9,12 @@
     "FIX73 'cwd contains /.worktrees/' <=> presence 'unattended'; the 'outside a worktree' cases <=> presence 'attended'. FIX73 requests carry no role, so the default profile applies.",
     "'agent_id' present in the payload <=> actor 'subagent'.",
     "A malformed payload (not json, empty, a json array, tool_input null) never reaches the evaluator: the daemon adapter (tranche S2) answers {}. At evaluator level the equivalent input is a request without a command, and the expected verdict is 'allow'.",
-    "The FIX73 'other tools are ignored' case sends toolName 'Read' carrying a command field."
+    "The FIX73 'other tools are ignored' case sends toolName 'Read' carrying a command field.",
+    "FIX73-28 and FIX73-29 write under .scratch/: the rule no-shell-file-writes steers a shell write anywhere else to the edit tools, and the cases keep their point (a name that only looks like .git is not a .git write)."
   ],
   "families": {
     "FIX60": { "expectedCaseCount": 27, "request": { "role": "DEV", "model": "opus", "presence": "attended", "actor": "session", "toolName": "Bash" }, "denyRuleId": "delegate-heavy-commands" },
-    "FIX73": { "expectedCaseCount": 42, "request": { "presence": "unattended", "actor": "session", "toolName": "Bash", "cwd": "/Users/chicko/repo/.worktrees/task-1" } }
+    "FIX73": { "expectedCaseCount": 42, "request": { "presence": "unattended", "actor": "session", "toolName": "Bash", "cwd": "/Users/chicko/repo/.worktrees/task-1", "worktreeRoot": "/Users/chicko/repo/.worktrees/task-1" } }
   },
   "cases": [
     { "id": "FIX60-01", "python": "test_pipe_inside_quotes_is_not_a_separator[0]", "request": { "command": "grep -rE 'a|b' /Users/chicko/x" }, "expect": "allow" },
@@ -71,8 +72,8 @@
     { "id": "FIX73-25", "python": "test_ordinary_commands_stay_allowed_in_a_worktree[3]", "request": { "command": "git clean -nfd" }, "expect": "allow" },
     { "id": "FIX73-26", "python": "test_ordinary_commands_stay_allowed_in_a_worktree[4]", "request": { "command": "git clean --dry-run -fd" }, "expect": "allow" },
     { "id": "FIX73-27", "python": "test_ordinary_commands_stay_allowed_in_a_worktree[5]", "request": { "command": "git status" }, "expect": "allow" },
-    { "id": "FIX73-28", "python": "test_ordinary_commands_stay_allowed_in_a_worktree[6]", "request": { "command": "echo hi >> .gitignore" }, "expect": "allow" },
-    { "id": "FIX73-29", "python": "test_ordinary_commands_stay_allowed_in_a_worktree[7]", "request": { "command": "echo hi > notes.git.txt" }, "expect": "allow" },
+    { "id": "FIX73-28", "python": "test_ordinary_commands_stay_allowed_in_a_worktree[6]", "request": { "command": "echo hi >> .scratch/.gitignore" }, "expect": "allow" },
+    { "id": "FIX73-29", "python": "test_ordinary_commands_stay_allowed_in_a_worktree[7]", "request": { "command": "echo hi > .scratch/notes.git.txt" }, "expect": "allow" },
     { "id": "FIX73-30", "python": "test_ordinary_commands_stay_allowed_in_a_worktree[8]", "request": { "command": "sh -c 'ls -la'" }, "expect": "allow" },
     { "id": "FIX73-31", "python": "test_ordinary_commands_stay_allowed_in_a_worktree[9]", "request": { "command": "bash -c 'rm -r build'" }, "expect": "allow" },
     { "id": "FIX73-32", "python": "test_ordinary_commands_stay_allowed_in_a_worktree[10]", "request": { "command": "git checkout -- ." }, "expect": "allow" },

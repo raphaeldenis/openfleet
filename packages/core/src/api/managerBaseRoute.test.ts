@@ -29,7 +29,7 @@ describe('GET /api/manager-base on a booted daemon', () => {
     const view = (await response.json()) as ManagerBaseView;
 
     expect(response.status).toBe(200);
-    expect(view.version).toBe(2);
+    expect(view.version).toBe(3);
     expect(view.sha).toBe(readFileSync(SHIPPED_SHA_URL, 'utf8').trim());
     expect(view.bytes).toBeGreaterThan(0);
     expect(view.bytes).toBeLessThanOrEqual(MAX_BASE_BYTES);

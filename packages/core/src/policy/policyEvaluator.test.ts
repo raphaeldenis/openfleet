@@ -63,10 +63,10 @@ describe('the delivered policy refuses what nobody could confirm', () => {
   });
 
   it.each([
-    'echo hi >> .gitignore', 'echo hi > notes.git.txt', 'cat .git/config', 'cp .git/config backup', 'echo hi > .github/x',
-    'echo hi > gitfile/.gitkeep', 'git status > out.txt',
+    'echo hi >> .scratch/.gitignore', 'echo hi > .scratch/notes.git.txt', 'cat .git/config', 'cp .git/config backup', 'echo hi > .scratch/.github/x',
+    'echo hi > .scratch/gitfile/.gitkeep', 'git status > .scratch/out.txt',
   ])('allows %s', (command) => {
-    expect(decisionOf(command)).toBe('allow');
+    expect(decisionOf(command, { worktreeRoot: '/work/repo' })).toBe('allow');
   });
 
   it.each(['Write', 'Edit', 'NotebookEdit'])('denies the %s tool on a file inside .git', (toolName) => {

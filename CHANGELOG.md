@@ -8,6 +8,8 @@ Each batch that adds or changes a tool while the version is 2 appends its lines 
 
 - P1, `get_argus_status` and `get_session_status`: `pendingPermission` carries a new `input` field next to `toolName` and `ageSeconds`: the first word of a Bash command (never its arguments), the file path for file tools, or the compact form of the tool input, on one line, masked by `maskedSecrets` and capped at 200 characters plus a truncation marker. `get_session_status` returns `pendingPermission` only while an approval is pending. The silent-block message sent to a manager names the tool and carries the same `input`.
 
+- CHILD-FILE-WRITE-TOOL01: the manager base template moves to version 3 (a change to the template contract, not to a tool): section §9 tells managers that file writes go through the `Write` and `Edit` tools. No MCP tool changes, so `contract_version` stays 2.
+
 Tools added: none.
 Tools changed: `get_argus_status` and `get_session_status` (output field only; no input schema changes).
 Migrations: none.

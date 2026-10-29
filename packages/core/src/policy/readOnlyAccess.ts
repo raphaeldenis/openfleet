@@ -35,7 +35,8 @@ function isInsideRoot(path: string[], root: string[]): boolean {
   return root.length > 0 && root.length <= path.length && root.every((segment, index) => path[index] === segment);
 }
 
-function isReadableUnderRoots(operand: string, scope: ReadScope): boolean {
+/** Tells whether a path operand resolves, against the cwd of the scope, to a place inside one of its roots. */
+export function isReadableUnderRoots(operand: string, scope: ReadScope): boolean {
   if (operand === '-') return true;
   const isResolvable = !NON_PATH_MARKERS.test(operand) && !operand.startsWith('~');
   if (!isResolvable) return false;

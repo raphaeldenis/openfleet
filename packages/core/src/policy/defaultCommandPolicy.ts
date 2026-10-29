@@ -130,6 +130,19 @@ const noGenericSendMessageToFleetSession: PolicyRule = {
   alternative: 'To a manager use `message_argus`; to any other session use `send_session_message`. SendMessage stays valid for your sub-agents.',
 };
 
+export const NO_SHELL_FILE_WRITES_RULE_ID = 'no-shell-file-writes';
+const SCRATCH_DIRECTORIES = ['{scratch}', '{worktree}/.scratch', '{toolResults}'];
+
+const noShellFileWrites: PolicyRule = {
+  id: NO_SHELL_FILE_WRITES_RULE_ID,
+  tools: ['Bash'],
+  presence: 'unattended',
+  decision: 'deny',
+  when: { writesFilesOutside: SCRATCH_DIRECTORIES },
+  reason: 'A file written through the shell (redirect, heredoc, tee, sed -i, an interpreter) asks for a confirmation nobody sees.',
+  alternative: 'Create or change the file with the Write tool (a whole file) or the Edit tool (a replacement); NotebookEdit for a notebook. Command output may go to .scratch/.',
+};
+
 const noGitPublish: PolicyRule = {
   id: 'no-git-publish',
   tools: ['Bash'],
@@ -163,7 +176,7 @@ export const DEFAULT_COMMAND_POLICY: CommandPolicyDocument = {
   mode: 'enforce',
   profiles: {
     default: {
-      rules: [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, findingsGatePrCreate.id, noGenericSendMessageToFleetSession.id, allowReadOnlyPipelines.id],
+      rules: [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, noShellFileWrites.id, findingsGatePrCreate.id, noGenericSendMessageToFleetSession.id, allowReadOnlyPipelines.id],
     },
     dev: { extends: 'default', rules: [delegateHeavyCommands.id] },
     qe: { extends: 'default', rules: [], mode: 'observe' },
@@ -173,6 +186,6 @@ export const DEFAULT_COMMAND_POLICY: CommandPolicyDocument = {
   roleToProfile: { DEV: 'dev', QE: 'qe', QA: 'qa', ADV: 'review', REVIEW: 'review' },
   rules: [
     noForcedRecursiveRm, noForcedGitClean, noWriteIntoGitDir, noFindDeleteOnBroadPaths, noHumanQuestionsUnattended,
-    findingsGatePrCreate, noGenericSendMessageToFleetSession, delegateHeavyCommands, allowReadOnlyPipelines, noGitPublish, noGitMutations, noFileWrites,
+    noShellFileWrites, findingsGatePrCreate, noGenericSendMessageToFleetSession, delegateHeavyCommands, allowReadOnlyPipelines, noGitPublish, noGitMutations, noFileWrites,
   ],
 };

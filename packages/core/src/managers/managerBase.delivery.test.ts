@@ -20,6 +20,7 @@ const SECTION_COUNT = 10;
 const RELEASED_BASE_SHAS: Record<number, string> = {
   1: '4ee6ed1d031e912d825972627a8e759ea881218bcd33f4f9609e6c066daa56a6',
   2: 'fe4afd8ff81625b6ff76711c059222f817472fe3c2a4f6e0daa291c13a7a077c',
+  3: '0ecc04887dbd48ab066dfe6b2fe23c583213e7ac582cff8e7db82781a7906607',
 };
 
 const tempDirs = createTempDirTracker();
@@ -73,6 +74,13 @@ describe('the shipped manager base', () => {
   it('cites only tools the real daemon registers', () => {
     expect(registeredToolNames.has('get_argus_status')).toBe(true);
     expect(registeredToolNames.has('get_manager_base')).toBe(true);
+  });
+
+  it('carries the file-write rule in the child prohibitions of §9', () => {
+    const childProhibitions = loadManagerBase().sections.find((section) => section.id === '§9');
+
+    expect(childProhibitions?.text).toMatch(/only with the Write and Edit tools, never through the shell/);
+    expect(childProhibitions?.text).toContain('`.scratch/`');
   });
 
   it('tells the manager to read the base with get_manager_base, whole, after a reset and on a version change', () => {

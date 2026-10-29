@@ -56,6 +56,8 @@ const SHELL_PROGRAMS: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash'
 const SHELL_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']);
 const FIND_EXEC_OPTIONS: ReadonlySet<string> = new Set(['-exec', '-execdir', '-ok', '-okdir']);
 const FIND_EXEC_TERMINATORS: ReadonlySet<string> = new Set([';', '+']);
+/** Stands for the program of a line that only redirects (`> f`, `{ …; } > f`, `done > f`, `exec > f`): the shell's `:` no-op. */
+const BARE_REDIRECT_PROGRAM = ':';
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 const isAssignment = (text: string): boolean => ASSIGNMENT.test(text);
@@ -194,7 +196,8 @@ class AnalysisRun {
     for (const script of substitutions) this.analyzeNested(script, 'substitution', context);
     for (const heredoc of heredocs) this.analyzeHeredocExpansions(heredoc, context);
     const commandWords = dropLeadingKeywords(words);
-    if (commandWords.length === 0) return;
+    const isBareRedirect = commandWords.length === 0 && redirects.length > 0;
+    if (commandWords.length === 0 && !isBareRedirect) return;
     const isInSubshell = state.subshellDepth > 0 && context.origin === 'top';
     const placement: Placement = { origin: isInSubshell ? 'subshell' : context.origin, depth: context.depth };
     this.emitCommand({ texts: commandWords.map((word) => word.text), redirects, fedByPipe: state.pipeFeedsNext, placement });
@@ -210,7 +213,8 @@ class AnalysisRun {
 
   private emitCommand({ texts, redirects, fedByPipe, placement }: { texts: string[]; redirects: CommandRedirect[]; fedByPipe: boolean; placement: Placement }): void {
     const { assignments, wrappers, programIndex } = unwrapProgram(texts);
-    const program = basenameOf(texts[programIndex] ?? '');
+    const namedProgram = basenameOf(texts[programIndex] ?? '');
+    const program = namedProgram === '' && redirects.length > 0 ? BARE_REDIRECT_PROGRAM : namedProgram;
     if (program === '') return;
     const command: SimpleCommand = { program, args: texts.slice(programIndex + 1), assignments, wrappers, redirects, fedByPipe, origin: placement.origin, depth: placement.depth };
     if (this.commands.length >= MAX_COMMANDS) {

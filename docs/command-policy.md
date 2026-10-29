@@ -86,5 +86,25 @@ The `SendMessage` tool of the Claude harness reaches only the sub-agents of the 
 - **Known limit.** A sub-agent given the same name as a manager session is refused; rename the sub-agent. A sub-agent whose name is exactly 8 hexadecimal characters (`deadbeef`) is refused too, because it reads as a session uuid prefix. A non-manager session addressed by name is not recognised (only managers and uuids are), so that call still gets the harness error.
 - **Predicate.** `recipientIsFleetSession: true` in a rule's `when`; it reads `recipient` (the `to` of the call) and `recipientNamesManager` of the policy request, and holds for no other tool.
 - **Mode.** Follows the policy mode: `observe` journals and lets the call pass, `off` or disabling the rule switches it off. The journal records the tool `SendMessage` with the recipient as the command excerpt.
+## Command policy: file writes go through the edit tools
+
+The delivered rule `no-shell-file-writes` (profile `default`, so every role; `Bash` only; unattended sessions only) refuses a command that writes file content through the shell and answers with a guidance: create or change the file with the `Write` tool (a whole file) or the `Edit` tool (a replacement), `NotebookEdit` for a notebook. The point is to keep a child out of the permission dialog nobody reads. Under `observe` the refusal is journaled and the command passes.
+
+The rule uses the predicate `writesFilesOutside`, true when one simple command writes outside the roots `{scratch}`, `{worktree}/.scratch` and `{toolResults}` (a relative target resolves against the `cwd` of the command, `..` is folded, `$VAR` and `~` targets cannot be resolved and count as outside).
+
+| Form | Judged as a write |
+|---|---|
+| Redirect to a file: `>`, `>>`, `>|`, `&>`, `&>>`, `<>`, `>& file`, with or without a descriptor (`2> f`) | yes, heredocs included (`cat > f <<'EOF'`, `cat <<'EOF' > f`) |
+| A line that only redirects: `> f`, `{ …; } > f`, `(…) > f`, `done > f`, `exec > f` | yes |
+| `tee <file>` (`tee` with no file is a pass-through; behind `xargs` it names files on stdin and counts) | yes |
+| `sed -i`, `sed -i.bak`, `sed --in-place` with a file outside the roots; `perl -i` / `-pi` | yes |
+| `dd of=<file>` | yes |
+| `python`, `node`, `deno`, `bun`, `ruby`, `perl`, `php` with inline code (`-c`, `-e`, `-p`, `--eval`, `eval`), a here-document or a here-string that opens a file for writing (`open(…, 'w'\|'a'\|'x'\|'r+')`, `write_text`, `writeFile*`, `appendFile*`, `createWriteStream`, `File.write`, `file_put_contents`, a perl `open` with `>`), shells out to a redirect, `tee` or `sed -i`, or decodes a payload and runs it (`b64decode` + `exec`) | yes |
+
+Never judged: `> /dev/null`, `&>/dev/null`, `2>&1`, `>&2`, `/dev/stdout`, `/dev/stderr`, `/dev/tty`, `/dev/fd/N`, input redirects, a redirect, `tee` or `sed -i` whose target is inside `.scratch/` of the worktree (or a `{scratch}` / `{toolResults}` root), reads (`cat`, `grep`, `sed` without `-i`), `sed` without a file, an interpreter that only reads or prints, and an interpreter that runs a script file (`python3 scripts/x.py`).
+
+The analyzer sees through `bash -c`, `sh -c`, `eval`, `env`, `command`, `xargs`, `find -exec`, `$(…)`, subshells and shell scripts read from a heredoc, as for the findings gate. **Known limits, not covered:** a script file that writes (`bash ./gen.sh`, `python3 gen.py`), an interpreter that reads its program from a pipe (`echo "…" | python3`), code assembled at run time from pieces the rule cannot read, and programs that write by other means (`cp`, `mv`, `install`, `curl -o`, `wget -O`, `git checkout`, `touch`). An interpreter whose code writes into `.scratch/` is still steered to the tools, since the code is not resolved to a path.
+
+The same rule is stated in section §9 of the manager base, which tells managers to say it in every child brief. The manager base template moves to version 3 with this rule (a change to the template contract): a manager that runs on version 2 does not tell its children about it until its base is updated.
 
 **Settings screen.** Settings → Command policy shows the mode (three states), the ask switch with what turning it off means, the rule list with a switch per delivered rule, a "Try a command" box (calls `evaluate`), the recent refusals and the number of times the policy engine failed open.

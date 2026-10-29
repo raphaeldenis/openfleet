@@ -30,6 +30,8 @@ export interface RulePredicate {
   readsOnlyWithin?: string[];
   /** The tool call addresses a session of the fleet: a session uuid (or its prefix), or the name of a manager session. */
   recipientIsFleetSession?: boolean;
+  /** The command writes file content (a redirect, `tee`, `sed -i`, `dd of=`, an interpreter's inline code) to a path outside these roots (`{worktree}`, `{worktree}/<dir>`, `{scratch}`, `{toolResults}` or absolute paths). */
+  writesFilesOutside?: string[];
   anyOf?: RulePredicate[];
   allOf?: RulePredicate[];
   not?: RulePredicate;
@@ -51,6 +53,7 @@ export const RulePredicateSchema: z.ZodType<RulePredicate> = z.lazy(() =>
     argMatching: z.array(NonEmptyText).optional(),
     readsOnlyWithin: z.array(NonEmptyText).min(1).optional(),
     recipientIsFleetSession: z.boolean().optional(),
+    writesFilesOutside: z.array(NonEmptyText).optional(),
     anyOf: z.array(RulePredicateSchema).optional(),
     allOf: z.array(RulePredicateSchema).optional(),
     not: RulePredicateSchema.optional(),
