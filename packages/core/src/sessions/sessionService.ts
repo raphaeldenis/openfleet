@@ -2360,7 +2360,8 @@ export class SessionService {
   private judgeLaunchOutput(sessionId: string, handle: HarnessHandle): void {
     const isStillThisLaunch = activeHandleBySessionId.get(sessionId) === handle;
     if (!isStillThisLaunch) return;
-    const hasSignOfLife = this.sessionsWithOutput.has(sessionId) || handle.probeTranscriptProgress?.() !== undefined;
+    const hasReportedItsStart = this.repo.get(sessionId)?.state !== 'starting';
+    const hasSignOfLife = hasReportedItsStart || this.sessionsWithOutput.has(sessionId) || handle.probeTranscriptProgress?.() !== undefined;
     if (hasSignOfLife) {
       this.markReady(sessionId);
       return;
@@ -2438,6 +2439,7 @@ export class SessionService {
   }
 
   private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number): void {
+    this.clearResumeTimer(sessionId);
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
