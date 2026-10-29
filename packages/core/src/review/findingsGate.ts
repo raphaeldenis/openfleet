@@ -38,7 +38,7 @@ function howToLogOf({ ticket, head, missing }: { ticket: string; head: string; m
   const verdictReport = isAdversarialMissing ? [`The reviewer calls report_ship_verdict({ verdict: "go", reasons: [...], sha: "${head}" }).`] : [];
   const firstWaivableStep = reportableSteps[0];
   const skipCommand = firstWaivableStep === undefined ? [] : [
-    `A human can waive ${reportableSteps.join(', ')} with the admin token: curl -X POST <daemon-url>${SKIP_ENDPOINT} -H "Authorization: Bearer <admin token>" -H "Content-Type: application/json" -d '{"ticket":"${ticket}","step":"${firstWaivableStep}","reason":"...","sha":"${head}"}'`,
+    `A human can waive ${reportableSteps.join(', ')} with the admin token: curl -X POST <daemon-url>${SKIP_ENDPOINT} -H "Authorization: Bearer <admin token>" -d '{"ticket":"${ticket}","step":"${firstWaivableStep}","reason":"...","sha":"${head}"}'`,
   ];
   return [...stepReport, ...verdictReport, ...skipCommand].join(' ');
 }
