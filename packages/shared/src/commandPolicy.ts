@@ -28,6 +28,8 @@ export interface RulePredicate {
   argMatching?: string[];
   /** The command is a plain read of files under these roots (`{worktree}`, `{scratch}`, `{toolResults}` or absolute paths). */
   readsOnlyWithin?: string[];
+  /** The tool call addresses a session of the fleet: a session uuid (or its prefix), or the name of a manager session. */
+  recipientIsFleetSession?: boolean;
   anyOf?: RulePredicate[];
   allOf?: RulePredicate[];
   not?: RulePredicate;
@@ -48,6 +50,7 @@ export const RulePredicateSchema: z.ZodType<RulePredicate> = z.lazy(() =>
     writesPathMatching: z.array(NonEmptyText).optional(),
     argMatching: z.array(NonEmptyText).optional(),
     readsOnlyWithin: z.array(NonEmptyText).min(1).optional(),
+    recipientIsFleetSession: z.boolean().optional(),
     anyOf: z.array(RulePredicateSchema).optional(),
     allOf: z.array(RulePredicateSchema).optional(),
     not: RulePredicateSchema.optional(),
@@ -126,6 +129,10 @@ export interface PolicyRequest {
   toolName: string;
   command?: string;
   filePaths?: string[];
+  /** The `to` of a SendMessage call. */
+  recipient?: string;
+  /** The daemon found a manager session named like `recipient`. */
+  recipientNamesManager?: boolean;
   cwd: string;
   worktreeRoot?: string;
   scratchRoots: string[];

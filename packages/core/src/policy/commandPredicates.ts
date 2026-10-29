@@ -15,8 +15,9 @@ export interface PredicateContext {
 type Check = (predicate: RulePredicate, context: PredicateContext) => boolean;
 
 const KNOWN_PREDICATE_KEYS: ReadonlySet<string> = new Set([
-  'program', 'subcommand', 'flags', 'commandPrefix', 'repoWideSearch', 'writesPathMatching', 'argMatching', 'readsOnlyWithin', 'anyOf', 'allOf', 'not',
+  'program', 'subcommand', 'flags', 'commandPrefix', 'repoWideSearch', 'writesPathMatching', 'argMatching', 'readsOnlyWithin', 'recipientIsFleetSession', 'anyOf', 'allOf', 'not',
 ]);
+const SESSION_ID_OR_PREFIX = /^[0-9a-f]{8}(-[0-9a-f]{1,12}){0,4}$/i;
 const GIT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
 const FILE_WRITING_REDIRECTS: ReadonlySet<string> = new Set(['>', '>>', '>|', '&>', '&>>', '<>']);
 const FILE_COPYING_PROGRAMS: ReadonlySet<string> = new Set(['cp', 'mv']);
@@ -103,6 +104,13 @@ function rootsOf(templates: string[], request: PolicyRequest): string[] {
   return templates.flatMap(resolveTemplate);
 }
 
+function addressesFleetSession(request: PolicyRequest): boolean {
+  const { recipient } = request;
+  if (recipient === undefined) return false;
+  const isSessionIdOrPrefix = SESSION_ID_OR_PREFIX.test(recipient);
+  return isSessionIdOrPrefix || request.recipientNamesManager === true;
+}
+
 const CHECKS: readonly Check[] = [
   (predicate) => Object.keys(predicate).every((key) => KNOWN_PREDICATE_KEYS.has(key)),
   ({ program }, { command }) => program === undefined || (command !== undefined && asList(program).includes(command.program)),
@@ -115,6 +123,7 @@ const CHECKS: readonly Check[] = [
   ({ argMatching }, { command }) => argMatching === undefined || (command !== undefined && command.args.some((arg) => argMatching.some((glob) => globMatches(glob, arg)))),
   ({ readsOnlyWithin }, { command, request }) => readsOnlyWithin === undefined
     || (command !== undefined && isPlainReadWithin(command, { cwd: request.cwd, roots: rootsOf(readsOnlyWithin, request) })),
+  ({ recipientIsFleetSession }, { request }) => recipientIsFleetSession === undefined || addressesFleetSession(request) === recipientIsFleetSession,
   ({ anyOf }, context) => anyOf === undefined || anyOf.some((child) => matchesPredicate(child, context)),
   ({ allOf }, context) => allOf === undefined || allOf.every((child) => matchesPredicate(child, context)),
   ({ not }, context) => not === undefined || !matchesPredicate(not, context),

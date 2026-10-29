@@ -119,6 +119,17 @@ const findingsGatePrCreate: PolicyRule = {
   alternative: 'Have QE, QA and the delivery review report on the head commit, or ask your manager for a logged step skip.',
 };
 
+export const SEND_MESSAGE_GUARD_RULE_ID = 'no-generic-send-message-to-fleet-session';
+
+const noGenericSendMessageToFleetSession: PolicyRule = {
+  id: SEND_MESSAGE_GUARD_RULE_ID,
+  tools: ['SendMessage'],
+  decision: 'deny',
+  when: { recipientIsFleetSession: true },
+  reason: 'SendMessage only reaches your own sub-agents, never a session or a manager of the fleet.',
+  alternative: 'To a manager use `message_argus`; to any other session use `send_session_message`. SendMessage stays valid for your sub-agents.',
+};
+
 const noGitPublish: PolicyRule = {
   id: 'no-git-publish',
   tools: ['Bash'],
@@ -152,7 +163,7 @@ export const DEFAULT_COMMAND_POLICY: CommandPolicyDocument = {
   mode: 'enforce',
   profiles: {
     default: {
-      rules: [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, findingsGatePrCreate.id, allowReadOnlyPipelines.id],
+      rules: [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, findingsGatePrCreate.id, noGenericSendMessageToFleetSession.id, allowReadOnlyPipelines.id],
     },
     dev: { extends: 'default', rules: [delegateHeavyCommands.id] },
     qe: { extends: 'default', rules: [], mode: 'observe' },
@@ -162,6 +173,6 @@ export const DEFAULT_COMMAND_POLICY: CommandPolicyDocument = {
   roleToProfile: { DEV: 'dev', QE: 'qe', QA: 'qa', ADV: 'review', REVIEW: 'review' },
   rules: [
     noForcedRecursiveRm, noForcedGitClean, noWriteIntoGitDir, noFindDeleteOnBroadPaths, noHumanQuestionsUnattended,
-    findingsGatePrCreate, delegateHeavyCommands, allowReadOnlyPipelines, noGitPublish, noGitMutations, noFileWrites,
+    findingsGatePrCreate, noGenericSendMessageToFleetSession, delegateHeavyCommands, allowReadOnlyPipelines, noGitPublish, noGitMutations, noFileWrites,
   ],
 };
