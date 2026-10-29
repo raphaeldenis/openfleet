@@ -175,3 +175,39 @@ describe('PATCH /api/projects/:id: the post-create hook setting', () => {
     expect((await patchProject(project.id, {})).status).toBe(400);
   });
 });
+
+describe('PATCH /api/projects/:id: the row guard setting', () => {
+  it('is absent from a new project: the guard is off by default', async () => {
+    const project = await createProject();
+
+    expect(project).not.toHaveProperty('rowGuardEnabled');
+  });
+
+  it('turns the guard on and lists it with the project', async () => {
+    const project = await createProject();
+
+    const res = await patchProject(project.id, { rowGuardEnabled: true });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ...project, rowGuardEnabled: true });
+    expect(await listProjects()).toEqual([{ ...project, rowGuardEnabled: true }]);
+  });
+
+  it('turns the guard back off', async () => {
+    const project = await createProject();
+    await patchProject(project.id, { rowGuardEnabled: true });
+
+    const res = await patchProject(project.id, { rowGuardEnabled: false });
+
+    expect(await res.json()).toEqual(project);
+  });
+
+  it('keeps the guard when only the name changes', async () => {
+    const project = await createProject();
+    await patchProject(project.id, { rowGuardEnabled: true });
+
+    const res = await patchProject(project.id, { name: 'Renamed' });
+
+    expect(await res.json()).toEqual({ ...project, name: 'Renamed', rowGuardEnabled: true });
+  });
+});

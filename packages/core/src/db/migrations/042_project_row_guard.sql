@@ -1,0 +1,1 @@
+ALTER TABLE projects ADD COLUMN row_guard_enabled INTEGER NOT NULL DEFAULT 0;

@@ -22,7 +22,7 @@ import { AmbiguousColumnReferenceError, DuplicateNameError, RowNotFoundError, St
 import {
   CellValueRejectedError, ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, OptionsHeldByRowsError, NaturalKeyConflictError, NaturalKeyMissingError, NaturalKeyNotFoundError, NaturalKeyNotUniqueError, NaturalKeyOnSeveralRowsError,
   ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError, NoNaturalKeyError, AmbiguousNaturalKeyError,
-  InvalidViewConfigError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
+  InvalidViewConfigError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError, JournalShortenedError, DoneWithoutPrUrlError, RowGuardViolationError,
 } from '../stores/dataStoreService.js';
 import { DocsFolderNotWritableError, InvalidDocsFolderError, NoteIsNotFileBackedError, ProjectHasNoDocsFolderError } from '../notes/docsFolderService.js';
 import { HandoffNotFoundError, SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
@@ -85,6 +85,9 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['DuplicateNameError', () => new DuplicateNameError('Tasks'), 'duplicate_name'],
   ['ConstraintError', () => new ConstraintError('bad'), 'constraint_violation'],
   ['StoreRowCapError', () => new StoreRowCapError('s1', 100), 'row_cap'],
+  ['RowGuardViolationError', () => new RowGuardViolationError('the row guard refused the change.'), 'row_guard_violation'],
+  ['JournalShortenedError', () => new JournalShortenedError(), 'row_guard_violation'],
+  ['DoneWithoutPrUrlError', () => new DoneWithoutPrUrlError(), 'row_guard_violation'],
   ['DaemonSetColumnError', () => new DaemonSetColumnError('x'), 'invalid_body'],
   ['InvalidCellValueError', () => new InvalidCellValueError('c1'), 'invalid_body'],
   ['InvalidNameError', () => new InvalidNameError('x'), 'invalid_body'],

@@ -14,6 +14,8 @@ export interface Project {
   postCreateHookScript?: string;
   /** How long that script may run; absent means the default. */
   postCreateHookTimeoutSeconds?: number;
+  /** Present and true when the project's rows keep their journal append-only and need a pr_url to be done; absent means off. */
+  rowGuardEnabled?: true;
 }
 
 const ProjectNameSchema = z.string().trim().min(1).max(MAX_PROJECT_NAME_CHARS);
@@ -55,6 +57,7 @@ export const UpdateProjectRequestSchema = z
     docsFolderPath: DocsFolderPathSchema.optional(),
     postCreateHookScript: PostCreateHookScriptSchema.optional(),
     postCreateHookTimeoutSeconds: PostCreateHookTimeoutSchema.optional(),
+    rowGuardEnabled: z.boolean().optional(),
   })
-  .refine((patch) => Object.values(patch).some((value) => value !== undefined), { message: 'name, docsFolderPath, postCreateHookScript or postCreateHookTimeoutSeconds is required' });
+  .refine((patch) => Object.values(patch).some((value) => value !== undefined), { message: 'name, docsFolderPath, postCreateHookScript, postCreateHookTimeoutSeconds or rowGuardEnabled is required' });
 export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequestSchema>;

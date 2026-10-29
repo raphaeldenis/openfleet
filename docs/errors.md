@@ -22,7 +22,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Kind | HTTP status | Codes |
 | --- | --- | --- |
-| `invalid_request` | 400 | 12 |
+| `invalid_request` | 400 | 13 |
 | `unauthorized` | 401 | 1 |
 | `not_found` | 404 | 12 |
 | `conflict` | 409 | 40 |
@@ -47,6 +47,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `outside_own_repository` | 400 | `never` |
 | `docs_root_invalid` | 400 | `never` |
 | `docs_root_forbidden` | 400 | `never` |
+| `row_guard_violation` | 400 | `never` |
 | `message_held_for_review` | 400 | `never` |
 
 ### unauthorized

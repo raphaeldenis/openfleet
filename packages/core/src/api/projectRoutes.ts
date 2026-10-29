@@ -9,10 +9,11 @@ import { json, queryParams, type Router } from './router.js';
 
 const ListProjectsQuerySchema = pageQuerySchema(MAX_NOTE_PAGE_LIMIT);
 
-const projectOf = ({ id, name, docsFolderPath, postCreateHookScript, postCreateHookTimeoutSeconds }: ProjectRecord): Project => ({
+const projectOf = ({ id, name, docsFolderPath, postCreateHookScript, postCreateHookTimeoutSeconds, rowGuardEnabled }: ProjectRecord): Project => ({
   id, name, docsFolderPath,
   ...(postCreateHookScript && { postCreateHookScript }),
   ...(postCreateHookScript && postCreateHookTimeoutSeconds && { postCreateHookTimeoutSeconds }),
+  ...(rowGuardEnabled && { rowGuardEnabled }),
 });
 
 export function registerProjectRoutes(router: Router, deps: { projects: ProjectRepository; projectService?: ProjectService; homeDirectory?: string }): void {

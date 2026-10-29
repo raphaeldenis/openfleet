@@ -25,7 +25,7 @@ import { NoteTooLargeError, NoteService, StaleRevisionError } from '../notes/not
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { DaemonShuttingDownError, SessionReopenError, SessionService } from '../sessions/sessionService.js';
 import { DataStoreRepository } from '../stores/dataStoreRepository.js';
-import { ConstraintError, DataStoreService, StoreRowCapError } from '../stores/dataStoreService.js';
+import { ConstraintError, DataStoreService, DoneWithoutPrUrlError, JournalShortenedError, StoreRowCapError } from '../stores/dataStoreService.js';
 import { WorkingStateService } from '../workingState/workingStateService.js';
 import { Router } from './router.js';
 import { startServer } from './server.js';
@@ -172,6 +172,8 @@ const REAL_REQUEST_SCENARIOS: Scenario[] = [
 const THROWN_ERROR_SCENARIOS: { name: string; thrown: () => unknown; expected: Expected }[] = [
   { name: 'a constraint violation (moved from 409 to 400: decision D10)', thrown: () => new ConstraintError('violates'), expected: { status: 400, error: 'constraint_violation' } },
   { name: 'a row cap', thrown: () => new StoreRowCapError('s1', 10000), expected: { status: 413, error: 'row_cap' } },
+  { name: 'a shortened journal', thrown: () => new JournalShortenedError(), expected: { status: 400, error: 'row_guard_violation' } },
+  { name: 'a done row without pull request link', thrown: () => new DoneWithoutPrUrlError(), expected: { status: 400, error: 'row_guard_violation' } },
   { name: 'an oversized note', thrown: () => new NoteTooLargeError(2_000_000), expected: { status: 413, error: 'note_too_large' } },
   { name: 'a path outside the docs folder', thrown: () => new PathEscapesDocsFolderError('x'), expected: { status: 409, error: 'path_escapes_docs_folder' } },
   { name: 'an unreadable note file', thrown: () => new NoteFileUnreadableError('/Users/someone/docs/a.md', new Error('EACCES')), expected: { status: 409, error: 'file_unreadable' } },

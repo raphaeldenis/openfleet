@@ -52,6 +52,12 @@ describe('copyFor', () => {
     expect(text).not.toMatch(/try again/i);
   });
 
+  it('tells the user a row guard refused the change and what to send instead, without a retry', () => {
+    const { text } = copyFor(apiErrorOf(envelopeOf('row_guard_violation')), { action: 'generic' });
+
+    expect(text).toBe('This project keeps a row journal append-only and a done row linked to a pull request — resend the previous journal with a new line added, or set the pull request link first.');
+  });
+
   it('tells the user to fix the folder permissions, then try again, when the docs folder is not writable', () => {
     const { text } = copyFor(apiErrorOf(envelopeOf('docs_folder_not_writable')), { action: 'generic' });
 
@@ -139,8 +145,8 @@ describe('copyFor', () => {
         return problems.map((problem) => `${code}: ${problem} — "${text}"`);
       });
 
-    it('covers every code, action and retry once (3600 cases)', () => {
-      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(3600);
+    it('covers every code, action and retry once (3645 cases)', () => {
+      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(3645);
     });
 
     it.each([

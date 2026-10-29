@@ -7,6 +7,9 @@ import {
 import { z } from 'zod';
 import { inTransaction as runInTransaction } from '../db/transaction.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, type DataStoreRepository, type RowActor } from './dataStoreRepository.js';
+import { rowGuardViolationOf } from './rowGuard.js';
+
+export { DoneWithoutPrUrlError, JournalShortenedError, RowGuardViolationError } from './rowGuard.js';
 
 export class InvalidCellValueError extends Error {
   constructor(readonly columnId: string) {
@@ -428,6 +431,7 @@ export class DataStoreService {
     this.refuseDaemonSetCells(storeId, input.patch);
     this.validateCells(this.repo.listColumns(storeId), input.patch);
     this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, input.patch);
+    this.refuseRowGuardViolation(storeId, rowId, input);
     return this.guarded(() => this.repo.updateRow(rowId, { storeId, patch: input.patch, actor: input.actor, at: this.clock() }));
   }
 
@@ -496,8 +500,18 @@ export class DataStoreService {
     }
     return this.inTransaction(() => input.items.map(({ rowId, patch }) => {
       this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, patch);
+      this.refuseRowGuardViolation(storeId, rowId, { projectId: input.projectId, patch });
       return this.repo.updateRow(rowId, { storeId, patch, actor: input.actor, at: this.clock() });
     }));
+  }
+
+  /** When the project guards its rows, refuses a patch that shortens the journal or moves a row to done without a pr_url. */
+  private refuseRowGuardViolation(storeId: string, rowId: string, input: Scope & { patch: Record<string, unknown> }): void {
+    if (!this.repo.isRowGuardEnabled(input.projectId)) return;
+    const current = this.repo.findRow(rowId, storeId);
+    if (current === undefined) return;
+    const violation = rowGuardViolationOf({ columns: this.repo.listColumns(storeId), current, patch: input.patch });
+    if (violation !== undefined) throw violation;
   }
 
   query(storeId: string, input: Scope & { where?: WhereClause[]; orderBy?: OrderTerm[]; limit?: number }): DsRow[] {

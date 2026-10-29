@@ -296,7 +296,13 @@ export class DataStoreRepository {
     return column ? toColumn(column) : undefined;
   }
 
-  private findRow(rowId: string, storeId: string): DsRow | undefined {
+  /** Whether the project keeps its rows guarded (journal append-only, done needs a pr_url); a missing project is unguarded. */
+  isRowGuardEnabled(projectId: string): boolean {
+    const project = this.db.prepare('SELECT row_guard_enabled FROM projects WHERE id = ?').get(projectId) as { row_guard_enabled: number } | undefined;
+    return project?.row_guard_enabled === 1;
+  }
+
+  findRow(rowId: string, storeId: string): DsRow | undefined {
     const row = this.db.prepare('SELECT * FROM ds_rows WHERE id = ? AND store_id = ?').get(rowId, storeId) as RowRow | undefined;
     return row ? toRow(row) : undefined;
   }

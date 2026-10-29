@@ -104,6 +104,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   payload_too_large: { what: 'The request is too large', fix: 'shorten it' },
   note_too_large: { what: 'This note is too large', fix: 'shorten it' },
   row_cap: { what: 'This table reached its row limit', fix: 'delete some rows first' },
+  row_guard_violation: { what: 'This project keeps a row journal append-only and a done row linked to a pull request', fix: 'resend the previous journal with a new line added, or set the pull request link first' },
   state_too_large: { what: 'The working state is too large', fix: 'shorten it' },
 
   daemon_shutting_down: { what: 'The daemon is shutting down' },
