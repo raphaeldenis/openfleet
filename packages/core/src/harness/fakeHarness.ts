@@ -82,6 +82,11 @@ export class FakeHandle implements HarnessHandle {
     });
   }
 
+  // Test-only: the human denies, in the CLI's own terminal dialog, a permission the daemon answered {} to.
+  // Assumed: Claude Code emits no PostToolUse and no Stop for this. The fake emits no hook either, so the daemon gets no signal.
+  deniedInTerminalCount = 0;
+  denyInTerminal(): void { this.deniedInTerminalCount += 1; }
+
   // Test-only: what the composer holds right now.
   get composerText(): string { return this.composer; }
 
