@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
+import { syntheticToken } from '../syntheticTokens.js';
 import { startGovernanceFixture, type GovernanceFixture } from './governanceQueue.testkit.js';
 
 let fixture: GovernanceFixture;
@@ -68,7 +69,7 @@ it('decides without waking a closed manager', async () => {
 
 it('masks secrets and bounds the notification', async () => {
   const { proposalId } = await fileProposal();
-  const secret = 'sk-ant-api03-' + 'a'.repeat(80);
+  const secret = syntheticToken({ shape: 'anthropic', bodyLength: 80 });
   expect((await decide(proposalId, 'deny', `Never expose ${secret}`)).status).toBe(200);
   const body = messages()[0]!.body;
   expect(body).not.toContain(secret);

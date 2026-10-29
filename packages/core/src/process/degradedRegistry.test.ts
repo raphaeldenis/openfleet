@@ -1,5 +1,6 @@
 import type { DaemonIssue } from '@openfleet/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { tokenPrefixOf } from '../syntheticTokens.js';
 import { createDegradedRegistry, type DegradedRegistry } from './degradedRegistry.js';
 
 const MINUTE_MS = 60_000;
@@ -62,10 +63,11 @@ describe('the degraded registry', () => {
   });
 
   it('caps and masks the message: a bearer, a control character and a 5 KiB text never reach an issue', () => {
-    registry.mark('db_stuck', `Bearer sk-secret-token-value\u0000\u001b[31m ${'x'.repeat(5000)}`);
+    const secretToken = `${tokenPrefixOf('openai')}secret-token-value`;
+    registry.mark('db_stuck', `Bearer ${secretToken}\u0000\u001b[31m ${'x'.repeat(5000)}`);
 
     const [{ message }] = registry.list() as [DaemonIssue];
-    expect(message).not.toContain('sk-secret-token-value');
+    expect(message).not.toContain(secretToken);
     expect(message).not.toMatch(/[\u0000-\u001f]/);
     expect(message.length).toBeLessThanOrEqual(300);
   });

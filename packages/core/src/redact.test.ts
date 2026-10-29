@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { expectLinearGrowth, cpuMillisecondsToRun } from './__testing__/linearGrowth.js';
 import { MASK, maskedSecrets, maskingCutCredential } from './redact.js';
+import { syntheticBody, syntheticJwtParts, syntheticToken, tokenPrefixOf } from './syntheticTokens.js';
+
+const awsKeyId = () => syntheticToken({ shape: 'aws', bodyLength: 16 });
+const awsSessionKeyIdFrom = (bodyLength: number) => syntheticToken({ shape: 'awsSession', bodyLength });
+const jwtSegment = ({ bodyLength, seed }: { bodyLength: number; seed: number }) => syntheticToken({ shape: 'jwt', bodyLength, seed });
+const JWT_HEADER_BODY_LENGTH = 17;
+const JWT_PAYLOAD_BODY_LENGTH = 21;
+const RS256_HEADER_BODY_LENGTH = 33;
+const jwtHeader = () => jwtSegment({ bodyLength: JWT_HEADER_BODY_LENGTH, seed: 1 });
+const jwtPayload = () => jwtSegment({ bodyLength: JWT_PAYLOAD_BODY_LENGTH, seed: 2 });
 
 const repeatedTo = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length));
 
@@ -45,7 +55,7 @@ describe('maskedSecrets: ReDoS guard on the well-known formats', () => {
 
 describe('maskedSecrets: well-known key formats', () => {
   it('masks an Anthropic or OpenAI style sk- key written in prose', () => {
-    const masked = maskedSecrets('use sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 for the call');
+    const masked = maskedSecrets(`use ${syntheticToken({ shape: 'anthropic', bodyLength: 36 })} for the call`);
     expect(masked).toBe(`use ${MASK} for the call`);
   });
 
@@ -56,12 +66,13 @@ describe('maskedSecrets: well-known key formats', () => {
   });
 
   it('masks an AWS access key id', () => {
-    expect(maskedSecrets('key AKIAIOSFODNN7EXAMPLE here')).toBe(`key ${MASK} here`);
+    expect(maskedSecrets(`key ${awsKeyId()} here`)).toBe(`key ${MASK} here`);
   });
 
   it('masks a JSON Web Token', () => {
-    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
-    expect(maskedSecrets(`jwt=${jwt}!`)).not.toContain('eyJzdWIi');
+    const { header, payload, signature } = syntheticJwtParts({ headerBodyLength: 17, payloadBodyLength: 24, signatureLength: 43 });
+    const jwt = `${header}.${payload}.${signature}`;
+    expect(maskedSecrets(`jwt=${jwt}!`)).not.toContain(payload.slice(0, 8));
     expect(maskedSecrets(`value ${jwt}`)).toBe(`value ${MASK}`);
   });
 
@@ -80,7 +91,7 @@ describe('maskedSecrets: well-known key formats', () => {
   });
 
   it('keeps masking the previous shapes (Bearer) next to a known key', () => {
-    expect(maskedSecrets('Authorization: Bearer abc.def and AKIAIOSFODNN7EXAMPLE')).toBe(`Authorization: Bearer ${MASK} and ${MASK}`);
+    expect(maskedSecrets(`Authorization: Bearer abc.def and ${awsKeyId()}`)).toBe(`Authorization: Bearer ${MASK} and ${MASK}`);
   });
 
   it.each([['gho_'], ['ghu_'], ['ghs_'], ['ghr_']])('masks a GitHub %s token as well as a ghp_ one', (prefix) => {
@@ -88,16 +99,17 @@ describe('maskedSecrets: well-known key formats', () => {
   });
 
   it('masks an AWS temporary access key id (ASIA)', () => {
-    expect(maskedSecrets('key ASIAIOSFODNN7EXAMPLE here')).toBe(`key ${MASK} here`);
+    expect(maskedSecrets(`key ${awsSessionKeyIdFrom(16)} here`)).toBe(`key ${MASK} here`);
   });
 
   it('leaves an AKIA id followed by more word characters alone: it is not a key id', () => {
-    const plain = 'AKIAIOSFODNN7EXAMPLEXTRA';
+    const plain = `${awsKeyId()}XTRA`;
     expect(maskedSecrets(plain)).toBe(plain);
   });
 
   it('does not mask a JWT glued after a dash or an underscore, which keeps the scan linear', () => {
-    expect(maskedSecrets('x-eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP')).toContain('eyJzdWIi');
+    const { header, payload, signature } = syntheticJwtParts({ headerBodyLength: 17, payloadBodyLength: 24, signatureLength: 12 });
+    expect(maskedSecrets(`x-${header}.${payload}.${signature}`)).toContain(payload.slice(0, 8));
   });
 });
 
@@ -125,17 +137,17 @@ describe('maskedSecrets: the other provider key formats', () => {
 
 describe('maskingCutCredential: a well-known credential the head cut left in part', () => {
   const cutCredentials = [
-    ['an sk- key', 'sk-proj-AbCdEfGhI'],
+    ['an sk- key', `${tokenPrefixOf('openai')}proj-${syntheticBody({ length: 9 })}`],
     ['a GitHub token', `ghp_${'a1B2c3D4e5'.repeat(2)}`],
     ['a fine-grained GitHub token', 'github_pat_11AAAA'],
-    ['an AWS key id', 'AKIAIOSFODNN'],
-    ['an AWS temporary key id', 'ASIAIOSFODNN'],
-    ['a JWT', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIx'],
+    ['an AWS key id', syntheticToken({ shape: 'aws', bodyLength: 8 })],
+    ['an AWS temporary key id', awsSessionKeyIdFrom(8)],
+    ['a JWT', `${jwtHeader()}.${jwtSegment({ bodyLength: 9, seed: 2 })}`],
     ['a Slack bot token', 'xoxb-1234567'],
     ['a Slack app token', 'xapp-1-A0123'],
     ['a Google API key', 'AIzaSyA1b2C3d4'],
     ['an npm token', 'npm_aB3dE6gH9j'],
-    ['a GitLab token', 'glpat-aB3dE6gH9j'],
+    ['a GitLab token', syntheticToken({ shape: 'gitlab', bodyLength: 10 })],
     ['a Stripe live secret key', 'sk_live_aB3dE6'],
     ['a Stripe live restricted key', 'rk_live_aB3dE6'],
   ] as const;
@@ -233,7 +245,7 @@ describe('maskedSecrets: provider key formats added after the first round', () =
   });
 
   it.each([
-    ['a Slack rotation token', 'xoxe-1-123456'],
+    ['a Slack rotation token', `${tokenPrefixOf('slackRefresh')}1-123456`],
     ['a Slack cookie token', 'xoxd-aB3dE6gH9j'],
     ['a Slack configuration token', 'xoxe.xoxp-1-1234'],
     ['a Hugging Face token', 'hf_aB3dE6gH9j'],
@@ -279,7 +291,7 @@ describe('maskedSecrets: the hardened rules stay linear', () => {
     '?a=', 'page=a?', 'a=?a=', '#a=', 'a=#a=', 'page=%25?', 'a=%2F?#', 'token=a?',
     'Bearer Bearer ', 'Bearer Bearer', 'Bearer %42earer ',
     '://a@', '://a@@', '://@', '://a@a/',
-    'xoxe.', 'xoxe.xoxp-', 'xoxd-', 'hf_', 'whsec_', 'sk_test_', '-AIza', 'glpat-aaaaaaaaaaaaaaaaaaaa.01.',
+    'xoxe.', 'xoxe.xoxp-', 'xoxd-', 'hf_', 'whsec_', 'sk_test_', '-AIza', `${tokenPrefixOf('gitlab')}${'a'.repeat(20)}.01.`,
   ];
 
   it.each(hostileUnits)('masks %j at 256 KiB and 1 MiB with 4x the input costing less than 8x', (unit) =>
@@ -410,8 +422,8 @@ describe('maskedSecrets: Cookie and Set-Cookie headers', () => {
 });
 
 describe('maskedSecrets: a JWT whose signature is missing', () => {
-  const header = 'eyJhbGciOiJIUzI1NiJ9';
-  const payload = 'eyJzdWIiOiIxMjM0NTY3ODkw';
+  const header = jwtHeader();
+  const payload = jwtPayload();
 
   it.each([
     ['a JWT cut before its signature', `${header}.${payload}`],
@@ -431,7 +443,7 @@ describe('maskedSecrets: a JWT whose signature is missing', () => {
 });
 
 describe('maskingCutCredential: an incomplete JWT tail, whatever the length of its payload', () => {
-  const header = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9';
+  const header = jwtSegment({ bodyLength: RS256_HEADER_BODY_LENGTH, seed: 1 });
 
   it.each([100, 508, 512, 600, 5000, 5100])('masks a header followed by a %i character payload prefix with no signature', (payloadLength) => {
     const head = `Fix CI ${header}.eyJ${'a'.repeat(payloadLength)}`;
@@ -464,7 +476,7 @@ describe('maskingCutCredential: an incomplete JWT tail, whatever the length of i
     expect(maskingCutCredential(plain)).toBe(plain);
   });
 
-  it.each(['-eyJ', '.eyJ', 'eyJa.eyJ', 'eyJaaaaaaaa.eyJ', 'sk-', 'a.', '%2F', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'])(
+  it.each(['-eyJ', '.eyJ', 'eyJa.eyJ', `${tokenPrefixOf('jwt')}${'a'.repeat(8)}.${tokenPrefixOf('jwt')}`, 'sk-', 'a.', '%2F', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'])(
     'cuts %j at 64 KiB and 256 KiB with 4x the input costing less than 8x',
     (unit) => expectUnitGrowsLinearly(unit, maskingCutCredential),
   );

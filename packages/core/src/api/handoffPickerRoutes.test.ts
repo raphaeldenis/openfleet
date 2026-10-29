@@ -2,6 +2,7 @@ import { linkSync, mkdirSync, readFileSync, renameSync, symlinkSync, truncateSyn
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { syntheticToken } from '../syntheticTokens.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -18,7 +19,7 @@ import { startServer } from './server.js';
 
 const PROJECT = '11111111-1111-4111-8111-111111111111';
 const OTHER_PROJECT = '22222222-2222-4222-8222-222222222222';
-const SECRET = 'sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+const SECRET = syntheticToken({ shape: 'anthropic', bodyLength: 36 });
 const ADMIN = { authorization: 'Bearer admin' };
 const tempDirs = createTempDirTracker();
 let root: string;

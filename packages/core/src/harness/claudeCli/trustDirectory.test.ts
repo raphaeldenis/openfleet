@@ -2,6 +2,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
+import { syntheticToken } from '../../syntheticTokens.js';
 import { markDirectoryTrusted } from './trustDirectory.js';
 
 function createScratchDirectory(prefix: string): string {
@@ -184,9 +185,11 @@ describe('markDirectoryTrusted', () => {
     expect(readFileSync(configPath, 'utf8')).toBe(`{"numStartups":3,"projects":{${JSON.stringify(realpathSync(directory))}:{"hasTrustDialogAccepted":true}}}`);
   });
 
+  const secretValue = syntheticToken({ shape: 'openai', bodyLength: 12 });
+
   it.each([
-    ['not valid JSON', '{"oauthToken": "sk-secret-value", broken'],
-    ['not a JSON object', '["sk-secret-value"]'],
+    ['not valid JSON', `{"oauthToken": "${secretValue}", broken`],
+    ['not a JSON object', `["${secretValue}"]`],
     ['JSON null', 'null'],
   ])('refuses a config file that is %s, leaves it untouched and never echoes its content', (_situation, content) => {
     const home = createScratchDirectory('of-claude-home-');
@@ -197,7 +200,7 @@ describe('markDirectoryTrusted', () => {
     const failure = (() => { try { markDirectoryTrusted(configPath, directory); } catch (err) { return err as Error; } })();
 
     expect(failure).toBeInstanceOf(Error);
-    expect(JSON.stringify([failure!.message, failure!.cause, (failure as { options?: unknown }).options])).not.toContain('sk-secret-value');
+    expect(JSON.stringify([failure!.message, failure!.cause, (failure as { options?: unknown }).options])).not.toContain(secretValue);
     expect(readFileSync(configPath, 'utf8')).toBe(content);
     expect(readdirSync(home)).toEqual(['.claude.json']);
   });

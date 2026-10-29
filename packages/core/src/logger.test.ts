@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cpuMillisecondsOf } from './__testing__/linearGrowth.js';
+import { tokenPrefixOf } from './syntheticTokens.js';
 import { createTempDirTracker } from './tempDirTracker.js';
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -843,9 +844,11 @@ describe('log — gaps the first suite left open', () => {
   it('masks a list of tokens under the key tokens, in the detail and in a field', async () => {
     const { log } = await loadLogger();
 
-    log('info', 'keys', { tokens: ['ghp_realtoken1', 'ghp_realtoken2'] }, { authTokens: ['ghp_realtoken3'] });
+    const realToken = (position: number) => `${tokenPrefixOf('github')}realtoken${position}`;
 
-    expect(onlyWrittenLine()).not.toContain('ghp_realtoken');
+    log('info', 'keys', { tokens: [realToken(1), realToken(2)] }, { authTokens: [realToken(3)] });
+
+    expect(onlyWrittenLine()).not.toContain(`${tokenPrefixOf('github')}realtoken`);
     expect(parsedLine().detail.tokens).toBe('***');
     expect(parsedLine().authTokens).toBe('***');
   });

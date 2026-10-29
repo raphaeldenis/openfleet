@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../../db/database.js';
+import { tokenPrefixOf } from '../../syntheticTokens.js';
 import { applyMigrations } from '../../db/migrate.js';
 import { createTempDirTracker } from '../../tempDirTracker.js';
 
@@ -321,7 +322,7 @@ DatabaseSync.prototype.close = function() {
   });
 
   it('R5 masks every free-text field before storage and FTS indexing without logging contents', () => {
-    const secrets = ['sk-abcdefghijklmnopqrstuvwxyz0123456789', 'Bearer abcdefghijklmnopqrstuvwxyz', 'Cookie: session=supersecretcredential', 'https://user:supersecretcredential@example.com', '{"token":"supersecretcredential"}'];
+    const secrets = [`${tokenPrefixOf('openai')}abcdefghijklmnopqrstuvwxyz0123456789`, 'Bearer abcdefghijklmnopqrstuvwxyz', 'Cookie: session=supersecretcredential', 'https://user:supersecretcredential@example.com', '{"token":"supersecretcredential"}'];
     rows = secrets.map((secret, index) => ({ ...sourceRow(String(index)), area: secret, fact: `searchterm ${secret}`, source_task: secret, source_kind: secret, verified_by: secret, retired_at: timestamp, retired_why: secret }));
     writeInputs();
     const result = run();

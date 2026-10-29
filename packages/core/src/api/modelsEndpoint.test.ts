@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { syntheticToken } from '../syntheticTokens.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
@@ -98,11 +99,12 @@ describe('GET /api/models response shape', () => {
   });
 
   it('projects the response onto the four rungs even when the served table carries extra keys', async () => {
-    const tableWithExtraKey = { ...DEFAULT_MODEL_TABLE, apiKey: 'sk-should-never-leave-the-daemon' } as unknown as ModelTable;
+    const apiKey = syntheticToken({ shape: 'openai', bodyLength: 28 });
+    const tableWithExtraKey = { ...DEFAULT_MODEL_TABLE, apiKey } as unknown as ModelTable;
     const server = await startServerServing(tableWithExtraKey);
 
     const bodyText = await (await getModels(server, authorized)).text();
 
-    expect(bodyText).not.toContain('sk-should-never-leave-the-daemon');
+    expect(bodyText).not.toContain(apiKey);
   });
 });

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { MAX_TODO_ITEMS, MAX_TODO_TEXT, MAX_TRACKED_TASKS, SEEN_CALLS_KEPT, type TodoToolName } from '@openfleet/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { applyCompletedCall, createTodoFold, foldHookPayload, foldTranscriptText, markRowsUnverified, normalisedTodoText, snapshotOf, type TodoFold } from './todoFold.js';
+import { tokenPrefixOf } from '../syntheticTokens.js';
 import { narrowTodoHookCall, type TodoHookCall } from './todoHookCall.js';
 
 const NOW = new Date('2026-09-30T17:00:00.000Z');
@@ -535,7 +536,8 @@ describe('the list stays bounded', () => {
 
 describe('the calls waiting for their result hold masked, bounded text', () => {
   it('keeps no credential in clear while a TaskCreate waits for its result', () => {
-    const fold = foldedFrom([assistantLine('c1', 'TaskCreate', { subject: 'rotate sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123', activeForm: 'rotating sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123' })]);
+    const projectKey = `${tokenPrefixOf('openai')}proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123`;
+    const fold = foldedFrom([assistantLine('c1', 'TaskCreate', { subject: `rotate ${projectKey}`, activeForm: `rotating ${projectKey}` })]);
 
     expect(JSON.stringify([...fold.pendingCalls.values()])).not.toContain('AbCdEf');
   });
@@ -604,7 +606,7 @@ describe('text normalisation', () => {
   });
 
   it('masks a provider key that straddles the 200-character cut: the mask runs before the cut', () => {
-    const text = normalisedTodoText(`${'a'.repeat(176)} sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz`);
+    const text = normalisedTodoText(`${'a'.repeat(176)} ${tokenPrefixOf('anthropic')}AbCdEfGhIjKlMnOpQrStUvWxYz`);
 
     expect(text).not.toContain('AbCdEf');
     expect(text.length).toBeLessThanOrEqual(MAX_TODO_TEXT);
@@ -639,7 +641,7 @@ describe('secrets in a todo text reach the snapshot masked, by either source', (
     ['a secret query parameter', 'open https://example.com/x?token=abc123secretvalue', 'abc123secretvalue'],
     ['a password pair', 'set password=correcthorsebattery', 'correcthorsebattery'],
     ['a hook token path', 'curl http://127.0.0.1:7777/hooks/0123456789abcdef0123456789abcdef', '0123456789abcdef0123456789abcdef'],
-    ['a bare provider key', 'use sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789', 'AbCdEfGhIjKlMnOpQrStUvWxYz'],
+    ['a bare provider key', `use ${tokenPrefixOf('anthropic')}AbCdEfGhIjKlMnOpQrStUvWxYz0123456789`, 'AbCdEfGhIjKlMnOpQrStUvWxYz'],
   ] as const;
 
   it.each(secrets)('hides %s arriving by the hook', (_name, subject, secret) => {
