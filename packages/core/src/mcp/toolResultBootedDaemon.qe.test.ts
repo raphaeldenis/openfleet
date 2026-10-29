@@ -204,6 +204,6 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
     const changes = (await (await adminApi(`/api/data-stores/${store.id}/rows/${inserted.ids[0]}/changes?projectId=p1`)).json()) as { items: object[] };
 
     expect(keysOf(rows.items[0]!)).toEqual(['createdAt', 'data', 'id', 'storeId', 'updatedAt']);
-    expect(keysOf(changes.items[0]!)).toEqual(['actorKind', 'actorLabel', 'change', 'createdAt', 'id', 'rowId']);
+    expect(keysOf(changes.items[0]!)).toEqual(['actorKind', 'actorLabel', 'change', 'createdAt', 'id', 'rowId', 'seq']);
   });
 });

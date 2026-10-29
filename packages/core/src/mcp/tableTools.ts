@@ -1,9 +1,10 @@
 import { AggregateSchema, ScapeAggregateSchema, AutoValueSchema, ColumnFormatSchema, ColumnTypeSchema, OptionReplacementSchema, SelectOptionSchema, type Aggregate, type ScapeAggregate, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
+import { RowNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
 import { InvalidColumnDefinitionError, SAVE_MODES, type DataStoreService } from '../stores/dataStoreService.js';
 import { guardedFor, refusalReasonOf, refuse } from './toolResults.js';
+import { ownStoreOf as ownStoreOfCaller } from './ownStore.js';
 import { queryPage } from './queryPage.js';
 import { storePage } from './storePage.js';
 import { cellsKeyedByColumnId, coerceFilterValue, columnLookupFor, requireColumn } from './rowValues.js';
@@ -33,13 +34,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     return caller.projectId ? { projectId: caller.projectId } : undefined;
   }
 
-  /** The caller's own store a reference names, by id or else by display name; a foreign or missing store reads the same. */
-  function ownStoreOf(reference: string, scope: { projectId: string }): DataStore {
-    const storeWithThatId = storeRepo.findStore(reference);
-    const store = storeWithThatId?.projectId === scope.projectId ? storeWithThatId : storeRepo.findStoreByName(scope.projectId, reference);
-    if (!store) throw new StoreNotFoundError(reference);
-    return store;
-  }
+  const ownStoreOf = (reference: string, scope: { projectId: string }): DataStore => ownStoreOfCaller(storeRepo, reference, scope);
 
   server.registerTool('create_data_store', {
     description: 'Create a new data store (table) in your project',

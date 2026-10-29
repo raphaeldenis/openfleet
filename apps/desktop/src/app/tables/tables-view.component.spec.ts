@@ -22,7 +22,7 @@ const columns: DsColumn[] = [
 ];
 
 const historyEntry = (overrides: Partial<DsRowHistoryEntry> = {}): DsRowHistoryEntry => ({
-  id: 'h1', rowId: 'r1', actorKind: 'agent', actorLabel: 'Gimli · T6', createdAt: NOW,
+  seq: 1, id: 'h1', rowId: 'r1', actorKind: 'agent', actorLabel: 'Gimli · T6', createdAt: NOW,
   change: { 'c-status': { from: 'todo', to: 'doing' } },
   ...overrides,
 });

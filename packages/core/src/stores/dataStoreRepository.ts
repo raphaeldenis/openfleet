@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AutoValue, ColumnFormat, ColumnType, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, SelectOption, ViewType } from '@openfleet/shared';
+import type { AutoValue, ColumnFormat, ColumnType, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, RowChangeKind, RowChangeOrder, SelectOption, ViewType } from '@openfleet/shared';
 import { inTransaction as runInTransaction } from '../db/transaction.js';
 import { newId } from '../ids.js';
 
@@ -50,7 +50,7 @@ interface ViewRow { id: string; store_id: string; display_name: string; view_typ
 interface StoreRow { id: string; project_id: string; display_name: string; natural_key_column_id: string | null; created_at: string; updated_at: string }
 interface ColumnRow { id: string; store_id: string; display_name: string; column_type: ColumnType; column_format: ColumnFormat | null; options_json: string | null; sort_order: number; auto_value: AutoValue | null }
 interface RowRow { id: string; store_id: string; data_json: string; created_at: string; updated_at: string }
-interface HistoryRow { id: string; row_id: string; actor_kind: RowActorKind; actor_label: string; change_json: string; created_at: string }
+interface HistoryRow { seq: number; id: string; row_id: string; actor_kind: RowActorKind; actor_label: string; change_json: string; created_at: string }
 
 const toStore = (r: StoreRow): DataStore => ({
   id: r.id, projectId: r.project_id, displayName: r.display_name, createdAt: r.created_at, updatedAt: r.updated_at,
@@ -70,13 +70,32 @@ const toRow = (r: RowRow): DsRow => ({
   id: r.id, storeId: r.store_id, data: JSON.parse(r.data_json) as Record<string, unknown>, createdAt: r.created_at, updatedAt: r.updated_at,
 });
 const toHistoryEntry = (r: HistoryRow): DsRowHistoryEntry => ({
-  id: r.id, rowId: r.row_id, actorKind: r.actor_kind, actorLabel: r.actor_label,
+  seq: r.seq, id: r.id, rowId: r.row_id, actorKind: r.actor_kind, actorLabel: r.actor_label,
   change: JSON.parse(r.change_json) as DsRowChange, createdAt: r.created_at,
 });
 
 const NO_LIMIT = -1;
 
-interface RowHistoryScope { projectId: string; storeId?: string; limit?: number; offset?: number }
+interface RowHistoryScope { projectId: string; storeId?: string; kind?: RowChangeKind; sinceSeq?: number; order?: RowChangeOrder; limit?: number; offset?: number }
+
+/** A creation is an `insert`, a deletion a `delete`, any cell-by-cell diff an `update` (a column named "kind" holds an object, never text). */
+const ROW_CHANGE_KIND_SQL = `CASE
+  WHEN json_type(history.change_json, '$.kind') <> 'text' OR json_type(history.change_json, '$.kind') IS NULL THEN 'update'
+  WHEN json_extract(history.change_json, '$.kind') = 'create' THEN 'insert'
+  ELSE json_extract(history.change_json, '$.kind')
+END`;
+const ROW_HISTORY_ORDER_SQL: Record<RowChangeOrder, string> = {
+  desc: 'history.created_at DESC, history.seq DESC',
+  asc: 'history.seq ASC',
+};
+const ROW_HISTORY_FILTER_SQL = `history.row_id = ? AND store.project_id = ? AND (? IS NULL OR history.store_id = ?)
+       AND (? IS NULL OR ${ROW_CHANGE_KIND_SQL} = ?) AND (? IS NULL OR history.seq > ?)`;
+const rowHistoryFilterArguments = (rowId: string, scope: RowHistoryScope) => {
+  const storeId = scope.storeId ?? null;
+  const kind = scope.kind ?? null;
+  const sinceSeq = scope.sinceSeq ?? null;
+  return [rowId, scope.projectId, storeId, storeId, kind, kind, sinceSeq, sinceSeq];
+};
 const WRITE_SAVEPOINT = 'data_store_write';
 
 /** Round-trips cells through JSON, as SQLite stores them: an `undefined` cell drops out, NaN becomes null, a Date becomes its ISO string, -0 becomes 0. */
@@ -255,15 +274,15 @@ export class DataStoreRepository {
     });
   }
 
-  /** Newest first, at most `limit` entries when given, after skipping `offset` newer ones. Authorizes through the entry's own store, so a deleted row's trail stays readable. */
+  /** Newest first unless `order` is `asc` (by seq), at most `limit` entries when given, after skipping `offset` entries. Narrowed by `kind` and by `sinceSeq` (entries after that seq). Authorizes through the entry's own store, so a deleted row's trail stays readable. */
   rowHistory(rowId: string, scope: RowHistoryScope): DsRowHistoryEntry[] {
     const entries = this.db.prepare(
       `SELECT history.* FROM ds_row_history history
        JOIN data_stores store ON store.id = history.store_id
-       WHERE history.row_id = ? AND store.project_id = ? AND (? IS NULL OR history.store_id = ?)
-       ORDER BY history.created_at DESC, history.rowid DESC
+       WHERE ${ROW_HISTORY_FILTER_SQL}
+       ORDER BY ${ROW_HISTORY_ORDER_SQL[scope.order ?? 'desc']}
        LIMIT ? OFFSET ?`,
-    ).all(rowId, scope.projectId, scope.storeId ?? null, scope.storeId ?? null, scope.limit ?? NO_LIMIT, scope.offset ?? 0) as unknown as HistoryRow[];
+    ).all(...rowHistoryFilterArguments(rowId, scope), scope.limit ?? NO_LIMIT, scope.offset ?? 0) as unknown as HistoryRow[];
     return entries.map(toHistoryEntry);
   }
 
@@ -271,8 +290,8 @@ export class DataStoreRepository {
     const { n } = this.db.prepare(
       `SELECT COUNT(*) AS n FROM ds_row_history history
        JOIN data_stores store ON store.id = history.store_id
-       WHERE history.row_id = ? AND store.project_id = ? AND (? IS NULL OR history.store_id = ?)`,
-    ).get(rowId, scope.projectId, scope.storeId ?? null, scope.storeId ?? null) as { n: number };
+       WHERE ${ROW_HISTORY_FILTER_SQL}`,
+    ).get(...rowHistoryFilterArguments(rowId, scope)) as { n: number };
     return n;
   }
 

@@ -1,5 +1,5 @@
 {
-  "contractVersion": 3,
+  "contractVersion": 4,
   "tools": [
     { "name": "add_data_store_column", "inputSchemaHash": "4181f0be3b447d3c" },
     { "name": "append_to_note", "inputSchemaHash": "e8b3f62130a1ad87" },
@@ -32,7 +32,7 @@
     { "name": "list_notes", "inputSchemaHash": "9a0ac639b447a6c9" },
     { "name": "list_project_folders", "inputSchemaHash": "e667872a85ca4401" },
     { "name": "list_projects", "inputSchemaHash": "7a014b717a77aac9" },
-    { "name": "list_row_changes", "inputSchemaHash": "7a1e7fc97b480b99" },
+    { "name": "list_row_changes", "inputSchemaHash": "c198a80c0f787453" },
     { "name": "list_sessions", "inputSchemaHash": "7a014b717a77aac9" },
     { "name": "list_worktrees", "inputSchemaHash": "38765eae9115169d" },
     { "name": "message_argus", "inputSchemaHash": "5d5bf4ab4bf3778a" },

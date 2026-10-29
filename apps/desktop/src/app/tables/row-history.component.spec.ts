@@ -9,6 +9,7 @@ const columns: DsColumn[] = [
 ];
 
 const entry = (overrides: Partial<DsRowHistoryEntry> & Pick<DsRowHistoryEntry, 'id' | 'change'>): DsRowHistoryEntry => ({
+  seq: 1,
   rowId: 'r1',
   actorKind: 'agent',
   actorLabel: 'Gimli · T6',

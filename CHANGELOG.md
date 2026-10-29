@@ -2,6 +2,14 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 4 — 2026-10-29
+
+- PARITY-TBL-08, `list_row_changes`: optional `store` (id or display name, same resolution as the other table tools), `kind` (`insert`, `update` or `delete`), `since` (a `seq`; keeps the entries after it) and `order` (`desc` by default, or `asc` by `seq`). Each entry gains a stable integer `seq`. Without the new parameters the order (newest first) and the entry shape (plus `seq`) are unchanged. `seq` is global to the history table, increases with every recorded change and is never renumbered nor reused.
+
+Tools added: none.
+Tools changed: `list_row_changes` (input schema and output field).
+Migrations: `043_ds_row_history_seq.sql`: rebuilds `ds_row_history` with an `INTEGER PRIMARY KEY AUTOINCREMENT` `seq`, numbering existing entries in their current reading order. No data loss.
+
 ## 3 — 2026-10-29
 
 - SPAWN-LAUNCH-HEALTH01, every tool that returns a compact session (`get_session_status`, `spawn_session` and the listings): the session carries `readiness` (`pending`, `ready` or `failed`) and `readinessReason` (`no_output_at_launch`) when set.

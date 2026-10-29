@@ -1050,7 +1050,7 @@ describe('MCP tool results are compact', () => {
 
       expect(history.count).toBe(1);
       expect(history.truncated).toBe(false);
-      expect(keysOf(history.entries[0])).toEqual(['actorKind', 'actorLabel', 'change', 'createdAt']);
+      expect(keysOf(history.entries[0])).toEqual(['actorKind', 'actorLabel', 'change', 'createdAt', 'seq']);
       expect(keysOf(view)).toEqual(['config', 'displayName', 'id', 'viewType']);
       expect(views).toEqual([view]);
     });

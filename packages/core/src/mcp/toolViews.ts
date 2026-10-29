@@ -63,7 +63,7 @@ export const columnarRowView = (row: DsRow, { columnIds, includeUpdatedAt, cellO
 ];
 
 export const rowChangeView = (entry: DsRowHistoryEntry) => ({
-  actorKind: entry.actorKind, actorLabel: entry.actorLabel, change: entry.change, createdAt: entry.createdAt,
+  seq: entry.seq, actorKind: entry.actorKind, actorLabel: entry.actorLabel, change: entry.change, createdAt: entry.createdAt,
 });
 
 export const savedView = (view: DsView) => ({ id: view.id, displayName: view.displayName, viewType: view.viewType, config: view.config });

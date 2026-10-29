@@ -58,7 +58,17 @@ export type RowActorKind = z.infer<typeof RowActorKindSchema>;
 
 export type DsRowChange = { kind: 'create' } | { kind: 'delete' } | Record<string, { from: unknown; to: unknown }>;
 
+export const ROW_CHANGE_KINDS = ['insert', 'update', 'delete'] as const;
+export const RowChangeKindSchema = z.enum(ROW_CHANGE_KINDS);
+export type RowChangeKind = z.infer<typeof RowChangeKindSchema>;
+
+export const ROW_CHANGE_ORDERS = ['desc', 'asc'] as const;
+export const RowChangeOrderSchema = z.enum(ROW_CHANGE_ORDERS);
+export type RowChangeOrder = z.infer<typeof RowChangeOrderSchema>;
+
 export interface DsRowHistoryEntry {
+  /** Stable position in the whole history: never renumbered, never reused, increasing with each recorded change. */
+  seq: number;
   id: string;
   rowId: string;
   actorKind: RowActorKind;

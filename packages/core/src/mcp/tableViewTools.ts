@@ -1,8 +1,9 @@
-import { DsViewConfigSchema, ViewTypeSchema, type Session } from '@openfleet/shared';
+import { DsViewConfigSchema, RowChangeKindSchema, RowChangeOrderSchema, ViewTypeSchema, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { RowNotFoundError, type DataStoreRepository } from '../stores/dataStoreRepository.js';
 import type { DataStoreService } from '../stores/dataStoreService.js';
+import { ownStoreOf } from './ownStore.js';
 import { guardedFor, refuse, truncateToByteBudget } from './toolResults.js';
 import { rowChangeView, savedView } from './toolViews.js';
 
@@ -65,13 +66,21 @@ export function registerTableViewTools(server: McpServer, deps: RegisterTableVie
   });
 
   server.registerTool('list_row_changes', {
-    description: `A row's change history, newest first (limit ≤ ${MAX_HISTORY_LIMIT}, default ${DEFAULT_HISTORY_LIMIT}); a deleted row's history stays readable in its own project`,
-    inputSchema: { row_id: z.string().min(1), limit: z.number().int().min(1).max(MAX_HISTORY_LIMIT).optional() },
-  }, async ({ row_id, limit }) => {
+    description: `A row's change history, newest first by default (limit ≤ ${MAX_HISTORY_LIMIT}, default ${DEFAULT_HISTORY_LIMIT}); a deleted row's history stays readable in its own project. Each entry carries a stable seq: order=asc lists oldest first by seq, since=<seq> keeps only entries after that seq, kind keeps insert, update or delete entries, store (id or name) restricts to one store`,
+    inputSchema: {
+      row_id: z.string().min(1),
+      limit: z.number().int().min(1).max(MAX_HISTORY_LIMIT).optional(),
+      store: z.string().min(1).optional(),
+      kind: RowChangeKindSchema.optional(),
+      since: z.number().int().min(0).optional(),
+      order: RowChangeOrderSchema.optional(),
+    },
+  }, async ({ row_id, limit, store, kind, since, order }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     return guarded(() => {
-      const history = storeRepo.rowHistory(row_id, { projectId: scope.projectId, limit: limit ?? DEFAULT_HISTORY_LIMIT });
+      const storeId = store === undefined ? undefined : ownStoreOf(storeRepo, store, scope).id;
+      const history = storeRepo.rowHistory(row_id, { projectId: scope.projectId, storeId, kind, sinceSeq: since, order, limit: limit ?? DEFAULT_HISTORY_LIMIT });
       if (history.length === 0) throw new RowNotFoundError(row_id);
       const { items: entries, truncated } = truncateToByteBudget(history.map(rowChangeView), MAX_HISTORY_RESULT_BYTES);
       return { entries, truncated, count: entries.length };
