@@ -1,11 +1,12 @@
 import { MASK, maskedSecrets } from '../redact.js';
 
-const SECRET_WORD = '(?:password|passwd|passphrase|secret|token|api-?key|auth|credentials?)';
+const SECRET_WORD = '(?:password|passwd|passphrase|secret|token|api-?key|authorization|auth|bearer|credentials?)';
 const QUOTED_OR_PLAIN_VALUE = '(?:"[^"]*"|\'[^\']*\'|\\S+)';
+const OPTIONAL_AUTH_SCHEME = '(?:(?:Bearer|Basic|Token)\\s+)?';
 const FLAG_NAMES_A_SECRET = `--(?:[a-z0-9]+-)*${SECRET_WORD}(?!-(?:stdin|file|prompt)\\b)(?:-[a-z0-9]+)*`;
 
-const SECRET_FLAG_WITH_EQUALS = new RegExp(`(${FLAG_NAMES_A_SECRET}=)${QUOTED_OR_PLAIN_VALUE}`, 'gi');
-const SECRET_FLAG_WITH_NEXT_ARGUMENT = new RegExp(`(${FLAG_NAMES_A_SECRET}\\s+)(?!-)${QUOTED_OR_PLAIN_VALUE}`, 'gi');
+const SECRET_FLAG_WITH_EQUALS = new RegExp(`(${FLAG_NAMES_A_SECRET}=)${OPTIONAL_AUTH_SCHEME}${QUOTED_OR_PLAIN_VALUE}`, 'gi');
+const SECRET_FLAG_WITH_NEXT_ARGUMENT = new RegExp(`(${FLAG_NAMES_A_SECRET}\\s+)(?!-)${OPTIONAL_AUTH_SCHEME}${QUOTED_OR_PLAIN_VALUE}`, 'gi');
 
 const SECRET_ENVIRONMENT_ASSIGNMENT = new RegExp(`(\\b[A-Za-z0-9_]*${SECRET_WORD.replaceAll('-?', '_?')}[A-Za-z0-9_]*=)${QUOTED_OR_PLAIN_VALUE}`, 'gi');
 

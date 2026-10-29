@@ -38,7 +38,7 @@ function howToLogOf({ ticket, head, missing }: { ticket: string; head: string; m
   const verdictReport = isAdversarialMissing ? [`The reviewer calls report_ship_verdict({ verdict: "go", reasons: [...], sha: "${head}" }).`] : [];
   const firstWaivableStep = reportableSteps[0];
   const skipCommand = firstWaivableStep === undefined ? [] : [
-    `A human can waive ${reportableSteps.join(', ')} with the admin token: curl -X POST <daemon-url>${SKIP_ENDPOINT} -H "Authorization: Bearer <admin token>" -H "Content-Type: application/json" -d '{"ticket":"${ticket}","step":"${firstWaivableStep}","reason":"...","sha":"${head}"}'`,
+    `A human can waive ${reportableSteps.join(', ')} with the admin token: curl -X POST <daemon-url>${SKIP_ENDPOINT} -H "Authorization: Bearer <admin token>" -d '{"ticket":"${ticket}","step":"${firstWaivableStep}","reason":"...","sha":"${head}"}'`,
   ];
   return [...stepReport, ...verdictReport, ...skipCommand].join(' ');
 }
@@ -50,8 +50,11 @@ function noEvidenceNoteOf(steps: string[]): string {
   return ` ${steps.join(', ')} lines have no evidence.`;
 }
 
-const isPassing =(line: ReviewFinding) => line.severity !== 'no-go';
-const hasEvidence = (line: ReviewFinding) => line.reasons.some((reason) => !isBlankText(reason));
+const isPassing = (line: ReviewFinding) => line.severity !== 'no-go';
+const hasNonBlankReason = (line: ReviewFinding) => line.reasons.some((reason) => !isBlankText(reason));
+const hasExecutedClaim = (line: ReviewFinding) => line.repros?.some(({ status }) => status !== 'not_reproduced') ?? false;
+/** A clean or go line stands on a run; a no-go line only needs to state its claims. */
+const hasEvidence = (line: ReviewFinding) => hasNonBlankReason(line) && (!isPassing(line) || hasExecutedClaim(line));
 const latestOf = (lines: ReviewFinding[]) => lines.at(-1);
 
 export interface FindingsGateDeps {

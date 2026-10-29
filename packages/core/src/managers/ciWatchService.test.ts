@@ -268,6 +268,19 @@ describe('the CI watch service', () => {
 
       expect(port.calls).toBe(0);
     });
+
+    it('tells nothing when the pull request is unwatched while its poll is in flight', async () => {
+      let answerThePoll: (snapshot: PullRequestSnapshot) => void = () => undefined;
+      const world = buildWorld({ snapshotOf: () => new Promise<PullRequestSnapshot>((resolve) => { answerThePoll = resolve; }) });
+      world.service.watch({ managerId: 'lead', ...pullRequest });
+      const pollInFlight = world.service.pollOnce();
+
+      world.service.unwatch({ managerId: 'lead', ...pullRequest });
+      answerThePoll(open(['success']));
+      await pollInFlight;
+
+      expect(world.scheduled).toEqual([]);
+    });
   });
 
   describe('the polling loop', () => {

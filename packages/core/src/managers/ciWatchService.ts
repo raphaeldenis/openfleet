@@ -124,11 +124,16 @@ export class CiWatchService {
     } catch (error) {
       return this.noteFailure(watched, error);
     }
+    if (!this.isStillWatched(watched)) return true;
     this.failuresOf.delete(watched.id);
     this.retryAtOf.delete(watched.id);
     if (watched.lastErrorCode !== undefined) this.deps.repository.recordError(watched.id, undefined);
     this.handle(watched, snapshot);
     return true;
+  }
+
+  private isStillWatched(watched: WatchedPr): boolean {
+    return this.deps.repository.activeOf(watched.managerId).some((active) => active.id === watched.id);
   }
 
   private handle(watched: WatchedPr, snapshot: PullRequestSnapshot): void {

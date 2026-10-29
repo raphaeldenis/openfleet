@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
+import { E2E_FLAG_ENV, E2E_FLAG_ON, REPRO_CLAIM_EXAMPLE, SHAPE_MESSAGE } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
@@ -233,8 +233,30 @@ describe('QE — every claim of a step finding carries its reproduction', () => 
     expect(storedRepros()).toEqual([]);
   });
 
+  it('keeps the whole instruction of the new form when three former plain text claims are refused', async () => {
+    const { spawn, devDirectory } = await bootTeam();
+    const qe = await spawn('qe');
+
+    const result = await reportStep(qe.client, { step: 'qe', severity: 'findings', claims: ['the filter is missing', 'a 500 on the stream', 'the sort is dropped'], sha: headOf(devDirectory) });
+
+    expect(rawText(result)).toContain(SHAPE_MESSAGE);
+    expect(rawText(result)).toContain(REPRO_CLAIM_EXAMPLE);
+    expect(rawText(result)).not.toContain('…');
+  });
+
+  it('keeps the whole instruction when a claim lacks its output', async () => {
+    const { spawn, devDirectory } = await bootTeam();
+    const qe = await spawn('qe');
+
+    const result = await reportStep(qe.client, { step: 'qe', severity: 'findings', claims: [{ claim: 'c', status: 'proven', command: 'pnpm test' }], sha: headOf(devDirectory) });
+
+    expect(rawText(result)).toContain(SHAPE_MESSAGE);
+    expect(rawText(result)).toContain(REPRO_CLAIM_EXAMPLE);
+    expect(rawText(result)).not.toContain('…');
+  });
+
   it.each([
-    ['a proven claim without output', { claim: 'c', status: 'proven', command: 'pnpm test' }],
+    ['a proven claim without output',{ claim: 'c', status: 'proven', command: 'pnpm test' }],
     ['a plausible claim without command', { claim: 'c', status: 'plausible', output: 'red' }],
     ['a claim without status', { claim: 'c', command: 'pnpm test', output: 'red' }],
     ['a claim with an unknown status', { claim: 'c', status: 'maybe', command: 'pnpm test', output: 'red' }],

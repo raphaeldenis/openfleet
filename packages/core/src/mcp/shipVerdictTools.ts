@@ -6,8 +6,10 @@ import type { ManagerService } from '../managers/managerService.js';
 import { maskedSecrets } from '../redact.js';
 import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
 import { BLANK_CLAIM_MESSAGE, hasBlankClaim, lacksExecutedEvidence, sanitizedReproClaim } from '../review/sanitizedReproClaim.js';
+import { VERDICT_PREFIX } from '../sessions/daemonLines.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { DEFAULT_TICKET_PATTERN, gitOutput, ticketOfBranch } from '../review/worktreeGit.js';
+import { refuseInvalidBody } from './claimRefusal.js';
 import { ok, refuse } from './toolResults.js';
 
 export const REVIEWER_ROLE = 'reviewer';
@@ -21,7 +23,7 @@ const cappedAt = (text: string, maxChars: number) => (text.length > maxChars ? `
 /** The message names each reason with the label of its status; the output of a reproduction stays in the table. */
 const noGoMessageOf = ({ ticket, sha, reasons }: { ticket: string; sha: string; reasons: ReproClaim[] }) => {
   const labelledReasons = reasons.map(({ claim, status }) => `${claim} [${REPRO_STATUS_LABELS[status]}]`);
-  return cappedAt(maskedSecrets(oneLine(`[verdict] no-go ${ticket} @ ${sha.slice(0, SHORT_SHA_LENGTH)}: ${labelledReasons.join('; ')}`)), MAX_VERDICT_MESSAGE_CHARS);
+  return cappedAt(maskedSecrets(oneLine(`${VERDICT_PREFIX} no-go ${ticket} @ ${sha.slice(0, SHORT_SHA_LENGTH)}: ${labelledReasons.join('; ')}`)), MAX_VERDICT_MESSAGE_CHARS);
 };
 
 export interface RegisterShipVerdictToolsDeps {
@@ -45,7 +47,7 @@ export function registerShipVerdictTools(server: McpServer, deps: RegisterShipVe
     if (!isReviewerOfAManager) return refuse('not_a_manager', 'only a reviewer spawned by a manager can report a ship verdict');
 
     const parsedVerdict = ShipVerdictSchema.safeParse(input);
-    if (!parsedVerdict.success) return refuse('invalid_body', parsedVerdict.error.issues.map((issue) => issue.message).join('; '));
+    if (!parsedVerdict.success) return refuseInvalidBody(parsedVerdict.error.issues.map((issue) => issue.message));
     const shipVerdict: ShipVerdict = parsedVerdict.data;
 
     const branch = await gitOutput(['rev-parse', '--abbrev-ref', 'HEAD'], caller.directory);
@@ -58,7 +60,7 @@ export function registerShipVerdictTools(server: McpServer, deps: RegisterShipVe
     const sanitizedReasons = shipVerdict.reasons.map(sanitizedReproClaim);
     if (sanitizedReasons.some(hasBlankClaim)) return refuse('invalid_body', BLANK_CLAIM_MESSAGE);
     const hasReasonWithoutEvidence = sanitizedReasons.some(lacksExecutedEvidence);
-    if (hasReasonWithoutEvidence) return refuse('invalid_body', EVIDENCE_MESSAGE);
+    if (hasReasonWithoutEvidence) return refuseInvalidBody([EVIDENCE_MESSAGE]);
 
     const reasons = sanitizedReasons.map((sanitizedReason) => sanitizedReason.claim);
     reviewFindings.record({

@@ -316,11 +316,17 @@ describe('the declared commands allow rule: uv --with takes a package of a close
     'uv run --with pytest-evil==1.0 pytest',
     'uv run --with pytest_evil pytest',
     'uv run --with pytest-cov-evil pytest',
+    'uv run --with pytest=1 pytest',
+    'uv run --with pytest==* pytest',
+    'uv run --with pytest==abc pytest',
+    'uv run --with pytest==1.*.* pytest',
+    'uv run --with pytest==1..0 pytest',
+    'uv run --with pytest==.5 pytest',
   ])('does not vouch for %j', (command) => {
     expect(isVouched(command)).toBe(false);
   });
 
-  it.each(['pytest', 'coverage', 'pytest-cov', 'pytest-xdist', 'pytest-asyncio', 'pytest-mock', 'pytest-timeout', 'pytest-randomly', 'pytest-cov==5.0.0', 'pytest==8.0'])('vouches for --with %s', (spec) => {
+  it.each(['pytest', 'coverage', 'pytest-cov', 'pytest-xdist', 'pytest-asyncio', 'pytest-mock', 'pytest-timeout', 'pytest-randomly', 'pytest-cov==5.0.0', 'pytest==8.0', 'pytest==8', 'pytest==8.*'])('vouches for --with %s', (spec) => {
     expect(isVouched(`uv run --with ${spec} pytest`)).toBe(true);
   });
 });

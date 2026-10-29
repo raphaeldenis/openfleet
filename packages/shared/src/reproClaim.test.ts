@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_REPRO_COMMAND_CHARS, MAX_REPRO_OUTPUT_CHARS, ReproClaimSchema, REPRO_CLAIM_EXAMPLE, REPRO_STATUSES } from './reproClaim.js';
+import { MAX_REPRO_COMMAND_CHARS, MAX_REPRO_OUTPUT_CHARS, ReproClaimSchema, REPRO_CLAIM_EXAMPLE, REPRO_STATUSES, SHAPE_MESSAGE } from './reproClaim.js';
+
+/** The cap describeError applies to the message of an error envelope. */
+const MAX_ERROR_MESSAGE_CHARS = 300;
 
 const executed = { claim: 'the filter is missing', status: 'proven', command: 'pnpm vitest run filter.test.ts', output: 'FAIL filter.test.ts > shows the filter' };
 const issueMessagesOf = (input: unknown) => {
@@ -44,7 +47,7 @@ describe('ReproClaimSchema', () => {
   it('teaches the whole new form to a reporter that still sends a plain text claim', () => {
     const messages = issueMessagesOf('the filter is missing');
 
-    expect(messages).toEqual([expect.stringContaining(REPRO_CLAIM_EXAMPLE)]);
+    expect(messages).toEqual([expect.stringContaining(SHAPE_MESSAGE)]);
     expect(REPRO_CLAIM_EXAMPLE).toMatch(/claim:.*status:.*command:.*output:/);
   });
 
@@ -52,13 +55,23 @@ describe('ReproClaimSchema', () => {
     const [message] = issueMessagesOf({ claim: 'c', status: 'proven' });
 
     expect(message).toContain('not_reproduced');
-    expect(message).toContain(REPRO_CLAIM_EXAMPLE);
+    expect(message).toContain(SHAPE_MESSAGE);
   });
 
   it('tells a reporter whose status is unknown the three statuses', () => {
     const [message] = issueMessagesOf({ ...executed, status: 'maybe' });
 
     expect(message).toContain('proven | plausible | not_reproduced');
-    expect(message).toContain(REPRO_CLAIM_EXAMPLE);
+    expect(message).toContain(SHAPE_MESSAGE);
+  });
+
+  it.each([
+    ['a plain text claim', 'the filter is missing'],
+    ['a proven claim without evidence', { claim: 'c', status: 'proven' }],
+    ['an unknown status', { ...executed, status: 'maybe' }],
+  ])('keeps the message for %s within the 300 characters the error envelope allows', (_name, input) => {
+    const [message] = issueMessagesOf(input);
+
+    expect(message!.length).toBeLessThanOrEqual(MAX_ERROR_MESSAGE_CHARS);
   });
 });

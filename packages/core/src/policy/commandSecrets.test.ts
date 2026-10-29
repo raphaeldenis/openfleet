@@ -37,6 +37,55 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     expect(masked).not.toContain('hunter two');
   });
 
+  describe('an option named after a credential', () => {
+    const secretOptionNames = ['token', 'password', 'passwd', 'secret', 'api-key', 'apikey', 'auth', 'authorization', 'bearer'];
+    const tokenEqualsValue = ['to', 'ken'].join('') + '=' + ['abc', 'DEF', '123'].join('');
+    const longBase64Key = ['QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo', 'wMTIzNDU2Nzg5YWJjZGVmZ2hpamtsbW5v', 'cHFyc3R1dnd4eXo9PQ'].join('');
+
+    it.each(secretOptionNames.flatMap((name) => [[name, 'space'], [name, 'equals']] as const))('masks the value of --%s given with %s', (name, form) => {
+      const command = form === 'space' ? `tool --${name} ${longBase64Key} --force` : `tool --${name}=${longBase64Key} --force`;
+      const separator = form === 'space' ? ' ' : '=';
+
+      const masked = maskedCommandSecrets(command);
+
+      expect(masked).toBe(`tool --${name}${separator}*** --force`);
+    });
+
+    it('masks a token assignment and a long base64 key given as option values', () => {
+      const masked = maskedCommandSecrets(`tool ${tokenEqualsValue} --token ${longBase64Key} --apikey=${longBase64Key}`);
+
+      expect(masked).not.toContain('abcDEF123');
+      expect(masked).not.toContain(longBase64Key);
+    });
+  });
+
+  describe('an authorization option given an unquoted scheme and token', () => {
+    const credential = ['abc', '123', 'def'].join('');
+
+    it.each([
+      ['Bearer', 'space'],
+      ['Bearer', 'equals'],
+      ['Basic', 'space'],
+      ['Basic', 'equals'],
+      ['Token', 'space'],
+      ['Token', 'equals'],
+    ] as const)('masks the %s scheme and its token given with %s', (scheme, form) => {
+      const separator = form === 'space' ? ' ' : '=';
+      const command = `curl --authorization${separator}${scheme} ${credential} https://example.com`;
+
+      const masked = maskedCommandSecrets(command);
+
+      expect(masked).toBe(`curl --authorization${separator}*** https://example.com`);
+      expect(masked).not.toContain(credential);
+    });
+
+    it('masks a quoted scheme and token', () => {
+      const masked = maskedCommandSecrets(`curl --authorization "Bearer ${credential}" https://example.com`);
+
+      expect(masked).toBe('curl --authorization *** https://example.com');
+    });
+  });
+
   it.each([
     'mkdir -p dir',
     'mkdir -p a/b/c',
@@ -47,6 +96,10 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     'docker login --password-stdin',
     'rm -rf build',
     'npm run test -- --token-count',
+    'git log --author alice',
+    'tool --authorization-file ./headers.txt',
+    'tool --authorized-keys foo',
+    'tool --authentication-agent x',
   ])('leaves %s readable', (command) => {
     expect(maskedCommandSecrets(command)).toBe(command);
   });

@@ -147,6 +147,25 @@ describe('an unattended child asks for a command the policy refuses', () => {
     expect(excerpt.length).toBeLessThanOrEqual(200);
     expect(excerpt).not.toContain(secret);
   });
+
+  it('masks a secret given as an option value in the journal row, the announced frame and the denials list', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const child = await createChildOf((await createSession()).id);
+    const socket = await openWsFrames();
+    const base64Key = ['QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo', 'wMTIzNDU2Nzg5YWJjZGVmZ2hpamtsbW5v'].join('');
+    const tokenValue = ['abc', 'DEF', '123'].join('');
+
+    await preToolUse(child.id, bash(`rm -rf x --authorization ${base64Key} --bearer=${base64Key} --token=${tokenValue}`));
+
+    const announced = await socket.waitForFrame('command.denied');
+    socket.close();
+    await vi.waitFor(() => expect(journalRows()).toHaveLength(1));
+    const outputs = [String(journalRows()[0]!.command_excerpt), JSON.stringify(announced.denial), JSON.stringify(await (await api('/api/command-policy/denials')).json())];
+    for (const output of outputs) {
+      expect(output).not.toContain(base64Key);
+      expect(output).not.toContain(tokenValue);
+    }
+  });
 });
 
 describe('the role profiles start by watching, not refusing', () => {

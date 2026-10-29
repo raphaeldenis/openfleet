@@ -22,14 +22,14 @@ export interface ProjectServiceDeps {
   docs: Pick<DocsFolderService, 'prepareFolder' | 'attachFolder' | 'createFileBackedNote'>;
   noteRepo: Pick<NoteRepository, 'list' | 'delete'>;
   /** Creates the folder of a new project under the docs root; without it a new project needs an existing folder. */
-  docsRoot?: Pick<DocsRootSettings, 'ensureProjectFolder'>;
+  docsRoot?: Pick<DocsRootSettings, 'ensureProjectFolder' | 'refuseDotSegments'>;
   /** Tells whether two paths reach the same directory; defaults to comparing the device and inode. */
   folderIdentity?: DocsFolderIdentity;
   clock: () => string;
   newId: () => string;
   /** Called after a project gets a docs folder (on create or on change), so the daemon can reconcile and watch it. */
   onDocsFolderSet?: (projectId: string) => void;
-  /** Called after a refused creation removes the project, so the daemon stops watching its folder. */
+  /** Called with the project id after a refused creation has deleted the project; the daemon stops watching the folder of that project. */
   onProjectForgotten?: (projectId: string) => void;
 }
 
@@ -73,10 +73,12 @@ export class ProjectService {
 
   update(projectId: string, patch: UpdateProjectRequest): ProjectRecord {
     const current = this.requireProject(projectId);
-    const { docsFolderPath } = patch;
+    const docsFolderPath = patch.docsFolderPath === undefined ? undefined : withoutRedundantSlashes(patch.docsFolderPath);
     const hookSetting = this.acceptedHookSetting(current, patch);
+    if (docsFolderPath !== undefined) this.deps.docsRoot?.refuseDotSegments(docsFolderPath);
     if (docsFolderPath !== undefined) this.acceptFolderChange(current, docsFolderPath);
-    this.deps.projects.update(projectId, { ...patch, ...hookSetting });
+    const normalisedPatch = docsFolderPath === undefined ? patch : { ...patch, docsFolderPath };
+    this.deps.projects.update(projectId, { ...normalisedPatch, ...hookSetting });
     if (docsFolderPath !== undefined) this.deps.onDocsFolderSet?.(projectId);
     return this.requireProject(projectId);
   }
@@ -149,7 +151,7 @@ export class ProjectService {
     }
   }
 
-  /** Removes the project with the notes imported for it (they point at the row) and stops watching its folder. */
+  /** Deletes every note of the project (they point at its row), then the row, then reports the project to `onProjectForgotten`. */
   private forgetProject(projectId: string): void {
     for (const note of this.deps.noteRepo.list(projectId)) this.deps.noteRepo.delete(note.id);
     this.deps.projects.delete(projectId);
