@@ -162,6 +162,23 @@ describe('REST', () => {
     expect(harness.launches[0]!.permissionMode).toBe(mode);
   });
 
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'])('201s a session create carrying the effort "%s" and passes it through to the harness launch', async (effort) => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', effort }) });
+
+    expect(res.status).toBe(201);
+    expect((await res.json()).effort).toBe(effort);
+    expect(harness.launches[0]!.effort).toBe(effort);
+  });
+
+  it.each(['minimal', 'HIGH', '', '--x'])('400s as invalid_body a session create carrying the unknown effort %j and creates no session', async (effort) => {
+    const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake', effort }) });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('invalid_body');
+    expect(await (await api('/api/sessions')).json()).toHaveLength(0);
+    expect(harness.launches).toHaveLength(0);
+  });
+
   it('sends raw input to the pty', async () => {
     const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     await api(`/api/sessions/${session.id}/input`, { method: 'POST', body: JSON.stringify({ data: 'y' }) });

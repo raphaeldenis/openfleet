@@ -6,6 +6,7 @@ export interface HarnessLaunch {
   cliSessionId?: string;
   directory: string;
   model?: string;
+  effort?: string;
   seededPrompt?: string;
   hookUrl: string;
   mcpUrl: string;

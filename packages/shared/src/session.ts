@@ -2,6 +2,7 @@ import * as z from 'zod';
 import { ManagerSpecSchema } from './managers.js';
 import { ModelIdSchema } from './models.js';
 import { HandoffFileSchema } from './handoff.js';
+import { effortRefusalOf } from './effort.js';
 
 export const SESSION_STATES = ['starting', 'generating', 'waiting_permission', 'waiting_input', 'idle', 'closed'] as const;
 export type SessionState = (typeof SESSION_STATES)[number];
@@ -46,9 +47,14 @@ export const SessionSpecSchema = z.object({
   role: z.string().optional(),
   harness: z.enum(HARNESSES).default('claude-cli'),
   permissionMode: z.enum(PERMISSION_MODES).optional(),
+  effort: z.string().optional(),
   manager: ManagerSpecSchema.optional(),
 }).refine((spec) => spec.handoffFile === undefined || spec.projectId !== undefined, {
   message: 'a handoff requires a project', path: ['handoffFile'],
+}).superRefine((spec, context) => {
+  if (spec.effort === undefined) return;
+  const refusal = effortRefusalOf(spec.harness, spec.effort);
+  if (refusal) context.addIssue({ code: 'custom', message: refusal, path: ['effort'] });
 });
 export type SessionSpec = z.infer<typeof SessionSpecSchema>;
 
@@ -69,6 +75,8 @@ export interface Session {
   projectId?: string;
   role?: string;
   permissionMode?: PermissionMode;
+  /** The effort level the session launches with; absent when none was chosen. */
+  effort?: string;
   harness: HarnessId;
   /** How the command policy reaches this session's harness. Absent from a daemon that predates the policy. */
   policyEnforcement?: PolicyEnforcement;

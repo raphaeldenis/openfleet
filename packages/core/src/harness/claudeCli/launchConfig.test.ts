@@ -257,6 +257,37 @@ describe('buildClaudeLaunchConfig', () => {
     expect(config.args[flagIndex + 1]).toBe(launch.model);
   });
 
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'])('passes --effort %s to the CLI', (effort) => {
+    const config = buildClaudeLaunchConfig({ ...launch, effort }, tokenFilePaths);
+
+    const flagIndex = config.args.indexOf('--effort');
+    expect(config.args[flagIndex + 1]).toBe(effort);
+  });
+
+  it('resuming a session keeps --effort when the session has one', () => {
+    const config = buildClaudeLaunchConfig({ ...launch, resuming: true, effort: 'high' }, tokenFilePaths);
+
+    const flagIndex = config.args.indexOf('--effort');
+    expect(config.args[flagIndex + 1]).toBe('high');
+  });
+
+  it('passes no --effort flag and leaves every other argument untouched when the launch has no effort', () => {
+    const config = buildClaudeLaunchConfig(launch, tokenFilePaths);
+
+    expect(config.args).toEqual([
+      '--session-id', launch.sessionId, '--name', launch.displayName, '--model', launch.model,
+      '--setting-sources', 'user', '--settings', tokenFilePaths.settingsPath, '--mcp-config', tokenFilePaths.mcpConfigPath,
+    ]);
+  });
+
+  it.each([
+    ['a flag-shaped value', '--x'],
+    ['a level the CLI does not know', 'minimal'],
+    ['a value with a space inside', 'high medium'],
+  ])('refuses to spawn with an effort that is %s, in case it slipped past every REST/MCP check', (_label, effort) => {
+    expect(() => buildClaudeLaunchConfig({ ...launch, effort }, tokenFilePaths)).toThrow();
+  });
+
   it('resuming still carries --settings and --mcp-config, so the same daemon hooks apply', () => {
     const config = buildClaudeLaunchConfig({ ...launch, resuming: true }, tokenFilePaths);
     expect(config.args.indexOf('--settings')).toBeGreaterThan(-1);

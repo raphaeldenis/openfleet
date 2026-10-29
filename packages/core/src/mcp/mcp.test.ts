@@ -357,6 +357,38 @@ describe('MCP', () => {
     expect(created.model).toBe('claude-opus-5-5[1m]');
   });
 
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'])('launches the child with effort %s and echoes it in the ack', async (effort) => {
+    const parent = await connect(parentToken);
+
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir(`effort-${effort}`), name: 'Gimli', effort } }));
+
+    expect(created.effort).toBe(effort);
+    expect(harness.launches[1]?.effort).toBe(effort);
+    expect(sessions.get(created.id)?.effort).toBe(effort);
+  });
+
+  it.each(['minimal', 'HIGH', '', '--x', 'high medium'])('refuses create_session with the unknown effort %j as invalid_body and creates no session', async (effort) => {
+    const parent = await connect(parentToken);
+    const sessionCountBefore = sessions.list().length;
+
+    const result = await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('bad-effort'), name: 'Gimli', effort } });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('error invalid_body');
+    expect(JSON.stringify(result.content)).toContain('low, medium, high, xhigh, max');
+    expect(sessions.list()).toHaveLength(sessionCountBefore);
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it('launches a child without effort exactly as before when none is given', async () => {
+    const parent = await connect(parentToken);
+
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('no-effort'), name: 'Gimli' } }));
+
+    expect(created).not.toHaveProperty('effort');
+    expect(harness.launches[1]?.effort).toBeUndefined();
+  });
+
   it('creates a child that inherits harness and can message its parent', async () => {
     const parent = await connect(parentToken);
     const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('gimli'), name: 'Gimli', emoji: '⚔️' } }));
