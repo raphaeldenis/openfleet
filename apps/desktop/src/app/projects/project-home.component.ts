@@ -78,8 +78,8 @@ function rememberLastVisitedProjectId(projectId: string): void {
         }
         @case ('empty') {
           <div class="centred">
-            <h1>No projects yet</h1>
-            <p class="note">Create one to keep handoffs and notes together.</p>
+            <h1>No project yet</h1>
+            <p class="note">A project groups sessions, notes, tables and handoffs under one docs folder.</p>
             @if (isCreatingProject()) {
               <div class="card creation">
                 <of-project-form (saved)="openCreatedProject($event)" (cancelled)="isCreatingProject.set(false)" />
@@ -92,7 +92,7 @@ function rememberLastVisitedProjectId(projectId: string): void {
         @case ('missing') {
           <div class="centred">
             <h1>Project not found</h1>
-            <of-error-line role="alert">This project no longer exists.</of-error-line>
+            <of-error-line role="alert">“{{ requestedProjectId() }}” was deleted or never existed on this daemon.</of-error-line>
             @if (firstProject(); as first) {
               <a class="of-btn of-btn--secondary" [routerLink]="['/project', first.id]">Open {{ first.name }}</a>
             }
@@ -171,11 +171,11 @@ function rememberLastVisitedProjectId(projectId: string): void {
                   <ul class="rows">
                     @for (manager of managers(); track manager.id) {
                       <li>
-                        <a class="row" [routerLink]="['/manager', manager.id]">
+                        <a class="row row--stacked" [routerLink]="['/manager', manager.id]">
                           <span class="emoji-tile" aria-hidden="true">{{ manager.emoji }}</span>
                           <span class="name">{{ visibleNameOf(manager) }}</span>
                           <of-state-chip [state]="manager.state" />
-                          <span class="meta" data-testid="manager-row-meta">{{ managerMetaOf(manager) }}</span>
+                          <span class="meta meta--below" data-testid="manager-row-meta">{{ managerMetaOf(manager) }}</span>
                         </a>
                       </li>
                     }
@@ -263,7 +263,9 @@ function rememberLastVisitedProjectId(projectId: string): void {
     .emoji-tile { display: flex; flex: none; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); }
     .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
     .meta { font-family: var(--mono); font-size: .6875rem; color: var(--mut); }
-    .skeleton { display: flex; flex-direction: column; gap: .75rem; }
+    .row--stacked { flex-wrap: wrap; row-gap: .125rem; }
+    .meta--below { flex: 0 0 100%; padding-left: 2.125rem; }
+    .skeleton { display: flex; flex-direction: column; gap: .75rem; max-width: 12rem; }
     .skeleton-block { display: block; border-radius: .625rem; background: var(--sunk); }
     .skeleton-title { width: 12rem; height: 1.5rem; border-radius: .25rem; }
     .skeleton-tiles { display: flex; gap: .75rem; }
@@ -277,7 +279,7 @@ export class ProjectHomeComponent {
   private readonly router = inject(Router);
   private readonly injector = inject(Injector);
   private readonly changeButton = viewChild<ElementRef<HTMLButtonElement>>('changeButton');
-  private readonly requestedProjectId = toSignal(inject(ActivatedRoute).paramMap.pipe(map((params) => params.get('id'))), { initialValue: null });
+  protected readonly requestedProjectId = toSignal(inject(ActivatedRoute).paramMap.pipe(map((params) => params.get('id'))), { initialValue: null });
 
   protected readonly countSources = COUNT_SOURCES;
   protected readonly noDocsFolder = NO_DOCS_FOLDER;
