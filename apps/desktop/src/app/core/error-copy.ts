@@ -62,7 +62,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   handoff_not_found: { what: 'That handoff is no longer in the docs folder', fix: 'pick another handoff or remove it' },
 
   session_closed: { what: 'The session is closed', fix: 'resume it first' },
-  stale_revision: { what: 'This note changed since you opened it' },
+  stale_revision: { what: 'This item changed since you opened it' },
   file_backed: { what: 'This note lives in a file', fix: 'edit the file instead' },
   file_unreadable: { what: 'The daemon cannot read the note file right now' },
   path_escapes_docs_folder: { what: 'That path leaves the docs folder', fix: 'pick one inside it' },
@@ -262,6 +262,31 @@ const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
 
 const isKnownCode = (code: string | undefined): code is ErrorCode => code !== undefined && Object.hasOwn(ERROR_CODES, code);
 
+const STALE_ROW_RESOURCE = 'data_store_row';
+
+/** What moved, when the `stale_revision` detail names the resource: a table row or a manager profile; a note names none. */
+const STALE_REVISION_COPY_BY_RESOURCE = new Map<string, CodeCopy>([
+  [STALE_ROW_RESOURCE, { what: 'This row changed since you opened it' }],
+  ['manager_profile', { what: 'This manager profile changed since you opened it' }],
+]);
+
+function staleRevisionResourceOf(envelope: ErrorEnvelope | undefined): string | undefined {
+  const detail = envelope?.detail;
+  const isRecord = typeof detail === 'object' && detail !== null;
+  const resource = isRecord ? (detail as Record<string, unknown>)['resource'] : undefined;
+  return typeof resource === 'string' ? resource : undefined;
+}
+
+/** Whether a write was refused because the table row it targets changed since the user opened it. */
+export function isStaleRowError(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'stale_revision' && staleRevisionResourceOf(error.envelope) === STALE_ROW_RESOURCE;
+}
+
+function staleRevisionCopyOf(envelope: ErrorEnvelope | undefined): CodeCopy {
+  const resource = staleRevisionResourceOf(envelope);
+  return (resource === undefined ? undefined : STALE_REVISION_COPY_BY_RESOURCE.get(resource)) ?? COPY_BY_CODE.stale_revision;
+}
+
 const endsWithPeriod = (sentence: string) => (/[.!?]$/.test(sentence) ? sentence : `${sentence}.`);
 const capitalized = (sentence: string) => sentence.charAt(0).toUpperCase() + sentence.slice(1);
 
@@ -295,7 +320,8 @@ function withRef(text: string, envelope: ErrorEnvelope | undefined): ErrorCopy {
 function copyOfKnownCode({ action, code, envelope }: { action: ErrorAction; code: ErrorCode; envelope: ErrorEnvelope | undefined }): CodeCopy {
   const refusalReason = action === 'remove_worktree' ? refusalReasonOf(envelope) : undefined;
   if (refusalReason) return REFUSAL_COPY_BY_REASON[refusalReason];
-  return COPY_BY_ACTION[action][code] ?? COPY_BY_CODE[code];
+  const copyOfCode = code === 'stale_revision' ? staleRevisionCopyOf(envelope) : COPY_BY_CODE[code];
+  return COPY_BY_ACTION[action][code] ?? copyOfCode;
 }
 
 function copyOfFailure(failure: Failure, { action }: ErrorContext): ErrorCopy {

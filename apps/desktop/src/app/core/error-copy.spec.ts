@@ -36,6 +36,22 @@ describe('copyFor', () => {
     });
   });
 
+  describe('a stale revision', () => {
+    const staleRevisionOf = (detail?: unknown) => copyFor(apiErrorOf(envelopeOf('stale_revision', { detail })), { action: 'generic' }).text;
+
+    it('names a row when the detail says the resource is a table row', () => {
+      expect(staleRevisionOf({ resource: 'data_store_row', rowId: 'r1', currentRev: 3 })).toBe('This row changed since you opened it — reload, then try again.');
+    });
+
+    it('names a manager profile when the detail says so', () => {
+      expect(staleRevisionOf({ resource: 'manager_profile', currentRev: 7 })).toBe('This manager profile changed since you opened it — reload, then try again.');
+    });
+
+    it.each([undefined, { currentRev: 4 }, { resource: 'something_new', currentRev: 4 }, 'not an object'])('says "item", never "note", when the detail %j names no known resource', (detail) => {
+      expect(staleRevisionOf(detail)).toBe('This item changed since you opened it — reload, then try again.');
+    });
+  });
+
   it('appends the ref of an internal error and returns it apart', () => {
     const envelope = envelopeOf('internal_error', { id: '3f9a1c2e' });
 

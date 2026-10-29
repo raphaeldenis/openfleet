@@ -1,5 +1,6 @@
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, input, linkedSignal, signal, untracked, viewChild } from '@angular/core';
 import { MAX_ROW_BATCH, orderedKanbanOptions, type DataStore, type DsColumn, type DsRow, type DsRowHistoryEntry, type DsView, type Project } from '@openfleet/shared';
+import { copyFor, isStaleRowError } from '../core/error-copy';
 import { ApiError, FleetApiService, type StoreScope } from '../core/fleet-api.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { RowHistoryComponent } from './row-history.component';
@@ -17,7 +18,7 @@ type LoadFailures = Partial<Record<LoadTarget, string>>;
 interface TableLoadOptions { keepsSelection?: boolean }
 type ViewMode = 'grid' | 'kanban';
 interface Mismatch { rowId: string; column: DsColumn }
-interface CellEditing extends CellEditRequest, StoreScope { value: unknown; rowTitle: string; tableRequest: number }
+interface CellEditing extends CellEditRequest, StoreScope { value: unknown; rev: number; rowTitle: string; tableRequest: number }
 
 const LOAD_TARGETS_BY_PRIORITY: LoadTarget[] = ['projects', 'stores', 'table'];
 const ROWS_PAGE_LIMIT = 1000;
@@ -39,6 +40,7 @@ const describeCreateFailure = (error: unknown, displayName: string): string => {
   return 'Could not create the table.';
 };
 const describeCellFailure = (error: unknown): string => {
+  if (isStaleRowError(error)) return copyFor(error, { action: 'generic' }).text;
   const code = error instanceof ApiError ? error.code : undefined;
   if (code === 'constraint_violation') return 'This value conflicts with a table constraint or another row’s natural key.';
   if (code === 'invalid_body') return 'The daemon refused this value. Check the input and try again.';
@@ -167,7 +169,7 @@ const describeCellFailure = (error: unknown): string => {
       }
     </div>
     @if (editing(); as edit) {
-      <of-table-cell-editor [column]="edit.column" [initialValue]="edit.value" [rowTitle]="edit.rowTitle" [saving]="isSavingCell()" [error]="cellError()" (submitted)="saveCell($event)" (cancelled)="closeEditor()" />
+      <of-table-cell-editor [column]="edit.column" [initialValue]="edit.value" [rowTitle]="edit.rowTitle" [saving]="isSavingCell()" [error]="cellError()" [canReload]="isCellRowStale()" (submitted)="saveCell($event)" (cancelled)="closeEditor()" (reloadRequested)="reloadEditedRow()" />
     }
   `,
   styles: `
@@ -240,6 +242,7 @@ export class TablesViewComponent {
   protected readonly historyRefreshAfterSaveFailed = signal(false);
   protected readonly isSavingCell = signal(false);
   protected readonly cellError = signal<string | null>(null);
+  protected readonly isCellRowStale = signal(false);
   protected readonly selectedRow = computed(() => this.rows().find((row) => row.id === this.selectedRowId()));
   private latestHistoryRequest = 0;
   protected readonly tableNameMaxLength = TABLE_NAME_MAX_LENGTH;
@@ -498,7 +501,20 @@ export class TablesViewComponent {
     const isReadonly = !canEditCell(request.column) || this.mismatches().length > 0;
     if (!scope || !row || isReadonly || this.editing()) return;
     this.cellError.set(null);
-    this.editing.set({ ...request, ...scope, value: row.data[request.column.id], rowTitle: titleOf(this.columns(), row) || row.id, tableRequest: this.latestTableRequest });
+    this.isCellRowStale.set(false);
+    this.editing.set({ ...request, ...scope, value: row.data[request.column.id], rev: row.rev, rowTitle: titleOf(this.columns(), row) || row.id, tableRequest: this.latestTableRequest });
+  }
+
+  /** Fetches the table again, then reopens the editor on the same cell with the value the row holds now. */
+  protected async reloadEditedRow(): Promise<void> {
+    const edit = this.editing();
+    if (!edit) return;
+    this.editing.set(null);
+    this.cellError.set(null);
+    this.isCellRowStale.set(false);
+    await this.loadTable(edit, { keepsSelection: true });
+    await new Promise<void>((editorIsGone) => afterNextRender(() => editorIsGone(), { injector: this.injector }));
+    this.startEditing(edit);
   }
 
   protected closeEditor(): void {
@@ -507,6 +523,7 @@ export class TablesViewComponent {
     this.editing.set(null);
     this.isSavingCell.set(false);
     this.cellError.set(null);
+    this.isCellRowStale.set(false);
     afterNextRender(() => {
       if (edit.trigger.isConnected) {
         edit.trigger.focus();
@@ -532,8 +549,9 @@ export class TablesViewComponent {
     }
     this.isSavingCell.set(true);
     this.cellError.set(null);
+    this.isCellRowStale.set(false);
     try {
-      const { items } = await this.api.updateRows({ projectId: edit.projectId, storeId: edit.storeId, updates: [{ rowId: edit.rowId, patch: { [edit.column.id]: value } }] });
+      const { items } = await this.api.updateRows({ projectId: edit.projectId, storeId: edit.storeId, updates: [{ rowId: edit.rowId, patch: { [edit.column.id]: value }, expectedRev: edit.rev }] });
       if (!this.isCurrentEdit(edit)) return;
       const savedRow = items.find((row) => row.id === edit.rowId);
       if (!savedRow) throw new Error('The saved row is missing from the response.');
@@ -542,6 +560,7 @@ export class TablesViewComponent {
       if (this.selectedRowId() === edit.rowId) await this.refreshHistory(edit, edit.rowId, { followsSave: true });
     } catch (error) {
       if (!this.isCurrentEdit(edit)) return;
+      this.isCellRowStale.set(isStaleRowError(error));
       this.cellError.set(describeCellFailure(error));
     } finally {
       const currentEdit = this.editing();

@@ -260,3 +260,71 @@ describe('update_data_store_rows under the row guard', () => {
     expect(await journalOf()).toBe('overwritten');
   });
 });
+
+describe('row revision over MCP', () => {
+  const revsOf = async (storeId: string, tool: 'query_data_store' | 'get_data_store') =>
+    Object.fromEntries((await kit.call(tool, { store: storeId })).json.rows.map((row: { id: string; rev: number }) => [row.id, row.rev]));
+
+  it.each(['query_data_store', 'get_data_store'] as const)('shows the revision of every row in %s, raised by a write', async (tool) => {
+    const { storeId, rowA, rowB, rowC } = await backlogOfThreeRows();
+    await kit.call('update_data_store_rows', { store: storeId, updates: [{ row_id: rowA, values: { title: 'changed' } }] });
+
+    expect(await revsOf(storeId, tool)).toEqual({ [rowA]: 2, [rowB]: 1, [rowC]: 1 });
+  });
+
+  it('puts the revision last in a columnar row and names it in the header', async () => {
+    const { storeId, rowA, columnIds } = await backlogOfThreeRows();
+    await kit.call('update_data_store_rows', { store: storeId, updates: [{ row_id: rowA, values: { title: 'changed' } }] });
+
+    const result = await kit.call('query_data_store', { store: storeId, format: 'columnar', columns: [columnIds.title], where: [{ column: 'Key', op: 'eq', value: 'A' }] });
+
+    expect(result.json.columns).toEqual(['id', 'updatedAt', columnIds.title, 'rev']);
+    expect(result.json.names).toEqual(['id', 'updatedAt', 'Title', 'rev']);
+    expect(result.json.rows).toEqual([[rowA, expect.any(String), 'changed', 2]]);
+  });
+
+  it('writes the updates of a list that expect the current revision', async () => {
+    const { storeId, rowA, dataOf, columnIds } = await backlogOfThreeRows();
+
+    const result = await kit.call('update_data_store_rows', { store: storeId, updates: [{ row_id: rowA, values: { title: 'mine' }, expected_rev: 1 }] });
+
+    expect(result.json).toMatchObject({ updated: 1, failed: 0, failures: [] });
+    expect((await dataOf(rowA))[columnIds.title]).toBe('mine');
+  });
+
+  it('fails a stale update of a list alone, tells the current revision, and commits the others', async () => {
+    const { storeId, rowA, rowB, dataOf, columnIds } = await backlogOfThreeRows();
+    await kit.call('update_data_store_rows', { store: storeId, updates: [{ row_id: rowA, values: { title: 'theirs' } }] });
+
+    const result = await kit.call('update_data_store_rows', {
+      store: storeId,
+      updates: [{ row_id: rowA, values: { title: 'mine' }, expected_rev: 1 }, { row_id: rowB, values: { title: 'ok' }, expected_rev: 1 }],
+    });
+
+    expect(result.json).toMatchObject({ updated: 1, failed: 1, updatedRowIDs: [rowB] });
+    expect(result.json.failures).toEqual([expect.stringMatching(/^row 1: .*changed since.*current rev: 2/)]);
+    expect((await dataOf(rowA))[columnIds.title]).toBe('theirs');
+    expect((await dataOf(rowB))[columnIds.title]).toBe('ok');
+  });
+
+  it('refuses a stale update_data_store_row with stale_revision, the current revision and after_refresh, and changes nothing', async () => {
+    const { storeId, rowA, dataOf, columnIds } = await backlogOfThreeRows();
+    await kit.call('update_data_store_row', { store: storeId, row_id: rowA, values: { title: 'theirs' } });
+
+    const result = await kit.call('update_data_store_row', { store: storeId, row_id: rowA, values: { title: 'mine' }, expected_rev: 1 });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/^error stale_revision: .*current rev: 2.*\(retry: after_refresh/);
+    expect((await dataOf(rowA))[columnIds.title]).toBe('theirs');
+  });
+
+  it('writes update_data_store_row when it expects the current revision, and still writes without one', async () => {
+    const { storeId, rowA, dataOf, columnIds } = await backlogOfThreeRows();
+
+    const expecting = await kit.call('update_data_store_row', { store: storeId, row_id: rowA, values: { title: 'one' }, expected_rev: 1 });
+    const notExpecting = await kit.call('update_data_store_row', { store: storeId, row_id: rowA, values: { title: 'two' } });
+
+    expect([expecting.isError, notExpecting.isError]).toEqual([false, false]);
+    expect((await dataOf(rowA))[columnIds.title]).toBe('two');
+  });
+});

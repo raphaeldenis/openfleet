@@ -590,7 +590,8 @@ export class DataStoreService {
     return this.daemonSetColumns(this.repo.listColumns(storeId)).map((column) => column.id).filter((columnId) => input.items.some((item) => Object.hasOwn(item, columnId)));
   }
 
-  updateRows(storeId: string, input: Scope & { items: { rowId: string; patch: Record<string, unknown> }[]; actor: RowActor }): DsRow[] {
+  /** An item with `expectedRev` is refused with `stale_revision` when the row has moved on; the whole call then writes nothing. */
+  updateRows(storeId: string, input: Scope & { items: { rowId: string; patch: Record<string, unknown>; expectedRev?: number | undefined }[]; actor: RowActor }): DsRow[] {
     this.authorize(storeId, input.projectId);
     const columns = this.repo.listColumns(storeId);
     for (const { patch } of input.items) {
@@ -598,10 +599,10 @@ export class DataStoreService {
       this.validateCells(columns, patch);
       this.refuseKindOutsideManagerLogList(storeId, columns, patch);
     }
-    return this.inTransaction(() => input.items.map(({ rowId, patch }) => {
+    return this.inTransaction(() => input.items.map(({ rowId, patch, expectedRev }) => {
       this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, patch);
       this.refuseRowGuardViolation(storeId, rowId, { projectId: input.projectId, patch });
-      return this.repo.updateRow(rowId, { storeId, patch, actor: input.actor, at: this.clock() });
+      return this.repo.updateRow(rowId, { storeId, patch, ...(expectedRev === undefined ? {} : { expectedRev }), actor: input.actor, at: this.clock() });
     }));
   }
 

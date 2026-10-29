@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AutoValue, ColumnConfig, ColumnFormat, ColumnType, ColumnWrap, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, RowChangeKind, RowChangeOrder, SelectOption, ViewType } from '@openfleet/shared';
+import { OpenFleetError, type AutoValue, ColumnConfig, ColumnFormat, ColumnType, ColumnWrap, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, RowChangeKind, RowChangeOrder, SelectOption, ViewType } from '@openfleet/shared';
 import { inTransaction as runInTransaction } from '../db/transaction.js';
 import { newId } from '../ids.js';
 
@@ -62,7 +62,7 @@ interface ColumnRow {
   id: string; store_id: string; display_name: string; column_type: ColumnType; column_format: ColumnFormat | null; options_json: string | null; sort_order: number; auto_value: AutoValue | null;
   required: number; display_column_id: string | null; config_json: string | null; display_width: number | null; wrap_mode: 'wrap' | null; wrap_max_lines: number | null;
 }
-interface RowRow { id: string; store_id: string; data_json: string; created_at: string; updated_at: string }
+interface RowRow { id: string; store_id: string; data_json: string; rev: number; created_at: string; updated_at: string }
 interface HistoryRow { seq: number; id: string; row_id: string; actor_kind: RowActorKind; actor_label: string; change_json: string; created_at: string }
 
 const toStore = (r: StoreRow): DataStore => ({
@@ -85,7 +85,7 @@ const toView = (r: ViewRow): DsView => ({
   config: JSON.parse(r.config_json) as DsViewConfig, sortOrder: r.sort_order,
 });
 const toRow = (r: RowRow): DsRow => ({
-  id: r.id, storeId: r.store_id, data: JSON.parse(r.data_json) as Record<string, unknown>, createdAt: r.created_at, updatedAt: r.updated_at,
+  id: r.id, storeId: r.store_id, data: JSON.parse(r.data_json) as Record<string, unknown>, rev: r.rev, createdAt: r.created_at, updatedAt: r.updated_at,
 });
 const toHistoryEntry = (r: HistoryRow): DsRowHistoryEntry => ({
   seq: r.seq, id: r.id, rowId: r.row_id, actorKind: r.actor_kind, actorLabel: r.actor_label,
@@ -93,6 +93,13 @@ const toHistoryEntry = (r: HistoryRow): DsRowHistoryEntry => ({
 });
 
 const NO_LIMIT = -1;
+const FIRST_ROW_REV = 1;
+export const STALE_ROW_RESOURCE = 'data_store_row';
+
+const staleRowRevision = (row: DsRow) => new OpenFleetError('stale_revision', `the row has changed since the revision you read, current rev: ${row.rev}.`, {
+  hint: 'reload the row, then write again.',
+  detail: { resource: STALE_ROW_RESOURCE, rowId: row.id, currentRev: row.rev },
+});
 
 interface RowHistoryScope { projectId: string; storeId?: string; kind?: RowChangeKind; sinceSeq?: number; order?: RowChangeOrder; limit?: number; offset?: number }
 
@@ -245,15 +252,20 @@ export class DataStoreRepository {
         .run(input.id, storeId, JSON.stringify(data), input.at, input.at);
       this.recordChange({ storeId, rowId: input.id, actor: input.actor, at: input.at, change: { kind: 'create' } });
     });
-    return { id: input.id, storeId, data, createdAt: input.at, updatedAt: input.at };
+    return { id: input.id, storeId, data, rev: FIRST_ROW_REV, createdAt: input.at, updatedAt: input.at };
   }
 
-  /** An `undefined` cell in the patch means no change; a cell is cleared with an explicit `null`. */
-  updateRow(rowId: string, input: { storeId: string; patch: Record<string, unknown>; actor: RowActor; at: string }): DsRow {
+  /**
+   * An `undefined` cell in the patch means no change; a cell is cleared with an explicit `null`.
+   * With `expectedRev`, a row whose revision differs is refused with `stale_revision` and nothing is written.
+   */
+  updateRow(rowId: string, input: { storeId: string; patch: Record<string, unknown>; expectedRev?: number; actor: RowActor; at: string }): DsRow {
     const patch = normalizeCells(input.patch);
     return this.inTransaction(() => {
       const current = this.findRow(rowId, input.storeId);
       if (!current) throw new RowNotFoundError(rowId);
+      const isStale = input.expectedRev !== undefined && input.expectedRev !== current.rev;
+      if (isStale) throw staleRowRevision(current);
       this.refuseUnknownColumns(input.storeId, Object.keys(patch));
 
       const change = diffCells(current.data, patch);
@@ -261,9 +273,10 @@ export class DataStoreRepository {
       if (changesNothing) return current;
 
       const data = { ...current.data, ...patch };
-      this.db.prepare('UPDATE ds_rows SET data_json = ?, updated_at = ? WHERE id = ? AND store_id = ?').run(JSON.stringify(data), input.at, rowId, input.storeId);
+      const rev = current.rev + 1;
+      this.db.prepare('UPDATE ds_rows SET data_json = ?, rev = ?, updated_at = ? WHERE id = ? AND store_id = ?').run(JSON.stringify(data), rev, input.at, rowId, input.storeId);
       this.recordChange({ storeId: input.storeId, rowId, actor: input.actor, at: input.at, change });
-      return { ...current, data, updatedAt: input.at };
+      return { ...current, data, rev, updatedAt: input.at };
     });
   }
 
@@ -362,7 +375,7 @@ export class DataStoreRepository {
     const holdsCell = Object.hasOwn(row.data, input.columnId);
     if (!holdsCell) return;
     const { [input.columnId]: from, ...remainingData } = row.data;
-    this.db.prepare('UPDATE ds_rows SET data_json = ?, updated_at = ? WHERE id = ? AND store_id = ?').run(JSON.stringify(remainingData), input.at, row.id, row.storeId);
+    this.db.prepare('UPDATE ds_rows SET data_json = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND store_id = ?').run(JSON.stringify(remainingData), input.at, row.id, row.storeId);
     this.recordChange({ storeId: row.storeId, rowId: row.id, actor: input.actor, at: input.at, change: { [input.columnId]: { from, to: null } } });
   }
 
