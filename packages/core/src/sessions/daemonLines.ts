@@ -8,6 +8,7 @@ export const HARNESS_EXITED_PREFIX = '[harness_exited]';
 export const SLEEP_PREFIX = '[sleep]';
 export const OPENFLEET_NOTICE_PREFIX = '[openfleet]';
 export const VERDICT_PREFIX = '[verdict]';
+export const ARBITER_PREFIX = '[arbiter]';
 
 /** The openings of the lines listed here, written by the daemon into a manager's message queue, none of them typed by a human. */
 export const DAEMON_LINE_PREFIXES: readonly string[] = [
@@ -19,6 +20,7 @@ export const DAEMON_LINE_PREFIXES: readonly string[] = [
   SLEEP_PREFIX,
   OPENFLEET_NOTICE_PREFIX,
   VERDICT_PREFIX,
+  ARBITER_PREFIX,
 ];
 
 const ENVELOPE_HEADER_PREFIX = '[from agent ';
