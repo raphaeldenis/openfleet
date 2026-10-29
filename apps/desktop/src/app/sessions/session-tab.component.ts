@@ -13,6 +13,8 @@ import { SessionDetailsComponent } from './session-details.component';
       @if (session(); as s) {
         <of-session-details [session]="s" />
         <of-state-panel [session]="s" />
+      } @else if (sessionId()) {
+        <p class="message" data-testid="session-tab-no-session">This session no longer exists.</p>
       } @else {
         <p class="message" data-testid="session-tab-no-session">Select a session to see its details.</p>
       }

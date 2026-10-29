@@ -35,6 +35,7 @@ function stubDaemon({ isUp = false } = {}) {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url.endsWith('/health')) return daemon.answerHealth(init);
     if (url.endsWith('/api/sessions')) return init?.method === 'POST' ? daemon.answerCreateSession() : daemon.answerListSessions();
+    if (new URL(url).pathname === '/api/settings/docs-root') return Promise.resolve(response({ body: { root: '/Users/me/Documents/OpenFleet', isDefault: true, proposedPath: '/Users/me/Documents/OpenFleet/Fleet' } }));
     if (new URL(url).pathname === '/api/projects') return Promise.resolve(response({ body: init?.method === 'POST' ? PROJECT : { items: [PROJECT], total: 1 } }));
     return Promise.reject(new Error(`unexpected request to ${url}`));
   });
@@ -82,9 +83,13 @@ async function reachFirstSessionStep({ repositoryPath = REPOSITORY_PATH, canOpen
 }
 
 describe('Onboarding — hostile black-box suite', () => {
-  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
+  beforeEach(() => {
+    localStorage.clear();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
   afterEach(() => {
     vi.useRealTimers();
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 

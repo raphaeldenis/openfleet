@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
-import { DIAGNOSTICS_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
+import { DIAGNOSTICS_PATH, DOCS_ROOT_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DiagnosticsDocument, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, GovernanceProposalView, HandoffContent, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
+  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DetectedRepository, DiagnosticsDocument, DocsRootView, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, GovernanceProposalView, HandoffContent, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
   LawView, ManagerGovernanceWithLawsView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   RemovedWorktree, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
@@ -213,6 +213,21 @@ export class FleetApiService {
     const project = parseProject(payload);
     if (!project) throw new ApiError(200, `${method} ${path} → unreadable project`);
     return project;
+  }
+  detectRepository(repositoryPath: string) {
+    return this.post<DetectedRepository>('/api/projects/detect', { repositoryPath });
+  }
+  async getDocsRoot(projectName?: string): Promise<DocsRootView> {
+    return this.readDocsRoot('GET', await this.call<unknown>(`${DOCS_ROOT_PATH}${queryString({ projectName })}`));
+  }
+  async saveDocsRoot(root: string): Promise<DocsRootView> {
+    return this.readDocsRoot('PATCH', await this.patch<unknown>(DOCS_ROOT_PATH, { root }));
+  }
+  private readDocsRoot(method: string, payload: unknown): DocsRootView {
+    const view = payload as Partial<DocsRootView> | null;
+    const isReadable = typeof view?.root === 'string' && typeof view.isDefault === 'boolean';
+    if (!isReadable) throw new ApiError(200, `${method} ${DOCS_ROOT_PATH} → unreadable docs root`);
+    return view as DocsRootView;
   }
   async listWorktrees(projectId: string): Promise<WorktreeList> {
     const path = `/api/projects/${encodeURIComponent(projectId)}/worktrees`;

@@ -14,7 +14,19 @@ export interface ScapePlaybook { id: string; name: string; lexicalContent: strin
 export interface ScapeNote { id: string; projectId: string; title: string; content: string; contentFormat: string; createdAt: unknown; updatedAt: unknown; isShared: boolean }
 export interface ScapeNoteVersion { id: string; noteId: string; content: string; contentFormat: string; createdAt: number; source: string }
 export interface ScapeStore { id: string; projectId: string; displayName: string; naturalKeyColumnId: string | null; createdAt: unknown; updatedAt: unknown }
-export interface ScapeColumn { id: string; storeId: string; displayName: string; columnType: string; sortOrder: number; options: string | null; format: string | null }
+/** The column fields a Scape source may lack: absent from the table, or null. */
+const SCAPE_COLUMN_METADATA_FIELDS = ['required', 'displayColumnID', 'config', 'displayWidth', 'wrapMode', 'wrapMaxLines'] as const;
+
+export interface ScapeColumnMetadata {
+  required?: number | null;
+  displayColumnID?: string | null;
+  config?: string | null;
+  displayWidth?: number | null;
+  wrapMode?: string | null;
+  wrapMaxLines?: number | null;
+}
+
+export interface ScapeColumn extends ScapeColumnMetadata { id: string; storeId: string; displayName: string; columnType: string; sortOrder: number; options: string | null; format: string | null }
 export interface ScapeView { id: string; storeId: string; name: string; viewType: string; sortOrder: number; config: string; createdAt: unknown }
 export interface ScapeRow { id: string; createdAt: number; updatedAt: number; cells: Record<string, unknown> }
 export interface ScapeRowChange { seq: number; storeId: string; rowId: string; kind: 'insert' | 'update' | 'delete'; oldValues: string | null; newValues: string | null; source: string; createdAt: number }
@@ -106,7 +118,10 @@ export class ScapeSource {
   }
 
   columnsOf(storeId: string): ScapeColumn[] {
-    return this.query(`SELECT id, storeID AS storeId, displayName, columnType, sortOrder, options, format FROM data_store_column WHERE storeID = ? ORDER BY sortOrder, id`, storeId) as unknown as ScapeColumn[];
+    const existingFields = new Set(this.query('PRAGMA table_info(data_store_column)').map((field) => String(field.name)));
+    const metadataFieldsInSource = SCAPE_COLUMN_METADATA_FIELDS.filter((field) => existingFields.has(field));
+    const selectedFields = ['id', 'storeID AS storeId', 'displayName', 'columnType', 'sortOrder', 'options', 'format', ...metadataFieldsInSource];
+    return this.query(`SELECT ${selectedFields.join(', ')} FROM data_store_column WHERE storeID = ? ORDER BY sortOrder, id`, storeId) as unknown as ScapeColumn[];
   }
 
   viewsOf(storeId: string): ScapeView[] {

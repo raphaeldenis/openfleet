@@ -6,6 +6,7 @@ import { carryLoggedRef, rememberLoggedRef } from '../errors/loggedRef.js';
 import { EventBus } from '../events/eventBus.js';
 import { createWorktreeWithHook, postCreateHookOf } from '../git/worktreeCreation.js';
 import type { Harness, HarnessHandle } from '../harness/harness.js';
+import { BinaryHealthCheck, brokenBinaryError, type BinaryHealth } from '../harness/binaryHealth.js';
 import { claudeProjectsDir } from '../harness/claudeProjectsDir.js';
 import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
@@ -15,7 +16,8 @@ import { HandoffSeed } from '../notes/handoffSeed.js';
 import { NoteRepository } from '../notes/noteRepository.js';
 import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { HumanDraft } from './humanDraft.js';
-import { MessageQueue } from './messageQueue.js';
+import { MessageQueue, type ChildExchange } from './messageQueue.js';
+import { DeliveryReconciler, promptDigestsInTranscript } from './deliveryReconciler.js';
 import { SessionRuntime, type RuntimeProgress } from './sessionRuntime.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
@@ -28,9 +30,17 @@ import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConver
 // Absent, the service still closes sessions with their reason but broadcasts no error events.
 export type DescribeError = (error: unknown, scope: { sessionId?: string; where?: string }) => ErrorEnvelope;
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError; env?: NodeJS.ProcessEnv;
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; turnStartTimeoutMs?: number;
+  /** Probes `<bin> --version` before each spawn; defaults to a real check with a 60 s cache. */
+  binaryHealth?: BinaryHealthCheck;
+  /** How long a launch may show neither a PTY byte nor transcript progress before its readiness is failed; absent: launches are not watched. */
+  launchOutputTimeoutMs?: number; clearInFlightTimeoutMs?: number; clearFlushGraceMs?: number; sessionEndExitGraceMs?: number; now?: () => number; describeError?: DescribeError; env?: NodeJS.ProcessEnv;
   /** The mission of a manager session (none for another session): handed over as the first prompt of a conversation the manager starts from nothing. */
   missionOf?: (sessionId: string) => string | undefined;
+  /** True while nothing automated may be typed to the session (a disabled manager): its queue keeps the messages. Absent, delivery is never held. */
+  isDeliveryHeld?: (sessionId: string) => boolean;
+  /** A queued message the session no longer owes is dropped instead of typed. */
+  isMessageObsolete?: (message: { sessionId: string; messageId: string }) => boolean;
   /** The bounded recall of the expertise and pulse actions a manager wrote; empty when it wrote none. Placed before the mission in the first prompt. */
   profileRecallOf?: (sessionId: string) => string;
   /** False when the command policy neither judges commands nor converts permission dialogs: the sessions then report no enforcement at all. */
@@ -55,6 +65,15 @@ const isNamedLaunchFailure = (error: unknown): error is OpenFleetError => error 
 export const SESSION_END_EXIT_GRACE_MS = 2000;
 // A process that dies this soon after its spawn most likely never started (e.g. the CLI is not on the PATH).
 export const EARLY_EXIT_WINDOW_MS = 3000;
+export const DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS = 30_000;
+// A launch that shows no sign of life is relaunched on its own this many times; the next stall stays failed.
+const MAX_AUTOMATIC_LAUNCH_RETRIES = 1;
+export interface LastProcessExit {
+  /** Milliseconds between the launch and the exit of the process. */
+  lifetimeMs: number;
+  /** Bytes the pty sent before the process ended. */
+  outputBytes: number;
+}
 const SIGNAL_EXIT_CODE_BASE = 128;
 const CLI_NOT_FOUND_HINT = 'Check that the claude CLI is installed and on the PATH the daemon runs with.';
 const REOPEN_HINT = 'reopen the session to resume the conversation.';
@@ -412,9 +431,13 @@ export class SessionService {
   private readonly projects: ProjectRepository;
   private readonly handoffSeed: HandoffSeed;
   private readonly queue: MessageQueue;
+  private readonly deliveryReconciler: DeliveryReconciler;
   private readonly handles = new Map<string, HarnessHandle>();
   private readonly outputBuffers = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly launchWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly sessionsWithOutput = new Set<string>();
+  private readonly binaryHealth: BinaryHealthCheck;
   private readonly deliveries = new Map<string, Delivery>();
   // What the human typed into the terminal prompt and has not sent, per live process: nothing is typed on top of it.
   private readonly humanDrafts = new Map<string, HumanDraftWatch>();
@@ -460,17 +483,21 @@ export class SessionService {
   // Cancels the wait a SessionEnd close gives the CLI to exit on its own (shutdown, a user close, the exit itself).
   private readonly cancelSessionEndGraces = new Map<string, () => void>();
   private readonly launchedAtBySessionId = new Map<string, number>();
+  private readonly lastExitBySessionId = new Map<string, LastProcessExit>();
   // Children their own parent asked to close, until the close lands: the parent already knows they ended.
   private readonly idsClosingByParent = new Set<string>();
+  private readonly closeRequestListeners = new Set<(sessionId: string) => void>();
   // The prompt the daemon handed each session at launch (a brief or a mission), for the process lifetime: a resume never replays it.
   private readonly seededPromptBySessionId = new Map<string, string>();
 
   constructor(private readonly deps: SessionServiceDeps) {
     this.runtime = new SessionRuntime(deps.bus);
     this.repo = new SessionRepository(deps.db);
+    this.binaryHealth = deps.binaryHealth ?? new BinaryHealthCheck();
     this.projects = new ProjectRepository(deps.db);
     this.handoffSeed = new HandoffSeed({ notes: new NoteRepository(deps.db), projects: this.projects, files: nodeHandoffFileReader });
     this.queue = new MessageQueue(deps.db);
+    this.deliveryReconciler = new DeliveryReconciler(deps.db);
   }
 
   private assertBriefFitsFirstPrompt(brief: string | undefined): void {
@@ -487,6 +514,8 @@ export class SessionService {
   async create(spec: SessionSpec, options?: { branch?: string }): Promise<Session> {
     this.assertNotShuttingDown();
     const harness = this.harnessFor(spec.harness);
+    const binaryProbe = this.preflightBinary(harness);
+    if (binaryProbe) await binaryProbe;
     this.assertProjectExists(spec.projectId);
     this.assertBriefFitsFirstPrompt(spec.seededPrompt);
     const seededPrompt = this.seededPromptWithHandoff(spec);
@@ -496,7 +525,7 @@ export class SessionService {
     const now = new Date().toISOString();
     this.repo.insert({ id, name: spec.name, emoji: spec.emoji, directory: spec.directory, worktree: null, model: spec.model ?? null,
       parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken,
-      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, project_id: spec.projectId ?? null, effort: spec.effort ?? null, created_at: now });
+      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, project_id: spec.projectId ?? null, effort: spec.effort ?? null, config_dir: spec.configDir ?? null, created_at: now });
     // Captured now so a later reopen can tell a directory that still resolves the same way apart from an
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
@@ -506,12 +535,13 @@ export class SessionService {
     const isManager = spec.role === MANAGER_ROLE;
     if (spec.seededPrompt?.trim() && !isManager) this.repo.setSeededPrompt(id, spec.seededPrompt.trim());
     this.startPendingRecording(id, spec.model);
+    if (this.isLaunchWatched()) this.repo.setReadiness(id, { readiness: 'pending' });
     let handle: HarnessHandle;
     try {
       handle = harness.start({
         sessionId: id, directory: spec.directory, model: spec.model, seededPrompt,
         hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
-        permissionMode: spec.permissionMode, effort: spec.effort,
+        permissionMode: spec.permissionMode, effort: spec.effort, configDir: spec.configDir,
       });
     } catch (err) {
       // The row above already exists: left alone, it would be a ghost forever — starting, no handle,
@@ -523,6 +553,7 @@ export class SessionService {
     this.handles.set(id, handle);
     activeHandleBySessionId.set(id, handle);
     handle.onData((data) => {
+      this.noteOutputReceived(id);
       this.appendOutput(id, data);
       this.deps.bus.emit({ type: 'session.output', sessionId: id, data });
     });
@@ -531,6 +562,7 @@ export class SessionService {
     // included) leaves this session starting forever otherwise. A first launch gets its own, longer timeout
     // (firstStartTimeoutMs) since a cold real CLI can sit waiting on an auth or trust prompt (AUD-06).
     this.armFirstStartTimeout(id, handle);
+    this.armLaunchWatchdog(id, handle);
     const session = this.repo.get(id)!;
     this.deps.bus.emit({ type: 'session.created', session });
     return session;
@@ -576,6 +608,15 @@ export class SessionService {
 
   queuedMessageCount(sessionId: string): number {
     return this.queue.countPending(sessionId);
+  }
+
+  deliveredMessageCountSince(sessionId: string, since: string): number {
+    return this.queue.countDeliveredSince(sessionId, since);
+  }
+
+  /** Types the messages that waited while delivery to the session was held. */
+  resumeHeldDelivery(sessionId: string): void {
+    this.guarded(sessionId, () => this.advance(sessionId));
   }
 
   // A messageId lets the caller retry a delivery attempt idempotently: resending the same id to the same
@@ -926,6 +967,7 @@ export class SessionService {
     }
     if (input.kind === 'hook' && input.event.hook_event_name === 'UserPromptSubmit') {
       this.repo.setCurrentConversationPrompted(sessionId, true);
+      this.recordPromptDigest(sessionId, input.event);
     }
     this.recordResolvedModelIfPending(sessionId);
     // Judged before the same-state early return below: a tool run rarely changes the session state.
@@ -993,6 +1035,11 @@ export class SessionService {
     this.launchedAtBySessionId.set(sessionId, this.now());
     handle.onExit((exitCode, { wasConversationNotFound }) => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // a stale process we already replaced
+      const launchedAt = this.launchedAtBySessionId.get(sessionId);
+      this.lastExitBySessionId.set(sessionId, {
+        lifetimeMs: launchedAt === undefined ? 0 : this.now() - launchedAt,
+        outputBytes: this.runtime.outputBytesOfLastEndedLaunch(sessionId) ?? 0,
+      });
       const reasonOfExit = this.reasonOfProcessExit(sessionId, exitCode);
       const isRefusedResume = wasConversationNotFound && reasonOfExit === 'harness_exit';
       this.markClosed(sessionId, { exitCode, reason: isRefusedResume ? 'conversation_not_found' : reasonOfExit });
@@ -1338,6 +1385,12 @@ export class SessionService {
 
 
   resize(sessionId: string, cols: number, rows: number): void { this.handles.get(sessionId)?.resize(cols, rows); }
+  /** Calls the listener each time a close is requested for a session, including one already closed, which emits no session.closed. */
+  onCloseRequested(listener: (sessionId: string) => void): () => void {
+    this.closeRequestListeners.add(listener);
+    return () => { this.closeRequestListeners.delete(listener); };
+  }
+
   isClosingByParent(sessionId: string): boolean {
     return this.idsClosingByParent.has(sessionId);
   }
@@ -1345,6 +1398,7 @@ export class SessionService {
   async close(sessionId: string, options?: { escalateAfterMs?: number; closedByParent?: boolean; cause?: CloseCause }): Promise<void> {
     const isSessionEndOfACloseAlreadyRequested = options?.cause === 'session_end' && this.isCloseRequested(sessionId);
     if (isSessionEndOfACloseAlreadyRequested) return;
+    this.closeRequestListeners.forEach((listener) => listener(sessionId));
     if (options?.closedByParent) this.idsClosingByParent.add(sessionId);
     const isExplicitClose = options?.cause === undefined;
     if (isExplicitClose) this.idsClosingForDaemonShutdown.delete(sessionId); // someone asked: the close is theirs, not the shutdown's
@@ -1450,6 +1504,8 @@ export class SessionService {
     return session ? this.projected(session) : undefined;
   }
   list(): Session[] { return this.repo.list().map((session) => this.projected(session)); }
+  /** The last message of a child to its manager and whether anything was exchanged with the child since. */
+  childExchangeOf(input: { managerId: string; childId: string }): ChildExchange { return this.queue.childExchangeOf(input); }
   private projected(session: Session): Session {
     const harnessEnforcement = this.deps.harnesses.find((harness) => harness.id === session.harness)?.policyEnforcement ?? 'none';
     const isPolicyActive = this.deps.isCommandPolicyActive?.() ?? true;
@@ -1460,6 +1516,10 @@ export class SessionService {
     return this.hasLiveLaunch(id) ? this.runtime.progress(id, this.trustedTranscriptFileOf(id)) : undefined;
   }
   setRuntimeAttention(id: string, attention: RuntimeAttention | undefined): void { this.runtime.setAttention(id, attention); }
+  /** How long the last process of the session lived and how many bytes its pty sent; undefined while no process exited since the daemon started. */
+  lastProcessExitOf(id: string): LastProcessExit | undefined { return this.lastExitBySessionId.get(id); }
+  /** Marks a closed session whose restart the daemon is waiting to make: its snapshot reads `restartPending`. */
+  setRestartPending(id: string, isPending: boolean): void { this.runtime.setRestartPending(id, isPending); }
   directoryRealpathOf(id: string): string | null | undefined { return this.repo.directoryRealpath(id); }
   /** Returns true when the prompt is the one the daemon launched the session with; the CLI may append to it. */
   isSeededPrompt(sessionId: string, prompt: string): boolean {
@@ -1695,10 +1755,16 @@ export class SessionService {
     const handle = this.liveHandle(sessionId);
     if (!handle) return;
     if (this.hasUnsentHumanDraft(sessionId)) return;
+    if (this.deps.isDeliveryHeld?.(sessionId)) return;
     // A daemon line ([pulse]) never lands in the composer of a session waiting on the human's answer.
     const isWaitingOnHuman = this.repo.get(sessionId)?.state === 'waiting_input';
     const message = this.queue.nextPending(sessionId, { skipDaemonLines: isWaitingOnHuman });
     if (!message) return;
+    if (this.deps.isMessageObsolete?.({ sessionId, messageId: message.id })) {
+      this.queue.discardQueued({ sessionId, messageId: message.id });
+      this.typeNextMessage(sessionId);
+      return;
+    }
     // Assumes HarnessHandle.typeMessage throws only when no bytes reached the pty: a failed body is retyped from 'ready'.
     handle.typeMessage(message.body);
     // typeMessage frames the body as one bracketed paste (see claudeCli/bracketedPaste.ts) so the composer
@@ -1756,7 +1822,7 @@ export class SessionService {
 
   private commitSubmission(sessionId: string, messageId: string): void {
     this.unrecordedDeliveries.set(sessionId, messageId);
-    const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
+    const turnStartTimeout = this.schedule(sessionId, this.deps.turnStartTimeoutMs ?? TURN_START_TIMEOUT_MS,() => this.stopAwaitingTurnStart(sessionId));
     this.enter(sessionId, { name: 'submitted', messageId }, turnStartTimeout);
     try {
       this.recordDelivery(sessionId);
@@ -1813,7 +1879,56 @@ export class SessionService {
     if (messageId === undefined) return;
     this.queue.markDelivered(messageId);
     this.unrecordedDeliveries.delete(sessionId);
+    this.recordSubmittedDigest({ sessionId, messageId });
     this.announceDelivered(sessionId, messageId);
+  }
+
+  // The digest of what the hook reports, under the CLI session id it names. Never throws into the hook handler.
+  private recordPromptDigest(sessionId: string, event: { session_id: string; user_prompt?: string; prompt?: string }): void {
+    const prompt = event.user_prompt ?? event.prompt;
+    if (prompt === undefined) return;
+    try {
+      this.deliveryReconciler.recordPromptTaken({ sessionId, cliSessionId: event.session_id.toLowerCase(), prompt });
+    } catch (err) {
+      log('error', `delivery: the digest of a submitted prompt could not be recorded for CLI session ${event.session_id}`, err);
+    }
+  }
+
+  private recordSubmittedDigest({ sessionId, messageId }: { sessionId: string; messageId: string }): void {
+    const body = this.queue.getById(messageId)?.body;
+    if (body === undefined) return;
+    try {
+      this.deliveryReconciler.recordSubmission({ messageId, sessionId, body });
+    } catch (err) {
+      log('error', `delivery: the digest of message ${messageId} could not be recorded for session ${sessionId}`, err);
+    }
+  }
+
+  // The submitted message left the target idle: unless its digest shows in the hook record or the transcript, it is queued
+  // again, once, to be typed behind the READY phase the caller enters next. A target whose transcript is unknown offers
+  // no proof either way, so its message is left as delivered.
+  private reconcileUnstartedTurn(sessionId: string, messageId: string): void {
+    try {
+      const transcriptTail = this.readTrustedTranscriptTail(sessionId);
+      const isTranscriptKnown = transcriptTail !== undefined;
+      if (!isTranscriptKnown) return;
+      const verdict = this.deliveryReconciler.judgeSubmission({
+        messageId,
+        cliSessionId: this.currentCliSessionIdOf(sessionId),
+        transcriptDigestsSince: (since) => promptDigestsInTranscript({ tail: transcriptTail, since }),
+      });
+      if (verdict === 'redeliver') this.queue.requeueDelivered(messageId);
+    } catch (err) {
+      log('error', `delivery: session ${sessionId} could not reconcile message ${messageId}`, err);
+    }
+  }
+
+  // The tail of the session's own trusted transcript; undefined when none is known, trusted or readable.
+  private readTrustedTranscriptTail(sessionId: string): string | undefined {
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (transcriptPath === undefined || !isTrustedTranscriptPath(transcriptPath) || !this.isTranscriptOfSession(sessionId, transcriptPath)) return undefined;
+    const resolvedPath = existsSync(transcriptPath) ? realpathSync(transcriptPath) : transcriptPath;
+    return this.isTranscriptOfSession(sessionId, resolvedPath) ? readTranscriptTail(resolvedPath) : undefined;
   }
 
   // A failing listener (e.g. a WS client on a closing socket) is not a delivery failure: it never feeds the retry.
@@ -1839,6 +1954,7 @@ export class SessionService {
       }, release);
       return;
     }
+    if (phase.name === 'submitted') this.reconcileUnstartedTurn(sessionId, phase.messageId);
     this.enter(sessionId, READY);
     this.advance(sessionId);
   }
@@ -1974,6 +2090,7 @@ export class SessionService {
   private markClosed(sessionId: string, closure: SessionClosure): void {
     const { exitCode, reason } = closure;
     this.clearResumeTimer(sessionId);
+    this.clearLaunchWatchdog(sessionId);
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
     this.dropPendingRecording(sessionId);
@@ -2050,6 +2167,7 @@ export class SessionService {
         directory: session.directory,
         model: session.model,
         effort: session.effort,
+        configDir: this.repo.configDirOf(session.id),
         hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`,
         mcpUrl: `${this.deps.baseUrl}/mcp`,
         mcpToken,
@@ -2135,7 +2253,7 @@ export class SessionService {
   // A conversation the harness cannot inspect is resumed as stored: only a file that is not there proves it gone.
   private conversationToLaunch(session: Session, harness: Harness): { cliSessionId: string; isResumed: boolean; isNewConversationAnnounced: boolean } {
     const currentCliSessionId = this.currentCliSessionIdOf(session.id);
-    const presence = harness.conversationExists?.({ cliSessionId: currentCliSessionId, directory: session.directory }) ?? 'present';
+    const presence = harness.conversationExists?.({ cliSessionId: currentCliSessionId, directory: session.directory, configDir: this.repo.configDirOf(session.id) }) ?? 'present';
     if (presence === 'present') return { cliSessionId: currentCliSessionId, isResumed: true, isNewConversationAnnounced: false };
     if (presence === 'unknown') {
       log('warn', `resume: conversation state unknown, resuming the stored one: session ${session.id}, conversation ${currentCliSessionId}`);
@@ -2184,6 +2302,134 @@ export class SessionService {
     return mode;
   }
 
+  /** Refuses with harness_binary_broken when the harness binary fails `--version`; callers that check other things first use it to fail before any await-sensitive window. */
+  async assertHarnessHealthy(harnessId: string): Promise<void> {
+    const probe = this.preflightBinary(this.harnessFor(harnessId));
+    if (probe) await probe;
+  }
+
+  // Synchronous while the answer is cached: create() keeps its no-await window for callers that already warmed the cache.
+  private preflightBinary(harness: Harness): Promise<void> | undefined {
+    const path = harness.binaryPath?.();
+    if (path === undefined) return undefined;
+    const cached = this.binaryHealth.cached(path);
+    if (cached) {
+      this.acceptOrRefuseBinary(cached);
+      return undefined;
+    }
+    return this.binaryHealth.check(path).then((health) => this.acceptOrRefuseBinary(health));
+  }
+
+  private acceptOrRefuseBinary(health: BinaryHealth): void {
+    if (!health.ok) {
+      log('warn', 'harness binary fails its version check', undefined, { code: 'harness_binary_broken', path: health.path, stderr: health.stderr });
+      throw brokenBinaryError(health);
+    }
+    log('info', `spawning with harness binary ${health.path} version ${health.version}`);
+  }
+
+  private isLaunchWatched(): boolean {
+    return this.deps.launchOutputTimeoutMs !== undefined;
+  }
+
+  private noteOutputReceived(sessionId: string): void {
+    if (!this.isLaunchWatched() || this.sessionsWithOutput.has(sessionId)) return;
+    this.sessionsWithOutput.add(sessionId);
+    this.markReady(sessionId);
+  }
+
+  private markReady(sessionId: string): void {
+    if (this.repo.get(sessionId)?.readiness === 'ready') return;
+    this.repo.setReadiness(sessionId, { readiness: 'ready' });
+    this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
+  }
+
+  private armLaunchWatchdog(sessionId: string, handle: HarnessHandle): void {
+    const timeoutMs = this.deps.launchOutputTimeoutMs;
+    if (timeoutMs === undefined) return;
+    clearTimeout(this.launchWatchdogs.get(sessionId));
+    this.launchWatchdogs.set(sessionId, setTimeout(() => this.judgeLaunchOutput(sessionId, handle), timeoutMs));
+  }
+
+  private clearLaunchWatchdog(sessionId: string): void {
+    clearTimeout(this.launchWatchdogs.get(sessionId));
+    this.launchWatchdogs.delete(sessionId);
+    this.sessionsWithOutput.delete(sessionId);
+  }
+
+  private judgeLaunchOutput(sessionId: string, handle: HarnessHandle): void {
+    const isStillThisLaunch = activeHandleBySessionId.get(sessionId) === handle;
+    if (!isStillThisLaunch) return;
+    const hasReportedItsStart = this.repo.get(sessionId)?.state !== 'starting';
+    const hasSignOfLife = hasReportedItsStart || this.sessionsWithOutput.has(sessionId) || handle.probeTranscriptProgress?.() !== undefined;
+    if (hasSignOfLife) {
+      this.markReady(sessionId);
+      return;
+    }
+    this.failLaunchWithoutOutput(sessionId, handle);
+  }
+
+  private failLaunchWithoutOutput(sessionId: string, stalledHandle: HarnessHandle): void {
+    const session = this.repo.get(sessionId)!;
+    const willRetry = this.repo.launchRetriesOf(sessionId) < MAX_AUTOMATIC_LAUNCH_RETRIES;
+    this.repo.setReadiness(sessionId, { readiness: 'failed', reason: 'no_output_at_launch' });
+    this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
+    log('warn', `session ${sessionId} produced no output at launch`, undefined, { code: 'no_output_at_launch', sessionId, willRetry });
+    this.notifyParentOfStalledLaunch(session, willRetry);
+    if (willRetry) this.relaunchStalledLaunch(session, stalledHandle);
+  }
+
+  private notifyParentOfStalledLaunch(session: Session, willRetry: boolean): void {
+    if (session.parentId === undefined) return;
+    const seconds = Math.round((this.deps.launchOutputTimeoutMs ?? 0) / 1000);
+    const followUp = willRetry
+      ? 'One automatic relaunch is under way.'
+      : 'No further automatic retry: close it and spawn again, or check the harness binary.';
+    const body = `[openfleet] child session ${session.name} (${session.id}) showed no PTY output and no transcript within ${seconds}s of launch: readiness failed, reason no_output_at_launch. ${followUp}`;
+    try {
+      this.sendMessage({ sessionId: session.parentId, body });
+    } catch (err) {
+      log('warn', `session ${session.id}: the parent ${session.parentId} could not be told about the stalled launch`, err);
+    }
+  }
+
+  // The retry is this session launching again, not a second spawn: it never goes through create_session's duplicate guard.
+  private relaunchStalledLaunch(session: Session, stalledHandle: HarnessHandle): void {
+    this.repo.incrementLaunchRetries(session.id);
+    activeHandleBySessionId.delete(session.id); // detached first: the stalled process's exit must not close the session
+    void this.killWithEscalation(stalledHandle, DEFAULT_CLOSE_ESCALATE_MS);
+    this.clearResumeTimer(session.id);
+    const harness = this.harnessFor(session.harness);
+    const hookToken = newToken();
+    const mcpToken = newToken();
+    this.repo.setTokens(session.id, hookToken, mcpToken);
+    let handle: HarnessHandle;
+    try {
+      handle = harness.start({
+        sessionId: session.id, directory: session.directory, model: session.model, effort: session.effort,
+        seededPrompt: this.seededPromptBySessionId.get(session.id),
+        hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken,
+        displayName: `${session.emoji} ${session.name}`, permissionMode: this.resolveResumePermissionMode(session),
+      });
+    } catch (err) {
+      this.logLaunchFailure(`relaunch: session ${session.id} failed to launch`, err);
+      this.closeAfterFailedLaunch(session.id, { reason: 'launch_failed', failure: err });
+      return;
+    }
+    this.handles.set(session.id, handle);
+    activeHandleBySessionId.set(session.id, handle);
+    handle.onData((data) => {
+      this.noteOutputReceived(session.id);
+      this.appendOutput(session.id, data);
+      this.deps.bus.emit({ type: 'session.output', sessionId: session.id, data });
+    });
+    this.watchProcessExit(session.id, handle);
+    this.armFirstStartTimeout(session.id, handle);
+    this.repo.setReadiness(session.id, { readiness: 'pending' });
+    this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(session.id)! });
+    this.armLaunchWatchdog(session.id, handle);
+  }
+
   private armResumeTimeout(sessionId: string, handle: HarnessHandle): void {
     this.armStartTimeout(sessionId, handle, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
   }
@@ -2193,6 +2439,7 @@ export class SessionService {
   }
 
   private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number): void {
+    this.clearResumeTimer(sessionId);
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this

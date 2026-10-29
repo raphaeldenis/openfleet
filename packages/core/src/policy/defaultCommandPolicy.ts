@@ -97,6 +97,19 @@ const allowReadOnlyPipelines: PolicyRule = {
   reason: 'A pipeline that only reads files inside the working directories needs no confirmation.',
 };
 
+export const ALLOW_DECLARED_COMMANDS_RULE_ID = 'allow-declared-commands';
+
+/** Inert until the `declaredCommands` setting of the policy file fills the list. */
+const allowDeclaredCommands: PolicyRule = {
+  id: ALLOW_DECLARED_COMMANDS_RULE_ID,
+  tools: ['Bash'],
+  presence: 'unattended',
+  appliesTo: 'everyCommand',
+  decision: 'allow',
+  when: { runsDeclaredCommand: [] },
+  reason: 'A declared test, lint or typecheck command, run inside the worktree, needs no confirmation.',
+};
+
 export const FINDINGS_GATE_RULE_ID = 'findings-gate-pr-create';
 
 const API_CALLS_THAT_MAY_POST: RulePredicate = { flags: { any: [['f'], ['F'], ['X'], ['field'], ['raw-field'], ['method'], ['input']] } };
@@ -117,6 +130,30 @@ const findingsGatePrCreate: PolicyRule = {
   },
   reason: 'findings_required: the ticket of this branch lacks the findings that open a pull request.',
   alternative: 'Have QE, QA and the delivery review report on the head commit, or ask your manager for a logged step skip.',
+};
+
+export const SEND_MESSAGE_GUARD_RULE_ID = 'no-generic-send-message-to-fleet-session';
+
+const noGenericSendMessageToFleetSession: PolicyRule = {
+  id: SEND_MESSAGE_GUARD_RULE_ID,
+  tools: ['SendMessage'],
+  decision: 'deny',
+  when: { recipientIsFleetSession: true },
+  reason: 'SendMessage only reaches your own sub-agents, never a session or a manager of the fleet.',
+  alternative: 'To a manager use `message_argus`; to any other session use `send_session_message`. SendMessage stays valid for your sub-agents.',
+};
+
+export const NO_SHELL_FILE_WRITES_RULE_ID = 'no-shell-file-writes';
+const SCRATCH_DIRECTORIES = ['{scratch}', '{worktree}/.scratch', '{toolResults}'];
+
+const noShellFileWrites: PolicyRule = {
+  id: NO_SHELL_FILE_WRITES_RULE_ID,
+  tools: ['Bash'],
+  presence: 'unattended',
+  decision: 'deny',
+  when: { writesFilesOutside: SCRATCH_DIRECTORIES },
+  reason: 'A file written through the shell (redirect, heredoc, tee, sed -i, an interpreter) asks for a confirmation nobody sees.',
+  alternative: 'Create or change the file with the Write tool (a whole file) or the Edit tool (a replacement); NotebookEdit for a notebook. Command output may go to .scratch/.',
 };
 
 const noGitPublish: PolicyRule = {
@@ -152,16 +189,16 @@ export const DEFAULT_COMMAND_POLICY: CommandPolicyDocument = {
   mode: 'enforce',
   profiles: {
     default: {
-      rules: [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, findingsGatePrCreate.id, allowReadOnlyPipelines.id],
+      rules: [noForcedRecursiveRm.id, noForcedGitClean.id, noWriteIntoGitDir.id, noFindDeleteOnBroadPaths.id, noHumanQuestionsUnattended.id, noShellFileWrites.id, findingsGatePrCreate.id, noGenericSendMessageToFleetSession.id, allowReadOnlyPipelines.id],
     },
-    dev: { extends: 'default', rules: [delegateHeavyCommands.id] },
-    qe: { extends: 'default', rules: [], mode: 'observe' },
+    dev: { extends: 'default', rules: [allowDeclaredCommands.id, delegateHeavyCommands.id] },
+    qe: { extends: 'default', rules: [allowDeclaredCommands.id], mode: 'observe' },
     qa: { extends: 'default', rules: [noGitPublish.id], mode: 'observe' },
     review: { extends: 'default', rules: [noFileWrites.id, noGitMutations.id], mode: 'observe' },
   },
   roleToProfile: { DEV: 'dev', QE: 'qe', QA: 'qa', ADV: 'review', REVIEW: 'review' },
   rules: [
     noForcedRecursiveRm, noForcedGitClean, noWriteIntoGitDir, noFindDeleteOnBroadPaths, noHumanQuestionsUnattended,
-    findingsGatePrCreate, delegateHeavyCommands, allowReadOnlyPipelines, noGitPublish, noGitMutations, noFileWrites,
+    noShellFileWrites, findingsGatePrCreate, noGenericSendMessageToFleetSession, delegateHeavyCommands, allowReadOnlyPipelines, allowDeclaredCommands, noGitPublish, noGitMutations, noFileWrites,
   ],
 };

@@ -63,7 +63,7 @@ beforeEach(async () => {
   const noteRepo = new NoteRepository(db);
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => CLOCK, newId });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => CLOCK });
-  const projectService = new ProjectService({ projects, docs, clock: () => CLOCK, newId });
+  const projectService = new ProjectService({ projects, docs, noteRepo, clock: () => CLOCK, newId });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot });
   server = await startServer({
     host: '127.0.0.1', port: 0, adminToken: ADMIN_TOKEN, sessions, approvals: new ApprovalService({ db, bus }), managers, pulseScheduler, bus,

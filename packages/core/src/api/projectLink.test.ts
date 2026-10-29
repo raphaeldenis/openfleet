@@ -61,7 +61,7 @@ beforeEach(async () => {
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => CLOCK, newId });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => CLOCK });
   onDocsFolderSet = vi.fn();
-  const projectService = new ProjectService({ projects, docs, clock: () => CLOCK, newId, onDocsFolderSet });
+  const projectService = new ProjectService({ projects, docs, noteRepo, clock: () => CLOCK, newId, onDocsFolderSet });
   const git = { statusShort: () => '', diffStatOf: () => '' };
   const handoff = createHandoffRouteDeps({ sessions, managers, workingStates, todos, docs, projects, git, settings: { writeOnClose: true }, clock: () => CLOCK });
 

@@ -63,8 +63,10 @@ let sessions: SessionService;
 let harness: FakeHarness;
 let parentToken: string;
 let parentId: string;
+let syntheticHome: string;
 
 beforeEach(async () => {
+  syntheticHome = realpathSync(mkdtempSync(join(tmpdir(), 'of-mcp-home-')));
   db = openDatabase(':memory:');
   bus = new EventBus();
   harness = new FakeHarness();
@@ -80,7 +82,7 @@ beforeEach(async () => {
   const noteRepo = new NoteRepository(db);
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString() });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), governanceQueue: governanceQueueFor(db), sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }), worktreesRoot: '/tmp/of-wt' }) });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath: '/tmp/of-unused/config.json', mcp: createMcpHandler({ knowledgeSearch: knowledgeSearchFor(db), governanceQueue: governanceQueueFor(db), sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates: new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: '/tmp/of-unused/state', maxBytes: 6144 }), worktreesRoot: '/tmp/of-wt', homeDirectory: syntheticHome }) });
   const parent = await sessions.create({ directory: '/tmp', name: 'Lead', harness: 'fake', emoji: '🧭' });
   parentId = parent.id;
   parentToken = harness.launches[0]!.mcpToken;
@@ -89,6 +91,7 @@ afterEach(async () => {
   await server.close();
   for (const directory of createdDirectories) rmSync(directory, { recursive: true, force: true });
   createdDirectories = [];
+  rmSync(syntheticHome, { recursive: true, force: true });
 });
 
 async function connect(token: string) {
@@ -387,6 +390,57 @@ describe('MCP', () => {
 
     expect(created).not.toHaveProperty('effort');
     expect(harness.launches[1]?.effort).toBeUndefined();
+  });
+
+  it('launches the child with the config_dir and shows only the profile name in the ack and the session card', async () => {
+    const profile = join(syntheticHome, '.claude-work');
+    mkdirSync(profile);
+    const parent = await connect(parentToken);
+
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('with-profile'), name: 'Gimli', config_dir: profile } }));
+
+    expect(harness.launches[1]?.configDir).toBe(profile);
+    expect(created.configProfile).toBe('.claude-work');
+    expect(JSON.stringify(created)).not.toContain(syntheticHome);
+    expect(JSON.stringify(sessions.get(created.id))).not.toContain(syntheticHome);
+  });
+
+  it('launches a child without config_dir exactly as before when none is given', async () => {
+    const parent = await connect(parentToken);
+
+    const created = text(await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('no-profile'), name: 'Gimli' } }));
+
+    expect(created).not.toHaveProperty('configProfile');
+    expect(harness.launches[1]?.configDir).toBeUndefined();
+  });
+
+  it.each([
+    ['a relative path', () => 'relative-profile', 'config_dir must be an absolute path'],
+    ['a missing directory', () => join(syntheticHome, '.missing'), 'config_dir does not exist or is not a directory'],
+    ['a directory outside home', () => existingWorktreeDir('outside-home'), 'config_dir must be inside the home directory'],
+    ['the home directory itself', () => syntheticHome, 'config_dir must be inside the home directory'],
+    ['the default ~/.claude directory', () => { const defaultProfile = join(syntheticHome, '.claude'); mkdirSync(defaultProfile); return defaultProfile; }, 'config_dir must not be the default ~/.claude directory'],
+    ['a symlink leaving home', () => { const link = join(syntheticHome, '.escape'); symlinkSync(existingWorktreeDir('escape-target'), link); return link; }, 'config_dir must be inside the home directory'],
+  ])('refuses create_session with %s as invalid_body and creates no session', async (_label, makeConfigDir, expectedMessage) => {
+    const parent = await connect(parentToken);
+    const sessionCountBefore = sessions.list().length;
+
+    const result = await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('bad-profile'), name: 'Gimli', config_dir: makeConfigDir() } });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('error invalid_body');
+    expect(JSON.stringify(result.content)).toContain(expectedMessage);
+    expect(sessions.list()).toHaveLength(sessionCountBefore);
+    expect(harness.launches).toHaveLength(1);
+  });
+
+  it('never echoes the requested path in a refusal', async () => {
+    const parent = await connect(parentToken);
+    const missing = join(syntheticHome, '.secret-profile-name');
+
+    const result = await parent.callTool({ name: 'create_session', arguments: { directory: existingWorktreeDir('no-echo'), name: 'Gimli', config_dir: missing } });
+
+    expect(JSON.stringify(result.content)).not.toContain('.secret-profile-name');
   });
 
   it('creates a child that inherits harness and can message its parent', async () => {

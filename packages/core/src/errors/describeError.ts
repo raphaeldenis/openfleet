@@ -27,8 +27,8 @@ import {
 } from '../sessions/sessionService.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from '../stores/dataStoreRepository.js';
 import {
-  ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, ConstraintError, DaemonSetColumnError, DuplicateIdError, OptionsHeldByRowsError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
-  InvalidViewConfigError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
+  ColumnIsDisplayColumnError, ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, ConstraintError, DaemonSetColumnError, DuplicateIdError, OptionsHeldByRowsError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError,
+  InvalidViewConfigError, LogKindNotAllowedError, RowGuardViolationError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from '../stores/dataStoreService.js';
 
 const MAX_MESSAGE_CHARS = 300;
@@ -72,6 +72,7 @@ const REOPEN_ENTRY_BY_CODE: Record<SessionReopenError['code'], Omit<Entry, 'code
 // A failed git command stays internal: its message is git's own output.
 const WORKTREE_ENTRY_BY_CODE: Record<WorktreeError['code'], (error: WorktreeError) => Entry | undefined> = {
   invalid_branch: asIs('invalid_branch_name'),
+  invalid_base_ref: asIs('invalid_body'),
   exists: () => ({ code: 'worktree_exists', message: 'the worktree already exists.' }),
   git_failed: () => undefined,
   directory_missing: () => ({ code: 'directory_missing', message: 'the repository directory does not exist.', hint: 'Check the repository path, then create the session again.' }),
@@ -146,9 +147,12 @@ const RULES: Rule[] = [
   when(ColumnOrderMismatchError, asDetail('invalid_body', 'the column order is not a permutation of the columns.')),
   when(ColumnIsNaturalKeyError, asDetail('constraint_violation', 'the column is the natural key.')),
   when(ColumnUsedByViewError, asDetail('constraint_violation', 'a view uses the column.')),
+  when(ColumnIsDisplayColumnError, asDetail('constraint_violation', 'another column uses it as its display column.')),
   when(OptionsHeldByRowsError, asDetail('constraint_violation', 'rows still hold the removed options.')),
   when(ConstraintError, asDetail('constraint_violation', 'the change breaks a constraint.')),
   when(StoreRowCapError, asIs('row_cap')),
+  when(RowGuardViolationError, asIs('row_guard_violation')),
+  when(LogKindNotAllowedError, asIs('log_kind_not_allowed')),
   when(DaemonSetColumnError, asDetail('invalid_body', 'the column is set by the daemon.')),
   when(InvalidCellValueError, asDetail('invalid_body', 'a cell value is invalid.')),
   when(InvalidNameError, asDetail('invalid_body', 'the name is invalid.')),

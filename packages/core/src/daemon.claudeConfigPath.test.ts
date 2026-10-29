@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from './config.js';
 import { startDaemon, type Daemon } from './daemon.js';
+import { BinaryHealthCheck } from './harness/binaryHealth.js';
 import { markDirectoryTrusted } from './harness/claudeCli/trustDirectory.js';
 import { createTempDirTracker } from './tempDirTracker.js';
 
@@ -28,7 +29,8 @@ describe('the folder trust of a booted daemon', () => {
     writeFileSync(join(home, 'config.json'), '{}');
     const claudeConfigPath = join(home, '.claude.json');
     const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0' });
-    daemon = await startDaemon(config, { claudeConfigPath });
+    const healthyBinary = new BinaryHealthCheck({ run: async () => ({ exitCode: 0, stdout: 'mocked 0.0.0', stderr: '' }) });
+    daemon = await startDaemon(config, { claudeConfigPath, binaryHealth: healthyBinary });
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await fetch(`${daemon.server.url}/api/sessions`, {

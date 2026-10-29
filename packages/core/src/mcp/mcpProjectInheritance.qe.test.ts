@@ -38,7 +38,8 @@ async function connect(sessionId: string): Promise<Client> {
 }
 
 async function aRootSession({ projectId }: { projectId?: string }): Promise<string> {
-  const directory = directories.make('root-session-');
+  // A project root works in the worktrees root, so every child directory made below it belongs to the project.
+  const directory = projectId ? worktreesRoot : directories.make('root-session-');
   const body = { directory, name: 'Root', harness: 'fake', emoji: '🤖', ...(projectId && { projectId }) };
   const response = await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify(body) });
   return ((await response.json()) as { id: string }).id;

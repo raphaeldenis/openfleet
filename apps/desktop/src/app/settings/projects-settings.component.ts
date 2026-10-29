@@ -27,9 +27,17 @@ const NOTICE_BY_EDITOR_KIND = { create: 'Project created', edit: 'Project update
           <button #createTrigger type="button" class="value" data-testid="projects-create" [attr.aria-expanded]="isCreating()" (click)="openEditor({ kind: 'create' })">Create a project…</button>
         </of-settings-row>
         @for (project of projects(); track project.id) {
-          <of-settings-row [name]="project.name" [detail]="project.docsFolderPath ?? noDocsFolder">
-            <button #editTrigger type="button" class="value" [attr.data-project-id]="project.id" [attr.aria-label]="'Edit docs folder of ' + project.name" [attr.aria-expanded]="isEditing(project)" (click)="openEditor({ kind: 'edit', project })">Edit docs folder</button>
-          </of-settings-row>
+          <div class="project" data-testid="project-card">
+            <of-settings-row [name]="project.name" [detail]="project.docsFolderPath ?? noDocsFolder">
+              <button #editTrigger type="button" class="value" [attr.data-project-id]="project.id" [attr.aria-label]="'Edit docs folder of ' + project.name" [attr.aria-expanded]="isEditing(project)" (click)="openEditor({ kind: 'edit', project })">Edit docs folder</button>
+            </of-settings-row>
+            @if (project.rowGuardWarning; as rowGuardWarning) {
+              <p class="warning" role="alert" data-testid="project-row-guard-warning">{{ rowGuardWarning }}</p>
+            }
+            @if (project.docsFolderSharedWith; as sharingProjectNames) {
+              <p class="warning" role="alert" data-testid="project-shared-folder-warning">This docs folder is also used by {{ sharingProjectNames.join(', ') }}. Give each project its own folder.</p>
+            }
+          </div>
         } @empty {
           @if (hasLoaded()) {
             <of-settings-row name="No projects yet" detail="Create one to keep handoffs and notes together" />
@@ -48,6 +56,10 @@ const NOTICE_BY_EDITOR_KIND = { create: 'Project created', edit: 'Project update
     ${SETTINGS_VALUE_STYLES}
     .projects { display: flex; flex-direction: column; gap: .75rem; }
     .hint:empty { display: none; }
+    .project { border-bottom: 1px solid var(--line); }
+    .project:last-child { border-bottom: 0; }
+    .project of-settings-row { border-bottom: 0; }
+    .warning { margin: 0; padding: 0 1rem .75rem; font-size: .8125rem; color: var(--state-permission-fill); }
     .editor { padding: 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
   `,
 })

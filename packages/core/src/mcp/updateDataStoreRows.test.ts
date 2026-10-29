@@ -221,3 +221,42 @@ describe('update_data_store_rows filter mode', () => {
     expect(latest).toMatchObject({ actorKind: 'agent', actorLabel: '⛏️ Gimli', change: { [columnIds.title]: { from: 'c', to: 'by filter' } } });
   });
 });
+
+describe('update_data_store_rows under the row guard', () => {
+  const FIRST_LINE = '2026-10-29T06:57Z [Capitaine] builder lance.';
+
+  async function guardedKanban(options: { guardEnabled: boolean }) {
+    if (options.guardEnabled) kit.db.prepare('UPDATE projects SET row_guard_enabled = 1 WHERE id = ?').run('p1');
+    const { json: store } = await kit.call('create_data_store', { display_name: 'Kanban' });
+    const journal = (await kit.call('add_data_store_column', { store: store.id, display_name: 'journal', column_type: 'text' })).json;
+    const inserted = await kit.call('insert_data_store_rows', { store: store.id, rows: [{ journal: FIRST_LINE }] });
+    const [rowId] = inserted.json.ids as string[];
+    const journalOf = async () => (await kit.call('query_data_store', { store: store.id })).json.rows[0].data[journal.id];
+    return { storeId: store.id as string, rowId: rowId!, journalOf };
+  }
+
+  it('fails a shortened journal with the guard code and tells the agent to resend the previous journal plus a line', async () => {
+    const { storeId, rowId, journalOf } = await guardedKanban({ guardEnabled: true });
+
+    const result = await kit.call('update_data_store_rows', { store: storeId, updates: [{ row_id: rowId, values: { journal: 'overwritten' } }] });
+
+    expect(result.json.failures).toEqual([expect.stringMatching(/^row 1: .*previous journal.*new line/i)]);
+    expect(await journalOf()).toBe(FIRST_LINE);
+  });
+
+  it('accepts the previous journal followed by a new line', async () => {
+    const { storeId, rowId, journalOf } = await guardedKanban({ guardEnabled: true });
+
+    await kit.call('update_data_store_rows', { store: storeId, updates: [{ row_id: rowId, values: { journal: `${FIRST_LINE}\nnext` } }] });
+
+    expect(await journalOf()).toBe(`${FIRST_LINE}\nnext`);
+  });
+
+  it('lets the journal be overwritten when the project setting is off', async () => {
+    const { storeId, rowId, journalOf } = await guardedKanban({ guardEnabled: false });
+
+    await kit.call('update_data_store_rows', { store: storeId, updates: [{ row_id: rowId, values: { journal: 'overwritten' } }] });
+
+    expect(await journalOf()).toBe('overwritten');
+  });
+});

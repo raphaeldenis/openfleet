@@ -49,6 +49,16 @@ describe('parseUsageLines', () => {
     expect(result.skippedLineCount).toBe(1);
   });
 
+  it.each(['2026-10-01 23:30:00', '2026-10-01T23:30:00', 'Oct 1 2026', '2026-10-01', '2026-13-01T10:00:00Z'])(
+    'skips and counts a line whose timestamp %s has no ISO date-time with a zone',
+    (timestamp) => {
+      const result = parseUsageLines(assistantLine({ timestamp }));
+
+      expect(result.rows).toEqual([]);
+      expect(result.skippedLineCount).toBe(1);
+    },
+  );
+
   it('skips and counts malformed JSON without throwing', () => {
     const transcript = ['{"type":"assistant"', 'not json', '[1,2]'].join('\n');
 

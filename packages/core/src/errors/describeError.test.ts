@@ -20,9 +20,9 @@ import {
 } from '../sessions/sessionService.js';
 import { AmbiguousColumnReferenceError, DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, UnknownColumnReferenceError } from '../stores/dataStoreRepository.js';
 import {
-  CellValueRejectedError, ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, OptionsHeldByRowsError, NaturalKeyConflictError, NaturalKeyMissingError, NaturalKeyNotFoundError, NaturalKeyNotUniqueError, NaturalKeyOnSeveralRowsError,
+  CellValueRejectedError, ColumnIsDisplayColumnError, ColumnIsNaturalKeyError, ColumnOrderMismatchError, ColumnUsedByViewError, OptionsHeldByRowsError, NaturalKeyConflictError, NaturalKeyMissingError, NaturalKeyNotFoundError, NaturalKeyNotUniqueError, NaturalKeyOnSeveralRowsError,
   ConstraintError, DaemonSetColumnError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError, InvalidNameError, InvalidQueryError, NoNaturalKeyError, AmbiguousNaturalKeyError,
-  InvalidViewConfigError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
+  InvalidViewConfigError, LogKindNotAllowedError, ReferencedRecordMissingError, StoreHasRowsError, StoreRowCapError, ViewNotFoundError, JournalShortenedError, DoneWithoutPrUrlError, RowGuardViolationError,
 } from '../stores/dataStoreService.js';
 import { DocsFolderNotWritableError, InvalidDocsFolderError, NoteIsNotFileBackedError, ProjectHasNoDocsFolderError } from '../notes/docsFolderService.js';
 import { HandoffNotFoundError, SessionHasNoProjectError, SessionNotFoundForHandoffError } from '../notes/handoffService.js';
@@ -85,6 +85,10 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['DuplicateNameError', () => new DuplicateNameError('Tasks'), 'duplicate_name'],
   ['ConstraintError', () => new ConstraintError('bad'), 'constraint_violation'],
   ['StoreRowCapError', () => new StoreRowCapError('s1', 100), 'row_cap'],
+  ['RowGuardViolationError', () => new RowGuardViolationError('the row guard refused the change.'), 'row_guard_violation'],
+  ['JournalShortenedError', () => new JournalShortenedError(), 'row_guard_violation'],
+  ['DoneWithoutPrUrlError', () => new DoneWithoutPrUrlError(), 'row_guard_violation'],
+  ['LogKindNotAllowedError', () => new LogKindNotAllowedError('wibble'), 'log_kind_not_allowed'],
   ['DaemonSetColumnError', () => new DaemonSetColumnError('x'), 'invalid_body'],
   ['InvalidCellValueError', () => new InvalidCellValueError('c1'), 'invalid_body'],
   ['InvalidNameError', () => new InvalidNameError('x'), 'invalid_body'],
@@ -98,6 +102,7 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['NaturalKeyNotUniqueError', () => new NaturalKeyNotUniqueError(), 'constraint_violation'],
   ['ColumnIsNaturalKeyError', () => new ColumnIsNaturalKeyError('Name'), 'constraint_violation'],
   ['ColumnUsedByViewError', () => new ColumnUsedByViewError('Status', 'Board'), 'constraint_violation'],
+  ['ColumnIsDisplayColumnError', () => new ColumnIsDisplayColumnError('Label', 'Price'), 'constraint_violation'],
   ['OptionsHeldByRowsError', () => new OptionsHeldByRowsError(['done']), 'constraint_violation'],
   ['ColumnOrderMismatchError', () => new ColumnOrderMismatchError({ missingIds: ['a'], unknownIds: [], repeatedIds: [] }), 'invalid_body'],
   ['CellValueRejectedError', () => new CellValueRejectedError('c1', 'not an option'), 'invalid_body'],
@@ -120,6 +125,7 @@ const domainErrorCodes: [string, () => unknown, ErrorCode][] = [
   ['InvalidDocsFolderError', () => new InvalidDocsFolderError(), 'invalid_body'],
   ['HandoffNotFoundError', () => new HandoffNotFoundError('2026-10-04-gimli.md'), 'handoff_not_found'],
   ['WorktreeError invalid_branch', () => new WorktreeError('invalid_branch', 'invalid branch name: a b'), 'invalid_branch_name'],
+  ['WorktreeError invalid_base_ref', () => new WorktreeError('invalid_base_ref', 'base_ref must be the name of a branch or tag, or a commit sha, that already exists in this repository.'), 'invalid_body'],
   ['WorktreeError git_failed', () => new WorktreeError('git_failed', 'fatal: /w/a is not a repository'), 'internal_error'],
   ['WorktreeError exists',() => new WorktreeError('exists', 'worktree already exists: /w/a'), 'worktree_exists'],
   ['PayloadTooLargeError', () => new PayloadTooLargeError('body exceeds 1 bytes'), 'payload_too_large'],

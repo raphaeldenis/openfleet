@@ -22,12 +22,12 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Kind | HTTP status | Codes |
 | --- | --- | --- |
-| `invalid_request` | 400 | 10 |
+| `invalid_request` | 400 | 15 |
 | `unauthorized` | 401 | 1 |
 | `not_found` | 404 | 12 |
-| `conflict` | 409 | 38 |
+| `conflict` | 409 | 42 |
 | `too_large` | 413 | 4 |
-| `unavailable` | 503 | 6 |
+| `unavailable` | 503 | 11 |
 | `internal` | 500 | 4 |
 
 ## Codes
@@ -40,11 +40,16 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `invalid_json` | 400 | `never` |
 | `invalid_url` | 400 | `never` |
 | `invalid_branch_name` | 400 | `never` |
+| `invalid_mode` | 400 | `never` |
 | `unknown_harness` | 400 | `never` |
 | `constraint_violation` | 400 | `never` |
+| `log_kind_not_allowed` | 400 | `never` |
 | `message_too_long` | 400 | `never` |
 | `query_too_long` | 400 | `never` |
 | `outside_own_repository` | 400 | `never` |
+| `docs_root_invalid` | 400 | `never` |
+| `docs_root_forbidden` | 400 | `never` |
+| `row_guard_violation` | 400 | `never` |
 | `message_held_for_review` | 400 | `never` |
 
 ### unauthorized
@@ -105,6 +110,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `verdict_stale` | 409 | `never` |
 | `directory_in_use` | 409 | `never` |
 | `duplicate_child` | 409 | `never` |
+| `directory_not_in_project` | 409 | `never` |
 | `no_parent` | 409 | `never` |
 | `spawn_raced` | 409 | `later` |
 | `store_has_rows` | 409 | `never` |
@@ -112,6 +118,9 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `no_docs_folder` | 409 | `never` |
 | `not_file_backed` | 409 | `never` |
 | `docs_folder_not_writable` | 409 | `later` |
+| `docs_folder_already_used` | 409 | `never` |
+| `docs_root_not_writable` | 409 | `later` |
+| `too_many_watched_prs` | 409 | `later` |
 
 ### too_large
 
@@ -132,6 +141,11 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `harness_exited` | 503 | `never` |
 | `claude_not_found` | 503 | `never` |
 | `git_unavailable` | 503 | `never` |
+| `gh_unavailable` | 503 | `never` |
+| `gh_not_authenticated` | 503 | `never` |
+| `gh_bad_output` | 503 | `later` |
+| `gh_timeout` | 503 | `later` |
+| `harness_binary_broken` | 503 | `later` |
 
 ### internal
 

@@ -25,7 +25,8 @@ describe('the review step skips migration upgrading a database that predates it'
   it('keeps the findings already recorded and starts with no skip', () => {
     const db = new DatabaseSync(':memory:');
     applyMigrations(db, migrationsBeforeStepSkips);
-    new ReviewFindingsRepository(db).record(goLine);
+    db.prepare('INSERT INTO review_findings (ticket, step, severity, claim, reasons_json, sha, author_session_id, manager_session_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(goLine.ticket, goLine.step, goLine.severity, goLine.claim, JSON.stringify(goLine.reasons), goLine.sha, goLine.authorSessionId, goLine.managerSessionId, goLine.createdAt);
 
     applyMigrations(db);
 

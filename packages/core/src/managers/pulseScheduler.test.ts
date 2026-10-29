@@ -238,6 +238,23 @@ describe('PulseScheduler — hostile cases', () => {
     });
   });
 
+  it('counts a closed child whose restart is pending in the childrenCount of manager.pulsed', async () => {
+    const { scheduler, sessions, managers, bus } = setup();
+    const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });
+    sessions.applyInput(manager.id, hook(manager.id, { hook_event_name: 'SessionStart' }));
+    managers.insert({ sessionId: manager.id, pulseSeconds: 1, childrenCap: 5, missionText: 'ship it', createdAt: new Date().toISOString() });
+    scheduler.onManagerCreated(managers.get(manager.id)!);
+    const child = await sessions.create({ directory: '/tmp', name: 'Gimli', emoji: '⚔️', harness: 'fake', parentId: manager.id });
+    await sessions.close(child.id);
+    sessions.setRestartPending(child.id, true);
+
+    const events: unknown[] = [];
+    bus.subscribe((e) => events.push(e));
+    vi.advanceTimersByTime(1000);
+
+    expect(events).toContainEqual({ type: 'manager.pulsed', manager: expect.objectContaining({ sessionId: manager.id, childrenCount: 1 }) });
+  });
+
   it('stop() cancels every armed timer so no manager pulses again', async () => {
     const { scheduler, sessions, managers, harness } = setup();
     const manager = await sessions.create({ directory: '/tmp', name: 'Lead', emoji: '🧭', harness: 'fake' });

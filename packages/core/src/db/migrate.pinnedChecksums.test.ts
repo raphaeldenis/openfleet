@@ -47,6 +47,18 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '038_manager_note_read': '906af8b1fc413f53e73943ffa879d32775806f89f3b3757fcffc02bc8c6a398a',
   '039_session_effort': '56781a9926f0d6cdb33b75cdaf31631fc91e5268aef1967cb9fb757d9e0f22ca',
   '040_review_step_skip_provenance': '32b09fa05c5eb7c655fcac441184c7b8a1d5a87e65b4739b2726afbeb4f02e35',
+  '041_session_launch_readiness': '7fe5471df7d2833426fddb04a807f1366fa37d8fc507aa9d81da2f3361dc1bd5',
+  '042_project_row_guard': 'd59769bb776ad0e998143257f1f40a60022e0ac448f0a06d4b222155145f6195',
+  '043_ds_row_history_seq': 'b5c998b08e9784eca5bdad5f7ced3f15fafb2ad1f43fbced9fcb0691ccc9497b',
+  '044_session_config_dir': '5b30ef88518e89f8d6119030a17d3f6979bb1d85c57257969f174d136c6a2692',
+  '045_review_finding_items': '00408dea79cdf9c176bb21534543d4c7f7a7ab9ef31c07d89387e33672a4ef31',
+  '046_usage_daily': '99b7bab7f543685dfc34dcd5018f206f9b9c063ee937ed139021349adb2d7991',
+  '047_message_delivery_digests': 'bae7b240f217e8ff61708390f1f5120bc6ba4b4c5692c7ff4c6f9cc5a6db9ea2',
+  '048_ds_column_metadata': 'a2b85d78b9048f8ec334aaaf5a80b3987d15c05117bc1ab2e8d600a2efcf2846',
+  '049_argus_scheduled_events': 'f55ad8363f95a6913e1016f23fc3f779cad7e00281f8d552665fcc6f4cc8b2f7',
+  '050_child_auto_restart': '8f77f9f0ffdd35998a59921e8d172912a025d52b3945b6f98c1d339678468e43',
+  '051_manager_mode': 'a4f0c389ed4a2f3ae444a7a4e374452b32f277432491f93a17d3eaed6226db0f',
+  '052_watched_prs': 'be1c88b41db630a8942816b29918efb54af3b50cc3ea295eaa169e7c4d25ed7a',
 };
 
 const migrationVersionsOnDisk = () =>

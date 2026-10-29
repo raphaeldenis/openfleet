@@ -70,12 +70,13 @@ describe('Settings → General', () => {
     expect(await screen.findByText('Dark', { selector: '[data-testid="general-theme"]' })).toBeInTheDocument();
   });
 
-  it('shows the docs folder root as disabled, with the reason, because this build has no such setting', async () => {
-    await renderGeneralSection();
+  it('offers the docs folder root as an editable setting backed by the daemon', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify({ root: '/Users/me/Documents/OpenFleet', isDefault: true })))));
+    await render(SettingsComponent);
 
     expect(screen.getByText('Docs folder root')).toBeInTheDocument();
-    expect(screen.getByTestId('general-docs-root')).toBeDisabled();
-    expect(screen.getByText(/Not configurable in this build yet/)).toBeInTheDocument();
+    expect(await screen.findByRole('textbox', { name: 'Docs folder root' })).toHaveValue('/Users/me/Documents/OpenFleet');
+    expect(screen.queryByText(/Not configurable in this build yet/)).not.toBeInTheDocument();
   });
 
   it('shows the handoff-on-close and reply-language rows disabled, since the daemon has no such setting', async () => {

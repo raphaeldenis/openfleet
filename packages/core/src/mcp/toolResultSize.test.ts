@@ -300,7 +300,7 @@ describe('MCP tool results are compact', () => {
       const appended = parsed(await call('append_to_note', { note: created.id, content: 'more' }));
       const sectioned = parsed(await call('update_note_section', { note: created.id, heading: 'H', content: 'x', expected_rev: appended.rev }));
       const moved = parsed(await call('move_note', { note: created.id, folder: null }));
-      const restored = parsed(await call('restore_note_version', { note: created.id, rev: 1 }));
+      const restored = parsed(await call('restore_note_version', { note: created.id, rev: 1, expected_rev: moved.rev }));
 
       expect([updated.rev, appended.rev, sectioned.rev, moved.rev, restored.rev]).toEqual([2, 3, 4, 5, 6]);
       for (const ack of [updated, appended, sectioned, moved, restored]) expect(ack).not.toHaveProperty('bodyMd');
@@ -1050,7 +1050,7 @@ describe('MCP tool results are compact', () => {
 
       expect(history.count).toBe(1);
       expect(history.truncated).toBe(false);
-      expect(keysOf(history.entries[0])).toEqual(['actorKind', 'actorLabel', 'change', 'createdAt']);
+      expect(keysOf(history.entries[0])).toEqual(['actorKind', 'actorLabel', 'change', 'createdAt', 'seq']);
       expect(keysOf(view)).toEqual(['config', 'displayName', 'id', 'viewType']);
       expect(views).toEqual([view]);
     });

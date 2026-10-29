@@ -21,6 +21,7 @@ function stubDaemon() {
   const fetchMock = vi.fn((url: string) => {
     if (url.endsWith('/health')) return daemon.isUp ? Promise.resolve(jsonResponse({ ok: true, version: daemon.version })) : Promise.reject(new TypeError('Failed to fetch'));
     if (url.endsWith('/api/sessions')) return Promise.resolve(jsonResponse([]));
+    if (url.includes('/api/settings/docs-root')) return Promise.resolve(jsonResponse({ root: '/Users/me/Documents/OpenFleet', isDefault: true, proposedPath: '/Users/me/Documents/OpenFleet/Fleet' }));
     if (url.endsWith('/api/projects')) return Promise.resolve(jsonResponse({ id: '3f2b8c1e-5d4a-4b6e-9a7c-1d2e3f4a5b6c', name: 'Fleet', docsFolderPath: null }));
     return Promise.reject(new Error(`unexpected request to ${url}`));
   });

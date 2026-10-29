@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { adminHeaders, api, signInAsAdmin } from './support/daemon';
 
 const POLICY_STATUS = 'policy-save-status';
+const LONGEST_RULE_ID = 'no-generic-send-message-to-fleet-session';
 
 const sessionIdsToClose: string[] = [];
 
@@ -51,6 +52,19 @@ test('the screen names every control: the mode, the ask switch, the rules, the t
   await expect(page.getByRole('list', { name: 'Recent refusals' }).or(page.getByTestId('policy-denials-empty'))).toBeVisible();
   await expect(page.getByTestId('policy-degraded')).toContainText('healthy');
 });
+
+for (const viewport of [{ width: 1200, height: 800 }, { width: 1440, height: 900 }]) {
+  test(`a rule identifier stays on one line in the Rule column at ${viewport.width}×${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await openCommandPolicy(page);
+
+    const ruleId = page.getByTestId(`policy-rule-${LONGEST_RULE_ID}`).locator('.rule-id');
+    await expect(ruleId).toBeVisible();
+
+    const { height, lineHeight } = await ruleId.evaluate((element) => ({ height: element.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(element).lineHeight) }));
+    expect(height).toBeLessThan(lineHeight * 1.5);
+  });
+}
 
 test('choosing a mode saves at once and the very next hook of a child answers differently, with no restart', async ({ page, request }) => {
   const child = await createChildSession(request);

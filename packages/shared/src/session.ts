@@ -25,6 +25,19 @@ export const parseSessionCloseReason = (value: unknown): SessionCloseReason | un
   return parsed.success ? parsed.data : undefined;
 };
 
+/** Whether a launch produced a sign of life: pending until the first PTY byte or transcript progress, failed when none came in time. */
+export const SESSION_READINESS = ['pending', 'ready', 'failed'] as const;
+export type SessionReadiness = (typeof SESSION_READINESS)[number];
+
+export const READINESS_FAILURE_REASONS = ['no_output_at_launch'] as const;
+export type ReadinessFailureReason = (typeof READINESS_FAILURE_REASONS)[number];
+
+export const parseSessionReadiness = (value: unknown): SessionReadiness | undefined =>
+  SESSION_READINESS.find((readiness) => readiness === value);
+
+export const parseReadinessFailureReason = (value: unknown): ReadinessFailureReason | undefined =>
+  READINESS_FAILURE_REASONS.find((reason) => reason === value);
+
 export const HARNESSES =['claude-cli', 'fake'] as const;
 export type HarnessId = (typeof HARNESSES)[number];
 
@@ -56,7 +69,10 @@ export const SessionSpecSchema = z.object({
   const refusal = effortRefusalOf(spec.harness, spec.effort);
   if (refusal) context.addIssue({ code: 'custom', message: refusal, path: ['effort'] });
 });
-export type SessionSpec = z.infer<typeof SessionSpecSchema>;
+export type SessionSpec = z.infer<typeof SessionSpecSchema> & {
+  /** A validated absolute config directory; set only by callers that resolved it, never parsed from a request body. */
+  configDir?: string;
+};
 
 export interface Session {
   id: string;
@@ -77,12 +93,19 @@ export interface Session {
   permissionMode?: PermissionMode;
   /** The effort level the session launches with; absent when none was chosen. */
   effort?: string;
+  /** The name (last path segment) of the config directory the session runs under; the path itself is never exposed. */
+  configProfile?: string;
   harness: HarnessId;
   /** How the command policy reaches this session's harness. Absent from a daemon that predates the policy. */
   policyEnforcement?: PolicyEnforcement;
   state: SessionState;
   stateSince: string;
   runtimeAttention?: RuntimeAttention;
+  /** Absent for a session launched before readiness was tracked. A launch that produced no sign of life is failed, whatever its state says. */
+  readiness?: SessionReadiness;
+  readinessReason?: ReadinessFailureReason;
+  /** True while the daemon waits to restart this closed child after a crash; absent otherwise. */
+  restartPending?: boolean;
   exitCode?: number;
   /** Why the session is closed; absent while it is live, for a close recorded before the reason was stored, and for a reason this version does not know. */
   closeReason?: SessionCloseReason;

@@ -2,6 +2,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { QueuedMessage } from '@openfleet/shared';
 import { newId } from '../ids.js';
 
+import { notADaemonLineCondition, PULSE_PREFIX } from './daemonLines.js';
+import { unwrapAgentMessage } from './messageEnvelope.js';
+
+export interface ChildExchange { lastChildMessage: string | undefined; hasExchangeSince: boolean }
+
 export class MessageQueue {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -27,7 +32,7 @@ export class MessageQueue {
     return Number(result.changes) > 0;
   }
   nextPending(sessionId: string, options: { skipDaemonLines?: boolean } = {}): QueuedMessage | undefined {
-    const daemonLineFilter = options.skipDaemonLines ? `AND body NOT LIKE '[pulse]%'` : '';
+    const daemonLineFilter = options.skipDaemonLines ? `AND ${notADaemonLineCondition()}` : '';
     const row = this.db.prepare(`SELECT id, session_id, from_session_id, body, status, created_at FROM message_queue WHERE session_id = ? AND status = 'queued' ${daemonLineFilter} ORDER BY created_at LIMIT 1`).get(sessionId) as
       { id: string; session_id: string; from_session_id: string | null; body: string; status: 'queued'; created_at: string } | undefined;
     if (!row) return undefined;
@@ -45,14 +50,32 @@ export class MessageQueue {
   }
   // A daemon line has no sending session. A human's message has none either, so one that starts with [pulse] is dropped as well.
   discardQueuedDaemonLines(sessionId: string): void {
-    this.db.prepare(`DELETE FROM message_queue WHERE session_id = ? AND status = 'queued' AND from_session_id IS NULL AND substr(body, 1, 7) = '[pulse]'`).run(sessionId);
+    this.db.prepare(`DELETE FROM message_queue WHERE session_id = ? AND status = 'queued' AND from_session_id IS NULL AND substr(body, 1, ${PULSE_PREFIX.length}) = '${PULSE_PREFIX}'`).run(sessionId);
   }
   markDelivered(id: string): void {
     this.db.prepare(`UPDATE message_queue SET status = 'delivered', delivered_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
   }
+  // True when a delivered message is queued again to be typed once more.
+  requeueDelivered(id: string): boolean {
+    const result = this.db.prepare(`UPDATE message_queue SET status = 'queued', delivered_at = NULL WHERE id = ? AND status = 'delivered'`).run(id);
+    return Number(result.changes) > 0;
+  }
+  /** The messages typed to the session at or after `since`, daemon pulses and sleep handoffs excluded. */
+  countDeliveredSince(sessionId: string, since: string): number {
+    const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND status = 'delivered' AND delivered_at >= ? AND body NOT LIKE '${PULSE_PREFIX}%' AND id NOT LIKE 'handoff:%'`).get(sessionId, since) as { n: number };
+    return row.n;
+  }
   countPending(sessionId: string): number {
     const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND status = 'queued'`).get(sessionId) as { n: number };
     return row.n;
+  }
+  /** The last message the child wrote to its manager, and whether any message reached the child or came again from it since. */
+  childExchangeOf({ managerId, childId }: { managerId: string; childId: string }): ChildExchange {
+    const lastChildRow = this.db.prepare(`SELECT rowid AS position, body FROM message_queue WHERE session_id = ? AND from_session_id = ? ORDER BY rowid DESC LIMIT 1`).get(managerId, childId) as
+      { position: number; body: string } | undefined;
+    if (!lastChildRow) return { lastChildMessage: undefined, hasExchangeSince: false };
+    const followingRow = this.db.prepare(`SELECT 1 FROM message_queue WHERE rowid > ? AND session_id = ? LIMIT 1`).get(lastChildRow.position, childId);
+    return { lastChildMessage: unwrapAgentMessage(lastChildRow.body), hasExchangeSince: followingRow !== undefined };
   }
   countPendingFromSender(input: { sessionId: string; fromSessionId: string }): number {
     const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND from_session_id = ? AND status = 'queued'`).get(input.sessionId, input.fromSessionId) as { n: number };

@@ -407,5 +407,114 @@ describe('table view tools', () => {
 
       expect(result.isError).toBe(true);
     });
+
+    describe('with filters, order and seq cursor', () => {
+      async function rowWithTwoUpdatesAndADelete() {
+        const client = await connect(scopedToken);
+        const store = await createStore(client);
+        const titleId = await addTextColumn(client, store.id);
+        const [rowId] = text(await client.callTool({ name: 'insert_data_store_rows', arguments: { store: store.id, rows: [{ [titleId]: 'v1' }] } })).ids;
+        await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: rowId, patch: { [titleId]: 'v2' } }] } });
+        await client.callTool({ name: 'update_data_store_rows', arguments: { store: store.id, updates: [{ row_id: rowId, patch: { [titleId]: 'v3' } }] } });
+        await client.callTool({ name: 'delete_data_store_row', arguments: { row_id: rowId } });
+        return { client, store, titleId, rowId };
+      }
+      const changesOf = (result: { entries: { change: unknown }[] }) => result.entries.map((entry) => entry.change);
+
+      it('keeps the default order and shape: newest first, the four historical fields, and a seq', async () => {
+        const { client, titleId, rowId } = await rowWithTwoUpdatesAndADelete();
+
+        const result = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId } }));
+
+        const { entries, ...envelope } = result;
+        expect(envelope).toEqual({ truncated: false, count: 4 });
+        expect(entries.map(({ seq: _seq, ...historicalFields }: { seq: number }) => historicalFields)).toEqual([
+          { actorKind: 'agent', actorLabel: '⛏️ Gimli', change: { kind: 'delete' }, createdAt: '2026-01-01T00:00:00.000Z' },
+          { actorKind: 'agent', actorLabel: '⛏️ Gimli', change: { [titleId]: { from: 'v2', to: 'v3' } }, createdAt: '2026-01-01T00:00:00.000Z' },
+          { actorKind: 'agent', actorLabel: '⛏️ Gimli', change: { [titleId]: { from: 'v1', to: 'v2' } }, createdAt: '2026-01-01T00:00:00.000Z' },
+          { actorKind: 'agent', actorLabel: '⛏️ Gimli', change: { kind: 'create' }, createdAt: '2026-01-01T00:00:00.000Z' },
+        ]);
+      });
+
+      it('gives every entry a distinct integer seq, decreasing in the default order', async () => {
+        const { client, rowId } = await rowWithTwoUpdatesAndADelete();
+
+        const result = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId } }));
+
+        const seqs = result.entries.map((entry: { seq: number }) => entry.seq);
+        expect(seqs.every(Number.isInteger)).toBe(true);
+        expect(seqs).toEqual([...seqs].sort((a, b) => b - a));
+        expect(new Set(seqs).size).toBe(4);
+      });
+
+      it('lists oldest first by seq with order asc', async () => {
+        const { client, titleId, rowId } = await rowWithTwoUpdatesAndADelete();
+
+        const result = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, order: 'asc' } }));
+
+        expect(changesOf(result)).toEqual([
+          { kind: 'create' }, { [titleId]: { from: 'v1', to: 'v2' } }, { [titleId]: { from: 'v2', to: 'v3' } }, { kind: 'delete' },
+        ]);
+        const seqs = result.entries.map((entry: { seq: number }) => entry.seq);
+        expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+      });
+
+      it('gives the 2 updates and the delete in seq order after the creation, and since skips the oldest', async () => {
+        const { client, titleId, rowId } = await rowWithTwoUpdatesAndADelete();
+        const all = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, order: 'asc' } }));
+        const [creation, firstUpdate] = all.entries;
+
+        const afterCreation = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, order: 'asc', since: creation.seq } }));
+        const afterFirstUpdate = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, order: 'asc', since: firstUpdate.seq } }));
+
+        expect(changesOf(afterCreation)).toEqual([{ [titleId]: { from: 'v1', to: 'v2' } }, { [titleId]: { from: 'v2', to: 'v3' } }, { kind: 'delete' }]);
+        expect(changesOf(afterFirstUpdate)).toEqual([{ [titleId]: { from: 'v2', to: 'v3' } }, { kind: 'delete' }]);
+      });
+
+      it.each([
+        { kind: 'insert', expected: 1 },
+        { kind: 'update', expected: 2 },
+        { kind: 'delete', expected: 1 },
+      ])('keeps only the $kind entries', async ({ kind, expected }) => {
+        const { client, rowId } = await rowWithTwoUpdatesAndADelete();
+
+        const result = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, kind } }));
+
+        expect(result.count).toBe(expected);
+      });
+
+      it('refuses an unknown kind', async () => {
+        const { client, rowId } = await rowWithTwoUpdatesAndADelete();
+
+        const result = await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, kind: 'purge' } });
+
+        expect(result.isError).toBe(true);
+      });
+
+      it('restricts to the named store, by id or by display name', async () => {
+        const { client, store, rowId } = await rowWithTwoUpdatesAndADelete();
+        const otherStore = await createStore(client, 'other');
+
+        const byId = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, store: store.id } }));
+        const byName = text(await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, store: store.displayName } }));
+        const wrongStore = await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, store: otherStore.id } });
+
+        expect(byId.count).toBe(4);
+        expect(byName.count).toBe(4);
+        expect(wrongStore.isError).toBe(true);
+      });
+
+      it('refuses another project\'s store like a missing store', async () => {
+        const { client, rowId } = await rowWithTwoUpdatesAndADelete();
+        const stranger = await connect(otherToken);
+        const foreignStore = await createStore(stranger);
+
+        const foreign = await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, store: foreignStore.id } });
+        const missing = await client.callTool({ name: 'list_row_changes', arguments: { row_id: rowId, store: 'no-such-store' } });
+
+        expect(foreign.isError).toBe(true);
+        expect(errorText(foreign).replace(foreignStore.id, 'X')).toBe(errorText(missing).replace('no-such-store', 'X'));
+      });
+    });
   });
 });

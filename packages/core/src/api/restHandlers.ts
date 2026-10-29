@@ -1,5 +1,5 @@
 import type { CloseHandoffResult, ManagerSpec, SessionSpec } from '@openfleet/shared';
-import { CloseSessionRequestSchema, ModelIdSchema, OpenFleetError, PERMISSION_MODES, ReopenRequestSchema, SessionSpecSchema, UpdateManagerSchema } from '@openfleet/shared';
+import { CloseSessionRequestSchema, isManagerMode, MANAGER_MODES, ModelIdSchema, OpenFleetError, PERMISSION_MODES, ReopenRequestSchema, SessionSpecSchema, UpdateManagerSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { FakeHandle } from '../harness/fakeHarness.js';
@@ -17,6 +17,12 @@ import type { WsTicketStore } from './wsTicketStore.js';
 const NO_HANDOFF_TARGET: CloseHandoffResult = { status: 'skipped', reason: 'target_unavailable' };
 
 const notFound = (what: string) => new OpenFleetError('not_found', `the ${what} does not exist.`);
+
+const requireKnownMode = (body: unknown): void => {
+  const requestedMode = typeof body === 'object' && body !== null ? (body as { mode?: unknown }).mode : undefined;
+  if (requestedMode === undefined || isManagerMode(requestedMode)) return;
+  throw new OpenFleetError('invalid_mode', `the manager mode must be one of ${MANAGER_MODES.join(', ')}.`);
+};
 
 const CreateSessionSchema = SessionSpecSchema.extend({ repoPath: z.string().optional(), branchName: z.string().optional() });
 
@@ -84,6 +90,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
 
   router.add('PATCH', '/api/managers/:id', ({ res, params, body }) => {
     if (!deps.managers.get(params.id!)) throw notFound('manager');
+    requireKnownMode(body);
     const { model, ...managerFields } = UpdateManagerSchema.parse(body);
     const patch = model === undefined ? managerFields : { ...managerFields, model: resolveModel(deps.modelTable, model) };
     json(res, 200, deps.managers.update(params.id!, patch));

@@ -103,8 +103,12 @@ function readConfigFileForUpdate(configPath: string): Record<string, unknown> {
  * and a read-only config is refused.
  */
 export function saveModelPatch(configPath: string, patch: ModelTablePatch): void {
-  const existingConfig = readConfigFileForUpdate(configPath);
-  const nextConfig = { ...existingConfig, models: { ...(existingConfig.models as object | undefined), ...patch } };
+  updateConfigFile(configPath, (existingConfig) => ({ ...existingConfig, models: { ...(existingConfig.models as object | undefined), ...patch } }));
+}
+
+/** Rewrites the config file with the result of `update`, with the same atomic, permission-keeping write as `saveModelPatch`. */
+export function updateConfigFile(configPath: string, update: (existingConfig: Record<string, unknown>) => Record<string, unknown>): void {
+  const nextConfig = update(readConfigFileForUpdate(configPath));
   const configExists = existsSync(configPath);
   const targetPath = configExists ? realpathSync(configPath) : configPath;
   const existingMode = configExists ? statSync(targetPath).mode & PERMISSION_BITS : NEW_CONFIG_FILE_MODE;

@@ -38,6 +38,7 @@ async function renderSettings(api: ReturnType<typeof fakeApi>) {
 const projectsSection = () => screen.getByTestId('settings-projects');
 const createTrigger = () => screen.getByRole('button', { name: 'Create a project…' });
 const rowOf = (name: string) => within(projectsSection()).getByText(name).closest('of-settings-row') as HTMLElement;
+const cardOf = (name: string) => rowOf(name).closest('[data-testid="project-card"]') as HTMLElement;
 const editTriggerOf = (name: string) => screen.getByRole('button', { name: `Edit docs folder of ${name}` });
 const nameField = () => screen.getByRole<HTMLInputElement>('textbox', { name: 'Name' });
 const docsFolderField = () => screen.getByRole<HTMLInputElement>('textbox', { name: 'Docs folder' });
@@ -51,6 +52,28 @@ describe('Settings → General → Projects', () => {
 
       expect(within(rowOf('Fleet')).getByText('/work/fleet-docs')).toBeInTheDocument();
       expect(within(rowOf('Armada')).getByText('No docs folder')).toBeInTheDocument();
+    });
+
+    it('warns on a project whose docs folder is shared, naming the other projects', async () => {
+      await renderSettings(fakeApi([{ ...FLEET, docsFolderSharedWith: ['Armada', 'Fleet bis'] }, ARMADA]));
+
+      const warning = await screen.findByTestId('project-shared-folder-warning');
+
+      expect(warning).toHaveTextContent('This docs folder is also used by Armada, Fleet bis');
+      expect(screen.getAllByTestId('project-shared-folder-warning')).toHaveLength(1);
+      expect(within(cardOf('Fleet')).getByTestId('project-shared-folder-warning')).toBe(warning);
+    });
+
+    it('shows the row guard warning of a project under its row', async () => {
+      const warning = 'The row guard does not check "done needs a pr_url" on a status column that is not a select.';
+      await renderSettings(fakeApi([{ ...FLEET, rowGuardWarning: warning }, ARMADA]));
+
+      const shown = await screen.findByTestId('project-row-guard-warning');
+
+      expect(shown).toHaveTextContent(warning);
+      expect(screen.getAllByTestId('project-row-guard-warning')).toHaveLength(1);
+      expect(within(cardOf('Fleet')).getByTestId('project-row-guard-warning')).toBe(shown);
+      expect(within(cardOf('Armada')).queryByTestId('project-row-guard-warning')).not.toBeInTheDocument();
     });
 
     it('shows a very long docs folder path in full, so that the user can read it', async () => {

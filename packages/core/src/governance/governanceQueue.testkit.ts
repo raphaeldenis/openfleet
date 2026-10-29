@@ -4,7 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Session } from '@openfleet/shared';
 import { loadConfig } from '../config.js';
-import { startDaemon } from '../daemon.js';
+import { startDaemon, type DaemonOptions } from '../daemon.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 
 export const OWN_PROJECT_ID = 'project-own';
@@ -13,11 +13,11 @@ export const OTHER_PROJECT_ID = 'project-other';
 const MANAGER_SPEC = { childrenCap: 2, mission: 'Lead the fleet', pulseSeconds: 3600 };
 
 /** A daemon booted the way production boots it (its own wiring, no hand-built services), with two managers and a plain session in one project. */
-export async function startGovernanceFixture() {
+export async function startGovernanceFixture(options: Pick<DaemonOptions, 'gh'> = {}) {
   const directories = createTempDirTracker();
   const home = directories.make('governance-queue-');
   const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', OPENFLEET_E2E: '1' });
-  const daemon = await startDaemon(config, { claudeConfigPath: join(home, 'harness-config.json'), power: { api: { acquire: () => ({ release: () => {} }) } } });
+  const daemon = await startDaemon(config, { claudeConfigPath: join(home, 'harness-config.json'), power: { api: { acquire: () => ({ release: () => {} }) } }, ...options });
   const { db } = daemon;
   const clients: Client[] = [];
   db.prepare("INSERT INTO projects (id, name, created_at) VALUES (?, 'Own', 'now'), (?, 'Other', 'now')").run(OWN_PROJECT_ID, OTHER_PROJECT_ID);

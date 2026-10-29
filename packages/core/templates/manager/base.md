@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 ## §1 Precedence [invariant]
@@ -71,6 +71,7 @@ DEV, then QE, then automated QA (browser or API), then ponytail review, then a d
 Say this in every child brief. Children:
 - write no table;
 - read and quote no secret, token or env file;
+- create and change files only with the Write and Edit tools, never through the shell (redirect, heredoc, `tee`, `sed -i`, an interpreter): the command policy refuses it and `.scratch/` is the only target a shell command may write to;
 - push nothing and open no pull request;
 - keep shell hygiene: one command per call, no heredoc, no `&&`, no `cd`, no recursive force delete.
 

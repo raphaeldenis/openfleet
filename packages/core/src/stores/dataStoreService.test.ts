@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { DsColumn, RowActorKind } from '@openfleet/shared';
+import { MANAGER_LOG_KINDS, type DsColumn, type RowActorKind } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { DataStoreRepository, DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError } from './dataStoreRepository.js';
 import {
   ConstraintError, DataStoreService, DataStoreWriteError, DuplicateIdError, InvalidActorError, InvalidCellValueError, InvalidColumnDefinitionError,
-  InvalidNameError, InvalidViewConfigError, MAX_ROWS_PER_STORE, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
+  InvalidNameError, InvalidViewConfigError, LogKindNotAllowedError, MAX_ROWS_PER_STORE, StoreHasRowsError, StoreRowCapError, ViewNotFoundError,
 } from './dataStoreService.js';
 
 const scope = { projectId: 'p1' } as const;
@@ -483,6 +483,184 @@ describe('DataStoreService', () => {
       expect(batch).toBeInstanceOf(StoreRowCapError);
       expect(rowCount()).toBe(MAX_ROWS_PER_STORE);
     }, 60_000);
+  });
+
+  describe('manager log kinds', () => {
+    function aManagerLog() {
+      const ctx = setup();
+      const store = ctx.service.createStore({ ...scope, displayName: 'manager log' });
+      const kindColumnId = ctx.service.addColumn(store.id, { ...scope, displayName: 'kind', columnType: 'text' }).id;
+      const noteColumnId = ctx.service.addColumn(store.id, { ...scope, displayName: 'note', columnType: 'text' }).id;
+      ctx.db.exec('PRAGMA foreign_keys = OFF');
+      ctx.db.prepare("INSERT INTO managers (session_id, pulse_seconds, children_cap, mission_text, created_at, log_store_id) VALUES ('m1', 600, 4, 'Ship', 't0', ?)").run(store.id);
+      ctx.db.exec('PRAGMA foreign_keys = ON');
+      const logRows = (kind: string, note = 'n') => ({ [kindColumnId]: kind, [noteColumnId]: note });
+      return { ...ctx, store, kindColumnId, noteColumnId, logRows };
+    }
+
+    it('accepts each of the 20 permitted kinds', () => {
+      const { service, store, logRows, rowCount } = aManagerLog();
+
+      service.insertRows(store.id, { ...scope, items: MANAGER_LOG_KINDS.map((kind) => logRows(kind)), actor: human });
+
+      expect(MANAGER_LOG_KINDS).toHaveLength(20);
+      expect(rowCount()).toBe(20);
+    });
+
+    it('refuses an insert whose kind is not permitted, naming the permitted kinds and writing nothing', () => {
+      const { service, store, logRows, rowCount } = aManagerLog();
+
+      const refusal = thrownBy(() => service.insertRow(store.id, { ...scope, data: logRows('wibble'), actor: human }));
+
+      expect(refusal).toBeInstanceOf(LogKindNotAllowedError);
+      for (const kind of MANAGER_LOG_KINDS) expect((refusal as Error).message).toContain(kind);
+      expect((refusal as Error).message).toContain('wibble');
+      expect(rowCount()).toBe(0);
+    });
+
+    it('compares the kind exactly: a capitalised permitted kind is refused', () => {
+      const { service, store, logRows } = aManagerLog();
+
+      const refusal = thrownBy(() => service.insertRow(store.id, { ...scope, data: logRows('Pulse'), actor: human }));
+
+      expect(refusal).toBeInstanceOf(LogKindNotAllowedError);
+    });
+
+    it('writes none of a batch when one row has a kind that is not permitted', () => {
+      const { service, store, logRows, rowCount } = aManagerLog();
+
+      const refusal = thrownBy(() => service.insertRows(store.id, { ...scope, items: [logRows('pulse'), logRows('wibble')], actor: human }));
+
+      expect(refusal).toBeInstanceOf(LogKindNotAllowedError);
+      expect(rowCount()).toBe(0);
+    });
+
+    it('refuses an update that sets a kind that is not permitted, and keeps the row as it was', () => {
+      const { service, store, logRows, kindColumnId, repo } = aManagerLog();
+      const row = service.insertRow(store.id, { ...scope, data: logRows('pulse'), actor: human });
+
+      const refusal = thrownBy(() => service.updateRow(store.id, row.id, { ...scope, patch: { [kindColumnId]: 'wibble' }, actor: human }));
+
+      expect(refusal).toBeInstanceOf(LogKindNotAllowedError);
+      expect(repo.listRows(store.id).map((stored) => stored.data[kindColumnId])).toEqual(['pulse']);
+    });
+
+    it('leaves an existing row with an old kind alone: editing another cell of it is accepted', () => {
+      const { service, store, db, kindColumnId, noteColumnId, repo } = aManagerLog();
+      db.prepare("DELETE FROM managers WHERE session_id = 'm1'").run();
+      const legacy = service.insertRow(store.id, { ...scope, data: { [kindColumnId]: 'wibble', [noteColumnId]: 'old' }, actor: human });
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.prepare("INSERT INTO managers (session_id, pulse_seconds, children_cap, mission_text, created_at, log_store_id) VALUES ('m1', 600, 4, 'Ship', 't0', ?)").run(store.id);
+      db.exec('PRAGMA foreign_keys = ON');
+
+      service.updateRow(store.id, legacy.id, { ...scope, patch: { [noteColumnId]: 'edited' }, actor: human });
+
+      expect(repo.listRows(store.id).map((stored) => stored.data)).toEqual([{ [kindColumnId]: 'wibble', [noteColumnId]: 'edited' }]);
+    });
+
+    it('does not guard a table that is not a manager log, even with a kind column', () => {
+      const { service, logRows, rowCount } = aManagerLog();
+      const plain = service.createStore({ ...scope, displayName: 'plain' });
+      const plainKindId = service.addColumn(plain.id, { ...scope, displayName: 'kind', columnType: 'text' }).id;
+
+      service.insertRow(plain.id, { ...scope, data: { [plainKindId]: 'wibble' }, actor: human });
+
+      expect(logRows('x')).toBeDefined();
+      expect(rowCount()).toBe(1);
+    });
+
+    it('does not concern a write that carries no kind cell', () => {
+      const { service, store, noteColumnId, rowCount } = aManagerLog();
+
+      service.insertRow(store.id, { ...scope, data: { [noteColumnId]: 'no kind here' }, actor: human });
+
+      expect(rowCount()).toBe(1);
+    });
+
+    it('does not concern a manager log that has no kind column', () => {
+      const ctx = setup();
+      const store = ctx.service.createStore({ ...scope, displayName: 'log without kind' });
+      const titleId = ctx.service.addColumn(store.id, { ...scope, displayName: 'title', columnType: 'text' }).id;
+      ctx.db.exec('PRAGMA foreign_keys = OFF');
+      ctx.db.prepare("INSERT INTO managers (session_id, pulse_seconds, children_cap, mission_text, created_at, log_store_id) VALUES ('m1', 600, 4, 'Ship', 't0', ?)").run(store.id);
+      ctx.db.exec('PRAGMA foreign_keys = ON');
+
+      ctx.service.insertRow(store.id, { ...scope, data: { [titleId]: 'wibble' }, actor: human });
+
+      expect(ctx.rowCount()).toBe(1);
+    });
+
+    describe('the kind column as the manager log declares it', () => {
+      const PERMITTED_LABEL = 'pulse';
+      const aManagerLogWithKindColumn = (kindColumn: { displayName: string; columnType: 'text' | 'select' | 'number' }) => {
+        const ctx = setup();
+        const store = ctx.service.createStore({ ...scope, displayName: 'manager log' });
+        const options = kindColumn.columnType === 'select' ? [{ id: 'opt-ok', label: PERMITTED_LABEL }, { id: 'opt-ko', label: 'wibble' }] : undefined;
+        const kindColumnId = ctx.service.addColumn(store.id, { ...scope, ...kindColumn, ...(options && { options }) }).id;
+        ctx.db.exec('PRAGMA foreign_keys = OFF');
+        ctx.db.prepare("INSERT INTO managers (session_id, pulse_seconds, children_cap, mission_text, created_at, log_store_id) VALUES ('m1', 600, 4, 'Ship', 't0', ?)").run(store.id);
+        ctx.db.exec('PRAGMA foreign_keys = ON');
+        return { ...ctx, store, kindColumnId };
+      };
+
+      it.each(['Kind', 'KIND', ' kind ', 'Kind '])('guards a kind column displayed as %j', (displayName) => {
+        const { service, store, kindColumnId } = aManagerLogWithKindColumn({ displayName, columnType: 'text' });
+
+        const refusal = thrownBy(() => service.insertRow(store.id, { ...scope, data: { [kindColumnId]: 'wibble' }, actor: human }));
+
+        expect(refusal).toBeInstanceOf(LogKindNotAllowedError);
+      });
+
+      it('accepts a permitted option label of a select kind column', () => {
+        const { service, store, kindColumnId, rowCount } = aManagerLogWithKindColumn({ displayName: 'kind', columnType: 'select' });
+
+        service.insertRow(store.id, { ...scope, data: { [kindColumnId]: 'opt-ok' }, actor: human });
+
+        expect(rowCount()).toBe(1);
+      });
+
+      it('refuses a select kind column option whose label is not permitted, whatever its id', () => {
+        const { service, store, kindColumnId, rowCount } = aManagerLogWithKindColumn({ displayName: 'kind', columnType: 'select' });
+
+        const refusal = thrownBy(() => service.insertRow(store.id, { ...scope, data: { [kindColumnId]: 'opt-ko' }, actor: human }));
+
+        expect(refusal).toBeInstanceOf(LogKindNotAllowedError);
+        expect((refusal as Error).message).toContain('wibble');
+        expect(rowCount()).toBe(0);
+      });
+
+      it('refuses a kind that is not a string', () => {
+        const { service, store, kindColumnId, rowCount } = aManagerLogWithKindColumn({ displayName: 'kind', columnType: 'number' });
+
+        const refusal = thrownBy(() => service.insertRow(store.id, { ...scope, data: { [kindColumnId]: 7 }, actor: human }));
+
+        expect(refusal).toBeInstanceOf(LogKindNotAllowedError);
+        expect(rowCount()).toBe(0);
+      });
+
+      it('refuses saveRow with a kind that is not permitted, in create and in update mode', () => {
+        const { service, store, kindColumnId, rowCount } = aManagerLogWithKindColumn({ displayName: 'kind', columnType: 'text' });
+        service.setNaturalKey(store.id, { ...scope, columnId: kindColumnId });
+        service.insertRow(store.id, { ...scope, data: { [kindColumnId]: 'pulse' }, actor: human });
+
+        const refusedCreate = thrownBy(() => service.saveRow(store.id, { ...scope, data: { [kindColumnId]: 'wibble' }, actor: human, mode: 'create' }));
+        const refusedUpsert = thrownBy(() => service.saveRow(store.id, { ...scope, data: { [kindColumnId]: 'wobble' }, actor: human, mode: 'upsert' }));
+
+        expect(refusedCreate).toBeInstanceOf(LogKindNotAllowedError);
+        expect(refusedUpsert).toBeInstanceOf(LogKindNotAllowedError);
+        expect(rowCount()).toBe(1);
+      });
+
+      it('refuses updateRowsWhere that sets a kind that is not permitted and leaves the matched rows as they were', () => {
+        const { service, store, kindColumnId, repo } = aManagerLogWithKindColumn({ displayName: 'kind', columnType: 'text' });
+        service.insertRow(store.id, { ...scope, data: { [kindColumnId]: 'pulse' }, actor: human });
+
+        const refusal = thrownBy(() => service.updateRowsWhere(store.id, { ...scope, where: [{ columnId: kindColumnId, op: 'eq', value: 'pulse' }], set: { [kindColumnId]: 'wibble' }, actor: human }));
+
+        expect(refusal).toBeInstanceOf(LogKindNotAllowedError);
+        expect(repo.listRows(store.id).map((stored) => stored.data[kindColumnId])).toEqual(['pulse']);
+      });
+    });
   });
 
   describe('error mapping', () => {

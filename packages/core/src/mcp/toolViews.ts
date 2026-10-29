@@ -3,9 +3,11 @@ import type { DataStore, ManagerView, DsColumn, DsRow, DsRowHistoryEntry, DsView
 /** A session as an agent needs it to act: identity, where it runs, lifecycle state and model, without the settings it supplied itself. */
 export const sessionView = (session: Session) => ({
   id: session.id, name: session.name, emoji: session.emoji, directory: session.directory, state: session.state, stateSince: session.stateSince,
-  model: session.model, effort: session.effort, resolvedModel: session.resolvedModel, modelDriftedFrom: session.modelDriftedFrom,
+  model: session.model, effort: session.effort, configProfile: session.configProfile, resolvedModel: session.resolvedModel, modelDriftedFrom: session.modelDriftedFrom,
   role: session.role, worktree: session.worktree, branch: session.branch, exitCode: session.exitCode, closedAt: session.closedAt,
   ...(session.runtimeAttention && { runtimeAttention: session.runtimeAttention }),
+  ...(session.readiness && { readiness: session.readiness }),
+  ...(session.readinessReason && { readinessReason: session.readinessReason }),
 });
 
 /** A session inside a lineage listing, where the parent link is what places it in the tree. */
@@ -21,6 +23,11 @@ export const columnView = (column: DsColumn) => ({
   ...(column.options ? { options: column.options } : {}),
   ...(column.autoValue ? { autoValue: column.autoValue } : {}),
   ...(column.format ? { format: column.format } : {}),
+  ...(column.required ? { required: true } : {}),
+  ...(column.displayColumnId ? { displayColumnId: column.displayColumnId } : {}),
+  ...(column.config ? { config: column.config } : {}),
+  ...(column.displayWidth ? { displayWidth: column.displayWidth } : {}),
+  ...(column.wrap ? { wrap: column.wrap } : {}),
 });
 
 /** What an agent reads for a stored cell of a column. */
@@ -61,7 +68,7 @@ export const columnarRowView = (row: DsRow, { columnIds, includeUpdatedAt, cellO
 ];
 
 export const rowChangeView = (entry: DsRowHistoryEntry) => ({
-  actorKind: entry.actorKind, actorLabel: entry.actorLabel, change: entry.change, createdAt: entry.createdAt,
+  seq: entry.seq, actorKind: entry.actorKind, actorLabel: entry.actorLabel, change: entry.change, createdAt: entry.createdAt,
 });
 
 export const savedView = (view: DsView) => ({ id: view.id, displayName: view.displayName, viewType: view.viewType, config: view.config });

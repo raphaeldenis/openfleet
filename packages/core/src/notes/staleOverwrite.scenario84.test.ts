@@ -8,7 +8,6 @@ import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
 import { openDatabase } from '../db/database.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
-import { recentLogLines } from '../logger.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 
 const tempDirs = createTempDirTracker();
@@ -197,36 +196,19 @@ describe('stale writes are refused on every other write path', () => {
     expect(afterRefusal.rev).toBe(first.rev);
   });
 
-  it('documented gap, not covered: an MCP restore_note_version without expected_rev still restores on top of the current revision, but the reply carries a warning that expected_rev becomes required, and the daemon logs it without the body', async () => {
+  it('refuses an MCP restore_note_version without expected_rev as invalid_body telling to call get_note, and keeps the agents\' work', async () => {
     await bootPlainProject();
     const agent = await agentInProject();
     const note = await createNoteWithFiveSections();
     const revAfterAgentWrites = await agentWritesFiveSections(agent, note.id, note.rev);
 
-    const restored = await agent.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1 } });
-    const afterRestore = await readNote(note.id);
-    const acknowledged = parsed(restored);
-    const warnLines = recentLogLines().filter((line) => line.includes('restore without expected_rev'));
+    const refused = await agent.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1 } });
+    const afterRefusal = await readNote(note.id);
 
-    expect(restored.isError).toBeFalsy();
-    expect(acknowledged.warning).toMatch(/expected_rev will be required in the next release.*get_note/);
-    expect(acknowledged.rev).toBe(revAfterAgentWrites + 1);
-    expect(afterRestore.bodyMd).toBe(originalBody);
-    expect(warnLines.length).toBeGreaterThan(0);
-    expect(warnLines.at(-1)).toContain(note.id);
-    expect(warnLines.at(-1)).not.toContain('original 1');
-    const lastAgentVersion = parsed(await agent.callTool({ name: 'get_note_version', arguments: { note: note.id, rev: revAfterAgentWrites } }));
-    expectEveryAgentSectionIn(lastAgentVersion.bodyMd);
-  });
-
-  it('does not warn when restore_note_version carries expected_rev', async () => {
-    await bootPlainProject();
-    const agent = await agentInProject();
-    const note = await createNoteWithFiveSections();
-
-    const restored = parsed(await agent.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1, expected_rev: note.rev } }));
-
-    expect(restored.warning).toBeUndefined();
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toMatch(/invalid_body.*get_note.*expected_rev/);
+    expect(afterRefusal.rev).toBe(revAfterAgentWrites);
+    expectEveryAgentSectionIn(afterRefusal.bodyMd);
   });
 
   it('refuses an MCP restore_note_version that is exactly one revision behind: no tolerance with expected_rev, the current rev is reported', async () => {

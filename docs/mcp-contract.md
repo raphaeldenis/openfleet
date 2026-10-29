@@ -1,0 +1,46 @@
+# MCP contract version
+
+The MCP server carries a `contract_version`: a plain integer that rises by one on every added MCP tool or changed tool shape. An integer fits because a client only asks "did the tools change since I looked", so major/minor semantics would carry nothing. It is distinct from `DAEMON_VERSION`, the version of the binary, which changes on every release whether or not a tool moved.
+
+## What raises it
+
+- A tool is added or removed.
+- A tool is renamed.
+- A tool's input schema changes: a parameter added, removed, renamed, retyped, made required or optional, or a bound changed.
+
+- A tool's output gains or loses a field (for example `pendingPermission.input`). The guard test does not see output fields, so raising the version for them is a convention: the author does it and records it in `CHANGELOG.md`.
+
+The description text of a parameter is part of the input schema, so rewording it changes the pin and raises the version. Text-only changes outside the input schema (the description of the tool itself, an error message) and behavior behind an unchanged shape do not raise it, with one exception: a call that used to succeed and is now refused (for example `restore_note_version` without `expected_rev`, version 10). The guard cannot see it, so the author raises the version by hand and records it in `CHANGELOG.md`.
+
+Output changes are not detected: the guard hashes input schemas only, so a changed result shape or result field passes unnoticed. Raise the version by hand when a tool's output changes in a way clients can see.
+
+Example: version 6 added `required`, `displayColumnId`, `config`, `displayWidth` and `wrap` to the column views next to new `update_data_store_column` parameters; the new parameters moved the pin, the new output fields were raised by hand.
+
+## Where to read it
+
+- `CONTRACT_VERSION` in `packages/shared/src/mcpContract.ts`, the single definition.
+- The MCP `initialize` result: the server `instructions` read `openfleet MCP contract_version: <n>` (`client.getInstructions()` in the SDK). `serverInfo.version` stays the daemon version.
+- The `contract_version` field of the `get_argus_status` result.
+
+## How to raise it
+
+1. Raise `CONTRACT_VERSION` by one in `packages/shared/src/mcpContract.ts`.
+2. Replace `packages/core/src/mcp/contract.pinned.json` with the contract printed by the failing guard test (same `contractVersion` as the constant).
+3. Add a section to `CHANGELOG.md`: date, tools added or changed, migrations.
+
+One pull request that adds or changes tools does all three.
+
+## Example: an optional parameter
+
+`create_worktree` gained the optional `base_ref` at version 9. An added optional parameter is a changed input schema: the pin changed and the version rose by one, with the `CHANGELOG.md` section "9".
+
+## The guard test
+
+`packages/core/src/mcp/contractGuard.test.ts` boots a real daemon, connects an MCP client as a manager and lists the tools. It sorts them by name and hashes each canonicalized input schema (object keys sorted; parameter descriptions included, the tool's own description not part of the input schema), then compares the result to `contract.pinned.json`. It fails when:
+
+- a tool name or an input schema differs from the pin, or
+- the pin's `contractVersion` differs from `CONTRACT_VERSION`.
+
+Changing the tools without touching the version fails the first check. Raising the version without refreshing the pin, or refreshing the pin without raising the version, fails the second. The failure message lists the added, removed and reshaped tools and prints the new pin to paste.
+
+The pin covers the tools a manager sees. The reviewer's reduced tool set is a subset of it.

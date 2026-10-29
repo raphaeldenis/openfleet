@@ -1,4 +1,4 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, ElementRef, input, output, signal, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, Injector, input, output, signal, viewChild } from '@angular/core';
 import type { DsColumn } from '@openfleet/shared';
 import { displayValue } from './table-cells';
 import { editedCellValue } from './table-cell-editor-values';
@@ -22,9 +22,9 @@ import { editedCellValue } from './table-cell-editor-values';
           @if (clearsValue()) { <p role="status">The value will be cleared.</p> }
           <p id="cell-editor-error" role="alert">{{ validationError() || error() }}</p>
           <div class="actions">
-            <button type="button" [disabled]="saving()" (click)="clearValue()">Clear value</button>
-            <button type="button" [disabled]="saving()" (click)="cancelled.emit()">Cancel</button>
-            <button type="submit" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Save' }}</button>
+            <button type="button" class="of-btn of-btn--secondary" [disabled]="saving()" (click)="clearValue()">Clear value</button>
+            <button type="button" class="of-btn of-btn--secondary" [disabled]="saving()" (click)="cancelled.emit()">Cancel</button>
+            <button type="submit" class="of-btn of-btn--primary" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Save' }}</button>
           </div>
           @if (saving()) { <span role="status">Saving…</span> }
         </form>
@@ -41,8 +41,7 @@ import { editedCellValue } from './table-cell-editor-values';
     p { margin: 0; font-size: .75rem; overflow-wrap: anywhere }
     #cell-editor-error { color: var(--s-err) }
     .actions { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: flex-end }
-    button { padding: .375rem .625rem; font: inherit; cursor: pointer }
-    :is(input, textarea, button):focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
+    :is(input, textarea):focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
   `,
 })
 export class TableCellEditorComponent {
@@ -56,7 +55,9 @@ export class TableCellEditorComponent {
   private readonly dialog = viewChild.required<ElementRef<HTMLElement>>('dialog');
   protected readonly draft = signal('');
   protected readonly clearsValue = signal(false);
+  private readonly injector = inject(Injector);
   private hasEditedDraft = false;
+  private wasSaving = false;
   protected readonly validationError = signal<string | null>(null);
   protected readonly inputType = computed(() => this.column().format === 'rank' ? 'number' : this.column().format === 'url' ? 'url' : 'text');
   protected readonly help = computed(() => {
@@ -74,8 +75,29 @@ export class TableCellEditorComponent {
     afterNextRender(() => {
       const value = this.initialValue();
       this.draft.set(value === null || value === undefined ? '' : String(value));
-      this.dialog().nativeElement.querySelector<HTMLElement>('input, textarea')?.focus();
+      this.focusDraftField();
     });
+    effect(() => {
+      const isSaving = this.saving();
+      const hasJustFinishedSaving = this.wasSaving && !isSaving;
+      this.wasSaving = isSaving;
+      if (hasJustFinishedSaving) this.restoreFocusAfterRender();
+    });
+  }
+
+  private focusDraftField(): void {
+    this.dialog().nativeElement.querySelector<HTMLElement>('input, textarea')?.focus();
+  }
+
+  /** The fields are disabled while saving, which drops the focus on the page body, out of reach of Escape and Tab containment. */
+  private restoreFocusAfterRender(): void {
+    afterNextRender(
+      () => {
+        const isFocusInsideDialog = this.dialog().nativeElement.contains(document.activeElement);
+        if (!isFocusInsideDialog) this.focusDraftField();
+      },
+      { injector: this.injector },
+    );
   }
 
   protected changeDraft(value: string): void {

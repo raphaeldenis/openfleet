@@ -189,6 +189,90 @@ describe('createWorktree', () => {
   });
 });
 
+describe('createWorktree with baseRef', () => {
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, env: childEnvironmentForGit(process.env), encoding: 'utf8' }).trim();
+  const aRepoWithAFeatureBranchAhead = () => {
+    const repoPath = makeRepo();
+    git(repoPath, 'branch', 'integration');
+    git(repoPath, 'checkout', 'integration');
+    git(repoPath, 'commit', '--allow-empty', '-m', 'integration work');
+    git(repoPath, 'tag', 'v1');
+    git(repoPath, 'checkout', 'main');
+    return { repoPath, integrationSha: git(repoPath, 'rev-parse', 'integration'), mainSha: git(repoPath, 'rev-parse', 'main') };
+  };
+  const aWorktreesRoot = () => mkdtempSync(join(tmpdir(), 'of-wt-'));
+
+  it('starts the new branch at the commit of the base branch', async () => {
+    const { repoPath, integrationSha, mainSha } = aRepoWithAFeatureBranchAhead();
+
+    const { path } = await createWorktree({ repoPath, branchName: 'task/from-integration', worktreesRoot: aWorktreesRoot(), baseRef: 'integration' });
+
+    expect(git(path, 'rev-parse', 'HEAD')).toBe(integrationSha);
+    expect(integrationSha).not.toBe(mainSha);
+  });
+
+  it('starts the new branch at a tag or a full sha', async () => {
+    const { repoPath, integrationSha } = aRepoWithAFeatureBranchAhead();
+    const worktreesRoot = aWorktreesRoot();
+
+    const fromTag = await createWorktree({ repoPath, branchName: 'from-tag', worktreesRoot, baseRef: 'v1' });
+    const fromSha = await createWorktree({ repoPath, branchName: 'from-sha', worktreesRoot, baseRef: integrationSha });
+
+    expect(git(fromTag.path, 'rev-parse', 'HEAD')).toBe(integrationSha);
+    expect(git(fromSha.path, 'rev-parse', 'HEAD')).toBe(integrationSha);
+  });
+
+  it('starts at the current HEAD when no baseRef is given', async () => {
+    const { repoPath, mainSha } = aRepoWithAFeatureBranchAhead();
+
+    const { path } = await createWorktree({ repoPath, branchName: 'task/default', worktreesRoot: aWorktreesRoot() });
+
+    expect(git(path, 'rev-parse', 'HEAD')).toBe(mainSha);
+  });
+
+  it.each([
+    ['an unknown ref', 'no-such-ref'],
+    ['an empty ref', ''],
+    ['a blank ref', '   '],
+    ['a ref starting with a dash', '-x'],
+    ['an option-like ref', '--upload-pack=touch pwned'],
+    ['a ref with a newline', 'main\nintegration'],
+    ['a ref with a NUL', 'main\0'],
+    ['a ref with an escape character', 'main\u001b[0m'],
+    ['a ref with a DEL', 'main\u007f'],
+    ['a revision expression that resolves', 'integration~1'],
+    ['a parent expression that resolves', 'integration^'],
+    ['a range expression', 'a..b'],
+    ['a range expression between two existing branches', 'main..integration'],
+  ])('refuses %s with invalid_base_ref and creates nothing', async (_label, baseRef) => {
+    const { repoPath } = aRepoWithAFeatureBranchAhead();
+    const worktreesRoot = aWorktreesRoot();
+
+    const refusal = createWorktree({ repoPath, branchName: 'task/refused', worktreesRoot, baseRef });
+
+    await expect(refusal).rejects.toMatchObject({ code: 'invalid_base_ref' });
+    expect(existsSync(join(worktreesRoot, 'task-refused'))).toBe(false);
+    expect(git(repoPath, 'branch', '--list', 'task/refused')).toBe('');
+  });
+
+  it('does not put the repository path or the raw ref in the refusal message', async () => {
+    const { repoPath } = aRepoWithAFeatureBranchAhead();
+
+    const refusal = createWorktree({ repoPath, branchName: 'task/leak', worktreesRoot: aWorktreesRoot(), baseRef: 'no-such-ref' });
+
+    await expect(refusal).rejects.toSatisfy((error: Error) => !error.message.includes(repoPath) && !error.message.includes('no-such-ref'));
+  });
+
+  it('refuses a baseRef when the target branch already exists, since the branch keeps its own commit', async () => {
+    const { repoPath } = aRepoWithAFeatureBranchAhead();
+
+    const refusal = createWorktree({ repoPath, branchName: 'integration', worktreesRoot: aWorktreesRoot(), baseRef: 'main' });
+
+    await expect(refusal).rejects.toMatchObject({ code: 'invalid_base_ref' });
+  });
+});
+
 describe('sameGitRepository', () => {
   it('is true for two directories inside the same repository', async () => {
     const repoPath = makeRepo();

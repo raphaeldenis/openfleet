@@ -52,6 +52,12 @@ describe('copyFor', () => {
     expect(text).not.toMatch(/try again/i);
   });
 
+  it('tells the user a row guard refused the change and what to send instead, without a retry', () => {
+    const { text } = copyFor(apiErrorOf(envelopeOf('row_guard_violation')), { action: 'generic' });
+
+    expect(text).toBe('This project keeps a row journal append-only and a done row linked to a pull request — resend the previous journal with a new line added, or set the pull request link first.');
+  });
+
   it('tells the user to fix the folder permissions, then try again, when the docs folder is not writable', () => {
     const { text } = copyFor(apiErrorOf(envelopeOf('docs_folder_not_writable')), { action: 'generic' });
 
@@ -139,8 +145,12 @@ describe('copyFor', () => {
         return problems.map((problem) => `${code}: ${problem} — "${text}"`);
       });
 
-    it('covers every code, action and retry once (3375 cases)', () => {
-      expect(ALL_CODES.length * ACTIONS.length * RETRIES.length).toBe(3375);
+    it.each([
+      ['docs_root_invalid', 'never', 'That docs root cannot be used — give an absolute path inside your home folder.'],
+      ['docs_root_forbidden', 'never', 'That docs root is a folder OpenFleet or its tools keep for themselves — pick another folder.'],
+      ['docs_root_not_writable', 'later', 'That docs root is not writable — fix the folder permissions, then try again.'],
+    ] as const)('words the docs root code %s for the user', (code, retry, expectedText) => {
+      expect(copyFor(apiErrorOf(envelopeOf(code, { retry })), { action: 'generic' }).text).toBe(expectedText);
     });
 
     describe.each(ACTIONS)('the action %s', (action) => {
@@ -222,6 +232,10 @@ describe('copyFor', () => {
 
     it('tells the user the folder is not writable, and to fix its permissions, then try again', () => {
       expect(copyOfProjectFailure('docs_folder_not_writable', 'later')).toBe('That folder is not writable — fix its permissions, then try again.');
+    });
+
+    it('tells the user another project already uses the folder, without a retry', () => {
+      expect(copyOfProjectFailure('docs_folder_already_used', 'never')).toBe('Another project already uses that folder — pick another one.');
     });
 
     it('tells the user a path inside the folder leaves it, without a retry', () => {

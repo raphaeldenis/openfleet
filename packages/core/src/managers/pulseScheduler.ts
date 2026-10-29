@@ -5,6 +5,8 @@ import { profileRecallOf } from './managerProfileRecall.js';
 import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
 import { nextPulseAt } from './pulseTiming.js';
+import { toSingleLineName } from './singleLineName.js';
+import { STALE_IN_PROGRESS_ROW_MS } from './staleRows.js';
 import { OpenFleetError, PULSE_WAKE_REASONS, type PulseWakeReason, type RuntimeAttention } from '@openfleet/shared';
 
 export const PULSE_MESSAGE = '[pulse] Re-read your mission and continue: check your children, unblock them, record what you did.';
@@ -20,10 +22,39 @@ const MISSION_NOTE_REREAD_REMINDER = 'context compacted: re-read your mission no
 
 const baseLineOf = ({ version, sha }: ManagerBaseIdentity): string => `Base v${version} (${sha.slice(0, BASE_SHA_PREFIX_LENGTH)}).`;
 
-/** The pulse text of a manager: the plain pulse, where to re-read the mission when it lives in a note, the expertise and pulse actions it wrote, the manager base it follows, and how many command refusals it has not looked at. */
+const MAX_LISTED_STALE_ROWS = 10;
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+const MAX_STALE_ROW_LABELS_LENGTH = 600;
+const STALE_ROW_LABEL_SEPARATOR = ', ';
+
+const labelsWithinLengthCap = (labels: readonly string[]): string[] => {
+  const listed: string[] = [];
+  let listedLength = 0;
+  for (const label of labels.slice(0, MAX_LISTED_STALE_ROWS)) {
+    const separatorLength = listed.length > 0 ? STALE_ROW_LABEL_SEPARATOR.length : 0;
+    const lengthWithLabel = listedLength + separatorLength + label.length;
+    const isOverCap = lengthWithLabel > MAX_STALE_ROW_LABELS_LENGTH;
+    if (isOverCap) break;
+    listed.push(label);
+    listedLength = lengthWithLabel;
+  }
+  return listed;
+};
+
+const staleRowsLineOf = (staleRowLabels: readonly string[]): string => {
+  const staleHours = STALE_IN_PROGRESS_ROW_MS / MS_PER_HOUR;
+  const oneLineLabels = staleRowLabels.map(toSingleLineName);
+  const listed = labelsWithinLengthCap(oneLineLabels);
+  const hiddenCount = oneLineLabels.length - listed.length;
+  const remainder = hiddenCount > 0 ? `, and ${hiddenCount} more` : '';
+  return `In progress for over ${staleHours} hours without an update, refresh or unblock them: ${listed.join(STALE_ROW_LABEL_SEPARATOR)}${remainder}.`;
+};
+
+/** The pulse text of a manager: the plain pulse, where to re-read the mission when it lives in a note, the expertise and pulse actions it wrote, the manager base it follows, how many command refusals it has not looked at, and the in progress rows left untouched for too long. */
 export const pulseMessageOf = (
   record: Pick<ManagerRecord, 'missionNoteId' | 'expertise' | 'pulseActions' | 'noteReadResetAt'>,
-  { unseenRefusalCount = 0, managerBase }: { unseenRefusalCount?: number; managerBase?: ManagerBaseIdentity } = {},
+  { unseenRefusalCount = 0, managerBase, staleRowLabels = [] }: { unseenRefusalCount?: number; managerBase?: ManagerBaseIdentity; staleRowLabels?: readonly string[] } = {},
 ): string => {
   const hasMissionNote = record.missionNoteId !== undefined;
   const hasUnseenRefusals = unseenRefusalCount > 0;
@@ -34,7 +65,8 @@ export const pulseMessageOf = (
   const profileLine = profileRecall === '' ? '' : ` ${profileRecall}`;
   const baseLine = managerBase ? ` ${baseLineOf(managerBase)}` : '';
   const refusalsLine = hasUnseenRefusals ? ` ${unseenRefusalsLineOf(unseenRefusalCount)}` : '';
-  return `${PULSE_MESSAGE}${missionLine}${profileLine}${baseLine}${refusalsLine}`;
+  const staleRowsLine = staleRowLabels.length > 0 ? ` ${staleRowsLineOf(staleRowLabels)}` : '';
+  return `${PULSE_MESSAGE}${missionLine}${profileLine}${baseLine}${refusalsLine}${staleRowsLine}`;
 };
 
 /** The pulse as the manager reads it: the pulse text, then why it wakes, strongest reason first. */
@@ -43,14 +75,6 @@ export const pulseBodyOf = ({ pulseText, wakeReasons }: { pulseText: string; wak
 
 const withWakeReason = (wakeReasons: readonly PulseWakeReason[], addedReason: PulseWakeReason): PulseWakeReason[] =>
   PULSE_WAKE_REASONS.filter((reason) => reason === addedReason || wakeReasons.includes(reason));
-
-const MAX_CHILD_NAME_LENGTH = 80;
-
-const toSingleLineName = (name: string) => {
-  const collapsed = name.replace(/[\s\p{Cc}]+/gu, ' ').trim();
-  const isTooLong = collapsed.length > MAX_CHILD_NAME_LENGTH;
-  return isTooLong ? `${collapsed.slice(0, MAX_CHILD_NAME_LENGTH)}…` : collapsed;
-};
 
 const MAX_LISTED_CHILD_WAKES = 10;
 // setTimeout clamps any longer delay to 1 ms.
@@ -92,6 +116,8 @@ export interface PulseSchedulerDeps {
   deniedCommandCountsOf?: (managerId: string) => DeniedCommandCounts;
   /** The manager base this daemon ships. Absent, the pulse names no base. */
   managerBase?: ManagerBaseIdentity;
+  /** The in progress rows of the manager's board left untouched for too long. Absent, or when it throws, the pulse names none. */
+  staleRowLabelsOf?: (managerId: string) => string[];
 }
 
 export class PulseScheduler {
@@ -356,7 +382,7 @@ export class PulseScheduler {
     const pulsedAt = new Date().toISOString();
     this.deps.managers.setLastPulseAt(record.sessionId, pulsedAt);
     const updated: ManagerRecord = { ...record, lastPulseAt: pulsedAt };
-    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && s.state !== 'closed').length;
+    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && (s.state !== 'closed' || s.restartPending === true)).length;
     this.deps.bus.emit({ type: 'manager.pulsed', manager: toManagerView(updated, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId), this.deps.managerBase) });
     this.arm(updated);
     this.managerIdsInFailureStreak.delete(record.sessionId);
@@ -370,7 +396,7 @@ export class PulseScheduler {
   private queuePulse(record: ManagerRecord, wakeReason: PulseWakeReason): boolean {
     const managerId = record.sessionId;
     const unseenRefusalCount = this.deps.deniedCommandCountsOf?.(managerId).deniedCommandCount ?? 0;
-    const pulseText = pulseMessageOf(record, { unseenRefusalCount, managerBase: this.deps.managerBase });
+    const pulseText = pulseMessageOf(record, { unseenRefusalCount, managerBase: this.deps.managerBase, staleRowLabels: this.staleRowLabelsOf(managerId) });
     const queued = this.queuedPulses.get(managerId);
     if (queued) {
       const isSameTextStillQueued = queued.pulseText === pulseText;
@@ -389,6 +415,16 @@ export class PulseScheduler {
     return false;
   }
 
+  // A reminder only: an unreadable board must never cost the manager its pulse.
+  private staleRowLabelsOf(managerId: string): string[] {
+    try {
+      return this.deps.staleRowLabelsOf?.(managerId) ?? [];
+    } catch (error) {
+      log('warn', `pulse: the stale rows of manager ${managerId} could not be read`, error);
+      return [];
+    }
+  }
+
   // A profile edit never re-arms the timer; it only rewrites the text of the pulse still queued, so the manager reads what it wrote last.
   private refreshQueuedPulse(sessionId: string): void {
     if (this.isStopped) return;
@@ -396,7 +432,7 @@ export class PulseScheduler {
     const record = this.deps.managers.getWithinBounds(sessionId);
     if (!queued || !record) return;
     const unseenRefusalCount = this.deps.deniedCommandCountsOf?.(sessionId).deniedCommandCount ?? 0;
-    const pulseText = pulseMessageOf(record, { unseenRefusalCount, managerBase: this.deps.managerBase });
+    const pulseText = pulseMessageOf(record, { unseenRefusalCount, managerBase: this.deps.managerBase, staleRowLabels: this.staleRowLabelsOf(sessionId) });
     if (pulseText === queued.pulseText) return;
     const body = pulseBodyOf({ pulseText, wakeReasons: queued.wakeReasons });
     const isRewritten = this.deps.sessions.replaceQueuedMessageBody({ sessionId, messageId: queued.messageId, body });

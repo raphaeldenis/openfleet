@@ -1,8 +1,9 @@
 import {
-  CommandPolicyOverrideSchema, POLICY_DOCUMENT_VERSION, POLICY_MODES, PolicyProfileSchema, PolicyRuleSchema, UnattendedOverrideSchema,
+  CommandPolicyOverrideSchema, DeclaredCommandsSchema, POLICY_DOCUMENT_VERSION, POLICY_MODES, PolicyProfileSchema, PolicyRuleSchema, UnattendedOverrideSchema,
   type CommandPolicyDocument, type CommandPolicyOverride, type PolicyMode, type PolicyProfile, type PolicyRule,
 } from '@openfleet/shared';
 import * as z from 'zod';
+import { ALLOW_DECLARED_COMMANDS_RULE_ID } from './defaultCommandPolicy.js';
 
 export type PolicyDocumentIssue =
   | { scope: 'document'; message: string }
@@ -30,6 +31,7 @@ export function validateCommandPolicyOverride(raw: unknown): OverrideValidation 
 
 interface ParsedOverride {
   mode?: PolicyMode;
+  declaredCommands: string[];
   disabledRules: string[];
   rules: PolicyRule[];
   profiles: Record<string, PolicyProfile>;
@@ -90,7 +92,7 @@ function parseRoleMappings(raw: unknown, issues: PolicyDocumentIssue[]): Record<
   return mappings;
 }
 
-const OVERRIDE_KEYS = new Set(['version', 'mode', 'unattended', 'disabledRules', 'rules', 'profiles', 'roleToProfile']);
+const OVERRIDE_KEYS = new Set(['version', 'mode', 'unattended', 'declaredCommands', 'disabledRules', 'rules', 'profiles', 'roleToProfile']);
 
 function parseOverride(override: Record<string, unknown>): ParsedOverride {
   const issues: PolicyDocumentIssue[] = [];
@@ -98,11 +100,12 @@ function parseOverride(override: Record<string, unknown>): ParsedOverride {
     issues.push({ scope: 'field', field: key, message: 'unknown key' });
   }
   const mode = parseField(override.mode, ModeSchema, 'mode', issues);
+  const declaredCommands = parseField(override.declaredCommands, DeclaredCommandsSchema, 'declaredCommands', issues) ?? [];
   const disabledRules = parseField(override.disabledRules, RuleIdListSchema, 'disabledRules', issues) ?? [];
   const rules = parseRules(override.rules, issues);
   const profiles = parseProfiles(override.profiles, issues);
   const roleToProfile = parseRoleMappings(override.roleToProfile, issues);
-  return { ...(mode === undefined ? {} : { mode }), disabledRules, rules, profiles, roleToProfile, issues };
+  return { ...(mode === undefined ? {} : { mode }), declaredCommands, disabledRules, rules, profiles, roleToProfile, issues };
 }
 
 function mergeRules(delivered: PolicyRule[], disabledIds: Set<string>, replacements: PolicyRule[]): PolicyRule[] {
@@ -136,11 +139,17 @@ export function validPartsOfOverride({ delivered, override }: { delivered: Comma
     version: POLICY_DOCUMENT_VERSION,
     ...(parsed.mode === undefined ? {} : { mode: parsed.mode }),
     ...(unattended.success && override.unattended !== undefined ? { unattended: unattended.data } : {}),
+    ...(isStatedAndValid('declaredCommands') ? { declaredCommands: parsed.declaredCommands } : {}),
     ...(isStatedAndValid('disabledRules') ? { disabledRules: parsed.disabledRules } : {}),
     ...(isStatedAndValid('rules') ? { rules: parsed.rules } : {}),
     ...(isStatedAndValid('profiles') ? { profiles: parsed.profiles } : {}),
     ...(isStatedAndValid('roleToProfile') ? { roleToProfile } : {}),
   };
+}
+
+function withDeclaredCommands(rules: PolicyRule[], declaredCommands: string[]): PolicyRule[] {
+  if (declaredCommands.length === 0) return rules;
+  return rules.map((rule) => (rule.id === ALLOW_DECLARED_COMMANDS_RULE_ID ? { ...rule, when: { ...rule.when, runsDeclaredCommand: declaredCommands } } : rule));
 }
 
 /**
@@ -162,7 +171,7 @@ export function resolveCommandPolicy({ delivered, override }: { delivered: Comma
     mode: parsed.mode ?? delivered.mode,
     profiles,
     roleToProfile,
-    rules: mergeRules(delivered.rules, new Set(parsed.disabledRules), parsed.rules),
+    rules: withDeclaredCommands(mergeRules(delivered.rules, new Set(parsed.disabledRules), parsed.rules), parsed.declaredCommands),
   };
   return { policy, issues: parsed.issues };
 }

@@ -33,6 +33,6 @@ Sections are the `##` blocks. Nothing is merged inside a section.
 
 ## `restore_note_version`
 
-Pass `expected_rev` (the rev from `get_note`). A rev different from the current one is refused with `stale_revision`; no gap is tolerated.
+`expected_rev` is required: call `get_note`, then pass its `rev`. A rev different from the current one is refused with `stale_revision`; no gap is tolerated.
 
-Grace period: a call without `expected_rev` still succeeds, the reply carries a `warning`, and the daemon logs `restore without expected_rev` with the note id and session id (never the body). The switch is `REQUIRE_EXPECTED_REV_ON_RESTORE` in `packages/core/src/mcp/noteVersionTools.ts`; set to `true`, a call without `expected_rev` is refused as `invalid_body` with a hint to call `get_note`.
+A call without `expected_rev` is refused as `invalid_body` with the hint to call `get_note` and pass its rev; nothing is changed. The switch is `REQUIRE_EXPECTED_REV_ON_RESTORE` in `packages/core/src/mcp/noteVersionTools.ts`.

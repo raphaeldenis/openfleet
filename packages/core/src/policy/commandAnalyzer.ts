@@ -12,13 +12,19 @@ export interface CommandRedirect { operator: RedirectOperator; fd?: number; targ
 export interface SimpleCommand {
   /** Basename of the program, after the transparent wrappers are removed. */
   program: string;
+  /** The program word as written, path included (`./bin/pytest`); `program` keeps only its basename. */
+  invokedAs: string;
   args: string[];
   assignments: string[];
   wrappers: string[];
+  /** The options (and their values) the transparent wrappers consumed, such as `-C /dir` of `env`. */
+  wrapperOptions: string[];
   redirects: CommandRedirect[];
   fedByPipe: boolean;
   origin: CommandOrigin;
   depth: number;
+  /** True when the analysed text sets a shell variable on its own (`PATH=x; cmd`), which changes how every later command resolves. */
+  textHasBareAssignment: boolean;
 }
 
 export interface CommandAnalysis { status: AnalysisStatus; commands: SimpleCommand[] }
@@ -56,6 +62,8 @@ const SHELL_PROGRAMS: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash'
 const SHELL_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']);
 const FIND_EXEC_OPTIONS: ReadonlySet<string> = new Set(['-exec', '-execdir', '-ok', '-okdir']);
 const FIND_EXEC_TERMINATORS: ReadonlySet<string> = new Set([';', '+']);
+/** Stands for the program of a line that only redirects (`> f`, `{ …; } > f`, `done > f`, `exec > f`): the shell's `:` no-op. */
+const BARE_REDIRECT_PROGRAM = ':';
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 const isAssignment = (text: string): boolean => ASSIGNMENT.test(text);
@@ -90,14 +98,19 @@ function dropLeadingKeywords(words: WordToken[]): WordToken[] {
   return firstReal === -1 ? [] : words.slice(firstReal);
 }
 
-function skipWrapper(texts: string[], wrapperIndex: number, spec: WrapperSpec, assignments: string[]): number {
+function skipWrapper(texts: string[], wrapperIndex: number, spec: WrapperSpec, collected: { assignments: string[]; options: string[] }): number {
+  const { assignments, options } = collected;
   let index = wrapperIndex + 1;
   if (texts[wrapperIndex] === 'rtk' && texts[index] === 'proxy') index += 1;
   while (index < texts.length) {
     const text = texts[index] as string;
     const isOption = text.startsWith('-') && text.length > 1;
     if (text === '--') return index + 1;
-    if (isOption) index += spec.optionsWithValue.has(text) ? 2 : 1;
+    if (isOption) {
+      const width = spec.optionsWithValue.has(text) ? 2 : 1;
+      options.push(...texts.slice(index, index + width));
+      index += width;
+    }
     else if (spec.takesAssignments && isAssignment(text)) {
       assignments.push(text);
       index += 1;
@@ -106,9 +119,10 @@ function skipWrapper(texts: string[], wrapperIndex: number, spec: WrapperSpec, a
   return index;
 }
 
-function unwrapProgram(texts: string[]): { assignments: string[]; wrappers: string[]; programIndex: number } {
+function unwrapProgram(texts: string[]): { assignments: string[]; wrappers: string[]; wrapperOptions: string[]; programIndex: number } {
   const assignments: string[] = [];
   const wrappers: string[] = [];
+  const wrapperOptions: string[] = [];
   let index = 0;
   while (index < texts.length) {
     const text = texts[index] as string;
@@ -118,10 +132,10 @@ function unwrapProgram(texts: string[]): { assignments: string[]; wrappers: stri
       index += 1;
     } else if (wrapper !== undefined) {
       wrappers.push(basenameOf(text));
-      index = skipWrapper(texts, index, wrapper, assignments);
+      index = skipWrapper(texts, index, wrapper, { assignments, options: wrapperOptions });
     } else break;
   }
-  return { assignments, wrappers, programIndex: index };
+  return { assignments, wrappers, wrapperOptions, programIndex: index };
 }
 
 const emptyPending = (): PendingCommand => ({ words: [], redirects: [], substitutions: [], heredocs: [] });
@@ -129,6 +143,7 @@ const emptyPending = (): PendingCommand => ({ words: [], redirects: [], substitu
 class AnalysisRun {
   readonly commands: SimpleCommand[] = [];
   status: AnalysisStatus = 'complete';
+  hasBareAssignment = false;
   private isStopped = false;
 
   analyzeScript(source: string, context: Placement): void {
@@ -194,7 +209,8 @@ class AnalysisRun {
     for (const script of substitutions) this.analyzeNested(script, 'substitution', context);
     for (const heredoc of heredocs) this.analyzeHeredocExpansions(heredoc, context);
     const commandWords = dropLeadingKeywords(words);
-    if (commandWords.length === 0) return;
+    const isBareRedirect = commandWords.length === 0 && redirects.length > 0;
+    if (commandWords.length === 0 && !isBareRedirect) return;
     const isInSubshell = state.subshellDepth > 0 && context.origin === 'top';
     const placement: Placement = { origin: isInSubshell ? 'subshell' : context.origin, depth: context.depth };
     this.emitCommand({ texts: commandWords.map((word) => word.text), redirects, fedByPipe: state.pipeFeedsNext, placement });
@@ -209,10 +225,15 @@ class AnalysisRun {
   }
 
   private emitCommand({ texts, redirects, fedByPipe, placement }: { texts: string[]; redirects: CommandRedirect[]; fedByPipe: boolean; placement: Placement }): void {
-    const { assignments, wrappers, programIndex } = unwrapProgram(texts);
-    const program = basenameOf(texts[programIndex] ?? '');
+    const { assignments, wrappers, wrapperOptions, programIndex } = unwrapProgram(texts);
+    const invokedAs = texts[programIndex] ?? '';
+    const namedProgram = basenameOf(invokedAs);
+    const program = namedProgram === '' && redirects.length > 0 ? BARE_REDIRECT_PROGRAM : namedProgram;
+    const namesNoProgram = programIndex >= texts.length;
+    const isBareAssignment = namesNoProgram && assignments.length > 0 && wrappers.length === 0;
+    if (isBareAssignment) this.hasBareAssignment = true;
     if (program === '') return;
-    const command: SimpleCommand = { program, args: texts.slice(programIndex + 1), assignments, wrappers, redirects, fedByPipe, origin: placement.origin, depth: placement.depth };
+    const command: SimpleCommand = { program, invokedAs, args: texts.slice(programIndex + 1), assignments, wrappers, wrapperOptions, redirects, fedByPipe, origin: placement.origin, depth: placement.depth, textHasBareAssignment: false };
     if (this.commands.length >= MAX_COMMANDS) {
       this.markLimitExceeded();
       this.isStopped = true;
@@ -274,5 +295,6 @@ export function analyzeCommand(text: string): CommandAnalysis {
   if (text.length > MAX_COMMAND_CHARS) return { status: 'limit_exceeded', commands: [] };
   const run = new AnalysisRun();
   run.analyzeScript(text, { origin: 'top', depth: 0 });
+  if (run.hasBareAssignment) for (const command of run.commands) command.textHasBareAssignment = true;
   return { status: run.status, commands: run.commands };
 }

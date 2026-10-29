@@ -1,5 +1,5 @@
 import { isLegacyMission, type ManagerView } from '@openfleet/shared';
-import { isPulseEnabled, type ManagerRecord } from './managerRepository.js';
+import { isPulseEnabled, modeOf, type ManagerRecord } from './managerRepository.js';
 import { nextPulseAt } from './pulseTiming.js';
 
 export interface DeniedCommandCounts {
@@ -24,6 +24,11 @@ export function toManagerView(record: ManagerRecord, childrenCount: number, deni
     sessionId: record.sessionId,
     pulseSeconds: record.pulseSeconds,
     pulseEnabled: isPulseEnabled(record),
+    mode: modeOf(record),
+    sleepHandoffPending: record.sleepHandoffPending === true,
+    ...(record.modeChangedAt && { modeChangedAt: record.modeChangedAt }),
+    ...(record.sleepHandoffDeliveredAt && { sleepHandoffDeliveredAt: record.sleepHandoffDeliveredAt }),
+    childAutoRestart: record.childAutoRestart === true,
     childrenCap: record.childrenCap,
     missionText: record.missionText,
     legacyMission: isLegacyMission(record.missionText),

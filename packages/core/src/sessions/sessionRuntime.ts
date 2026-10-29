@@ -17,25 +17,47 @@ interface ActiveLaunch {
   launchId: string;
   hookSequence: number;
   outputSequence: number;
+  outputBytes: number;
 }
 
 export class SessionRuntime {
   private readonly launches = new Map<string, ActiveLaunch>();
   private readonly attention = new Map<string, RuntimeAttention>();
+  private readonly outputBytesOfEndedLaunch = new Map<string, number>();
+  private readonly idsWithRestartPending = new Set<string>();
 
   constructor(private readonly bus: EventBus) {}
 
   observeLaunch(sessionId: string, handle: HarnessHandle): void {
-    const launch: ActiveLaunch = { handle, launchId: randomUUID(), hookSequence: 0, outputSequence: 0 };
+    const launch: ActiveLaunch = { handle, launchId: randomUUID(), hookSequence: 0, outputSequence: 0, outputBytes: 0 };
     this.launches.set(sessionId, launch);
+    this.outputBytesOfEndedLaunch.delete(sessionId);
     this.setAttention(sessionId, undefined);
     handle.onData((data) => {
       const isCurrentLaunch = this.launches.get(sessionId) === launch;
-      if (isCurrentLaunch && data.length > 0) launch.outputSequence += 1;
+      if (!isCurrentLaunch || data.length === 0) return;
+      launch.outputSequence += 1;
+      launch.outputBytes += Buffer.byteLength(data);
     });
     handle.onExit(() => {
-      if (this.launches.get(sessionId) === launch) this.launches.delete(sessionId);
+      if (this.launches.get(sessionId) !== launch) return;
+      this.outputBytesOfEndedLaunch.set(sessionId, launch.outputBytes);
+      this.launches.delete(sessionId);
     });
+  }
+
+  /** The bytes the pty of the session's last launch sent before its process ended; undefined while no launch ended. */
+  outputBytesOfLastEndedLaunch(sessionId: string): number | undefined {
+    return this.outputBytesOfEndedLaunch.get(sessionId);
+  }
+
+  setRestartPending(sessionId: string, isPending: boolean): void {
+    if (isPending) this.idsWithRestartPending.add(sessionId);
+    else this.idsWithRestartPending.delete(sessionId);
+  }
+
+  isRestartPending(sessionId: string): boolean {
+    return this.idsWithRestartPending.has(sessionId);
   }
 
   observeHook(sessionId: string): void {
@@ -57,7 +79,8 @@ export class SessionRuntime {
 
   project(session: Session): Session {
     const runtimeAttention = this.attention.get(session.id);
-    return runtimeAttention ? { ...session, runtimeAttention: { ...runtimeAttention } } : session;
+    const withAttention = runtimeAttention ? { ...session, runtimeAttention: { ...runtimeAttention } } : session;
+    return this.isRestartPending(session.id) ? { ...withAttention, restartPending: true } : withAttention;
   }
 
   setAttention(sessionId: string, attention: RuntimeAttention | undefined): void {

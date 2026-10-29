@@ -1,9 +1,20 @@
-import { effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
+import { CONTRACT_VERSION, configDirHarnessRefusalOf, effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { z } from 'zod';
 import { createWorktreeWithHook, postCreateHookOf } from '../git/worktreeCreation.js';
 import { isPathWithin, sameGitRepository } from '../git/worktrees.js';
+import { isDirectoryInProject } from '../projects/projectMembership.js';
+
+// A session directory stored before it was resolved, or one that no longer exists, is compared as stored.
+function realPathOrItself(directory: string): string {
+  try {
+    return realpathSync.native(directory);
+  } catch {
+    return directory;
+  }
+}
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import { resolveModel, type ModelTable } from '../models.js';
 import type { ApprovalService } from '../governance/approvalService.js';
@@ -17,11 +28,18 @@ import { log } from '../logger.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { guardedFor, ok, refuse } from './toolResults.js';
 import { lineageSessionView, managerView, sessionView } from './toolViews.js';
+import { resolveConfigDir } from '../sessions/configDir.js';
 import type { HeldFor, SessionService } from '../sessions/sessionService.js';
 import { sessionLastMessage } from './sessionLastMessage.js';
+import { pendingPermissionViewOf, type PendingPermissionView } from './pendingPermissionView.js';
 import { maskedSecrets } from '../redact.js';
 import type { ManagerDenials } from '../policy/managerDenials.js';
 import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
+import type { ScheduledEventService } from '../managers/scheduledEventService.js';
+import { scheduledEventView } from './scheduledEventTools.js';
+
+/** A child counts against the children cap while it is live or waiting for the daemon to restart it. */
+const isActiveChild = (child: Session): boolean => child.state !== 'closed' || child.restartPending === true;
 
 const MAX_AMBIGUITY_CANDIDATES = 4;
 const MAX_CANDIDATE_NAME_CHARS = 24;
@@ -54,12 +72,16 @@ export interface RegisterToolsDeps {
   sessions: SessionService;
   caller: Session;
   worktreesRoot: string;
+  /** The home directory a config_dir must live under; absent, the OS home directory. */
+  homeDirectory?: string;
   projects: Pick<ProjectRepository, 'get'>;
   approvals: ApprovalService;
   managers: ManagerService;
   pulseScheduler: PulseScheduler;
   modelTable: ModelTable;
   managerDenials?: Pick<ManagerDenials, 'countsOf'>;
+  /** The pending scheduled events get_argus_status lists; absent, it lists none. */
+  scheduledEvents?: Pick<ScheduledEventService, 'pendingOf'>;
   /** The review findings the ship gate reads; absent, get_argus_status lists no blocked ticket. */
   reviewFindings?: Pick<ReviewFindingsRepository, 'latestAdversarialLinePerTicketOf'>;
   /** The manager base this daemon ships. Absent, spawning is not checked against it and the manager view reports no base. */
@@ -145,10 +167,9 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   };
   const isInLineage = (target: Session) => target.id === caller.id || target.parentId === caller.id || target.id === caller.parentId;
 
-  const pendingPermissionFor = (sessionId: string): { toolName: string; ageSeconds: number } | undefined => {
+  const pendingPermissionFor = (sessionId: string): PendingPermissionView | undefined => {
     const pending = approvals.listPending().find((a: Approval) => a.sessionId === sessionId);
-    if (!pending) return undefined;
-    return { toolName: pending.toolName, ageSeconds: Math.floor((Date.now() - new Date(pending.createdAt).getTime()) / 1000) };
+    return pending && pendingPermissionViewOf(pending, new Date());
   };
 
   const isDescendant = (target: Session): boolean => {
@@ -160,12 +181,13 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return false;
   };
 
-  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, effort, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree, branch and runtimeAttention when set; permissionMode and harness are not echoed';
+  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, effort, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree, branch, runtimeAttention, readiness (pending, ready or failed) and readinessReason when set; permissionMode and harness are not echoed';
 
   server.registerTool('get_session_status', { description: `State of your session or one in your lineage. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);
     if (!target || !isInLineage(target)) return refuse('outside_lineage', 'session not found or outside your lineage');
-    return ok(sessionView(target));
+    const pendingPermission = pendingPermissionFor(target.id);
+    return ok(pendingPermission ? { ...sessionView(target), pendingPermission } : sessionView(target));
   });
 
   server.registerTool('get_session_card', { description: `Session status plus last_message: the latest assistant transcript text, redacted and capped at 8192 UTF-8 bytes, null when unavailable. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
@@ -221,17 +243,17 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return sendMessage(() => sessions.sendMessage({ sessionId: manager.id, body: message, fromSessionId: caller.id, messageId: message_id }));
   });
 
-  server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task. If your project configures a post-create script it runs in the new worktree; a failing script never fails the call, it adds a warnings entry (reason timeout, exit_nonzero, not_executable, not_found, unsafe_permissions or spawn_failed)', inputSchema: { repo_path: z.string(), branch_name: z.string() } }, async ({ repo_path, branch_name }) => {
+  server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task. If your project configures a post-create script it runs in the new worktree; a failing script never fails the call, it adds a warnings entry (reason timeout, exit_nonzero, not_executable, not_found, unsafe_permissions or spawn_failed)', inputSchema: { repo_path: z.string(), branch_name: z.string(), base_ref: z.string().optional().describe('Existing branch, tag or commit sha of the repository the new branch starts from; defaults to the current HEAD of repo_path') } }, async ({ repo_path, branch_name, base_ref }) => {
     const isCallersOwnRepo = await sameGitRepository(caller.directory, repo_path);
     if (!isCallersOwnRepo) return refuse('outside_own_repository', 'repo_path must be the git repository of your own session directory');
     const hook = postCreateHookOf(caller.projectId ? deps.projects.get(caller.projectId) : undefined);
-    return ok(await createWorktreeWithHook({ repoPath: repo_path, branchName: branch_name, worktreesRoot: deps.worktreesRoot, hook }));
+    return ok(await createWorktreeWithHook({ repoPath: repo_path, branchName: branch_name, baseRef: base_ref, worktreesRoot: deps.worktreesRoot, hook }));
   });
 
   server.registerTool('create_session', { description: `Spawn a child coding session in a directory (use create_worktree first). ${COMPACT_SESSION}`, inputSchema: {
     directory: z.string(), name: z.string().refine((name) => name.trim().length > 0, 'name must not be blank'), emoji: z.string().optional(), model: ModelIdSchema.optional(),
     seeded_prompt: z.string().optional(), role: z.string().optional(), permission_mode: z.enum(PERMISSION_MODES).optional(),
-    allow_duplicate: z.boolean().optional(), effort: z.string().optional(),
+    allow_duplicate: z.boolean().optional(), effort: z.string().optional(), config_dir: z.string().optional(),
     manager: z.object({ pulse_seconds: ManagerSpecSchema.shape.pulseSeconds, children_cap: ManagerSpecSchema.shape.childrenCap, mission: z.string().min(1) }).optional(),
   } }, async (input) => {
     // A parentless caller is a human-launched root session (Raphaël's own Lead/Capitaine), always trusted to
@@ -253,6 +275,13 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const effortRefusal = input.effort === undefined ? undefined : effortRefusalOf(caller.harness, input.effort);
     if (effortRefusal) return refuse('invalid_body', effortRefusal);
 
+    // The account profile is chosen by the caller alone: nothing detects or picks one, and the refusal never repeats the requested path.
+    const configDirHarnessRefusal = input.config_dir === undefined ? undefined : configDirHarnessRefusalOf(caller.harness);
+    if (configDirHarnessRefusal) return refuse('invalid_body', configDirHarnessRefusal);
+    const configDirResolution = input.config_dir === undefined ? undefined : resolveConfigDir({ requested: input.config_dir, homeDirectory: deps.homeDirectory ?? homedir(), openfleetHome: process.env.OPENFLEET_HOME });
+    if (configDirResolution && 'refusal' in configDirResolution) return refuse('invalid_body', configDirResolution.refusal);
+    const configDir = configDirResolution?.realPath;
+
     // The directory must already exist: without this, a symlinked "..' segment could be lexically
     // collapsed back inside the root by path.resolve() while the OS actually opened somewhere else, and
     // a genuinely missing directory used to reach the harness, which then died with exit 1 instead of
@@ -261,6 +290,8 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // realpathSync.native, not the plain (non-native) realpathSync: Node's own JS reimplementation has a
     // lexical blind spot for some symlink + ".." combinations that the native OS call does not.
     const realDirectory = realpathSync.native(input.directory);
+
+    await sessions.assertHarnessHealthy(caller.harness);
 
     const ownerOfRequestedDirectory = findLineageSessionOwning(realDirectory);
     if (ownerOfRequestedDirectory) {
@@ -290,6 +321,15 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const isCallersOwnRepo = await sameGitRepository(caller.directory, realDirectory);
     if (!isWithinWorktreesRoot && !isCallersOwnRepo) return refuse('outside_own_repository', 'directory must be inside the worktrees root or inside your own git repository');
 
+    const callerProjectId = caller.projectId;
+    if (callerProjectId !== undefined) {
+      const callerProject = deps.projects.get(callerProjectId);
+      const projectDirectories = sessions.list().filter((session) => session.projectId === callerProjectId).map((session) => realPathOrItself(session.directory));
+      const isInCallersProject = await isDirectoryInProject({ realDirectory, projectDirectories, docsFolderPath: callerProject?.docsFolderPath ?? null, sameGitRepository });
+      const projectName = callerProject?.name ?? callerProjectId;
+      if (!isInCallersProject) return refuse('directory_not_in_project', `directory ${realDirectory} belongs to no project.`, `Spawn inside project "${projectName}": use one of its directories or a worktree of its repository (create_worktree).`);
+    }
+
     const isDirectoryUnchangedSinceChecks = existsSync(input.directory) && realpathSync.native(input.directory) === realDirectory;
     if (!isDirectoryUnchangedSinceChecks) return refuse('spawn_raced', `directory ${input.directory} changed while the spawn was being checked: retry`);
 
@@ -308,7 +348,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       // inside sessions.create()/managers.createManagerSession() below: Node never interleaves another
       // callback into this handler before that insert happens, so two concurrent create_session calls
       // can never both pass this check before either session exists — see Review Focus #3.
-      const activeChildren = sessions.list().filter((s) => s.parentId === caller.id && s.state !== 'closed').length;
+      const activeChildren = sessions.list().filter((s) => s.parentId === caller.id && isActiveChild(s)).length;
       // A manager-role caller with no ManagerRecord (legacy data, a role forged before this guard existed,
       // a deleted record) is capped at 0 rather than treated as unlimited — defence in depth.
       const childrenCap = record ? record.childrenCap : 0;
@@ -340,7 +380,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
 
     const spec = {
       directory: realDirectory, name: input.name, emoji: input.emoji ?? '🤖', model: resolvedModel,
-      seededPrompt: input.seeded_prompt, role: input.role, parentId: caller.id, harness: caller.harness, permissionMode, projectId: caller.projectId, effort: input.effort,
+      seededPrompt: input.seeded_prompt, role: input.role, parentId: caller.id, harness: caller.harness, permissionMode, projectId: caller.projectId, effort: input.effort, configDir,
     };
 
     const child = input.manager
@@ -365,13 +405,15 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       pendingPermission: pendingPermissionFor(child.id),
       queuedMessageCount: sessions.queuedMessageCount(child.id),
       ...(child.runtimeAttention && { runtimeAttention: child.runtimeAttention }),
+      ...(child.restartPending && { restartPending: true }),
     }));
     const record = caller.role === MANAGER_ROLE ? managers.get(caller.id) : undefined;
-    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed').length, deps.managerDenials?.countsOf(record.sessionId), managerBase)) : null;
+    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed' || c.restartPending).length, deps.managerDenials?.countsOf(record.sessionId), managerBase)) : null;
     const blockedTickets = (deps.reviewFindings?.latestAdversarialLinePerTicketOf(caller.id) ?? [])
       .filter((line) => line.severity === 'no-go')
       .map(({ ticket, sha, reasons }) => ({ ticket, sha, reasons }));
-    return ok({ manager, children, blockedTickets });
+    const scheduledEvents = (deps.scheduledEvents?.pendingOf(caller.id) ?? []).map(scheduledEventView);
+    return ok({ contract_version: CONTRACT_VERSION, manager, children, blockedTickets, scheduled_events: scheduledEvents });
   });
 
   server.registerTool('pulse_now', { description: 'Trigger an immediate pulse for a manager (yourself, or a manager you are the parent of)', inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {

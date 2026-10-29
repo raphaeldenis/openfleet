@@ -90,7 +90,7 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
             <tbody>
               @for (rule of view.rules; track rule.id) {
                 <tr [attr.data-testid]="'policy-rule-' + rule.id" [attr.data-enabled]="rule.enabled ? '1' : '0'">
-                  <th scope="row" class="rule-name"><div class="rule-name-lines"><span class="mono">{{ rule.id }}</span><span class="reason">{{ rule.reason }}</span></div></th>
+                  <th scope="row" class="rule-name"><div class="rule-name-lines"><span class="mono rule-id">{{ rule.id }}</span><span class="reason">{{ rule.reason }}</span></div></th>
                   <td class="mono">{{ rule.profiles.length > 0 ? rule.profiles.join(', ') : '—' }}</td>
                   <td><span class="of-badge decision" [attr.data-decision]="rule.decision">{{ rule.decision }}</span></td>
                   <td class="alternative">{{ rule.alternative ?? '—' }}</td>
@@ -209,6 +209,7 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
     tbody tr[data-enabled='0'] { color: var(--mut); }
     .rule-name { font-weight: 400; }
     .rule-name-lines { display: flex; flex-direction: column; gap: .125rem; }
+    .rule-id { white-space: nowrap; }
     .reason { color: var(--mut); overflow-wrap: anywhere; }
     .alternative { color: var(--mut); overflow-wrap: anywhere; min-width: 10rem; }
     .decision[data-decision='deny'] { background: color-mix(in oklch, var(--state-error) 14%, transparent); color: var(--fg); }

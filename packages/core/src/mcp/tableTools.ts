@@ -1,9 +1,10 @@
-import { AggregateSchema, ScapeAggregateSchema, AutoValueSchema, ColumnFormatSchema, ColumnTypeSchema, OptionReplacementSchema, SelectOptionSchema, type Aggregate, type ScapeAggregate, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
+import { AggregateSchema, ScapeAggregateSchema, AutoValueSchema, ColumnConfigSchema, ColumnFormatSchema, ColumnTypeSchema, DisplayWidthSchema, MAX_DISPLAY_WIDTH, MAX_SELECT_OPTIONS, MAX_WRAP_LINES, MIN_DISPLAY_WIDTH, OptionReplacementSchema, SelectOptionSchema, WrapMaxLinesSchema, WrapModeSchema, type Aggregate, type ColumnChanges, type ScapeAggregate, type DataStore, type DsColumn, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { RowNotFoundError, StoreNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
+import { RowNotFoundError, UnknownColumnReferenceError, type DataStoreRepository, type RowActor } from '../stores/dataStoreRepository.js';
 import { InvalidColumnDefinitionError, SAVE_MODES, type DataStoreService } from '../stores/dataStoreService.js';
 import { guardedFor, refusalReasonOf, refuse } from './toolResults.js';
+import { ownStoreOf as ownStoreOfCaller } from './ownStore.js';
 import { queryPage } from './queryPage.js';
 import { storePage } from './storePage.js';
 import { cellsKeyedByColumnId, coerceFilterValue, columnLookupFor, requireColumn } from './rowValues.js';
@@ -33,13 +34,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     return caller.projectId ? { projectId: caller.projectId } : undefined;
   }
 
-  /** The caller's own store a reference names, by id or else by display name; a foreign or missing store reads the same. */
-  function ownStoreOf(reference: string, scope: { projectId: string }): DataStore {
-    const storeWithThatId = storeRepo.findStore(reference);
-    const store = storeWithThatId?.projectId === scope.projectId ? storeWithThatId : storeRepo.findStoreByName(scope.projectId, reference);
-    if (!store) throw new StoreNotFoundError(reference);
-    return store;
-  }
+  const ownStoreOf = (reference: string, scope: { projectId: string }): DataStore => ownStoreOfCaller(storeRepo, reference, scope);
 
   server.registerTool('create_data_store', {
     description: 'Create a new data store (table) in your project',
@@ -123,15 +118,45 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       + 'name renames it. natural_key true makes a text column the natural key of the store, false clears the key when this column holds it. '
       + 'options (select column only) replaces the whole option list: an entry keeps the id of the current option with the same id, else with the same label, otherwise it gets a new id; '
       + 'labels must be unique whatever their case, and labels and colors are taken from the replacement list only (a color left out is cleared, never kept from the old option); '
-      + 'it is refused while a row still holds an option that is dropped. Pass at least one of name, natural_key, options. All changes land together or none. Returns the column',
-    inputSchema: { store: z.string().min(1), column_id: z.string().min(1), name: z.string().min(1).optional(), natural_key: z.boolean().optional(), options: z.array(OptionReplacementSchema).optional() },
-  }, async ({ store, column_id, name, natural_key, options }) => {
+      + `it is refused while a row still holds an option that is dropped; at most ${MAX_SELECT_OPTIONS} options, each color #RGB, #RRGGBB or #RRGGBBAA. `
+      + 'required marks the column required (stored and returned, not enforced on row writes). '
+      + 'display_column_id (an id or display name of ANOTHER column of the same store) names the column that labels this one; clear_display_column_id true unsets it; a column used as display column cannot be deleted. '
+      + 'format (datetime on a date column, longText or url on a text column, rank on a number column) sets the display format; clear_format true unsets it. '
+      + 'config (number column only) is {symbol (max 8 characters), decimals (0-10), ratingMax (1-10), ratingIcon (max 32 characters)} and replaces the whole config; clear_config true unsets it. '
+      + `display_width is the width in pixels (${MIN_DISPLAY_WIDTH}-${MAX_DISPLAY_WIDTH}); clear_display_width true unsets it. `
+      + `wrap_mode "wrap" wraps cell text, with wrap_max_lines (1-${MAX_WRAP_LINES}) as an optional line cap; "truncate" resets the wrapping (and takes no wrap_max_lines). `
+      + 'Each field is either set or cleared in one call, never both. Pass at least one change. All changes land together or none. Returns the column',
+    inputSchema: {
+      store: z.string().min(1), column_id: z.string().min(1), name: z.string().min(1).optional(), natural_key: z.boolean().optional(), options: z.array(OptionReplacementSchema).max(MAX_SELECT_OPTIONS).optional(),
+      required: z.boolean().optional(),
+      display_column_id: z.string().min(1).optional(), clear_display_column_id: z.boolean().optional(),
+      format: ColumnFormatSchema.optional(), clear_format: z.boolean().optional(),
+      config: ColumnConfigSchema.optional(), clear_config: z.boolean().optional(),
+      display_width: DisplayWidthSchema.optional(), clear_display_width: z.boolean().optional(),
+      wrap_mode: WrapModeSchema.optional(), wrap_max_lines: WrapMaxLinesSchema.optional(),
+    },
+  }, async ({ store, column_id, name, natural_key, options, required, display_column_id, clear_display_column_id, format, clear_format, config, clear_config, display_width, clear_display_width, wrap_mode, wrap_max_lines }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
+    const setAndClearedTogether = [
+      ['display_column_id', display_column_id, clear_display_column_id], ['format', format, clear_format], ['config', config, clear_config], ['display_width', display_width, clear_display_width],
+    ].filter(([, value, cleared]) => value !== undefined && cleared === true).map(([field]) => field);
+    if (setAndClearedTogether.length > 0) return refuse('invalid_body', `pass either ${setAndClearedTogether.join(', ')} or its clear_ flag, not both`);
+    const hasWrapLinesWithoutWrap = wrap_max_lines !== undefined && wrap_mode !== 'wrap';
+    if (hasWrapLinesWithoutWrap) return refuse('invalid_body', 'wrap_max_lines needs wrap_mode "wrap"');
     return guarded(() => {
       const ownStore = ownStoreOf(store, scope);
-      const column = requireColumn(storeRepo.listColumns(ownStore.id), column_id);
-      return columnView(stores.updateColumn(ownStore.id, { ...scope, columnId: column.id, changes: { name, naturalKey: natural_key, options } }));
+      const storeColumns = storeRepo.listColumns(ownStore.id);
+      const column = requireColumn(storeColumns, column_id);
+      const displayColumnId = clear_display_column_id === true ? null : display_column_id === undefined ? undefined : requireColumn(storeColumns, display_column_id).id;
+      const changes: ColumnChanges = {
+        name, naturalKey: natural_key, options, required, displayColumnId,
+        format: clear_format === true ? null : format,
+        config: clear_config === true ? null : config,
+        displayWidth: clear_display_width === true ? null : display_width,
+        wrap: wrap_mode === undefined ? undefined : { mode: wrap_mode, maxLines: wrap_max_lines },
+      };
+      return columnView(stores.updateColumn(ownStore.id, { ...scope, columnId: column.id, changes }));
     });
   });
 

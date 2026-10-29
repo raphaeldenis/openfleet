@@ -1,8 +1,10 @@
 import type { FlagGroups, PolicyRequest, RulePredicate } from '@openfleet/shared';
 import type { SimpleCommand } from './commandAnalyzer.js';
 import { argsWithoutRepoOptionsAroundGroup } from './ghPrCreate.js';
+import { runsDeclaredCommand } from './declaredCommands.js';
 import { globMatches } from './pathGlob.js';
 import { isPlainReadWithin } from './readOnlyAccess.js';
+import { writesFileOutside } from './shellFileWrites.js';
 import { parseSearchArguments } from './searchArguments.js';
 
 /** What a predicate is asked about: one simple command, or a tool call that names files instead. */
@@ -15,8 +17,9 @@ export interface PredicateContext {
 type Check = (predicate: RulePredicate, context: PredicateContext) => boolean;
 
 const KNOWN_PREDICATE_KEYS: ReadonlySet<string> = new Set([
-  'program', 'subcommand', 'flags', 'commandPrefix', 'repoWideSearch', 'writesPathMatching', 'argMatching', 'readsOnlyWithin', 'anyOf', 'allOf', 'not',
+  'program', 'subcommand', 'flags', 'commandPrefix', 'repoWideSearch', 'writesPathMatching', 'argMatching', 'readsOnlyWithin', 'recipientIsFleetSession', 'writesFilesOutside', 'runsDeclaredCommand', 'anyOf', 'allOf', 'not',
 ]);
+const SESSION_ID_OR_PREFIX = /^[0-9a-f]{8}(-[0-9a-f]{1,12}){0,4}$/i;
 const GIT_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
 const FILE_WRITING_REDIRECTS: ReadonlySet<string> = new Set(['>', '>>', '>|', '&>', '&>>', '<>']);
 const FILE_COPYING_PROGRAMS: ReadonlySet<string> = new Set(['cp', 'mv']);
@@ -95,12 +98,19 @@ function writtenPathsOf(command: SimpleCommand): string[] {
 
 function rootsOf(templates: string[], request: PolicyRequest): string[] {
   const resolveTemplate = (template: string): string[] => {
-    if (template === WORKTREE_TEMPLATE) return request.worktreeRoot === undefined ? [] : [request.worktreeRoot];
+    if (template.startsWith(WORKTREE_TEMPLATE)) return request.worktreeRoot === undefined ? [] : [`${request.worktreeRoot}${template.slice(WORKTREE_TEMPLATE.length)}`];
     if (template === SCRATCH_TEMPLATE) return request.scratchRoots;
     if (template === TOOL_RESULTS_TEMPLATE) return request.toolResultsRoot === undefined ? [] : [request.toolResultsRoot];
     return [template];
   };
   return templates.flatMap(resolveTemplate);
+}
+
+function addressesFleetSession(request: PolicyRequest): boolean {
+  const { recipient } = request;
+  if (recipient === undefined) return false;
+  const isSessionIdOrPrefix = SESSION_ID_OR_PREFIX.test(recipient);
+  return isSessionIdOrPrefix || request.recipientNamesManager === true;
 }
 
 const CHECKS: readonly Check[] = [
@@ -115,6 +125,10 @@ const CHECKS: readonly Check[] = [
   ({ argMatching }, { command }) => argMatching === undefined || (command !== undefined && command.args.some((arg) => argMatching.some((glob) => globMatches(glob, arg)))),
   ({ readsOnlyWithin }, { command, request }) => readsOnlyWithin === undefined
     || (command !== undefined && isPlainReadWithin(command, { cwd: request.cwd, roots: rootsOf(readsOnlyWithin, request) })),
+  ({ recipientIsFleetSession }, { request }) => recipientIsFleetSession === undefined || addressesFleetSession(request) === recipientIsFleetSession,
+  ({ writesFilesOutside }, { command, request }) => writesFilesOutside === undefined
+    || (command !== undefined && writesFileOutside(command, { cwd: request.cwd, roots: rootsOf(writesFilesOutside, request) })),
+  ({ runsDeclaredCommand: declared }, { command, request }) => declared === undefined || (command !== undefined && runsDeclaredCommand(command, declared, request)),
   ({ anyOf }, context) => anyOf === undefined || anyOf.some((child) => matchesPredicate(child, context)),
   ({ allOf }, context) => allOf === undefined || allOf.every((child) => matchesPredicate(child, context)),
   ({ not }, context) => not === undefined || !matchesPredicate(not, context),

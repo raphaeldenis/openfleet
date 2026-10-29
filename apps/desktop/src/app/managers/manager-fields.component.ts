@@ -50,14 +50,16 @@ function kilobytesLabelOf(bytes: number): string {
   imports: [FormsModule, ErrorLineComponent],
   viewProviders: [{ provide: ControlContainer, useExisting: NgForm }],
   template: `
-    <div class="of-row">
+    <div class="of-row" [class.of-row--compact]="isCompact()" [attr.role]="isCompact() ? 'group' : null" [attr.aria-label]="isCompact() ? 'Pulse, children cap and model' : null">
       <div class="of-field">
         <label class="of-label" for="manager-pulse-seconds">Pulse cadence</label>
-        <div class="presets" role="group" aria-label="Pulse cadence presets">
-          @for (preset of pulsePresets; track preset.label) {
-            <button type="button" class="preset" [attr.aria-pressed]="isPresetInForce(preset)" [attr.aria-disabled]="isLocked() ? 'true' : null" (click)="choosePreset(preset)">{{ preset.label }}</button>
-          }
-        </div>
+        @if (!isCompact()) {
+          <div class="presets" role="group" aria-label="Pulse cadence presets">
+            @for (preset of pulsePresets; track preset.label) {
+              <button type="button" class="preset" [attr.aria-pressed]="isPresetInForce(preset)" [attr.aria-disabled]="isLocked() ? 'true' : null" (click)="choosePreset(preset)">{{ preset.label }}</button>
+            }
+          </div>
+        }
         <div class="custom">
           <input
             #pulseSecondsInput id="manager-pulse-seconds" class="of-input pulse-input" data-testid="manager-pulse-seconds" name="pulseSeconds" type="number" [readonly]="isLocked()"
@@ -93,6 +95,7 @@ function kilobytesLabelOf(bytes: number): string {
           <of-error-line id="manager-children-cap-error" role="alert" data-testid="manager-children-cap-error">{{ error }}</of-error-line>
         }
       </div>
+      <ng-content select="[rowEnd]" />
     </div>
     <div class="of-field">
       <label class="of-label" for="manager-mission">Mission</label>
@@ -114,6 +117,8 @@ function kilobytesLabelOf(bytes: number): string {
     :host { display: flex; flex-direction: column; gap: 1.25rem }
     .of-row { display: flex; gap: 1rem }
     .of-row .of-field { flex: 1 }
+    .of-row--compact { flex-wrap: wrap; align-items: flex-start }
+    .of-row--compact .of-field { flex: 1 1 11rem }
     .presets { display: flex; flex-wrap: wrap; gap: .25rem }
     .preset { flex: 1 1 3rem; height: 2rem; padding: 0 .375rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; font-size: .75rem; white-space: nowrap; cursor: pointer }
     .preset[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-bg) }
@@ -136,6 +141,8 @@ export class ManagerFieldsComponent implements OnInit {
   protected readonly childrenCapBounds = CHILDREN_CAP_BOUNDS;
   protected readonly pulsePresets = PULSE_PRESETS;
   readonly isLocked = input(false);
+  /** Lays pulse, children cap and a projected `rowEnd` field on one row, without the cadence presets. */
+  readonly isCompact = input(false);
   // Undefined or null (typed then cleared): the daemon applies its own heartbeat default.
   readonly pulseSeconds = model<number | null | undefined>(undefined);
   readonly childrenCap = model(2);

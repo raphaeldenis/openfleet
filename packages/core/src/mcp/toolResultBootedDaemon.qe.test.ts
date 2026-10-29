@@ -32,8 +32,14 @@ const childDirectory = (name: string) => {
   return directory;
 };
 
+// The project root works in the worktrees root, so every child directory made below it belongs to the project.
+const worktreesRootDirectory = () => {
+  mkdirSync(config.worktreesRoot, { recursive: true });
+  return config.worktreesRoot;
+};
+
 async function bootRootSession() {
-  const created = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'Root', harness: 'fake', emoji: '🧭' }) })).json()) as { id: string };
+  const created = (await (await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: worktreesRootDirectory(), name: 'Root', harness: 'fake', emoji: '🧭' }) })).json()) as { id: string };
   new ProjectRepository(daemon.db).insert({ id: 'p1', name: 'One', docsFolderPath: null, createdAt: 't0' });
   daemon.db.prepare('UPDATE sessions SET project_id = ? WHERE id = ?').run('p1', created.id);
   return created.id;
@@ -185,7 +191,7 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
 
     const sessions = (await (await adminApi('/api/sessions')).json()) as { name: string }[];
 
-    expect(keysOf(sessions.find((session) => session.name === 'Kid')!)).toEqual(['createdAt', 'directory', 'emoji', 'harness', 'id', 'name', 'parentId', 'permissionMode', 'policyEnforcement', 'projectId', 'state', 'stateSince']);
+    expect(keysOf(sessions.find((session) => session.name === 'Kid')!)).toEqual(['createdAt', 'directory', 'emoji', 'harness', 'id', 'name', 'parentId', 'permissionMode', 'policyEnforcement', 'projectId', 'readiness', 'state', 'stateSince']);
   });
 
   it('REST keeps its full row and row history shapes while MCP is compact: an operator still gets storeId and createdAt on rows, and rowId and id on changes', async () => {
@@ -198,6 +204,6 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
     const changes = (await (await adminApi(`/api/data-stores/${store.id}/rows/${inserted.ids[0]}/changes?projectId=p1`)).json()) as { items: object[] };
 
     expect(keysOf(rows.items[0]!)).toEqual(['createdAt', 'data', 'id', 'storeId', 'updatedAt']);
-    expect(keysOf(changes.items[0]!)).toEqual(['actorKind', 'actorLabel', 'change', 'createdAt', 'id', 'rowId']);
+    expect(keysOf(changes.items[0]!)).toEqual(['actorKind', 'actorLabel', 'change', 'createdAt', 'id', 'rowId', 'seq']);
   });
 });

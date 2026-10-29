@@ -23,10 +23,14 @@ export interface SourceLosses {
   storesWithoutTables: string[];
   droppedColumnFormats: { columnId: string; format: string }[];
   droppedViewFields: { viewId: string; fields: string[] }[];
+  /** A column field (required, config, display column, width, wrap) the source holds and OpenFleet cannot keep, with its source value. */
+  droppedColumnMetadata: { columnId: string; field: string; value: string }[];
+  /** An option color that is neither a hex color nor a standard CSS color name. */
+  droppedOptionColors: { columnId: string; optionId: string; color: string }[];
 }
 
 export const emptySourceLosses = (): SourceLosses => ({
-  orphanDatastoreFiles: [], storesWithoutTables: [], droppedColumnFormats: [], droppedViewFields: [],
+  orphanDatastoreFiles: [], storesWithoutTables: [], droppedColumnFormats: [], droppedViewFields: [], droppedColumnMetadata: [], droppedOptionColors: [],
 });
 
 export interface ImportReport extends SourceLosses {
@@ -125,6 +129,8 @@ export function renderImportReport(report: ImportReport): string {
   const toolsWithoutEquivalent = Object.entries(report.missionToolReferences.withoutEquivalent).map(([toolName, count]) => `${toolName}: ${count}`);
   const droppedColumnFormats = report.droppedColumnFormats.map(({ columnId, format }) => `${columnId}: ${format}`);
   const droppedViewFields = report.droppedViewFields.map(({ viewId, fields }) => `${viewId}: ${fields.join(', ')}`);
+  const droppedColumnMetadata = report.droppedColumnMetadata.map(({ columnId, field, value }) => `${columnId}: ${field} = ${value}`);
+  const droppedOptionColors = report.droppedOptionColors.map(({ columnId, optionId, color }) => `${columnId} / ${optionId}: ${color}`);
   return [
     `# Scape import report${report.dryRun ? ' (dry run: nothing written)' : ''}`,
     '',
@@ -138,7 +144,7 @@ export function renderImportReport(report: ImportReport): string {
     '',
     'Removed in Scape: the last import wrote the record and the Scape source no longer holds it; it stays in OpenFleet. Not counted by a run limited to one project.',
     '',
-    'Not converted: notes and versions holding at least one lexical node without a markdown form; playbooks archived as inert text in one note per project (playbook counts follow the archive write outcome); columns whose display format is dropped; views whose settings are dropped or that cannot be mapped; rows holding a select value that is not one of the column options; log entries that changed nothing; managers whose mission note is outside the import or whose mission is unusable, whose model is not a known alias, or whose granted note or table is not imported.',
+    'Not converted: notes and versions holding at least one lexical node without a markdown form; playbooks archived as inert text in one note per project (playbook counts follow the archive write outcome); columns whose display format, a setting or an option color is dropped; views whose settings are dropped or that cannot be mapped; rows holding a select value that is not one of the column options; log entries that changed nothing; managers whose mission note is outside the import or whose mission is unusable, whose model is not a known alias, or whose granted note or table is not imported.',
     '',
     '## Orphan datastore files — ignored',
     'These files have no project in the Scape project catalog. Their tables are not read or imported.',
@@ -151,6 +157,14 @@ export function renderImportReport(report: ImportReport): string {
     '## Column display formats not converted',
     'Values and column types are kept; the Scape display formats have no OpenFleet equivalent.',
     ...bulletList(droppedColumnFormats),
+    '',
+    '## Column settings not converted',
+    'OpenFleet keeps required, config, display column, width and wrap when valid; a value it cannot hold (unknown or cyclic display column, width outside 60-1200, config it does not know, config on a non-number column, wrap lines without wrap) is left out.',
+    ...bulletList(droppedColumnMetadata),
+    '',
+    '## Option colors not converted',
+    'Hex colors are kept and standard CSS color names are converted to hex; any other color is left out.',
+    ...bulletList(droppedOptionColors),
     '',
     '## View settings not converted',
     'OpenFleet keeps supported kanban grouping, card fields, title, column order and ungrouped settings. Unsupported or invalid source properties listed below are lost in whole or in part.',

@@ -15,6 +15,9 @@ const formatValue = (value: unknown) => (value === null || value === undefined ?
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [ActorBadgeComponent],
   template: `
+    @if (identifier(); as rowIdentifier) {
+      <div class="identifier" data-testid="history-identifier">{{ rowIdentifier }}</div>
+    }
     @if (heading(); as title) {
       <div class="heading" data-testid="history-heading">{{ title }}</div>
     }
@@ -39,7 +42,9 @@ const formatValue = (value: unknown) => (value === null || value === undefined ?
   `,
   styles: `
     :host { display: flex; flex-direction: column }
+    .identifier { padding: .75rem .875rem 0; font-family: var(--mono); font-size: .6875rem; color: var(--mut) }
     .heading { padding: .75rem .875rem; border-bottom: 1px solid var(--line); font-weight: 600 }
+    .identifier + .heading { padding-top: .125rem }
     .section-title { padding: .5rem .875rem }
     .entry { display: flex; padding: .375rem .875rem; font-size: .75rem }
     .body { flex: 1; min-width: 0; display: flex; flex-direction: column }
@@ -53,6 +58,8 @@ export class RowHistoryComponent {
   readonly entries = input.required<DsRowHistoryEntry[]>();
   readonly columns = input<DsColumn[]>([]);
   readonly heading = input<string | null>(null);
+  /** The table and row the history belongs to, shown above the heading. */
+  readonly identifier = input<string | null>(null);
 
   private readonly columnById = computed(() => new Map(this.columns().map((column) => [column.id, column])));
 

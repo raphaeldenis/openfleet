@@ -134,12 +134,12 @@ describe('column edit REST routes', () => {
     const { store, name, status } = seedStore();
 
     const renamed = await call('PATCH', `/api/data-stores/${store.id}/columns/${name.id}`, { projectId: 'p1', name: 'Product' });
-    const reoptioned = await call('PATCH', `/api/data-stores/${store.id}/columns/${status.id}`, { projectId: 'p1', options: [{ label: 'Done', color: 'green' }, { label: 'Later' }] });
+    const reoptioned = await call('PATCH', `/api/data-stores/${store.id}/columns/${status.id}`, { projectId: 'p1', options: [{ label: 'Done', color: '#0a0' }, { label: 'Later' }] });
 
     expect(renamed.status).toBe(200);
     expect(await json(renamed)).toMatchObject({ id: name.id, displayName: 'Product', columnType: 'text' });
     expect(reoptioned.status).toBe(200);
-    expect((await json(reoptioned)).options).toEqual([{ id: 'done', label: 'Done', color: 'green' }, { id: expect.any(String), label: 'Later' }]);
+    expect((await json(reoptioned)).options).toEqual([{ id: 'done', label: 'Done', color: '#0a0' }, { id: expect.any(String), label: 'Later' }]);
   });
 
   it('refuses options on a text column and an unknown field with 400 and changes nothing', async () => {
@@ -151,6 +151,92 @@ describe('column edit REST routes', () => {
     expect(retyped.status).toBe(400);
     expect(unknownField.status).toBe(400);
     expect(await columnNames(store.id)).toEqual(['name', 'qty', 'status']);
+  });
+
+  it('persists the column metadata and returns it on PATCH and on the next read, then clears it with null and truncate', async () => {
+    const { store, name, qty } = seedStore();
+    const qtyPath = `/api/data-stores/${store.id}/columns/${qty.id}`;
+    const metadata = { required: true, displayColumnId: name.id, format: 'rank', config: { symbol: '€', decimals: 2, ratingMax: 5, ratingIcon: 'star' }, displayWidth: 240, wrap: { mode: 'wrap', maxLines: 3 } };
+
+    const patched = await call('PATCH', qtyPath, { projectId: 'p1', ...metadata });
+    const read = (await json(await call('GET', `/api/data-stores/${store.id}?projectId=p1`))).columns.find((column: DsColumn) => column.id === qty.id);
+    const cleared = await call('PATCH', qtyPath, { projectId: 'p1', required: false, displayColumnId: null, format: null, config: null, displayWidth: null, wrap: { mode: 'truncate' } });
+
+    expect(patched.status).toBe(200);
+    expect(await json(patched)).toMatchObject(metadata);
+    expect(read).toMatchObject(metadata);
+    const clearedColumn = await json(cleared);
+    for (const field of ['required', 'displayColumnId', 'format', 'config', 'displayWidth', 'wrap']) expect(clearedColumn).not.toHaveProperty(field);
+  });
+
+  it.each([
+    ['a width under 60', { displayWidth: 59 }],
+    ['a width over 1200', { displayWidth: 1201 }],
+    ['wrap lines over 100', { wrap: { mode: 'wrap', maxLines: 101 } }],
+    ['wrap lines with truncate', { wrap: { mode: 'truncate', maxLines: 2 } }],
+    ['a symbol over 8 characters', { config: { symbol: '123456789' } }],
+    ['decimals over 10', { config: { decimals: 11 } }],
+    ['ratingMax over 10', { config: { ratingMax: 11 } }],
+    ['a ratingIcon over 32 characters', { config: { ratingIcon: 'x'.repeat(33) } }],
+    ['an unknown config key', { config: { colour: 'red' } }],
+    ['a format of another type', { format: 'url' }],
+    ['a display column of the column itself', { displayColumnId: 'SELF' }],
+    ['an unknown display column', { displayColumnId: 'missing' }],
+  ])('refuses %s with 400 and writes nothing, not even the valid required flag', async (_label, changes) => {
+    const { store, qty } = seedStore();
+    const body = JSON.parse(JSON.stringify(changes).replace('SELF', qty.id));
+
+    const response = await call('PATCH', `/api/data-stores/${store.id}/columns/${qty.id}`, { projectId: 'p1', required: true, ...body });
+
+    expect(response.status).toBe(400);
+    expect(storeRepo.listColumns(store.id).find((column) => column.id === qty.id)).toEqual(qty);
+  });
+
+  it('refuses a config on a text column and a column type change, leaving the column untouched', async () => {
+    const { store, name } = seedStore();
+    const namePath = `/api/data-stores/${store.id}/columns/${name.id}`;
+
+    const config = await call('PATCH', namePath, { projectId: 'p1', config: { decimals: 1 } });
+    const retype = await call('PATCH', namePath, { projectId: 'p1', required: true, columnType: 'number' });
+
+    expect(config.status).toBe(400);
+    expect(retype.status).toBe(400);
+    expect(storeRepo.listColumns(store.id).find((column) => column.id === name.id)).toEqual(name);
+  });
+
+  it('refuses to delete the column another column uses as display column, then deletes it once cleared', async () => {
+    const { store, name, qty } = seedStore();
+    await call('PATCH', `/api/data-stores/${store.id}/columns/${qty.id}`, { projectId: 'p1', displayColumnId: name.id });
+
+    const blocked = await call('DELETE', `/api/data-stores/${store.id}/columns/${name.id}?projectId=p1`);
+    await call('PATCH', `/api/data-stores/${store.id}/columns/${qty.id}`, { projectId: 'p1', displayColumnId: null });
+    const allowed = await call('DELETE', `/api/data-stores/${store.id}/columns/${name.id}?projectId=p1`);
+
+    expect(blocked.status).toBe(400);
+    expect(await json(blocked)).toMatchObject({ error: 'constraint_violation', detail: 'Column "name" is the display column of "qty"; clear that display column first' });
+    expect(allowed.status).toBe(200);
+  });
+
+  it('does not let another project edit the metadata of a column', async () => {
+    const { store, qty } = seedStore();
+
+    const response = await call('PATCH', `/api/data-stores/${store.id}/columns/${qty.id}`, { projectId: 'p2', required: true, displayWidth: 200 });
+
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(storeRepo.listColumns(store.id).find((column) => column.id === qty.id)).toEqual(qty);
+  });
+
+  it('refuses an option color that is not hex and more than 500 options', async () => {
+    const { store, status } = seedStore();
+    const statusPath = `/api/data-stores/${store.id}/columns/${status.id}`;
+
+    const named = await call('PATCH', statusPath, { projectId: 'p1', options: [{ label: 'A', color: 'green' }] });
+    const tooMany = await call('PATCH', statusPath, { projectId: 'p1', options: Array.from({ length: 501 }, (_, index) => ({ label: `O${index}` })) });
+    const hex = await call('PATCH', statusPath, { projectId: 'p1', options: [{ label: 'A', color: '#A1B2C3D4' }] });
+
+    expect(named.status).toBe(400);
+    expect(tooMany.status).toBe(400);
+    expect(hex.status).toBe(200);
   });
 
   it('sets then clears the natural key', async () => {

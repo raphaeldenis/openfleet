@@ -51,7 +51,8 @@ async function attempt(client: Client, args: Json): Promise<{ isRefused: boolean
 }
 
 async function aRootSession(): Promise<string> {
-  const directory = directories.make('root-');
+  // The root works in the worktrees root, so every child directory made below it belongs to the project.
+  const directory = config.worktreesRoot;
   const response = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory, name: 'Root', harness: 'fake', emoji: '🤖', projectId: PROJECT_ID }) });
   return (await response.json()).id;
 }

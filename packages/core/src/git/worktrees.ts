@@ -24,7 +24,7 @@ export async function run(args: string[], options: GitRunOptions): Promise<{ std
 }
 
 export class WorktreeError extends Error {
-  constructor(public readonly code: 'invalid_branch' | 'exists' | 'git_failed' | 'directory_missing' | 'git_unavailable', message: string) {
+  constructor(public readonly code: 'invalid_branch' | 'invalid_base_ref' | 'exists' | 'git_failed' | 'directory_missing' | 'git_unavailable', message: string) {
     super(message);
   }
 }
@@ -46,7 +46,29 @@ export function isValidBranchName(branchName: string): boolean {
 
 const isDirectory = (path: string): boolean => existsSync(path) && statSync(path).isDirectory();
 
-export async function createWorktree(input: { repoPath: string; branchName: string; worktreesRoot: string; env?: NodeJS.ProcessEnv }): Promise<{ path: string; branch: string }> {
+const INVALID_BASE_REF_MESSAGE = 'base_ref must be the name of a branch or tag, or a commit sha, that already exists in this repository.';
+const refuseBaseRef = (): never => { throw new WorktreeError('invalid_base_ref', INVALID_BASE_REF_MESSAGE); };
+
+/** A plain branch, tag or sha spelling: no leading dash, no revision syntax (~ ^ : @ and the `..` range), no whitespace or control character. */
+const isPlainRefSpelling = (baseRef: string): boolean => {
+  const isWithinLengthCap = baseRef.length <= MAX_BRANCH_NAME_CHARS;
+  const isRangeExpression = baseRef.includes('..');
+  return isWithinLengthCap && SAFE_BRANCH.test(baseRef) && !isRangeExpression;
+};
+
+/** Returns the commit sha the ref names; refuses a ref that is malformed or does not resolve to a commit of the repository. */
+async function resolveBaseRefCommit(input: { repoPath: string; baseRef: string; env?: NodeJS.ProcessEnv }): Promise<string> {
+  if (!isPlainRefSpelling(input.baseRef)) return refuseBaseRef();
+  try {
+    const { stdout } = await run(['rev-parse', '--verify', '--quiet', '--end-of-options', `${input.baseRef}^{commit}`], { cwd: input.repoPath, env: input.env });
+    return stdout.trim();
+  } catch (error) {
+    if (error instanceof WorktreeError) throw error;
+    return refuseBaseRef();
+  }
+}
+
+export async function createWorktree(input: { repoPath: string; branchName: string; worktreesRoot: string; baseRef?: string; env?: NodeJS.ProcessEnv }): Promise<{ path: string; branch: string }> {
   if (!isValidBranchName(input.branchName)) throw new WorktreeError('invalid_branch', `invalid branch name: ${input.branchName}`);
   if (!isDirectory(input.repoPath)) throw new WorktreeError('directory_missing', 'the repository directory does not exist.');
 
@@ -54,9 +76,15 @@ export async function createWorktree(input: { repoPath: string; branchName: stri
   if (existsSync(worktreePath)) throw new WorktreeError('exists', `worktree already exists: ${worktreePath}`);
 
   const branchExists = await gitSucceeds(input.repoPath, ['rev-parse', '--verify', `refs/heads/${input.branchName}`], input.env);
+  const hasBaseRef = input.baseRef !== undefined;
+  if (hasBaseRef && branchExists) throw new WorktreeError('invalid_base_ref', 'base_ref only applies to a new branch: this branch already exists.');
+  const baseCommit = hasBaseRef ? await resolveBaseRefCommit({ repoPath: input.repoPath, baseRef: input.baseRef!, env: input.env }) : undefined;
+  const newBranchArgs = baseCommit === undefined
+    ? ['worktree', 'add', '-b', input.branchName, '--', worktreePath]
+    : ['worktree', 'add', '-b', input.branchName, '--', worktreePath, baseCommit];
   const args = branchExists
     ? ['worktree', 'add', '--', worktreePath, input.branchName]
-    : ['worktree', 'add', '-b', input.branchName, '--', worktreePath];
+    : newBranchArgs;
   try {
     await run(args, { cwd: input.repoPath, env: input.env });
   } catch (error) {

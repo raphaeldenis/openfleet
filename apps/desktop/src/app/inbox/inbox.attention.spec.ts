@@ -70,6 +70,45 @@ describe('InboxComponent questions from agents', () => {
     expect(line.querySelector('strong, code')).toBeNull();
   });
 
+  it('user reads each question as a paragraph of its own, not as a bullet list', async () => {
+    await renderInbox([agent('s1')], [stateOf({ sessionId: 's1', questionsForHuman: ['which port?', 'which region?'], blockers: ['no token'] })]);
+
+    await showOnlyQuestions();
+
+    const card = cards()[0];
+    expect(within(card).queryByRole('list')).toBeNull();
+    expect(within(card).queryAllByRole('listitem')).toHaveLength(0);
+    expect(within(card).getByText('which port?')).toBeTruthy();
+    expect(within(card).getByText('no token')).toBeTruthy();
+  });
+
+  it('user sees the BLOCKING badge on the card of a session that waits for the answer, and not on a session that keeps working', async () => {
+    await renderInbox(
+      [agent('s1', { state: 'waiting_input' }), agent('s2', { state: 'generating' })],
+      [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] }), stateOf({ sessionId: 's2', questionsForHuman: ['which region?'] })],
+    );
+
+    await showOnlyQuestions();
+
+    const [blockedCard, workingCard] = cards();
+    expect(within(blockedCard).getByText('BLOCKING')).toBeTruthy();
+    expect(within(blockedCard).getByTitle('A session is blocked until this is answered')).toBeTruthy();
+    expect(within(workingCard).queryByText('BLOCKING')).toBeNull();
+  });
+
+  it('user sees the card of a session that waits for the answer carry the card--blocking class, and not the card of a session that keeps working', async () => {
+    await renderInbox(
+      [agent('s1', { state: 'waiting_input' }), agent('s2', { state: 'generating' })],
+      [stateOf({ sessionId: 's1', questionsForHuman: ['which port?'] }), stateOf({ sessionId: 's2', questionsForHuman: ['which region?'] })],
+    );
+
+    await showOnlyQuestions();
+
+    const [blockedCard, workingCard] = cards();
+    expect(blockedCard).toHaveClass('card--blocking');
+    expect(workingCard).not.toHaveClass('card--blocking');
+  });
+
   it('user sees a card with only blockers show no questions block, and the other way round', async () => {
     await renderInbox([agent('s1'), agent('s2')], [stateOf({ sessionId: 's1', blockers: ['no token'] }), stateOf({ sessionId: 's2', questionsForHuman: ['which port?'] })]);
 
@@ -248,27 +287,46 @@ describe('InboxComponent questions from agents', () => {
         expect(toggle).toHaveTextContent('▾');
       });
 
-      it('user sees "Reply delivered" on the card, with no reply field, right after the reply reaches the session', async () => {
+      it('user sees "Reply delivered" in a standalone strip above the list, with the answered card already gone, right after the reply reaches the session', async () => {
         const view = await renderInbox([agent('s1')], asking);
         await replyFromCard(view);
 
-        expect(cards()).toHaveLength(1);
-        expect(within(cards()[0]).getByTestId('inbox-attention-delivered')).toHaveTextContent('Reply delivered — this session is working on it');
-        expect(within(cards()[0]).queryByTestId('composer-input')).toBeNull();
+        const strip = screen.getByRole('status');
+        const list = screen.getByTestId('inbox-list');
+        expect(strip).toHaveTextContent('Reply delivered — this session is working on it');
+        expect(strip.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(cards()).toHaveLength(0);
+        expect(screen.queryByRole('textbox')).toBeNull();
+      });
+
+      it('user sees the empty state under the delivery strip when the answered card was the last one', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        expect(screen.getByText('Nothing needs you')).toBeTruthy();
+      });
+
+      it('user sees the delivery strip disappear once the acknowledgement ends', async () => {
+        const view = await renderInbox([agent('s1')], asking);
+        await replyFromCard(view);
+
+        await waitForDeliveryAcknowledgementToEnd(view);
+
+        expect(screen.queryByRole('status')).toBeNull();
       });
 
       it('user reads the delivery acknowledgement as a check-marked strip', async () => {
         const view = await renderInbox([agent('s1')], asking);
         await replyFromCard(view);
 
-        expect(within(cards()[0]).getByTestId('inbox-attention-delivered')).toHaveTextContent(/^✓\s*Reply delivered/);
+        expect(screen.getByRole('status')).toHaveTextContent(/^✓\s*Reply delivered/);
       });
 
-      it('user sees the badge, the tab count and the page count drop at delivery while the card stays', async () => {
+      it('user sees the badge, the tab count and the page count drop at delivery while the strip shows', async () => {
         const view = await renderInbox([agent('s1')], asking);
         await replyFromCard(view);
 
-        expect(cards()).toHaveLength(1);
+        expect(screen.getByRole('status')).toBeTruthy();
         expect(screen.queryByTestId('inbox-count')).toBeNull();
         expect(screen.getByTestId('inbox-filter-questions')).toHaveTextContent('0');
       });
@@ -290,7 +348,7 @@ describe('InboxComponent questions from agents', () => {
         view.events.workingStates.set(new Map([['s1', stateOf({ sessionId: 's1', questionsForHuman: ['and the host?'] })]]));
         await view.fixture.whenStable();
 
-        expect(within(cards()[0]).queryByTestId('inbox-attention-delivered')).toBeNull();
+        expect(screen.queryByRole('status')).toBeNull();
         expect(within(cards()[0]).getByTestId('composer-input')).toBeTruthy();
         expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
       });

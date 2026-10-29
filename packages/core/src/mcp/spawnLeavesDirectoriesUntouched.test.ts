@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BinaryHealthCheck } from '../harness/binaryHealth.js';
 
 const spawn = vi.fn((_command: string, _args: string[], _options: { cwd: string }) => ({
   onData: () => ({ dispose: () => undefined }),
@@ -91,7 +92,7 @@ describe('spawning a child session', () => {
     const db = openDatabase(':memory:');
     const bus = new EventBus();
     openFleetSessionsRoot = makeTrackedDirectory(join(tmpdir(), 'of-home-'));
-    const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(openFleetSessionsRoot)], baseUrl: 'http://127.0.0.1:0', worktreesRoot: WORKTREES_ROOT, submitKeystrokeDelayMs: 0 });
+    const sessions = new SessionService({ db, bus, harnesses: [new ClaudeCliHarness(openFleetSessionsRoot)], baseUrl: 'http://127.0.0.1:0', worktreesRoot: WORKTREES_ROOT, submitKeystrokeDelayMs: 0, binaryHealth: new BinaryHealthCheck({ run: async () => ({ exitCode: 0, stdout: 'mocked 0.0.0', stderr: '' }) }) });
     const managerRepo = new ManagerRepository(db);
     const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
     const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });

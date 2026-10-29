@@ -101,7 +101,8 @@ describe('the project home page', () => {
     it('user sees an empty state that offers to create a project', async () => {
       await openAt('/project', { api: fakeApi({ projects: [] }) });
 
-      expect(await screen.findByRole('heading', { level: 1, name: 'No projects yet' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { level: 1, name: 'No project yet' })).toBeInTheDocument();
+      expect(screen.getByText('A project groups sessions, notes, tables and handoffs under one docs folder.')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Create a project' })).toBeInTheDocument();
     });
 
@@ -160,10 +161,10 @@ describe('the project home page', () => {
       expect(await screen.findByRole('heading', { level: 1, name: 'Fleet' })).toBeInTheDocument();
     });
 
-    it('user is told when the project of the address does not exist', async () => {
+    it('user is told which project of the address was deleted or never existed', async () => {
       await openAt('/project/ghost');
 
-      expect(await screen.findByRole('alert')).toHaveTextContent('This project no longer exists.');
+      expect(await screen.findByRole('alert')).toHaveTextContent('“ghost” was deleted or never existed on this daemon.');
     });
 
     it('user opens the first project from the not found page', async () => {

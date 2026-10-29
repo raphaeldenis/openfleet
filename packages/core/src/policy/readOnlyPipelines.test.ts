@@ -100,10 +100,12 @@ describe('the read-only pipeline allow rule: precedence', () => {
     expect(verdictOf('find / -name x -delete')).toMatchObject({ decision: 'deny', ruleId: 'no-find-delete-on-broad-paths' });
   });
 
-  it('is the only explicit permission the delivered policy grants', () => {
-    const allowRuleIds = DEFAULT_COMMAND_POLICY.rules.filter((rule) => rule.decision === 'allow').map((rule) => rule.id);
+  it('is, with the inert declared-commands rule, the only explicit permission the delivered policy grants', () => {
+    const allowRules = DEFAULT_COMMAND_POLICY.rules.filter((rule) => rule.decision === 'allow');
+    const grantingRuleIds = allowRules.filter((rule) => rule.when.runsDeclaredCommand?.length !== 0).map((rule) => rule.id);
 
-    expect(allowRuleIds).toEqual([READ_ONLY_RULE_ID]);
+    expect(grantingRuleIds).toEqual([READ_ONLY_RULE_ID]);
+    expect(allowRules.map((rule) => rule.id)).toEqual([READ_ONLY_RULE_ID, 'allow-declared-commands']);
   });
 
   it('is not reported when the policy is off', () => {

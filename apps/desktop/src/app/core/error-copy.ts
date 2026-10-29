@@ -34,6 +34,7 @@ interface CodeCopy {
 
 const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   invalid_body: { what: 'The daemon rejected these values', fix: 'check them and change what is wrong' },
+  invalid_mode: { what: 'That manager mode does not exist', fix: 'choose watching, sleeping or disabled' },
   invalid_json: { what: 'The app sent a request the daemon could not read', fix: 'restart the app' },
   invalid_url: { what: 'That address is not valid', fix: 'check it' },
   invalid_branch_name: { what: 'The branch name is not valid', fix: 'pick another one' },
@@ -42,6 +43,8 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   message_too_long: { what: 'The message is too long', fix: 'shorten it' },
   query_too_long: { what: 'The query is too long', fix: 'shorten it' },
   outside_own_repository: { what: 'That path is outside the session’s repository', fix: 'pick one inside it' },
+  docs_root_invalid: { what: 'That docs root cannot be used', fix: 'give an absolute path inside your home folder' },
+  docs_root_forbidden: { what: 'That docs root is a folder OpenFleet or its tools keep for themselves', fix: 'pick another folder' },
 
   unauthorized: { what: 'The daemon refused the app’s credentials', fix: 'check the admin token' },
 
@@ -89,6 +92,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   verdict_stale: { what: 'That verdict is for a commit that is no longer the latest', fix: 'review the latest commit' },
   directory_in_use: { what: 'Another session already uses this directory', fix: 'pick another directory' },
   duplicate_child: { what: 'A session with that name already exists here', fix: 'pick another name' },
+  directory_not_in_project: { what: 'That directory belongs to no project', fix: 'pick a directory of the project' },
   no_parent: { what: 'This session has no parent' },
   spawn_raced: { what: 'The directory changed while the session was being created' },
   store_has_rows: { what: 'This table still has rows', fix: 'empty it first' },
@@ -96,10 +100,14 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   no_docs_folder: { what: 'No docs folder is set', fix: 'set one first' },
   not_file_backed: { what: 'This note does not live in a file' },
   docs_folder_not_writable: { what: 'The docs folder is not writable', fix: 'fix the folder permissions' },
+  docs_folder_already_used: { what: 'Another project already uses that docs folder', fix: 'pick another folder' },
+  docs_root_not_writable: { what: 'That docs root is not writable', fix: 'fix the folder permissions' },
 
   payload_too_large: { what: 'The request is too large', fix: 'shorten it' },
   note_too_large: { what: 'This note is too large', fix: 'shorten it' },
+  log_kind_not_allowed: { what: 'That kind is not allowed in a manager log', fix: 'pick one of the permitted kinds' },
   row_cap: { what: 'This table reached its row limit', fix: 'delete some rows first' },
+  row_guard_violation: { what: 'This project keeps a row journal append-only and a done row linked to a pull request', fix: 'resend the previous journal with a new line added, or set the pull request link first' },
   state_too_large: { what: 'The working state is too large', fix: 'shorten it' },
 
   daemon_shutting_down: { what: 'The daemon is shutting down' },
@@ -109,6 +117,12 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   harness_exited: { what: 'The agent process ended', fix: 'resume the session' },
   claude_not_found: { what: 'The claude command is not on the daemon’s PATH', fix: 'install it, or start the daemon from a shell that has it' },
   git_unavailable: { what: 'Git is not available to the daemon', fix: 'install it' },
+  gh_unavailable: { what: 'The GitHub CLI is not available to the daemon', fix: 'install gh' },
+  gh_not_authenticated: { what: 'The GitHub CLI is not signed in', fix: 'run gh auth login' },
+  gh_bad_output: { what: 'The GitHub CLI answered something unreadable' },
+  gh_timeout: { what: 'The GitHub CLI took too long to answer' },
+  too_many_watched_prs: { what: 'This manager watches too many pull requests', fix: 'unwatch one' },
+  harness_binary_broken: { what: 'The agent command fails its version check', fix: 'reinstall it, then spawn again' },
 
   internal_error: { what: 'The daemon hit an unexpected error' },
   launch_failed: { what: 'The agent failed to launch' },
@@ -194,6 +208,7 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
   save_project: {
     invalid_body: { what: 'That folder cannot be used: use an existing absolute folder path' },
     docs_folder_not_writable: { what: 'That folder is not writable', fix: 'fix its permissions' },
+    docs_folder_already_used: { what: 'Another project already uses that folder', fix: 'pick another one' },
     path_escapes_docs_folder: { what: 'That folder contains a link that leads outside it', fix: 'pick a folder without one' },
   },
   save_project_hook: {

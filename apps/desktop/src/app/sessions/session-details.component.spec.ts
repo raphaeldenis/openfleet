@@ -493,6 +493,22 @@ describe('SessionDetailsComponent', () => {
     });
   });
 
+  describe('config profile', () => {
+    it('shows the profile name of a session launched with a config dir', async () => {
+      const session = baseSession({ configProfile: '.claude-work' });
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+      expect(screen.getByTestId('session-config-profile')).toHaveTextContent('.claude-work');
+    });
+
+    it('shows no profile line for a session launched without a config dir', async () => {
+      const session = baseSession();
+      await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });
+
+      expect(screen.queryByTestId('session-config-profile')).toBeNull();
+    });
+  });
+
   describe('elapsed time', () => {
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => vi.useRealTimers());

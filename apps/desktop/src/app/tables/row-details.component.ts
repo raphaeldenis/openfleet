@@ -17,13 +17,13 @@ import { sortedColumns } from './table-cells';
           <of-table-cell [column]="column" [value]="row().data[column.id]" [expanded]="true" />
           @if (column.autoValue) { <span>Set automatically</span> }
           @if (!readonly() && canEdit(column)) {
-            <button type="button" (click)="editRequested.emit({ rowId: row().id, column, trigger: $any($event.currentTarget) })">Edit {{ column.displayName }}</button>
+            <button type="button" class="of-btn of-btn--secondary of-btn--compact" (click)="editRequested.emit({ rowId: row().id, column, trigger: $any($event.currentTarget) })">Edit {{ column.displayName }}</button>
           }
         </div>
       }
     </section>
   `,
-  styles: `section, .field { display: flex; flex-direction: column; gap: .375rem } section { padding: .75rem .875rem; border-bottom: .0625rem solid var(--line) } h2 { font-size: .875rem; margin: 0 } .field { font-size: .75rem; overflow-wrap: anywhere } button { align-self: flex-start; font: inherit }`,
+  styles: `section, .field { display: flex; flex-direction: column; gap: .375rem } section { padding: .75rem .875rem; border-bottom: .0625rem solid var(--line) } h2 { font-size: .875rem; margin: 0 } .field { font-size: .75rem; overflow-wrap: anywhere } button { align-self: flex-start }`,
 })
 export class RowDetailsComponent {
   readonly row = input.required<DsRow>();

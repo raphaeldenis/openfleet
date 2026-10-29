@@ -12,6 +12,7 @@ import { FleetEventsService, silentBlockKey } from '../core/fleet-events.service
 import { VersionsService } from '../core/versions.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent } from '../design/kind-badge.component';
+import { REPLY_DELIVERED_COPY } from '../sessions/reply-delivered-copy';
 import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
 import { answeredItemsOf, attentionItemsOf, itemsNeedingYouOf } from '../working-state/attention-items';
 import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
@@ -93,6 +94,9 @@ function formatInput(toolInput: unknown): FormattedInput {
           <button type="button" class="of-btn of-btn--secondary of-btn--compact" data-testid="inbox-reply-failure-dismiss" (click)="dismissReplyFailure(failure.sessionId)">Dismiss</button>
         </div>
       }
+      @if (isDeliveredReplyAcknowledged()) {
+        <p class="delivered" role="status"><span class="delivered-check" aria-hidden="true">✓</span>{{ replyDeliveredCopy }}</p>
+      }
       @if (issues().length > 0) {
         <ul class="issue-list" aria-label="Issues">
           @for (issue of issues(); track issue.key) {
@@ -154,7 +158,7 @@ function formatInput(toolInput: unknown): FormattedInput {
           }
           @if (activeFilter().showsQuestions) {
             @for (item of attentionCards(); track item.session.id) {
-              <of-attention-card [item]="item" [isReplyDelivered]="item.isAnswered" />
+              <of-attention-card [item]="item" />
             }
           }
           @if (activeFilter().showsProposals) {
@@ -205,6 +209,8 @@ function formatInput(toolInput: unknown): FormattedInput {
     .reply-failure { display: flex; flex-direction: column; align-items: flex-start; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--state-error); border-radius: .625rem; background: var(--panel); }
     .reply-failure-title { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
     .reply-failure-draft { margin: 0; max-width: 100%; max-height: 10rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+    .delivered { display: flex; align-items: center; gap: .5rem; margin: 0; padding: .5rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--sunk); font-size: .75rem; }
+    .delivered-check { color: var(--state-idle); }
     .issue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
     .issue { display: flex; flex-direction: column; gap: .375rem; min-width: 0; padding: .625rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
     .issue-copy { margin: 0; overflow-wrap: anywhere; }
@@ -324,11 +330,14 @@ export class InboxComponent {
     [...this.answeredReplies.answeredReplyBySessionId()].map(([sessionId, reply]) => [sessionId, reply.deliveredAt]),
   );
 
-  /** The cards to draw: those needing the human, plus those whose delivered reply is still being acknowledged. */
-  protected readonly attentionCards = computed(() => {
+  protected readonly attentionCards = this.attentionItemsNeedingYou;
+
+  protected readonly isDeliveredReplyAcknowledged = computed(() => {
     const sessionIdsAcknowledged = this.sessionIdsWithDeliveredReplyShown();
-    return this.attentionItems().filter((item) => !item.isAnswered || sessionIdsAcknowledged.has(item.session.id));
+    return answeredItemsOf(this.attentionItems()).some((item) => sessionIdsAcknowledged.has(item.session.id));
   });
+
+  protected readonly replyDeliveredCopy = REPLY_DELIVERED_COPY;
 
   private showDeliveredReplyBriefly(sessionId: string): void {
     clearTimeout(this.deliveredReplyTimers.get(sessionId));

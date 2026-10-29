@@ -14,6 +14,7 @@ const adminApi = (path: string) => fetch(`${daemon.server.url}${path}`, { header
 const fakeHarness = () => daemon.harnesses.find((harness) => harness.id === 'fake') as FakeHarness;
 const stateOf = async (sessionId: string) => ((await (await adminApi('/api/sessions')).json()) as { id: string; state: string }[]).find((session) => session.id === sessionId)!.state;
 const approvalsOfSession = (sessionId: string) => daemon.db.prepare('SELECT status FROM approvals WHERE session_id = ? ORDER BY created_at').all(sessionId) as { status: Approval['status'] }[];
+const sessionRowOf = (sessionId: string) => daemon.db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId);
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const postHook = (handle: FakeHandle, body: object) => fetch(handle.hookUrl!, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'c', ...body }) });
 
@@ -43,11 +44,36 @@ describe('QE — a permission approval that expires while the CLI still waits in
   });
 
   it('creates no further approval while the session keeps waiting', async () => {
-    const { sessionId } = await sessionWhoseApprovalExpired();
+    const { sessionId, handle } = await sessionWhoseApprovalExpired();
+    const sessionRowAfterExpiry = sessionRowOf(sessionId);
 
     await wait(APPROVAL_TIMEOUT_MS * 3);
 
     expect(approvalsOfSession(sessionId)).toEqual([{ status: 'expired' }]);
+    expect(sessionRowOf(sessionId)).toEqual(sessionRowAfterExpiry);
+    expect(handle.written).toEqual([]);
+  });
+
+  // Pins the state once the approval has expired and no signal arrives at all. It does not pin the terminal denial itself:
+  // assumed (unverified) that Claude Code sends no hook for it, so this holds the same state as the first test.
+  it('stays in waiting_permission after the expiry when no hook follows, even if the fake records a terminal denial', async () => {
+    const { sessionId, handle } = await sessionWhoseApprovalExpired();
+
+    handle.denyInTerminal();
+    await wait(APPROVAL_TIMEOUT_MS * 3);
+
+    expect(handle.deniedInTerminalCount).toBe(1);
+    expect(await stateOf(sessionId)).toBe('waiting_permission');
+  });
+
+  // Pins the daemon's CURRENT behavior (stateMachine keeps waiting_permission on idle_prompt). Invert once the real signal is known.
+  it('stays in waiting_permission when the CLI then posts an idle_prompt notification after a terminal denial', async () => {
+    const { sessionId, handle } = await sessionWhoseApprovalExpired();
+
+    handle.denyInTerminal();
+    await postHook(handle, { hook_event_name: 'Notification', notification_type: 'idle_prompt' });
+
+    expect(await stateOf(sessionId)).toBe('waiting_permission');
   });
 
   it('leaves waiting_permission as soon as the CLI hooks again after the human answered in the terminal', async () => {

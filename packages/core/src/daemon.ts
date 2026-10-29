@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHandoffRouteDeps } from './api/handoffRoutes.js';
 import { startServer } from './api/server.js';
@@ -23,6 +24,7 @@ import { SqliteDenialJournal } from './policy/sqliteDenialJournal.js';
 import { ManagerDenials } from './policy/managerDenials.js';
 import { FINDINGS_GATE_ENFORCEMENT, FindingsGate, type FindingsGateEnforcement } from './review/findingsGate.js';
 import { ReviewFindingsRepository } from './review/reviewFindingsRepository.js';
+import { UsageLedgerService } from './usage/usageLedgerService.js';
 import { descendantSessionIdsOf } from './managers/lineage.js';
 import type { BaseNotReadEnforcement } from './managers/baseReadGuard.js';
 import type { NoteNotReadEnforcement } from './managers/noteReadGuard.js';
@@ -43,15 +45,27 @@ import { profileRecallOf } from './managers/managerProfileRecall.js';
 import { ManagerRepository } from './managers/managerRepository.js';
 import { ManagerService } from './managers/managerService.js';
 import { ProjectProfileBootstrap } from './managers/projectProfileBootstrap.js';
+import { IdleChildWatcher } from './managers/idleChildWatcher.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
+import { ScheduledEventRepository } from './managers/scheduledEventRepository.js';
+import { ScheduledEventService } from './managers/scheduledEventService.js';
+import { CiWatchService } from './managers/ciWatchService.js';
+import { WatchedPrRepository } from './managers/watchedPrRepository.js';
+import { createGhPullRequestPort, type GhPullRequestPort } from './github/ghPullRequestPort.js';
+import { staleInProgressRowLabelsOfProject } from './managers/staleRows.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
+import { pendingPermissionViewOf } from './mcp/pendingPermissionView.js';
 import { KnowledgeRepository } from './knowledge/knowledgeRepository.js';
 import { KnowledgeRepoScope } from './knowledge/knowledgeRepoScope.js';
 import { KnowledgeSearchService } from './knowledge/knowledgeSearchService.js';
 import { loadModelTable } from './models.js';
 import { DocsFolderService } from './notes/docsFolderService.js';
 import { registerHandoffOnClose } from './notes/handoffService.js';
+import { ChildAutoRestarter } from './managers/childAutoRestarter.js';
+import { SleepHandoff } from './managers/sleepHandoff.js';
+import { ChildRestartLedger } from './managers/childRestartLedger.js';
 import { loadHandoffSettings } from './notes/handoffSettings.js';
+import { DocsRootSettings } from './notes/docsRootSettings.js';
 import { expandMentions } from './notes/mentionExpander.js';
 import { nodeDocsFolderFs } from './notes/nodeDocsFolderFs.js';
 import { NoteRepository } from './notes/noteRepository.js';
@@ -63,7 +77,8 @@ import { DocsFolderSupervisor } from './projects/docsFolderSupervisor.js';
 import { ProjectRepository } from './projects/projectRepository.js';
 import { ProjectService } from './projects/projectService.js';
 import { WorktreeService } from './worktrees/worktreeService.js';
-import { SessionService } from './sessions/sessionService.js';
+import type { BinaryHealthCheck } from './harness/binaryHealth.js';
+import { DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS, SessionService } from './sessions/sessionService.js';
 import { DataStoreRepository } from './stores/dataStoreRepository.js';
 import { DataStoreService } from './stores/dataStoreService.js';
 import { TodoTracker } from './todos/todoTracker.js';
@@ -97,6 +112,8 @@ export interface Daemon {
   db: ReturnType<typeof openDatabase>;
   degraded: DegradedRegistry;
   governanceQueue: GovernanceQueueService;
+  scheduledEvents: ScheduledEventService;
+  ciWatch: CiWatchService;
   harnesses: Harness[];
   close: () => Promise<void>;
 }
@@ -105,6 +122,8 @@ export interface DaemonOptions {
   /** The registry the process guards already mark; the daemon makes its own when none is handed over. */
   degraded?: DegradedRegistry;
   claudeConfigPath?: string;
+  /** Replaces the real `--version` check of the harness binary before a spawn, so a test can boot a daemon whose binary is a stand-in. */
+  binaryHealth?: BinaryHealthCheck;
   /** Overrides BASE_NOT_READ_ENFORCEMENT: 'warn_only' turns the base_not_read refusal of a spawn into a warning. */
   baseNotReadEnforcement?: BaseNotReadEnforcement;
   /** Overrides NOTE_NOT_READ_ENFORCEMENT: 'refuse' turns the note_not_read warning of a spawn into a refusal; absent, the warning only warns. */
@@ -113,10 +132,17 @@ export interface DaemonOptions {
   findingsGateEnforcement?: FindingsGateEnforcement;
   /** Replaces the base this build ships, so a test can boot a daemon that ships a newer version. */
   managerBase?: ManagerBase;
+  /** Replaces the GitHub CLI the daemon polls the checks of watched pull requests with, so a test needs no network and no login. */
+  gh?: GhPullRequestPort;
   /** The injection point of the command policy: the settings the daemon enforces and the evaluator that applies them. */
   commandPolicy?: { settings?: CommandPolicySettings; evaluate?: PolicyEvaluate };
   /** Overrides the delay after which an undecided approval expires, so a test does not wait the nine minutes of the hook timeout. */
   approvalTimeoutMs?: number;
+  /** Replaces the clock and the timer of the automatic child restarts, so a test does not wait their delays. */
+  childRestart?: {
+    clock?: () => number;
+    schedule?: (callback: () => void, delayMs: number) => () => void;
+  };
   power?: {
     api?: PowerApi;
     clock?: () => number;
@@ -147,7 +173,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     const { document, unattended } = commandPolicyService.settings();
     return document.mode !== 'off' || unattended.askBecomesDeny;
   };
-  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}), isCommandPolicyActive });
+  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, binaryHealth: options.binaryHealth, launchOutputTimeoutMs: DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, isDeliveryHeld: (sessionId) => managerRepository.get(sessionId)?.mode === 'disabled', isMessageObsolete: (message) => managerRepository.isObsoleteSleepHandoff(message), profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}), isCommandPolicyActive });
   const approvals = new ApprovalService({ db, bus, timeoutMs: options.approvalTimeoutMs });
   // A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
   // process that would have decided it is gone with the old daemon.
@@ -168,13 +194,27 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   sleepGuard.observeSessionEvents();
   const managerDenials = new ManagerDenials({ db, lineageSessionIdsOf: (managerId) => descendantSessionIdsOf(sessions.list(), managerId) });
   const deniedCommandCountsOf = (managerId: string) => managerDenials.countsOf(managerId);
-  const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError, deniedCommandCountsOf, managerBase: shippedManagerBase });
   const storeRepo = new DataStoreRepository(db);
+  const staleRowLabelsOf = (managerId: string) => {
+    const projectId = sessions.get(managerId)?.projectId;
+    return projectId === undefined ? [] : staleInProgressRowLabelsOfProject({ stores: storeRepo, projectId, now: Date.now() });
+  };
+  const pulseScheduler = new PulseScheduler({ managers: managerRepository, sessions, bus, describeError, deniedCommandCountsOf, managerBase: shippedManagerBase, staleRowLabelsOf });
+  const idleChildWatcher = new IdleChildWatcher({ managers: managerRepository, sessions });
   const noteRepo = new NoteRepository(db);
   const managers = new ManagerService({
     managers: managerRepository, sessions, bus, scheduler: pulseScheduler, heartbeatDefaultSeconds: managerSettings.heartbeatDefaultSeconds, deniedCommandCountsOf, currentBase: shippedManagerBase,
     scapeImportStatusOf: (sessionId) => scapeImportStatusOfManager(db, sessionId),
     linkTargets: { noteProjectId: (noteId) => noteRepo.getProjectId(noteId), storeProjectId: (storeId) => storeRepo.findStore(storeId)?.projectId },
+  });
+  const childAutoRestarter = new ChildAutoRestarter({
+    bus, sessions, managers: managerRepository, ledger: new ChildRestartLedger(db),
+    clock: options.childRestart?.clock ?? Date.now, schedule: options.childRestart?.schedule ?? scheduleOnRealClock,
+  });
+  const sleepHandoff = new SleepHandoff({ bus, sessions, managers: managerRepository, clock: () => new Date().toISOString() });
+  bus.subscribe((event) => {
+    const isReactivated = event.type === 'manager.updated' && event.manager.mode !== 'disabled';
+    if (isReactivated) sessions.resumeHeldDelivery(event.manager.sessionId);
   });
   const governanceQueue = new GovernanceQueueService({
     db, bus, clock: () => new Date().toISOString(), newId,
@@ -199,7 +239,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const notes = new NoteService({ repo: noteRepo, db, expandMentions, clock: () => new Date().toISOString(), newId, publishChange: (event) => bus.emit(event) });
   const docs = new DocsFolderService({ notes, noteRepo, projects, fs: nodeDocsFolderFs, clock: () => new Date().toISOString(), degraded, onWatchError: logDocsFolderFailure('watch') });
   const docsFolders = new DocsFolderSupervisor({ projects, docs, onError: ({ projectId, step, error }) => logDocsFolderFailure(step, projectId)(error) });
-  const projectService = new ProjectService({ projects, docs, clock: () => new Date().toISOString(), newId, onDocsFolderSet: (projectId) => docsFolders.watchProject(projectId) });
+  const docsRoot = new DocsRootSettings({ configPath: modelConfigPath, homeDir: homedir(), openfleetHome: config.home });
+  const projectService = new ProjectService({ projects, docs, noteRepo, docsRoot, clock: () => new Date().toISOString(), newId, onDocsFolderSet: (projectId) => docsFolders.watchProject(projectId), onProjectForgotten: (projectId) => docsFolders.unwatchProject(projectId) });
   const workingStates = new WorkingStateService({ db, clock: () => new Date().toISOString(), stateRoot: config.stateRoot, maxBytes: workingStateSettings.maxBytes });
   const stopRefusal = new StopRefusal({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString() });
   const sessionStartContext = new SessionStartContext({ db, workingStates, settings: workingStateSettings, clock: () => new Date().toISOString(), managerBase: shippedManagerBase });
@@ -217,7 +258,10 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     const session = sessions.get(sessionId);
     const manager = session?.parentId;
     if (!wasUnwatched || session === undefined || manager === undefined) return;
-    const body = `[OpenFleet] ${session.name} (${session.id}) has waited more than ${unattendedSilentBlockSeconds} seconds on a permission prompt nobody can answer. Look at it, or close and relaunch it.`;
+    const pendingApproval = approvals.listPending().find((approval) => approval.sessionId === sessionId);
+    const pendingPermission = pendingApproval && pendingPermissionViewOf(pendingApproval, new Date());
+    const waitingOn = pendingPermission ? ` It waits on ${pendingPermission.toolName}: ${pendingPermission.input}` : '';
+    const body = `[OpenFleet] ${session.name} (${session.id}) has waited more than ${unattendedSilentBlockSeconds} seconds on a permission prompt nobody can answer.${waitingOn} Look at it, or close and relaunch it.`;
     try {
       sessions.sendMessage({ sessionId: manager, body });
     } catch (error) {
@@ -234,6 +278,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   bus.subscribe((event) => silentBlocks.handle(event));
   const handoffSettings = loadHandoffSettings(modelConfigPath);
   const reviewFindings = new ReviewFindingsRepository(db);
+  const usageLedger = new UsageLedgerService(db);
   const findingsGate = {
     gate: new FindingsGate({ findings: reviewFindings, ticketPattern: findingsGateSettings.ticketPattern }),
     enforcement: options.findingsGateEnforcement ?? findingsGateSettings.enforcement ?? FINDINGS_GATE_ENFORCEMENT,
@@ -253,7 +298,9 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   // fast process hitting a port nothing is serving yet.
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, mcp: createMcpHandler({ projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const scheduledEvents = new ScheduledEventService({ repository: new ScheduledEventRepository(db), sessions, managers: managerRepository, bus });
+  const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -265,6 +312,10 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     clearInterval(expirySweep);
     unwatchDatabase();
     pulseScheduler.stop();
+    scheduledEvents.stop();
+    await ciWatch.stop();
+    childAutoRestarter.stop();
+    idleChildWatcher.stop();
     contextNotice.stop();
     silentBlocks.stop();
     stopHandoffOnClose();
@@ -287,10 +338,14 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     sleepGuard.start();
     await sessions.resumeAll();
     pulseScheduler.start();
+    scheduledEvents.start();
+    sleepHandoff.start();
+    ciWatch.start();
+    idleChildWatcher.start();
   } catch (error) {
     await closeWithin({ timeoutMs: REFUSED_BOOT_CLOSE_TIMEOUT_MS, close });
     throw error;
   }
 
-  return { server, db, degraded, governanceQueue, harnesses, close };
+  return { server, db, degraded, governanceQueue, scheduledEvents, ciWatch, harnesses, close };
 }

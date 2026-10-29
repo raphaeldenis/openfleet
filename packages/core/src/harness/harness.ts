@@ -7,6 +7,8 @@ export interface HarnessLaunch {
   directory: string;
   model?: string;
   effort?: string;
+  /** The account profile directory the CLI runs under; absent runs under the daemon's own environment. */
+  configDir?: string;
   seededPrompt?: string;
   hookUrl: string;
   mcpUrl: string;
@@ -50,9 +52,11 @@ export interface Harness {
   /** How the command policy reaches this harness; a harness that does not say is not covered. */
   readonly policyEnforcement?: PolicyEnforcement;
   start(launch: HarnessLaunch): HarnessHandle;
+  // The executable `start` runs, when it is one file the daemon can probe with `--version`. A harness without one omits it.
+  binaryPath?(): string | undefined;
   // Whether a resume of this conversation can succeed: the CLI refuses (exit 1) a conversation it has no file for.
   // A harness that cannot tell omits it and its conversations are assumed to exist.
-  conversationExists?(conversation: { cliSessionId: string; directory: string }): ConversationPresence;
+  conversationExists?(conversation: { cliSessionId: string; directory: string; configDir?: string }): ConversationPresence;
   // Read-only: a description of the project-level settings in `directory` that would loosen the harness's permission gate, if its
   // CLI would read them. A harness whose CLI reads no project settings omits it.
   findProjectSettingsWarning?(directory: string): string | undefined;

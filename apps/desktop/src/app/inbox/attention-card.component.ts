@@ -4,7 +4,6 @@ import { MANAGER_ROLE } from '@openfleet/shared';
 import { compactElapsedLabel, elapsedSecondsSince } from '../design/elapsed-time';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { ComposerComponent } from '../sessions/composer.component';
-import { REPLY_DELIVERED_COPY } from '../sessions/reply-delivered-copy';
 import { tickingNow } from '../working-state/working-state-freshness';
 import type { AttentionItem } from '../working-state/attention-items';
 import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
@@ -14,33 +13,24 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../co
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [KindBadgeComponent, RouterLink, ComposerComponent],
   template: `
-    <article class="card" data-testid="inbox-attention-card" (keydown.escape)="returnFocusToSessionLink()">
+    <article class="card" [class.card--blocking]="isBlocking()" data-testid="inbox-attention-card" (keydown.escape)="returnFocusToSessionLink()">
       <span class="avatar" aria-hidden="true">{{ item().session.emoji }}</span>
       <div class="body">
         <div class="meta">
           <of-kind-badge kind="question" />
           <a #sessionLink class="session-link" data-testid="inbox-attention-session" [routerLink]="sessionRoute()">{{ sessionName() }}</a>
+          @if (isBlocking()) {
+            <span class="blocking" title="A session is blocked until this is answered"><span class="blocking-dot" aria-hidden="true"></span>BLOCKING</span>
+          }
           <span class="age" data-testid="inbox-attention-age">{{ ageLabel() }}</span>
         </div>
-        @if (questions().length > 0) {
-          <ul class="lines">
-            @for (line of questions(); track $index) {
-              <li class="line" data-testid="inbox-attention-question">{{ line }}</li>
-            }
-          </ul>
+        @for (line of questions(); track $index) {
+          <p class="line" data-testid="inbox-attention-question">{{ line }}</p>
         }
-        @if (blockers().length > 0) {
-          <ul class="lines lines--blockers">
-            @for (line of blockers(); track $index) {
-              <li class="line" data-testid="inbox-attention-blocker">{{ line }}</li>
-            }
-          </ul>
+        @for (line of blockers(); track $index) {
+          <p class="line line--blocker" data-testid="inbox-attention-blocker">{{ line }}</p>
         }
-        @if (isReplyDelivered()) {
-          <p class="delivered" role="status" data-testid="inbox-attention-delivered"><span class="delivered-check" aria-hidden="true">✓</span>{{ replyDeliveredCopy }}</p>
-        } @else {
-          <of-composer [sessionId]="item().session.id" [busy]="item().session.state === 'generating'" />
-        }
+        <of-composer [sessionId]="item().session.id" [busy]="item().session.state === 'generating'" />
       </div>
     </article>
   `,
@@ -53,21 +43,21 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../co
     .session-link { min-width: 0; font-weight: 500; color: var(--fg); text-decoration: none; overflow-wrap: anywhere; }
     .session-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .age { margin-left: auto; font-size: .6875rem; color: var(--mut); }
-    .lines { margin: 0; padding: 0 0 0 1rem; display: flex; flex-direction: column; gap: .125rem; }
-    .lines--blockers { color: var(--mut); }
-    .line { min-width: 0; overflow-wrap: anywhere; }
+    .card--blocking { border-color: color-mix(in oklch, var(--state-waiting-input) 40%, transparent); }
+    .blocking { display: inline-flex; align-items: center; gap: .25rem; height: 1rem; margin-left: auto; padding: 0 .375rem; border-radius: .25rem; border: 1px solid color-mix(in oklch, var(--state-waiting-input) 45%, transparent); background: color-mix(in oklch, var(--state-waiting-input) 14%, transparent); font-family: var(--mono); font-size: .625rem; }
+    .blocking-dot { width: .375rem; height: .375rem; border-radius: 50%; background: var(--state-waiting-input); }
+    .blocking + .age { margin-left: 0; }
+    .line { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    .line--blocker { color: var(--mut); }
     of-composer { display: block; margin: 0 -.75rem; }
-    .delivered { display: flex; align-items: center; gap: .5rem; margin: 0; padding: .375rem .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); font-size: .75rem; }
-    .delivered-check { color: var(--state-idle); }
   `,
 })
 export class AttentionCardComponent {
   readonly item = input.required<AttentionItem>();
-  readonly isReplyDelivered = input(false);
-  protected readonly replyDeliveredCopy = REPLY_DELIVERED_COPY;
   private readonly now = tickingNow();
   private readonly sessionLink = viewChild.required<ElementRef<HTMLAnchorElement>>('sessionLink');
   protected readonly sessionName = computed(() => showInvisibleControlsAsEscapes(this.item().session.name));
+  protected readonly isBlocking = computed(() => this.item().session.state === 'waiting_input');
   protected readonly questions = computed(() => this.item().questions.map(showBidiControlsAsEscapes));
   protected readonly blockers = computed(() => this.item().blockers.map(showBidiControlsAsEscapes));
   protected readonly sessionRoute = computed(() => [this.item().session.role === MANAGER_ROLE ? '/manager' : '/session', this.item().session.id]);

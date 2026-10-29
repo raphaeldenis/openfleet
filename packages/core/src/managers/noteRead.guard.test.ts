@@ -54,7 +54,7 @@ async function startRig(options: DaemonOptions): Promise<Rig> {
   const getNote: Rig['getNote'] = async (client, noteId, args = {}) => jsonOf(await callTool(client, 'get_note', { note: noteId, ...args }));
   return {
     daemon,
-    aManager: async (name) => (await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: tempDirs.make('of-note-guard-wt-'), harness: 'fake', emoji: '🧭', name, projectId: PROJECT_ID, manager: { pulseSeconds: 3600, childrenCap: 5, mission: 'Ship the fleet' } }) })).json()) as { id: string },
+    aManager: async (name) => (await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: config.worktreesRoot, harness: 'fake', emoji: '🧭', name, projectId: PROJECT_ID, manager: { pulseSeconds: 3600, childrenCap: 5, mission: 'Ship the fleet' } }) })).json()) as { id: string },
     aNote: async (title, bodyMd) => {
       const created = (await (await api('/api/notes', { method: 'POST', body: JSON.stringify({ projectId: PROJECT_ID, title, bodyMd }) })).json()) as { id?: string; rev?: number; data?: { id: string; rev: number } };
       return { id: created.id ?? created.data!.id, rev: created.rev ?? created.data!.rev };

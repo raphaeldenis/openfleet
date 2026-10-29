@@ -1,7 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { OpenFleetError } from '@openfleet/shared';
 import { z } from 'zod';
-import { log } from '../logger.js';
 import { StaleRevisionError, VersionNotFoundError } from '../notes/noteService.js';
 import { planStaleSectionWrite, replaceSection } from '../notes/noteSections.js';
 import { createNoteToolSupport, type NoteToolDeps } from './noteToolSupport.js';
@@ -9,11 +8,10 @@ import { guardedFor, refuse } from './toolResults.js';
 
 export type RegisterNoteVersionToolsDeps = NoteToolDeps;
 
-/** The single switch for the grace period: `true` refuses a restore without expected_rev as invalid_body. */
-export const REQUIRE_EXPECTED_REV_ON_RESTORE = false;
+/** The single switch: `true` refuses a restore without expected_rev as invalid_body. */
+export const REQUIRE_EXPECTED_REV_ON_RESTORE = true;
 
-const MISSING_EXPECTED_REV_HINT = 'Call get_note, then pass its rev as expected_rev.';
-const MISSING_EXPECTED_REV_WARNING = 'expected_rev will be required in the next release: call get_note and pass its rev.';
+const MISSING_EXPECTED_REV_MESSAGE = 'expected_rev is required to restore a note version: call get_note to read its rev, then pass it as expected_rev.';
 // One first try plus three retries after losing the CAS to a concurrent writer, as for append.
 const MAX_MERGE_ATTEMPTS = 4;
 
@@ -98,7 +96,7 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
   });
 
   server.registerTool('restore_note_version', {
-    description: 'Restore a note to a past revision\'s body — a new, forward revision, never a rewrite of history; rejected with stale_revision and the current rev if expected_rev is stale (pass the rev from get_note); omitting expected_rev still works for now but the reply carries a warning and it becomes required in the next release; returns the new rev (id, title, folder, rev, shared, fileBacked), not the body',
+    description: 'Restore a note to a past revision\'s body — a new, forward revision, never a rewrite of history; rejected with stale_revision and the current rev if expected_rev is stale; expected_rev is required (call get_note, pass its rev), omitting it is refused with invalid_body; returns the new rev (id, title, folder, rev, shared, fileBacked), not the body',
     inputSchema: { note: z.string().min(1), rev: z.number().int(), expected_rev: z.number().int().optional() },
   }, async ({ note, rev, expected_rev }) => {
     const scope = requireProject();
@@ -107,10 +105,8 @@ export function registerNoteVersionTools(server: McpServer, deps: RegisterNoteVe
       const current = requireWritableNote(scope.projectId, note);
       const target = requireVersion(note, rev);
       const isMissingExpectedRev = expected_rev === undefined;
-      if (isMissingExpectedRev && REQUIRE_EXPECTED_REV_ON_RESTORE) throw new OpenFleetError('invalid_body', 'expected_rev is required to restore a note version.', { hint: MISSING_EXPECTED_REV_HINT });
-      if (isMissingExpectedRev) log('warn', 'restore without expected_rev', undefined, { noteId: current.id, sessionId: deps.caller.id });
-      const restored = noteSummary(writeBody(current, { bodyMd: target.bodyMd, expectedRev: expected_rev ?? current.rev, source: 'restore' }));
-      return isMissingExpectedRev ? { ...restored, warning: MISSING_EXPECTED_REV_WARNING } : restored;
+      if (isMissingExpectedRev && REQUIRE_EXPECTED_REV_ON_RESTORE) throw new OpenFleetError('invalid_body', MISSING_EXPECTED_REV_MESSAGE);
+      return noteSummary(writeBody(current, { bodyMd: target.bodyMd, expectedRev: expected_rev ?? current.rev, source: 'restore' }));
     });
   });
 }

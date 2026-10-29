@@ -42,14 +42,14 @@ describe('update_data_store_column', () => {
 
     const result = await kit.call('update_data_store_column', {
       store, column_id: status.id,
-      options: [{ id: 'done', label: 'Finished', color: 'green' }, { label: 'To do' }, { label: 'Blocked', color: 'red' }],
+      options: [{ id: 'done', label: 'Finished', color: '#0a0' }, { label: 'To do' }, { label: 'Blocked', color: '#f00' }],
     });
 
     expect(result.isError).toBe(false);
     expect(result.json.options).toEqual([
-      { id: 'done', label: 'Finished', color: 'green' },
+      { id: 'done', label: 'Finished', color: '#0a0' },
       { id: 'todo', label: 'To do' },
-      { id: expect.any(String), label: 'Blocked', color: 'red' },
+      { id: expect.any(String), label: 'Blocked', color: '#f00' },
     ]);
     expect(result.json.options[2].id).not.toMatch(/^(todo|done|old)$/);
     expect((await describeColumns(store))[0]?.options).toEqual(result.json.options);
@@ -104,12 +104,12 @@ describe('update_data_store_column', () => {
 
   it('takes the colors from the replacement list: a matched option without color loses it, with a color keeps the new one', async () => {
     const store = await createStore();
-    const status = await addColumn(store, { display_name: 'Status', column_type: 'select', options: [{ id: 'todo', label: 'To do', color: 'blue' }, { id: 'done', label: 'Done', color: 'green' }] });
+    const status = await addColumn(store, { display_name: 'Status', column_type: 'select', options: [{ id: 'todo', label: 'To do', color: '#00f' }, { id: 'done', label: 'Done', color: '#0a0' }] });
 
-    const result = await kit.call('update_data_store_column', { store, column_id: status.id, options: [{ id: 'todo', label: 'To do' }, { label: 'Done', color: 'purple' }] });
+    const result = await kit.call('update_data_store_column', { store, column_id: status.id, options: [{ id: 'todo', label: 'To do' }, { label: 'Done', color: '#808' }] });
 
     expect(result.isError).toBe(false);
-    expect(result.json.options).toEqual([{ id: 'todo', label: 'To do' }, { id: 'done', label: 'Done', color: 'purple' }]);
+    expect(result.json.options).toEqual([{ id: 'todo', label: 'To do' }, { id: 'done', label: 'Done', color: '#808' }]);
   });
 
   it('refuses an update that changes nothing', async () => {

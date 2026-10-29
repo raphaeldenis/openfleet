@@ -31,7 +31,16 @@ const isStaleRevision = (error: unknown): boolean => error instanceof ApiError &
   imports: [FormsModule, ErrorLineComponent, ManagerFieldsComponent, ManagerPulseProfileFieldsComponent],
   template: `
     <form class="of-form" (ngSubmit)="save()" novalidate [attr.aria-busy]="isSaving() || null">
-      <of-manager-fields [isLocked]="isSaving()" [storedMission]="manager().missionText" [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" [(isMissionTouched)]="isMissionTouched" />
+      <of-manager-fields [isCompact]="true" [isLocked]="isSaving()" [storedMission]="manager().missionText" [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" [(isMissionTouched)]="isMissionTouched">
+        <div rowEnd class="of-field">
+          <label class="of-label" for="manager-model">Model</label>
+          <select id="manager-model" class="of-input model" [disabled]="isSaving()" (change)="chooseModel($event)">
+            @for (rung of modelChoices(); track rung) {
+              <option [value]="rung" [selected]="rung === model()">{{ rung }}</option>
+            }
+          </select>
+        </div>
+      </of-manager-fields>
       <p class="note">${LIVE_MISSION_NOTE}</p>
       <of-manager-pulse-profile-fields [isLocked]="isSaving()" [expertise]="expertise()" (expertiseChange)="editExpertise($event)" [pulseActions]="pulseActions()" (pulseActionsChange)="editPulseActions($event)" />
       @if (isProfileStale()) {
@@ -40,14 +49,6 @@ const isStaleRevision = (error: unknown): boolean => error instanceof ApiError &
           <button type="button" class="of-btn of-btn--secondary" [disabled]="isSaving()" (click)="reloadProfile()">Reload profile</button>
         </div>
       }
-      <div class="of-field">
-        <label class="of-label" for="manager-model">Model</label>
-        <select id="manager-model" class="of-input model" [disabled]="isSaving()" (change)="chooseModel($event)">
-          @for (rung of modelChoices(); track rung) {
-            <option [value]="rung" [selected]="rung === model()">{{ rung }}</option>
-          }
-        </select>
-      </div>
       @if (saveError(); as error) {
         <of-error-line role="alert">{{ error }}</of-error-line>
       }
@@ -60,7 +61,7 @@ const isStaleRevision = (error: unknown): boolean => error instanceof ApiError &
   styles: `
     .of-form { display: flex; flex-direction: column; gap: 1rem }
     .note { margin: 0; font-size: .75rem; color: var(--mut) }
-    .model { width: auto; min-width: 10rem }
+    .model { width: 100% }
     .stale { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap }
     .actions { display: flex; align-items: center; gap: .75rem }
     .changes { font-size: .75rem; color: var(--mut) }

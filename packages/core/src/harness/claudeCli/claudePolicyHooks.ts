@@ -29,7 +29,8 @@ const FILE_PATH_FIELDS = ['file_path', 'notebook_path'];
 export interface ClaudePolicyHooksDeps {
   settings: () => CommandPolicySettings;
   evaluate: PolicyEvaluate;
-  sessions: { get(id: string): Session | undefined; sendMessage(input: { sessionId: string; body: string }): unknown };
+  /** `list` lets a SendMessage addressed to a manager by name be recognised; absent, only uuids are. */
+  sessions: { get(id: string): Session | undefined; sendMessage(input: { sessionId: string; body: string }): unknown; list?(): readonly Session[] };
   isManager: (sessionId: string) => boolean;
   journal: DenialJournal;
   bus: { emit(event: ServerEvent): void };
@@ -71,8 +72,16 @@ function toolResultsRootOf(event: ToolHookEvent): string | undefined {
 const presenceOf = (session: Session): PolicyPresence => (session.parentId === undefined ? 'attended' : 'unattended');
 const actorOf = (event: ToolHookEvent): PolicyActor => (event.agent_id === undefined ? 'session' : 'subagent');
 
-function toPolicyRequest(session: Session, event: ToolHookEvent, source: PolicySource): PolicyRequest {
+const SEND_MESSAGE_TOOL = 'SendMessage';
+
+function recipientOf(event: ToolHookEvent): string | undefined {
+  const recipient = event.tool_name === SEND_MESSAGE_TOOL && isRecord(event.tool_input) ? event.tool_input.to : undefined;
+  return typeof recipient === 'string' ? recipient.trim() : undefined;
+}
+
+function toPolicyRequest(session: Session, event: ToolHookEvent, source: PolicySource, recipientNamesManager: boolean): PolicyRequest {
   const command = commandOf(event.tool_input);
+  const recipient = recipientOf(event);
   const filePaths = filePathsOf(event.tool_input);
   const model = session.resolvedModel ?? session.model;
   const toolResultsRoot = toolResultsRootOf(event);
@@ -87,6 +96,7 @@ function toPolicyRequest(session: Session, event: ToolHookEvent, source: PolicyS
     toolName: event.tool_name,
     ...(command === undefined ? {} : { command }),
     ...(filePaths === undefined ? {} : { filePaths }),
+    ...(recipient === undefined ? {} : { recipient, recipientNamesManager }),
     cwd: event.cwd ?? session.directory,
     worktreeRoot: session.worktree ?? session.directory,
     scratchRoots: [],
@@ -166,12 +176,19 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
 
   private evaluateFailingOpen(session: Session, event: ToolHookEvent, source: PolicySource): PolicyVerdict | undefined {
     try {
-      return this.deps.evaluate(toPolicyRequest(session, event, source), this.deps.settings().document);
+      const recipientNamesManager = this.namesManagerSession(recipientOf(event));
+      return this.deps.evaluate(toPolicyRequest(session, event, source, recipientNamesManager), this.deps.settings().document);
     } catch (error) {
       log('warn', `command policy evaluation failed, letting the call through: ${error instanceof Error ? error.message : String(error)}`, session.id);
       this.deps.degraded?.recordHookFailOpen();
       return undefined;
     }
+  }
+
+  private namesManagerSession(recipient: string | undefined): boolean {
+    if (recipient === undefined || this.deps.sessions.list === undefined) return false;
+    const wanted = recipient.toLowerCase();
+    return this.deps.sessions.list().some((candidate) => candidate.name.toLowerCase() === wanted && this.deps.isManager(candidate.id));
   }
 
   private refusalOf(session: Session, verdict: PolicyVerdict): Refusal | undefined {
@@ -202,7 +219,7 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
       decisionSource: refusal.source,
       outcome: refusal.outcome,
       toolName: event.tool_name,
-      command: commandOf(event.tool_input) ?? filePathsOf(event.tool_input)?.join(' ') ?? '',
+      command: commandOf(event.tool_input) ?? filePathsOf(event.tool_input)?.join(' ') ?? recipientOf(event) ?? '',
       ...(refusal.alternative === '' ? {} : { alternative: refusal.alternative }),
       actor: actorOf(event),
     };

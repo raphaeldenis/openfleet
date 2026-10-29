@@ -573,16 +573,18 @@ const KNOWN_CODES: &[&str] = &[
   "SQLITE_BUSY", "SQLITE_CANTOPEN", "SQLITE_CONSTRAINT", "SQLITE_CORRUPT", "SQLITE_ERROR", "SQLITE_FULL", "SQLITE_IOERR", "SQLITE_LOCKED", "SQLITE_MISUSE",
   "SQLITE_NOTADB", "SQLITE_READONLY",
   // shared error codes (packages/shared/src/errors.ts)
-  "invalid_body", "invalid_json", "invalid_url", "invalid_branch_name", "unknown_harness", "constraint_violation", "message_too_long", "query_too_long",
+  "invalid_body", "invalid_json", "invalid_url", "invalid_branch_name", "invalid_mode", "unknown_harness", "constraint_violation", "log_kind_not_allowed", "message_too_long", "query_too_long",
   "outside_own_repository", "unauthorized", "not_found", "project_not_found", "no_state", "session_not_found", "note_not_found", "store_not_found",
   "view_not_found", "row_not_found", "manager_not_found", "handoff_not_found", "session_closed", "stale_revision", "file_backed", "file_unreadable",
   "path_escapes_docs_folder", "duplicate_name", "worktree_exists", "not_closed", "directory_missing", "directory_changed", "directory_unreadable",
   "already_resolved", "config_unreadable", "config_read_only", "message_id_reused", "too_many_pending", "children_cap", "outside_lineage", "not_a_manager", "manager_paused",
   "mission_missing", "mission_too_large", "base_not_read", "note_not_read", "findings_required", "verdict_stale",
   "directory_in_use", "duplicate_child", "no_parent", "spawn_raced", "store_has_rows", "duplicate_id", "no_docs_folder", "not_file_backed",
-  "docs_folder_not_writable", "payload_too_large", "note_too_large", "row_cap", "state_too_large", "daemon_shutting_down", "daemon_degraded",
+  "docs_folder_not_writable", "docs_folder_already_used", "docs_root_invalid", "docs_root_forbidden", "docs_root_not_writable", "payload_too_large", "note_too_large", "row_cap", "row_guard_violation", "state_too_large", "daemon_shutting_down", "daemon_degraded",
   "delivery_failed", "message_held_for_review", "harness_exited", "claude_not_found", "git_unavailable", "internal_error", "launch_failed", "resume_timeout",
   "db_stuck", "proposal_not_found", "governance_queue_full", "law_not_found", "law_revision_conflict", "law_withdrawn",
+  "harness_binary_broken", "directory_not_in_project",
+  "gh_unavailable", "gh_not_authenticated", "gh_bad_output", "gh_timeout", "too_many_watched_prs",
 ];
 
 const OTHER_CODE: &str = "other";

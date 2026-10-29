@@ -22,7 +22,7 @@ const columns: DsColumn[] = [
 ];
 
 const historyEntry = (overrides: Partial<DsRowHistoryEntry> = {}): DsRowHistoryEntry => ({
-  id: 'h1', rowId: 'r1', actorKind: 'agent', actorLabel: 'Gimli · T6', createdAt: NOW,
+  seq: 1, id: 'h1', rowId: 'r1', actorKind: 'agent', actorLabel: 'Gimli · T6', createdAt: NOW,
   change: { 'c-status': { from: 'todo', to: 'doing' } },
   ...overrides,
 });
@@ -1030,6 +1030,17 @@ describe('TablesViewComponent', () => {
       expect(entry).toHaveTextContent('Status todo → in progress');
       expect(api.listRowChanges).toHaveBeenCalledWith(expect.objectContaining({ storeId: 's1', rowId: 'r1' }));
       expect(screen.getByTestId('history-heading')).toHaveTextContent('Desktop reconnect');
+    });
+
+    it('user sees the table name and row number above the title of the opened row', async () => {
+      const api = fakeApi({ rows: twoRows });
+      await renderView(api);
+      await screen.findByTestId('table-grid');
+
+      await userEvent.click(screen.getByTestId('grid-row-r2'));
+
+      const identifier = await screen.findByTestId('history-identifier');
+      expect(identifier).toHaveTextContent(/^\S.* #2$/);
     });
 
     it('user opens the history of a card from the kanban', async () => {

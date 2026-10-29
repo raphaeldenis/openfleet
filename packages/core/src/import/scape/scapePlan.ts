@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { columnsByCellKey, mapChange, mapColumn, mapNote, mapRow, mapVersions, mapView, type MappedColumn, type SelectedOption } from './scapeMappers.js';
 import type { RecordValues } from './scapeTarget.js';
+import { withValidDisplayColumns } from './scapeColumnSettings.js';
 import { ScapeImportError } from './scapeImportError.js';
 import { planManagers, type PlannedManager } from './scapeManagers.js';
 import type { ScapeProject, ScapeSource } from './scapeSource.js';
@@ -22,7 +23,7 @@ export interface ImportPlan {
   notes: PlannedRecord<{ unconvertedTypes: string[]; currentVersionId: string }>[];
   noteVersions: PlannedRecord<{ unconvertedTypes: string[] }>[];
   dataStores: PlannedRecord[];
-  columns: PlannedRecord<{ hasDroppedFormat: boolean }>[];
+  columns: PlannedRecord<{ hasUnconvertedPart: boolean }>[];
   views: PlannedRecord<{ hasDroppedFields: boolean }>[];
   skippedViewCount: number;
   rows: PlannedRecord<{ hasStaleSelectValue: boolean; selectedOptions: SelectedOption[] }>[];
@@ -74,8 +75,9 @@ function planNotes(plan: ImportPlan, source: ScapeSource, project: ScapeProject)
 }
 
 function planStoreColumns(plan: ImportPlan, source: ScapeSource, store: { id: string; createdAt: string }): MappedColumn[] {
-  const columns = source.columnsOf(store.id).map(mapColumn);
+  const { columns, dropped: droppedDisplayColumns } = withValidDisplayColumns(source.columnsOf(store.id).map(mapColumn));
   for (const column of columns) {
+    const { settings } = column;
     const record = {
       store_id: column.storeId,
       display_name: column.displayName,
@@ -84,10 +86,20 @@ function planStoreColumns(plan: ImportPlan, source: ScapeSource, store: { id: st
       options_json: column.options === null ? null : JSON.stringify(column.options),
       sort_order: column.sortOrder,
       created_at: store.createdAt,
+      required: settings.required,
+      display_column_id: settings.displayColumnId,
+      config_json: settings.configJson,
+      display_width: settings.displayWidth,
+      wrap_mode: settings.wrapMode,
+      wrap_max_lines: settings.wrapMaxLines,
     };
-    const hasDroppedFormat = column.droppedFormat !== null;
+    const droppedDisplayColumn = droppedDisplayColumns.filter((dropped) => dropped.columnId === column.id).map(({ setting }) => setting);
+    const droppedSettings = [...column.droppedSettings, ...droppedDisplayColumn];
+    const hasUnconvertedPart = column.droppedFormat !== null || droppedSettings.length > 0 || column.droppedOptionColors.length > 0;
     if (column.droppedFormat !== null) plan.sourceLosses.droppedColumnFormats.push({ columnId: column.id, format: column.droppedFormat });
-    plan.columns.push({ id: column.id, record, extra: { hasDroppedFormat } });
+    for (const { field, value } of droppedSettings) plan.sourceLosses.droppedColumnMetadata.push({ columnId: column.id, field, value });
+    for (const { optionId, color } of column.droppedOptionColors) plan.sourceLosses.droppedOptionColors.push({ columnId: column.id, optionId, color });
+    plan.columns.push({ id: column.id, record, extra: { hasUnconvertedPart } });
   }
   return columns;
 }

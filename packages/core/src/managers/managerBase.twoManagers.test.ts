@@ -84,8 +84,9 @@ class Fleet {
   }
 
   private async aProjectRoot(projectName: string): Promise<string> {
+    mkdirSync(this.config.worktreesRoot, { recursive: true });
     const project = (await (await this.api('/api/projects', { method: 'POST', body: JSON.stringify({ name: projectName }) })).json()) as { id: string };
-    const root = (await (await this.api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', harness: 'fake', emoji: '🧭', name: `${projectName} root`, projectId: project.id }) })).json()) as { id: string };
+    const root = (await (await this.api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: this.config.worktreesRoot, harness: 'fake', emoji: '🧭', name: `${projectName} root`, projectId: project.id }) })).json()) as { id: string };
     return root.id;
   }
 

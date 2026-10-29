@@ -17,11 +17,36 @@ export const ScapeAggregateSchema = AggregateSchema.omit({ op: true }).extend({ 
 export type Aggregate = z.infer<typeof AggregateSchema>;
 export type ScapeAggregate = z.infer<typeof ScapeAggregateSchema>;
 
-export const SelectOptionSchema = z.object({ id: z.string().min(1), label: z.string().min(1), color: z.string().min(1).optional() });
+export const MAX_SELECT_OPTIONS = 500;
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+export const OptionColorSchema = z.string().regex(HEX_COLOR, 'A color is #RGB, #RRGGBB or #RRGGBBAA');
+
+export const SelectOptionSchema = z.object({ id: z.string().min(1), label: z.string().min(1), color: OptionColorSchema.optional() });
 export type SelectOption = z.infer<typeof SelectOptionSchema>;
 
 export const AutoValueSchema = z.enum(['created_at']);
 export type AutoValue = z.infer<typeof AutoValueSchema>;
+
+export const MIN_DISPLAY_WIDTH = 60;
+export const MAX_DISPLAY_WIDTH = 1200;
+export const DisplayWidthSchema = z.number().int().min(MIN_DISPLAY_WIDTH).max(MAX_DISPLAY_WIDTH);
+
+export const MAX_WRAP_LINES = 100;
+export const WRAP_MODES = ['wrap', 'truncate'] as const;
+export const WrapModeSchema = z.enum(WRAP_MODES);
+export type WrapMode = z.infer<typeof WrapModeSchema>;
+export const WrapMaxLinesSchema = z.number().int().min(1).max(MAX_WRAP_LINES);
+
+/** How a cell wraps; a column that truncates carries no wrap at all. */
+export interface ColumnWrap { mode: 'wrap'; maxLines?: number }
+
+export const ColumnConfigSchema = z.object({
+  symbol: z.string().max(8).optional(),
+  decimals: z.number().int().min(0).max(10).optional(),
+  ratingMax: z.number().int().min(1).max(10).optional(),
+  ratingIcon: z.string().max(32).optional(),
+}).strict();
+export type ColumnConfig = z.infer<typeof ColumnConfigSchema>;
 
 export interface DsColumn {
   id: string;
@@ -32,6 +57,13 @@ export interface DsColumn {
   options: SelectOption[] | null;
   sortOrder: number;
   autoValue?: AutoValue;
+  /** Present (true) only for a required column; absent means optional. */
+  required?: true;
+  /** Another column of the same store that labels this one. */
+  displayColumnId?: string;
+  config?: ColumnConfig;
+  displayWidth?: number;
+  wrap?: ColumnWrap;
 }
 
 export interface DataStore {
@@ -58,7 +90,17 @@ export type RowActorKind = z.infer<typeof RowActorKindSchema>;
 
 export type DsRowChange = { kind: 'create' } | { kind: 'delete' } | Record<string, { from: unknown; to: unknown }>;
 
+export const ROW_CHANGE_KINDS = ['insert', 'update', 'delete'] as const;
+export const RowChangeKindSchema = z.enum(ROW_CHANGE_KINDS);
+export type RowChangeKind = z.infer<typeof RowChangeKindSchema>;
+
+export const ROW_CHANGE_ORDERS = ['desc', 'asc'] as const;
+export const RowChangeOrderSchema = z.enum(ROW_CHANGE_ORDERS);
+export type RowChangeOrder = z.infer<typeof RowChangeOrderSchema>;
+
 export interface DsRowHistoryEntry {
+  /** Stable position in the whole history: never renumbered, never reused, increasing with each recorded change. */
+  seq: number;
   id: string;
   rowId: string;
   actorKind: RowActorKind;
@@ -130,10 +172,20 @@ export const MAX_STORE_NAME_CHARS = 200;
 export const OptionReplacementSchema = SelectOptionSchema.partial({ id: true }).strict();
 export type OptionReplacement = z.infer<typeof OptionReplacementSchema>;
 
+const ColumnWrapChangeSchema = z.object({ mode: WrapModeSchema, maxLines: WrapMaxLinesSchema.optional() }).strict()
+  .refine((wrap) => wrap.mode === 'wrap' || wrap.maxLines === undefined, 'maxLines only applies to the wrap mode');
+
+/** A null clears the field; an absent key leaves it unchanged. wrap mode truncate resets the wrapping. */
 export const ColumnChangesSchema = z.object({
   name: z.string().trim().min(1).max(MAX_STORE_NAME_CHARS).optional(),
   naturalKey: z.boolean().optional(),
-  options: z.array(OptionReplacementSchema).optional(),
+  options: z.array(OptionReplacementSchema).max(MAX_SELECT_OPTIONS).optional(),
+  required: z.boolean().optional(),
+  displayColumnId: z.string().min(1).nullable().optional(),
+  format: ColumnFormatSchema.nullable().optional(),
+  config: ColumnConfigSchema.nullable().optional(),
+  displayWidth: DisplayWidthSchema.nullable().optional(),
+  wrap: ColumnWrapChangeSchema.optional(),
 }).strict();
 export type ColumnChanges = z.infer<typeof ColumnChangesSchema>;
 

@@ -36,8 +36,8 @@ describe('the error registry', () => {
 
 describe('the wire contract of the registry', () => {
   const KIND_AND_RETRY_BY_CODE: Record<ErrorCode, string> = {
-    invalid_body: 'invalid_request/never', invalid_json: 'invalid_request/never', invalid_url: 'invalid_request/never', invalid_branch_name: 'invalid_request/never', unknown_harness: 'invalid_request/never',
-    constraint_violation: 'invalid_request/never', message_held_for_review: 'invalid_request/never', message_too_long: 'invalid_request/never', query_too_long: 'invalid_request/never', outside_own_repository: 'invalid_request/never',
+    invalid_body: 'invalid_request/never', invalid_json: 'invalid_request/never', invalid_url: 'invalid_request/never', invalid_branch_name: 'invalid_request/never', invalid_mode: 'invalid_request/never', unknown_harness: 'invalid_request/never',
+    constraint_violation: 'invalid_request/never', row_guard_violation: 'invalid_request/never', log_kind_not_allowed: 'invalid_request/never', message_held_for_review: 'invalid_request/never', message_too_long: 'invalid_request/never', query_too_long: 'invalid_request/never', outside_own_repository: 'invalid_request/never',
     unauthorized: 'unauthorized/never',
     not_found: 'not_found/never', project_not_found: 'not_found/never', no_state: 'not_found/never', session_not_found: 'not_found/never',
     note_not_found: 'not_found/never', store_not_found: 'not_found/never', view_not_found: 'not_found/never', row_not_found: 'not_found/never',
@@ -52,11 +52,15 @@ describe('the wire contract of the registry', () => {
     outside_lineage: 'conflict/never', not_a_manager: 'conflict/never', manager_paused: 'conflict/never', mission_missing: 'conflict/never', mission_too_large: 'conflict/never', directory_in_use: 'conflict/never',
     duplicate_child: 'conflict/never', no_parent: 'conflict/never', spawn_raced: 'conflict/later',
     store_has_rows: 'conflict/never', duplicate_id: 'conflict/never', no_docs_folder: 'conflict/never', not_file_backed: 'conflict/never',
-    docs_folder_not_writable: 'conflict/later', handoff_not_found: 'not_found/never',
+    docs_folder_not_writable: 'conflict/later', docs_folder_already_used: 'conflict/never', handoff_not_found: 'not_found/never',
+    docs_root_invalid: 'invalid_request/never', docs_root_forbidden: 'invalid_request/never', docs_root_not_writable: 'conflict/later',
     base_not_read: 'conflict/never', note_not_read: 'conflict/never', findings_required: 'conflict/never', verdict_stale: 'conflict/never',
     payload_too_large: 'too_large/never', note_too_large: 'too_large/never', row_cap: 'too_large/never', state_too_large: 'too_large/never',
     daemon_shutting_down: 'unavailable/later', daemon_degraded: 'unavailable/later', delivery_failed: 'unavailable/later', harness_exited: 'unavailable/never',
     claude_not_found: 'unavailable/never', git_unavailable: 'unavailable/never',
+    gh_unavailable: 'unavailable/never', gh_not_authenticated: 'unavailable/never', gh_bad_output: 'unavailable/later', gh_timeout: 'unavailable/later',
+    too_many_watched_prs: 'conflict/later',
+    harness_binary_broken: 'unavailable/later', directory_not_in_project: 'conflict/never',
     internal_error: 'internal/later', launch_failed: 'internal/later', resume_timeout: 'internal/later', db_stuck: 'internal/later',
   };
 

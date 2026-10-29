@@ -32,6 +32,21 @@ const bindings = (extra: ReturnType<typeof outputBinding>[] = []) => [
   ...extra,
 ];
 
+describe('TableKanbanComponent status dots', () => {
+  it('user sees each column header dot in its status colour', async () => {
+    await render(TableKanbanComponent, { bindings: [
+      inputBinding('columns', () => columns),
+      inputBinding('groups', () => [
+        { option: { id: 'todo', label: 'todo', color: 'var(--s-closed)' }, rows: [] },
+        { option: { id: 'doing', label: 'in progress', color: 'var(--s-gen)' }, rows: [] },
+      ]),
+    ] });
+
+    expect(screen.getByTestId('kanban-dot-todo')).toHaveStyle({ color: 'var(--s-closed)' });
+    expect(screen.getByTestId('kanban-dot-doing')).toHaveStyle({ color: 'var(--s-gen)' });
+  });
+});
+
 describe('TableKanbanComponent', () => {
   it('renders selected details of every base type in configured order and ignores stale references', async () => {
     const detailColumns: DsColumn[] = [

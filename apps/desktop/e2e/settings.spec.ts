@@ -7,7 +7,6 @@ interface UnavailableRow { testId: string; value: string; reason: string }
 
 const DISABLED_ROWS: Record<string, UnavailableRow[]> = {
   General: [
-    { testId: 'general-docs-root', value: '—', reason: 'Not configurable in this build yet' },
     { testId: 'general-handoff-on-close', value: 'Set in config.json', reason: 'Set handoff.writeOnClose in config.json' },
     { testId: 'general-reply-language', value: '—', reason: 'Not available yet — no language setting in the daemon' },
   ],
@@ -57,6 +56,38 @@ for (const [section, rows] of Object.entries(DISABLED_ROWS)) {
       await expect(value).toHaveAccessibleDescription(row.reason);
       await expect(page.getByRole('tabpanel').getByText(row.reason, { exact: true })).toBeVisible();
     }
+  });
+}
+
+test('the Docs folder root row of General shows the root read from the daemon in an editable field with a Save button', async ({ page }) => {
+  await openSettings(page);
+
+  const docsRoot = page.getByTestId('general-docs-root');
+
+  await expect(docsRoot).toBeEnabled();
+  await expect(docsRoot).toHaveValue(/\/Documents\/OpenFleet$/);
+  await expect(docsRoot).not.toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByTestId('general-docs-root-save')).toHaveAttribute('aria-disabled', 'true');
+
+  await docsRoot.fill('/tmp/openfleet-docs-root');
+
+  await expect(page.getByTestId('general-docs-root-save')).not.toHaveAttribute('aria-disabled', 'true');
+});
+
+for (const viewport of [{ width: 1200, height: 800 }, { width: 1440, height: 900 }]) {
+  test(`the Docs folder root field takes the room left by the Save button at ${viewport.width}×${viewport.height}`, async ({ page }) => {
+    const MINIMUM_FIELD_WIDTH = 400;
+    await page.setViewportSize(viewport);
+    await openSettings(page);
+
+    const docsRoot = page.getByTestId('general-docs-root');
+    await expect(docsRoot).toBeEnabled();
+    const fieldWidth = (await docsRoot.boundingBox())!.width;
+    const saveButtonRight = (await page.getByTestId('general-docs-root-save').boundingBox())!;
+    const rowRight = (await page.getByTestId('general-docs-root').locator('xpath=ancestor::of-settings-row').boundingBox())!;
+
+    expect(fieldWidth).toBeGreaterThanOrEqual(MINIMUM_FIELD_WIDTH);
+    expect(saveButtonRight.x + saveButtonRight.width).toBeLessThanOrEqual(rowRight.x + rowRight.width);
   });
 }
 

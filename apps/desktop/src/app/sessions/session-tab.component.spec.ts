@@ -34,10 +34,11 @@ describe('SessionTabComponent', () => {
     expect(screen.queryByTestId('state-panel')).toBeNull();
   });
 
-  it('asks to select a session when the watched id matches no session', async () => {
+  it('does not ask to select a session when the watched id matches no session: the selection is gone', async () => {
     await renderTab('ghost');
 
-    expect(screen.getByTestId('session-tab-no-session')).toBeTruthy();
+    expect(screen.getByTestId('session-tab-no-session')).toHaveTextContent('This session no longer exists.');
+    expect(screen.queryByText(/Select a session/)).toBeNull();
   });
 
   it('follows the watched session to another one', async () => {

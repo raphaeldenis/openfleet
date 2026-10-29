@@ -385,7 +385,7 @@ describe('note version tools', () => {
       const note = await createNote(client, { body_md: 'v1' });
       await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: 'v2', expected_rev: note.rev } });
       await client.callTool({ name: 'append_to_note', arguments: { note: note.id, content: 'more' } });
-      await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1 } });
+      await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1, expected_rev: 3 } });
 
       const result = text(await client.callTool({ name: 'list_note_versions', arguments: { note: note.id } }));
 
@@ -412,7 +412,7 @@ describe('note version tools', () => {
       const note = await createNote(client, { body_md: 'v1' });
       await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: 'v2', expected_rev: note.rev } });
 
-      const restored = text(await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1 } }));
+      const restored = text(await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1, expected_rev: 2 } }));
 
       expect(await bodyOf(client, note.id)).toBe('v1');
       expect(restored.rev).toBe(3);
@@ -435,6 +435,18 @@ describe('note version tools', () => {
       expect(await bodyOf(client, note.id)).toBe('v1');
     });
 
+    it('without expected_rev, refuses with invalid_body telling to call get_note and pass its rev, and leaves the note untouched', async () => {
+      const client = await connect(scopedToken);
+      const note = await createNote(client, { body_md: 'v1' });
+      await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: 'v2', expected_rev: note.rev } });
+
+      const refused = await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1 } });
+
+      expect(refused.isError).toBe(true);
+      expect(errorText(refused)).toMatch(/^error invalid_body: .*get_note.*expected_rev/);
+      expect(await bodyOf(client, note.id)).toBe('v2');
+    });
+
     it('on another project\'s note fails exactly like a missing note', async () => {
       const owner = await connect(scopedToken);
       const note = await createNote(owner);
@@ -453,7 +465,7 @@ describe('note version tools', () => {
       const client = await connect(fileBackedToken);
       await client.callTool({ name: 'update_note', arguments: { note: note.id, body_md: 'v2', expected_rev: note.rev } });
 
-      const restored = text(await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1 } }));
+      const restored = text(await client.callTool({ name: 'restore_note_version', arguments: { note: note.id, rev: 1, expected_rev: 2 } }));
 
       expect(restored.rev).toBe(3);
       expect(nodeDocsFolderFs.readFileSync(note.filePath!)).toBe('v1');

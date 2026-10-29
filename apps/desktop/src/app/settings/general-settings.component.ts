@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { NotificationDispatcher } from '../core/notification-dispatcher.service';
 import { NotificationPrefsStore } from '../core/notification-prefs.store';
 import { ThemeService } from '../core/theme.service';
+import { DocsRootSettingComponent } from './docs-root-setting.component';
 import { ProjectsSettingsComponent } from './projects-settings.component';
 import { SettingsRowComponent } from './settings-row.component';
 import { SettingsSectionComponent } from './settings-section.component';
@@ -25,7 +26,7 @@ const NOTIFICATION_ROWS: readonly { pref: NotificationRowPref; name: string; det
 @Component({
   selector: 'of-general-settings',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SettingsSectionComponent, SettingsRowComponent, ProjectsSettingsComponent],
+  imports: [SettingsSectionComponent, SettingsRowComponent, ProjectsSettingsComponent, DocsRootSettingComponent],
   template: `
     <of-settings-section heading="General" testId="settings-general">
       <div class="rows">
@@ -35,7 +36,7 @@ const NOTIFICATION_ROWS: readonly { pref: NotificationRowPref; name: string; det
         <of-settings-row name="Theme" detail="Also switchable from the sidebar footer">
           <button type="button" class="value" data-testid="general-theme" [attr.aria-label]="themeButtonLabel()" (click)="theme.toggle()">{{ themeLabel() }}</button>
         </of-settings-row>
-        <of-settings-row name="Docs folder root" detail="Each project gets <root>/<project>/ with specs, plans, handoffs, reports" [unavailable]="docsRoot" />
+        <of-docs-root-setting />
         <of-settings-row name="Write a handoff when a session closes" detail="Saved to handoffs/YYYY-MM-DD-<session>.md; offered in the close dialog" [unavailable]="handoffOnClose" />
         <of-settings-row name="Agents reply and write in" detail="Applies to sessions started afterwards · code and commits follow House rules" [unavailable]="replyLanguage" />
         @for (row of notificationRows; track row.pref) {
@@ -60,7 +61,6 @@ export class GeneralSettingsComponent {
 
   protected readonly prefs = this.prefsStore.prefs;
   protected readonly notificationRows = NOTIFICATION_ROWS;
-  protected readonly docsRoot = { testId: 'general-docs-root', value: '—', reason: 'Not configurable in this build yet' };
   protected readonly handoffOnClose = { testId: 'general-handoff-on-close', value: 'Set in config.json', reason: 'Set handoff.writeOnClose in config.json' };
   protected readonly replyLanguage = { testId: 'general-reply-language', value: '—', reason: 'Not available yet — no language setting in the daemon' };
   protected readonly themeLabel = computed(() => THEME_LABELS[this.theme.theme()]);

@@ -24,12 +24,18 @@ export class ClaudeCliHarness implements Harness {
     private readonly claudeConfigPath: string = join(homedir(), '.claude.json'),
   ) {}
 
-  conversationExists(conversation: { cliSessionId: string; directory: string }): ConversationPresence {
+  conversationExists(conversation: { cliSessionId: string; directory: string; configDir?: string }): ConversationPresence {
+    // The transcripts of an alternate profile live inside it, and no file of a profile is read.
+    if (conversation.configDir !== undefined) return 'unknown';
     return conversationPresence(conversation);
   }
 
   findProjectSettingsWarning(directory: string): string | undefined {
     return findPermissiveSettingsWarning(directory);
+  }
+
+  binaryPath(): string | undefined {
+    return findExecutable(CLAUDE_COMMAND, pathDirectoriesOf(this.env));
   }
 
   start(launch: HarnessLaunch): HarnessHandle {
@@ -38,7 +44,8 @@ export class ClaudeCliHarness implements Harness {
     // under OPENFLEET_HOME, or one the operator pointed the daemon at) — Claude
     // Code's first-run folder-trust dialog would otherwise block the PTY
     // forever waiting for a keypress nothing ever sends.
-    markDirectoryTrusted(this.claudeConfigPath, launch.directory);
+    // An alternate profile keeps its own trust state, which is not read or written here: the CLI may ask in the terminal.
+    if (launch.configDir === undefined) markDirectoryTrusted(this.claudeConfigPath, launch.directory);
     // A fresh per-launch directory (not just per-session) so a resume, reopen, or crash-recovery relaunch
     // never collides with a file an earlier, not-yet-cleaned-up launch of the same session left behind.
     const tokenFilesDir = tokenFilesDirFor(this.sessionsRoot, launch.sessionId);
@@ -51,7 +58,7 @@ export class ClaudeCliHarness implements Harness {
         cols: 120,
         rows: 40,
         cwd: launch.directory,
-        env: { ...childEnvironmentForClaudeCli(this.env), TERM: 'xterm-256color' },
+        env: { ...childEnvironmentForClaudeCli(this.env), TERM: 'xterm-256color', ...(launch.configDir !== undefined && { CLAUDE_CONFIG_DIR: launch.configDir }) },
       });
     } catch (err) {
       deleteTokenFiles(tokenFilesDir);

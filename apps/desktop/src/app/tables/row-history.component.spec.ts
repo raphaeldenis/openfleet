@@ -9,6 +9,7 @@ const columns: DsColumn[] = [
 ];
 
 const entry = (overrides: Partial<DsRowHistoryEntry> & Pick<DsRowHistoryEntry, 'id' | 'change'>): DsRowHistoryEntry => ({
+  seq: 1,
   rowId: 'r1',
   actorKind: 'agent',
   actorLabel: 'Gimli · T6',
@@ -78,6 +79,17 @@ describe('RowHistoryComponent', () => {
     });
 
     expect(screen.getByTestId('history-heading')).toHaveTextContent('Desktop reconnect with backoff');
+  });
+
+  it('user sees which table and row the history belongs to above the title', async () => {
+    await render(RowHistoryComponent, {
+      bindings: [...bindings(), inputBinding('heading', () => 'Desktop reconnect'), inputBinding('identifier', () => 'backlog #6')],
+    });
+
+    expect(screen.getByTestId('history-identifier')).toHaveTextContent('backlog #6');
+    const identifier = screen.getByTestId('history-identifier');
+    const heading = screen.getByTestId('history-heading');
+    expect(identifier.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('user still sees the entry, with the raw value, when its date is not a date', async () => {

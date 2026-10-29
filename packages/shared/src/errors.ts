@@ -20,12 +20,17 @@ export const ERROR_CODES = {
   invalid_json: { kind: 'invalid_request' },
   invalid_url: { kind: 'invalid_request' },
   invalid_branch_name: { kind: 'invalid_request' },
+  invalid_mode: { kind: 'invalid_request' },
   unknown_harness: { kind: 'invalid_request' },
   // A bad cell value is the caller's row (decision D10): it answers 400, not 409.
   constraint_violation: { kind: 'invalid_request' },
+  // A manager log row carries a kind outside the closed list MANAGER_LOG_KINDS: another kind from the list makes the same write succeed.
+  log_kind_not_allowed: { kind: 'invalid_request' },
   message_too_long: { kind: 'invalid_request' },
   query_too_long: { kind: 'invalid_request' },
   outside_own_repository: { kind: 'invalid_request' },
+  docs_root_invalid: { kind: 'invalid_request' },
+  docs_root_forbidden: { kind: 'invalid_request' },
 
   unauthorized: { kind: 'unauthorized' },
 
@@ -81,6 +86,8 @@ export const ERROR_CODES = {
   verdict_stale: { kind: 'conflict', retry: 'never' },
   directory_in_use: { kind: 'conflict', retry: 'never' },
   duplicate_child: { kind: 'conflict', retry: 'never' },
+  // The directory belongs to no project: spawning inside a project's folders or worktrees is what lets the same call succeed.
+  directory_not_in_project: { kind: 'conflict', retry: 'never' },
   no_parent: { kind: 'conflict', retry: 'never' },
   // The directory moved while the spawn was being checked: the same call can succeed once it settles.
   spawn_raced: { kind: 'conflict', retry: 'later' },
@@ -90,11 +97,17 @@ export const ERROR_CODES = {
   not_file_backed: { kind: 'conflict', retry: 'never' },
   // The permissions can be fixed while the app stays open: the same save succeeds afterwards.
   docs_folder_not_writable: { kind: 'conflict', retry: 'later' },
+  // Another project already holds that folder (same directory once links and letter case are resolved): only another folder passes.
+  docs_folder_already_used: { kind: 'conflict', retry: 'never' },
+  docs_root_not_writable: { kind: 'conflict', retry: 'later' },
 
   payload_too_large: { kind: 'too_large' },
   note_too_large: { kind: 'too_large' },
   row_cap: { kind: 'too_large' },
   state_too_large: { kind: 'too_large' },
+
+  // The project keeps a row journal append-only and a done row linked to a pull request: only a changed write (previous journal plus a line, or a pr_url) passes.
+  row_guard_violation: { kind: 'invalid_request' },
 
   daemon_shutting_down: { kind: 'unavailable' },
   daemon_degraded: { kind: 'unavailable' },
@@ -107,6 +120,16 @@ export const ERROR_CODES = {
   // A missing binary on the daemon PATH: only installing it, or starting the daemon from a shell that has it, helps.
   claude_not_found: { kind: 'unavailable', retry: 'never' },
   git_unavailable: { kind: 'unavailable', retry: 'never' },
+  // The GitHub CLI is missing from the daemon PATH, or not logged in: only installing it or running `gh auth login` helps.
+  gh_unavailable: { kind: 'unavailable', retry: 'never' },
+  gh_not_authenticated: { kind: 'unavailable', retry: 'never' },
+  // GitHub or the network may answer correctly on the next poll.
+  gh_bad_output: { kind: 'unavailable', retry: 'later' },
+  gh_timeout: { kind: 'unavailable', retry: 'later' },
+  // Unwatching a pull request frees a place, or the manager waits for one to merge.
+  too_many_watched_prs: { kind: 'conflict', retry: 'later' },
+  // The binary answers `--version` with a failure: repairing or reinstalling it, then waiting out the 60 s health cache, lets the same spawn succeed.
+  harness_binary_broken: { kind: 'unavailable', retry: 'later' },
 
   internal_error: { kind: 'internal' },
   launch_failed: { kind: 'internal' },

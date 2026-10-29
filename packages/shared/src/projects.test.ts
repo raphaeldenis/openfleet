@@ -26,6 +26,32 @@ describe('CreateProjectRequestSchema', () => {
   });
 });
 
+describe('CreateProjectRequestSchema profile', () => {
+  const profile = { goal: 'Ship it', stack: ['TypeScript'], commands: { test: 'pnpm test' }, repositories: ['/work/fleet'] };
+
+  it('accepts a profile next to the docs folder path', () => {
+    const request = CreateProjectRequestSchema.parse({ name: 'Fleet', docsFolderPath: '/work/docs', profile });
+
+    expect(request.profile).toEqual(profile);
+  });
+
+  it('refuses a profile without a docs folder path', () => {
+    expect(() => CreateProjectRequestSchema.parse({ name: 'Fleet', profile })).toThrow();
+  });
+
+  it('refuses a 10 KB goal, unknown profile keys and unknown commands', () => {
+    const withProfile = (changed: object) => CreateProjectRequestSchema.parse({ name: 'Fleet', docsFolderPath: '/work/docs', profile: { ...profile, ...changed } });
+
+    expect(() => withProfile({ goal: 'x'.repeat(10_000) })).toThrow();
+    expect(() => withProfile({ extra: 1 })).toThrow();
+    expect(() => withProfile({ commands: { deploy: 'make deploy' } })).toThrow();
+  });
+
+  it('refuses too many stack bullets', () => {
+    expect(() => CreateProjectRequestSchema.parse({ name: 'Fleet', docsFolderPath: '/work/docs', profile: { stack: Array.from({ length: 21 }, (_, i) => `s${i}`) } })).toThrow();
+  });
+});
+
 describe('UpdateProjectRequestSchema', () => {
   it('accepts a name, a docs folder path or both', () => {
     expect(UpdateProjectRequestSchema.parse({ name: ' Renamed ' })).toEqual({ name: 'Renamed' });

@@ -1,12 +1,15 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  COLUMN_TYPES, COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, DsViewConfigSchema, NO_VALUE_GROUP_ID, orderedKanbanOptions, OrderTermSchema, SelectOptionSchema, VIEW_TYPES, WhereClauseSchema,
-  type AutoValue, type ColumnChanges, type ColumnFormat, type ColumnType, type DataStore, type DsColumn, type DsRow, type DsView, type DsViewConfig, type OptionReplacement, type OrderTerm, type SelectOption, type ViewType, type WhereClause,
+  COLUMN_TYPES, COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, DsViewConfigSchema, MANAGER_LOG_KINDS, MAX_SELECT_OPTIONS, NO_VALUE_GROUP_ID, orderedKanbanOptions, OrderTermSchema, SelectOptionSchema, VIEW_TYPES, WhereClauseSchema,
+  type AutoValue, type ColumnChanges, type ColumnWrap, type ColumnFormat, type ColumnType, type DataStore, type DsColumn, type DsRow, type DsView, type DsViewConfig, type OptionReplacement, type OrderTerm, type SelectOption, type ViewType, type WhereClause,
 } from '@openfleet/shared';
 import { z } from 'zod';
 import { inTransaction as runInTransaction } from '../db/transaction.js';
-import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, type DataStoreRepository, type RowActor } from './dataStoreRepository.js';
+import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, type ColumnMetadata, type DataStoreRepository, type RowActor } from './dataStoreRepository.js';
+import { rowGuardViolationOf } from './rowGuard.js';
+
+export { DoneWithoutPrUrlError, JournalShortenedError, RowGuardViolationError } from './rowGuard.js';
 
 export class InvalidCellValueError extends Error {
   constructor(readonly columnId: string) {
@@ -89,6 +92,11 @@ export class ColumnUsedByViewError extends ConstraintError {
     super(`Column "${columnName}" is used by the view "${viewName}"; update or delete the view first`);
   }
 }
+export class ColumnIsDisplayColumnError extends ConstraintError {
+  constructor(columnName: string, labelledColumnName: string) {
+    super(`Column "${columnName}" is the display column of "${labelledColumnName}"; clear that display column first`);
+  }
+}
 export class OptionsHeldByRowsError extends ConstraintError {
   constructor(optionIds: string[]) {
     super(`Rows still hold the options being removed (${optionIds.join(', ')}); change those rows first`);
@@ -104,6 +112,18 @@ export class StoreRowCapError extends Error {
     super(`Data store ${storeId} is at its ${cap}-row cap`);
   }
 }
+
+/** A write put a `kind` outside the closed list in the log table of a manager. */
+export class LogKindNotAllowedError extends Error {
+  constructor(readonly kind: unknown) {
+    super(`The manager log refuses kind ${JSON.stringify(kind)}. Allowed kinds: ${MANAGER_LOG_KINDS.join(', ')}. Ticket reports go in the ticket journal, not in the log.`);
+  }
+}
+
+const LOG_KIND_COLUMN_NAME = 'kind';
+const isLogKindColumn = (column: DsColumn): boolean => column.displayName.trim().toLowerCase() === LOG_KIND_COLUMN_NAME;
+const labelOfSelectedOption = (column: DsColumn, optionId: unknown): unknown => (column.options ?? []).find((option) => option.id === optionId)?.label ?? optionId;
+const isPermittedLogKind =(kind: unknown): boolean => (MANAGER_LOG_KINDS as readonly unknown[]).includes(kind);
 
 export interface DataStoreServiceDeps {
   repo: DataStoreRepository;
@@ -252,18 +272,19 @@ export class DataStoreService {
     return this.guarded(() => this.repo.createStore({ id: this.newId(), projectId: input.projectId, displayName, at: this.clock() }));
   }
 
-  /** Renames a column, replaces the options of a select column and sets or clears the store natural key, all or nothing. */
+  /** Renames a column, replaces the options of a select column, edits its display metadata and sets or clears the store natural key, all or nothing. */
   updateColumn(storeId: string, input: Scope & { columnId: string; changes: ColumnChanges }): DsColumn {
     this.authorize(storeId, input.projectId);
     const { name, options, naturalKey } = input.changes;
-    const hasNothingToUpdate = name === undefined && options === undefined && naturalKey === undefined;
-    if (hasNothingToUpdate) throw new InvalidColumnDefinitionError('Nothing to update: pass name, natural_key or options');
+    const hasNothingToUpdate = Object.values(input.changes).every((change) => change === undefined);
+    if (hasNothingToUpdate) throw new InvalidColumnDefinitionError('Nothing to update: pass name, natural_key, options or a column metadata field');
     const column = this.requireColumn(storeId, input.columnId);
     const displayName = name === undefined ? column.displayName : normalizeName(name);
     const replacedOptions = options === undefined ? column.options : this.replacedOptions(column, options);
+    const metadata = this.metadataAfter(storeId, column, input.changes);
     return this.inTransaction(() => {
       if (options !== undefined) this.refuseOptionsStillHeldByRows(storeId, { column, options: replacedOptions });
-      const updatedColumn = this.guarded(() => this.repo.updateColumn(storeId, { columnId: column.id, displayName, options: replacedOptions }));
+      const updatedColumn = this.guarded(() => this.repo.updateColumn(storeId, { columnId: column.id, displayName, options: replacedOptions, metadata }));
       if (naturalKey !== undefined) this.applyNaturalKeyChoice(storeId, { projectId: input.projectId, columnId: column.id, isNaturalKey: naturalKey });
       return updatedColumn;
     });
@@ -277,6 +298,8 @@ export class DataStoreService {
     if (isNaturalKey) throw new ColumnIsNaturalKeyError(column.displayName);
     const usingView = this.repo.listViews(storeId).find((view) => viewConfigReferences(view.config, column.id));
     if (usingView) throw new ColumnUsedByViewError(column.displayName, usingView.displayName);
+    const labelledColumn = this.repo.listColumns(storeId).find((storeColumn) => storeColumn.displayColumnId === column.id);
+    if (labelledColumn) throw new ColumnIsDisplayColumnError(column.displayName, labelledColumn.displayName);
     this.guarded(() => this.repo.deleteColumn(storeId, { columnId: column.id, actor: input.actor, at: this.clock() }));
   }
 
@@ -296,6 +319,48 @@ export class DataStoreService {
     const column = this.repo.listColumns(storeId).find((storedColumn) => storedColumn.id === columnId);
     if (!column) throw new UnknownColumnError([columnId]);
     return column;
+  }
+
+  /** The complete display metadata of a column once `changes` apply: a field left out keeps its value, null clears it. */
+  private metadataAfter(storeId: string, column: DsColumn, changes: ColumnChanges): ColumnMetadata {
+    const keptOrChanged = <T>(change: T | null | undefined, kept: T | undefined): T | null => change === undefined ? kept ?? null : change;
+    const format = keptOrChanged(changes.format, column.format);
+    const isFormatOfAnotherType = format !== null && COLUMN_TYPE_BY_FORMAT[format] !== column.columnType;
+    if (isFormatOfAnotherType) throw new InvalidColumnDefinitionError('The format must match the column type');
+    const config = keptOrChanged(changes.config, column.config);
+    const isConfigOnNonNumber = changes.config != null && column.columnType !== 'number';
+    if (isConfigOnNonNumber) throw new InvalidColumnDefinitionError('Only a number column takes a config');
+    const displayColumnId = keptOrChanged(changes.displayColumnId, column.displayColumnId);
+    if (displayColumnId !== null) this.requireDisplayColumn(storeId, { column, displayColumnId });
+    return {
+      required: changes.required ?? column.required === true,
+      format,
+      config: config !== null && Object.keys(config).length === 0 ? null : config,
+      displayColumnId,
+      displayWidth: keptOrChanged(changes.displayWidth, column.displayWidth),
+      wrap: this.wrapAfter(column, changes.wrap),
+    };
+  }
+
+  private wrapAfter(column: DsColumn, change: ColumnChanges['wrap']): ColumnWrap | null {
+    if (change === undefined) return column.wrap ?? null;
+    if (change.mode === 'truncate') return null;
+    return change.maxLines === undefined ? { mode: 'wrap' } : { mode: 'wrap', maxLines: change.maxLines };
+  }
+
+  private requireDisplayColumn(storeId: string, input: { column: DsColumn; displayColumnId: string }): void {
+    if (input.displayColumnId === input.column.id) throw new InvalidColumnDefinitionError('A column cannot be its own display column');
+    const isInStore = this.repo.listColumns(storeId).some((storeColumn) => storeColumn.id === input.displayColumnId);
+    if (!isInStore) throw new UnknownColumnError([input.displayColumnId]);
+    const displayColumnIdOf = new Map(this.repo.listColumns(storeId).map((storeColumn) => [storeColumn.id, storeColumn.displayColumnId]));
+    const visited = new Set<string>();
+    for (let followed = input.displayColumnId as string | undefined; followed !== undefined; followed = displayColumnIdOf.get(followed)) {
+      const closesCycle = followed === input.column.id;
+      if (closesCycle) throw new InvalidColumnDefinitionError('A display column cannot lead back to the column: this closes a cycle of display columns');
+      const isInsideAnExistingCycle = visited.has(followed);
+      if (isInsideAnExistingCycle) throw new InvalidColumnDefinitionError('A display column cannot lead into a cycle of display columns');
+      visited.add(followed);
+    }
   }
 
   /** Keeps the id of every replacement matching a current option (by id, else by label); a replacement matching none gets a fresh id. The list is authoritative: labels and colors come from the replacements only. */
@@ -415,6 +480,7 @@ export class DataStoreService {
     const columns = this.repo.listColumns(storeId);
     const data = this.withDaemonSetCells(this.daemonSetColumns(columns), input.data, at);
     this.validateCells(columns, data);
+    this.refuseKindOutsideManagerLogList(storeId, columns, data);
     this.assertRowCapacity(storeId, 1);
     return this.inTransaction(() => {
       const rowId = this.newId();
@@ -426,8 +492,11 @@ export class DataStoreService {
   updateRow(storeId: string, rowId: string, input: Scope & { patch: Record<string, unknown>; actor: RowActor }): DsRow {
     this.authorize(storeId, input.projectId);
     this.refuseDaemonSetCells(storeId, input.patch);
-    this.validateCells(this.repo.listColumns(storeId), input.patch);
+    const columns = this.repo.listColumns(storeId);
+    this.validateCells(columns, input.patch);
+    this.refuseKindOutsideManagerLogList(storeId, columns, input.patch);
     this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, input.patch);
+    this.refuseRowGuardViolation(storeId, rowId, input);
     return this.guarded(() => this.repo.updateRow(rowId, { storeId, patch: input.patch, actor: input.actor, at: this.clock() }));
   }
 
@@ -454,7 +523,10 @@ export class DataStoreService {
       const at = this.clock();
       return { at, data: this.withDaemonSetCells(daemonSetColumns, item, at) };
     });
-    for (const { data } of stampedRows) this.validateCells(columns, data);
+    for (const { data } of stampedRows) {
+      this.validateCells(columns, data);
+      this.refuseKindOutsideManagerLogList(storeId, columns, data);
+    }
     this.assertRowCapacity(storeId, input.items.length);
     return this.inTransaction(() => stampedRows.map(({ data, at }) => {
       const rowId = this.newId();
@@ -481,6 +553,22 @@ export class DataStoreService {
     return { matched: matchedRows.length, updated };
   }
 
+  /**
+   * In the log table of a manager, a written `kind` cell must be one of MANAGER_LOG_KINDS (exact, case-sensitive match).
+   * The column is found by its display name, ignoring case and surrounding spaces; in a select column the option label is compared, not the option id.
+   * Other tables, logs without a `kind` column and writes that leave the kind cell out or null are not concerned; stored rows are never rewritten.
+   */
+  private refuseKindOutsideManagerLogList(storeId: string, columns: DsColumn[], cells: Record<string, unknown>): void {
+    const kindColumn = columns.find(isLogKindColumn);
+    const writtenCell = kindColumn === undefined ? undefined : cells[kindColumn.id];
+    const writesNoKind = writtenCell === undefined || writtenCell === null;
+    if (kindColumn === undefined || writesNoKind) return;
+    const writtenKind = kindColumn.columnType === 'select' ? labelOfSelectedOption(kindColumn, writtenCell) : writtenCell;
+    if (isPermittedLogKind(writtenKind)) return;
+    const isManagerLog = this.db.prepare('SELECT 1 FROM managers WHERE log_store_id = ?').get(storeId) !== undefined;
+    if (isManagerLog) throw new LogKindNotAllowedError(writtenKind);
+  }
+
   /** The daemon-set columns that the given rows try to fill: they are dropped at insert, and the caller reports them. */
   ignoredDaemonSetColumnIds(storeId: string, input: Scope & { items: Record<string, unknown>[] }): string[] {
     this.authorize(storeId, input.projectId);
@@ -493,11 +581,22 @@ export class DataStoreService {
     for (const { patch } of input.items) {
       this.refuseDaemonSetCells(storeId, patch);
       this.validateCells(columns, patch);
+      this.refuseKindOutsideManagerLogList(storeId, columns, patch);
     }
     return this.inTransaction(() => input.items.map(({ rowId, patch }) => {
       this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, patch);
+      this.refuseRowGuardViolation(storeId, rowId, { projectId: input.projectId, patch });
       return this.repo.updateRow(rowId, { storeId, patch, actor: input.actor, at: this.clock() });
     }));
+  }
+
+  /** When the project guards its rows, refuses a patch that shortens the journal or moves a row to done without a pr_url. */
+  private refuseRowGuardViolation(storeId: string, rowId: string, input: Scope & { patch: Record<string, unknown> }): void {
+    if (!this.repo.isRowGuardEnabled(input.projectId)) return;
+    const current = this.repo.findRow(rowId, storeId);
+    if (current === undefined) return;
+    const violation = rowGuardViolationOf({ columns: this.repo.listColumns(storeId), current, patch: input.patch });
+    if (violation !== undefined) throw violation;
   }
 
   query(storeId: string, input: Scope & { where?: WhereClause[]; orderBy?: OrderTerm[]; limit?: number }): DsRow[] {
@@ -629,7 +728,7 @@ export class DataStoreService {
       if (options !== undefined) throw new InvalidColumnDefinitionError('Only a select column takes options');
       return undefined;
     }
-    const parsed = z.array(SelectOptionSchema).min(1).safeParse(options);
+    const parsed = z.array(SelectOptionSchema).min(1).max(MAX_SELECT_OPTIONS).safeParse(options);
     if (!parsed.success) throw new InvalidColumnDefinitionError('A select column needs at least one option, each with an id and a label');
     const hasDuplicateIds = new Set(parsed.data.map((option) => option.id)).size !== parsed.data.length;
     if (hasDuplicateIds) throw new InvalidColumnDefinitionError('Option ids must be unique');

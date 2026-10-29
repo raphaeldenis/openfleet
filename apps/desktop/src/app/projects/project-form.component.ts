@@ -4,7 +4,7 @@ import { copyFor } from '../core/error-copy';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { ErrorLineComponent } from '../design/error-line.component';
 
-const DOCS_FOLDER_ERROR_CODES: ReadonlySet<string> = new Set(['invalid_body', 'docs_folder_not_writable', 'path_escapes_docs_folder']);
+const DOCS_FOLDER_ERROR_CODES: ReadonlySet<string> = new Set(['invalid_body', 'docs_folder_not_writable', 'docs_folder_already_used', 'path_escapes_docs_folder']);
 const NAME_REQUIRED = 'Name is required';
 const NAME_TOO_LONG = `The name must be ${MAX_PROJECT_NAME_CHARS} characters or fewer`;
 const DOCS_FOLDER_REQUIRED = 'Docs folder is required';
@@ -42,6 +42,9 @@ let nextFormSequence = 0;
         <label class="of-label" [for]="docsFolderId">Docs folder</label>
         <input #docsFolderInput [id]="docsFolderId" class="of-input" data-testid="project-docs-folder" placeholder="/path/to/docs" [value]="docsFolder()" [readonly]="pending()" (input)="editDocsFolder($event)" (keydown.enter)="saveOnEnter($event)" [attr.aria-invalid]="isDocsFolderInvalid() ? 'true' : null" [attr.aria-describedby]="docsFolderDescribedBy()" />
         <span [id]="docsFolderHintId" class="hint">Optional. Type the absolute path of an existing folder — there is no folder picker yet.</span>
+        @if (suggestedDocsFolder(); as suggestion) {
+          <span class="hint" data-testid="project-docs-folder-suggestion">Your docs folder root suggests <span class="mono">{{ suggestion }}</span> — create it first, or type another path.</span>
+        }
         @if (docsFolderMessage(); as message) {
           <of-error-line [id]="docsFolderErrorId" role="alert" data-testid="project-form-error">{{ message }}</of-error-line>
         }
@@ -56,6 +59,7 @@ let nextFormSequence = 0;
     :host { display: block; }
     .project-form { display: flex; flex-direction: column; gap: 1rem; }
     .hint { font-size: .75rem; color: var(--mut); }
+    .mono { font-family: var(--mono); overflow-wrap: anywhere; }
     .actions { display: flex; justify-content: flex-end; gap: .5rem; }
   `,
 })
@@ -70,6 +74,8 @@ export class ProjectFormComponent {
   readonly project = input<Project>();
   readonly saved = output<Project>();
   readonly cancelled = output<void>();
+  /** Shows `<docs folder root>/<name>` under the docs folder field, once the user has saved a docs folder root. */
+  readonly suggestsDocsFolder = input(false);
 
   private readonly sequence = nextFormSequence++;
   protected readonly nameId = `project-name-${this.sequence}`;
@@ -86,6 +92,8 @@ export class ProjectFormComponent {
   protected readonly nameError = signal('');
   private readonly docsFolderRequiredError = signal('');
   private readonly saveFailure = signal<SaveFailure | undefined>(undefined);
+  protected readonly suggestedDocsFolder = signal('');
+  private latestSuggestionRequest = 0;
 
   protected readonly docsFolderMessage = computed(() => this.docsFolderRequiredError() || this.saveFailure()?.text || '');
   protected readonly isDocsFolderInvalid = computed(() => this.docsFolderRequiredError() !== '' || this.saveFailure()?.isAboutDocsFolder === true);
@@ -94,11 +102,30 @@ export class ProjectFormComponent {
   constructor() {
     inject(DestroyRef).onDestroy(() => (this.hasBeenDestroyed = true));
     afterNextRender(() => this.focusFirstField(), { injector: this.injector });
+    afterNextRender(() => void this.refreshSuggestedDocsFolder(), { injector: this.injector });
   }
 
   protected editName(event: Event): void {
     this.name.set((event.target as HTMLInputElement).value);
     this.nameError.set('');
+    void this.refreshSuggestedDocsFolder();
+  }
+
+  /** Asks the daemon where the typed name would live; no suggestion while no root is saved, or when the daemon does not answer. */
+  private async refreshSuggestedDocsFolder(): Promise<void> {
+    if (!this.suggestsDocsFolder() || this.isEditing()) return;
+    const requestNumber = ++this.latestSuggestionRequest;
+    const typedName = this.name().trim();
+    let suggestion = '';
+    try {
+      const view = await this.api.getDocsRoot(typedName || undefined);
+      const isRootSaved = !view.isDefault;
+      suggestion = isRootSaved ? (view.proposedPath ?? '') : '';
+    } catch {
+      suggestion = '';
+    }
+    const isStale = requestNumber !== this.latestSuggestionRequest || this.hasBeenDestroyed;
+    if (!isStale) this.suggestedDocsFolder.set(suggestion);
   }
 
   protected editDocsFolder(event: Event): void {

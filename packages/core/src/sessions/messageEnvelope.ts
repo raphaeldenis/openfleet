@@ -36,6 +36,15 @@ function splitHeaderField(value: string): { displayValue: string; spillover: str
   return { displayValue: displayValue!, spillover: rest.length > 0 ? rest.join('\n') : undefined };
 }
 
+/** Returns the text a stored agent message carries between its envelope markers; a body without envelope comes back as it is. */
+export function unwrapAgentMessage(storedBody: string): string {
+  const lines = storedBody.split('\n');
+  const beginIndex = lines.indexOf(AGENT_MESSAGE_BEGIN);
+  const endIndex = lines.lastIndexOf(AGENT_MESSAGE_END);
+  const isEnveloped = beginIndex >= 0 && endIndex > beginIndex;
+  return isEnveloped ? lines.slice(beginIndex + 1, endIndex).join('\n') : storedBody;
+}
+
 export function wrapAgentMessage(input: { fromSessionId: string; fromBranch?: string; messageId: string; body: string }): string {
   const senderId = splitHeaderField(input.fromSessionId.slice(0, SENDER_ID_DISPLAY_LENGTH));
   const branch = splitHeaderField(input.fromBranch ?? '?');
