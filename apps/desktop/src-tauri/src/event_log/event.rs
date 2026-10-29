@@ -301,7 +301,7 @@ mod tests {
   }
 
   fn opaque(text: &str) -> Opaque {
-    Opaque::of(text.as_bytes(), Some(&salt()))
+    Opaque::bucketed(text.as_bytes(), Some(&salt()))
   }
 
   fn io_failure(errno: i32) -> IoFailure {
@@ -490,10 +490,10 @@ mod tests {
         id: ShortId::parse("ffffffff"),
         session: SessionId::parse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
         code: Some(KnownCode::from_name("docs_folder_not_writable")),
-        message: Some(DaemonMessage::Unlisted(Opaque::of(&vec![b'x'; EIGHT_DIGIT_LENGTH], Some(&salt())))),
+        message: Some(DaemonMessage::Unlisted(Opaque::bucketed(&vec![b'x'; EIGHT_DIGIT_LENGTH], Some(&salt())))),
         error_name: Some(KnownErrorName::from_name("ReferenceError")),
         error_code: Some(KnownCode::from_name("docs_folder_not_writable")),
-        error_message: Some(Opaque::of(&vec![b'y'; EIGHT_DIGIT_LENGTH], Some(&salt()))),
+        error_message: Some(Opaque::bucketed(&vec![b'y'; EIGHT_DIGIT_LENGTH], Some(&salt()))),
         frames: Some(frames_at(&[(123, 456), (123, 456), (123, 456), (123, 456), (123, 456), (123, 456), (123, 456), (1234, 456)])),
         extra_fields: Count(u64::MAX),
       };
@@ -548,7 +548,7 @@ mod tests {
     fn free_text_renders_as_its_length_and_tag_only() {
       let line = DesktopEvent::SidecarFailed { reason: opaque("No such file or directory") }.render(now());
 
-      let prefix = "2026-10-04T12:00:00Z error sidecar_failed reason=[text:25:";
+      let prefix = "2026-10-04T12:00:00Z error sidecar_failed reason=[text:32:";
       assert!(line.as_str().starts_with(prefix), "{line}");
       assert_eq!(line.as_str().len(), prefix.len() + "xxxxxxxx]".len());
     }
@@ -596,6 +596,44 @@ mod tests {
       assert_eq!(event.render(now()).as_str(), "2026-10-04T12:00:00Z error sidecar_failed reason=[text:16]");
     }
 
+    mod a_renderer_that_prints_an_exact_length_instead_of_a_bucket {
+      use super::*;
+
+      fn exact_length() -> Opaque {
+        Opaque::of(b"disk", Some(&salt()))
+      }
+
+      #[test]
+      #[cfg(debug_assertions)]
+      #[should_panic(expected = "does not match the kind of its field")]
+      fn is_a_bug_for_the_sidecar_reason() {
+        DesktopEvent::SidecarFailed { reason: exact_length() }.render(now());
+      }
+
+      #[test]
+      #[cfg(debug_assertions)]
+      #[should_panic(expected = "does not match the kind of its field")]
+      fn is_a_bug_for_the_spawn_failure_text() {
+        DesktopEvent::DaemonSpawnFailed { failure: SpawnFailure::Unclassified(exact_length()) }.render(now());
+      }
+
+      #[test]
+      #[cfg(debug_assertions)]
+      #[should_panic(expected = "does not match the kind of its field")]
+      fn is_a_bug_for_the_daemon_message() {
+        let fields = DaemonLineFields { message: Some(DaemonMessage::Unlisted(exact_length())), ..daemon_line("x") };
+        DesktopEvent::DaemonLine(fields).render(now());
+      }
+
+      #[test]
+      #[cfg(debug_assertions)]
+      #[should_panic(expected = "does not match the kind of its field")]
+      fn is_a_bug_for_the_daemon_error_message() {
+        let fields = DaemonLineFields { error_message: Some(exact_length()), ..daemon_line("x") };
+        DesktopEvent::DaemonLine(fields).render(now());
+      }
+    }
+
     #[test]
     fn an_event_carrying_text_never_prints_it_through_debug() {
       let event = DesktopEvent::SidecarFailed { reason: opaque(&github_token()) };
@@ -638,7 +676,8 @@ mod tests {
       let text = random.bytes(text_length);
       let has_salt = !random.next().is_multiple_of(4);
       let maybe_salt = has_salt.then(salt);
-      let opaque = Opaque::of(&text, maybe_salt.as_ref());
+      let opaque = Opaque::bucketed(&text, maybe_salt.as_ref());
+      let exact_length_opaque = Opaque::of(&text, maybe_salt.as_ref());
       let some_ts = |random: &mut XorShift64Star| Ts::from_unix_seconds(random.next() % 253_402_300_800);
       let kind = (random.next() % 4000) as i32;
       let has_os_error_code = random.next().is_multiple_of(2);
@@ -652,7 +691,7 @@ mod tests {
         DesktopEvent::DaemonStopRequested { pid: Pid(words[0] as u32) },
         DesktopEvent::DaemonExited { code: Some(ExitCode(words[1] as i32)) },
         DesktopEvent::SidecarFailed { reason: opaque },
-        DesktopEvent::DaemonText { stream: Stream::Err, class: DaemonTextClass::NodeFatal, text: opaque },
+        DesktopEvent::DaemonText { stream: Stream::Err, class: DaemonTextClass::NodeFatal, text: exact_length_opaque },
         DesktopEvent::DaemonLine(DaemonLineFields {
           level: Level::Error,
           daemon_ts: some_ts(random),
@@ -867,7 +906,7 @@ mod tests {
         let folded = secret.to_ascii_lowercase();
         let watched = watched_windows(secret.as_bytes(), folded.as_bytes());
         let events = [
-          DesktopEvent::SidecarFailed { reason: Opaque::of(secret.as_bytes(), None) },
+          DesktopEvent::SidecarFailed { reason: Opaque::bucketed(secret.as_bytes(), None) },
           DesktopEvent::DaemonText { stream: Stream::Out, class: DaemonTextClass::Other, text: Opaque::of(secret.as_bytes(), None) },
         ];
 

@@ -1126,7 +1126,7 @@ mod tests {
 
     #[test]
     fn passes_a_line_that_only_holds_the_length_and_tag() {
-      let lines = vec!["2026-10-04T12:00:00Z info daemon_line msg=[text:24:0a1b2c3d] extra_fields=0".to_string()];
+      let lines = vec!["2026-10-04T12:00:00Z info daemon_line msg=[text:32:0a1b2c3d] extra_fields=0".to_string()];
 
       assert_eq!(leaked_form_in(&lines, "SyntheticSecretValue0123"), None);
     }

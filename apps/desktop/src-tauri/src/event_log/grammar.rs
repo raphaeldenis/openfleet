@@ -2,6 +2,7 @@ use super::daemon_line::is_catalogue_id;
 use super::event::{DaemonTextClass, ForeignTarget, ABSENT, OUTCOME_NOTHING_TO_STOP, SPAWN_CAUSE_BUNDLE_NOT_FOUND, SPAWN_CAUSE_IO, SPAWN_CAUSE_UNCLASSIFIED};
 use super::field::{
   with_extra, DaemonPhase, EventName, IoKind, Level, PathClass, PathSource, SessionId, ShortId, StopOutcome, Stream, Ts, CODE_VALUES, ERROR_NAME_VALUES, MAX_FRAMES,
+  SMALLEST_LENGTH_BUCKET,
 };
 use std::fmt;
 
@@ -137,14 +138,16 @@ pub enum FieldKind {
   SignedDecimalOrNone,
   Bool,
   Enum(&'static [&'static str]),
-  Opaque,
+  /// Free text reduced to a power-of-two length bucket of 16 at least, never its exact length.
+  BucketedOpaque,
+  /// Free text of a catalogued message: its catalogue id, or the bucketed opaque form.
+  CatalogueOrBucketedOpaque,
   /// Free text whose exact byte length is kept on purpose: only `daemon_text.text`, where the line length is what support needs.
   OpaqueExactLength,
   Ts,
   Hex8,
   Uuid,
   Frames,
-  CatalogueOrOpaque,
 }
 
 impl FieldKind {
@@ -157,12 +160,13 @@ impl FieldKind {
       FieldKind::SignedDecimalOrNone => value == NONE_VALUE || is_signed_decimal(value),
       FieldKind::Bool => value == b"true" || value == b"false",
       FieldKind::Enum(names) => names.iter().any(|name| name.as_bytes() == value),
-      FieldKind::Opaque | FieldKind::OpaqueExactLength => is_opaque(value),
+      FieldKind::OpaqueExactLength => is_opaque(value),
+      FieldKind::BucketedOpaque => is_bucketed_opaque(value),
+      FieldKind::CatalogueOrBucketedOpaque => is_bucketed_opaque(value) || is_catalogue_id(text),
       FieldKind::Ts => Ts::parse(text).is_some_and(|parsed| parsed.to_string() == text),
       FieldKind::Hex8 => ShortId::parse(text).is_some(),
       FieldKind::Uuid => SessionId::parse(text).is_some(),
       FieldKind::Frames => is_frames(value),
-      FieldKind::CatalogueOrOpaque => is_opaque(value) || is_catalogue_id(text),
     }
   }
 }
@@ -183,16 +187,28 @@ fn is_lowercase_hex(byte: &u8) -> bool {
 const MAX_OPAQUE_LENGTH_DIGITS: usize = 8;
 const OPAQUE_TAG_BYTES: usize = 8;
 
-/// `[text:<1 to 8 digits>]` or `[text:<1 to 8 digits>:<8 lowercase hex>]`.
-fn is_opaque(value: &[u8]) -> bool {
-  let Some(inner) = value.strip_prefix(b"[text:").and_then(|rest| rest.strip_suffix(b"]")) else { return false };
+/// Returns the length digits of `[text:<1 to 8 digits>]` or `[text:<1 to 8 digits>:<8 lowercase hex>]`.
+fn opaque_length_digits(value: &[u8]) -> Option<&[u8]> {
+  let inner = value.strip_prefix(b"[text:").and_then(|rest| rest.strip_suffix(b"]"))?;
   let (length, tag) = match inner.iter().position(|byte| *byte == b':') {
     Some(colon_at) => (&inner[..colon_at], Some(&inner[colon_at + 1..])),
     None => (inner, None),
   };
   let has_length = (1..=MAX_OPAQUE_LENGTH_DIGITS).contains(&length.len()) && length.iter().all(u8::is_ascii_digit);
   let has_tag_or_none = tag.is_none_or(|tag| tag.len() == OPAQUE_TAG_BYTES && tag.iter().all(is_lowercase_hex));
-  has_length && has_tag_or_none
+  (has_length && has_tag_or_none).then_some(length)
+}
+
+fn is_opaque(value: &[u8]) -> bool {
+  opaque_length_digits(value).is_some()
+}
+
+/// An opaque whose length is a power of two of `SMALLEST_LENGTH_BUCKET` at least, written without a leading zero.
+fn is_bucketed_opaque(value: &[u8]) -> bool {
+  let Some(length_digits) = opaque_length_digits(value) else { return false };
+  let length = std::str::from_utf8(length_digits).ok().and_then(|digits| digits.parse::<usize>().ok());
+  let is_a_bucket = length.is_some_and(|length| length >= SMALLEST_LENGTH_BUCKET && length.is_power_of_two());
+  is_decimal(length_digits) && is_a_bucket
 }
 
 /// `L:C` positions joined by `/`, at most 8.
@@ -227,7 +243,7 @@ const DAEMON_SPAWN_FAILED_FIELDS: &[FieldSpec] = &[
   field!("path_class", FieldKind::Enum(&PathClass::NAMES), 14),
   field!("kind", FieldKind::Enum(&IoKind::NAMES), 20),
   field!("errno", FieldKind::SignedDecimalOrNone, 11),
-  field!("text", FieldKind::Opaque, 24),
+  field!("text", FieldKind::BucketedOpaque, 24),
 ];
 const DAEMON_STOP_REQUESTED_FIELDS: &[FieldSpec] = &[field!("pid", FieldKind::Decimal, 10)];
 const DAEMON_STOPPED_FIELDS: &[FieldSpec] = &[field!("outcome", FieldKind::Enum(&STOP_OUTCOME_VALUES), 18)];
@@ -235,7 +251,7 @@ const DAEMON_LOG_FLUSHED_FIELDS: &[FieldSpec] = &[field!("drained", FieldKind::B
 const DAEMON_PHASE_CHANGED_FIELDS: &[FieldSpec] =
   &[field!("from", FieldKind::Enum(&DaemonPhase::NAMES), 8), field!("to", FieldKind::Enum(&DaemonPhase::NAMES), 8)];
 const DAEMON_EXITED_FIELDS: &[FieldSpec] = &[field!("code", FieldKind::SignedDecimalOrNone, 11)];
-const SIDECAR_FAILED_FIELDS: &[FieldSpec] = &[field!("reason", FieldKind::Opaque, 24)];
+const SIDECAR_FAILED_FIELDS: &[FieldSpec] = &[field!("reason", FieldKind::BucketedOpaque, 24)];
 const DAEMON_TEXT_FIELDS: &[FieldSpec] = &[
   field!("stream", FieldKind::Enum(&Stream::NAMES), 3),
   field!("class", FieldKind::Enum(&DaemonTextClass::NAMES), 12),
@@ -245,10 +261,10 @@ const DAEMON_LINE_FIELDS: &[FieldSpec] = &[
   field!("id", FieldKind::Hex8, 8),
   field!("session", FieldKind::Uuid, 36),
   field!("code", FieldKind::Enum(&CODE_VALUES), 26),
-  field!("msg", FieldKind::CatalogueOrOpaque, 64),
+  field!("msg", FieldKind::CatalogueOrBucketedOpaque, 64),
   field!("err_name", FieldKind::Enum(&ERROR_NAME_VALUES), 14),
   field!("err_code", FieldKind::Enum(&CODE_VALUES), 26),
-  field!("err_msg", FieldKind::Opaque, 24),
+  field!("err_msg", FieldKind::BucketedOpaque, 24),
   field!("frames", FieldKind::Frames, 64),
   field!("extra_fields", FieldKind::Decimal, 20),
 ];
@@ -447,6 +463,30 @@ mod tests {
     }
 
     #[test]
+    fn the_free_text_of_msg_err_msg_reason_and_spawn_text_is_bucketed() {
+      let bucketed: Vec<String> = all_specs()
+        .into_iter()
+        .filter(|(_, spec)| matches!(spec.kind, FieldKind::BucketedOpaque | FieldKind::CatalogueOrBucketedOpaque))
+        .map(|(event, spec)| format!("{event}.{}", spec.key))
+        .collect();
+
+      assert_eq!(bucketed, ["daemon_spawn_failed.text", "sidecar_failed.reason", "daemon_line.msg", "daemon_line.err_msg"]);
+    }
+
+    #[test]
+    fn a_bucketed_field_accepts_a_power_of_two_of_sixteen_at_least_within_eight_digits_and_nothing_else() {
+      let bucketed_kinds = [FieldKind::BucketedOpaque, FieldKind::CatalogueOrBucketedOpaque];
+      let accepted = ["[text:16]", "[text:16:0a1b2c3d]", "[text:65536:0a1b2c3d]", "[text:67108864]"];
+      let rejected = ["[text:0]", "[text:4]", "[text:8]", "[text:15]", "[text:17]", "[text:40:0a1b2c3d]", "[text:65535]", "[text:134217728]", "[text:016]", "[text:]", "[text:16:0A1B2C3D]"];
+
+      for kind in bucketed_kinds {
+        assert!(accepted.iter().all(|value| kind.accepts(value.as_bytes())), "{kind:?}");
+        assert!(rejected.iter().all(|value| !kind.accepts(value.as_bytes())), "{kind:?} accepts one of {rejected:?}");
+      }
+      assert!(FieldKind::OpaqueExactLength.accepts(b"[text:40:0a1b2c3d]"));
+    }
+
+    #[test]
     fn every_max_bytes_is_positive_and_within_the_value_ceiling() {
       for (event, spec) in all_specs() {
         assert!(spec.max_bytes > 0 && usize::from(spec.max_bytes) <= MAX_VALUE_BYTES, "{event}.{}", spec.key);
@@ -475,7 +515,8 @@ mod tests {
           FieldKind::SignedDecimal | FieldKind::SignedDecimalOrNone => "-2147483648",
           FieldKind::Bool => "false",
           FieldKind::Enum(_) => "",
-          FieldKind::Opaque | FieldKind::OpaqueExactLength | FieldKind::CatalogueOrOpaque => "[text:99999999:ffffffff]",
+          FieldKind::OpaqueExactLength => "[text:99999999:ffffffff]",
+          FieldKind::BucketedOpaque | FieldKind::CatalogueOrBucketedOpaque => "[text:67108864:ffffffff]",
           FieldKind::Ts => "9999-12-31T23:59:59Z",
           FieldKind::Hex8 => "ffffffff",
           FieldKind::Uuid => "ffffffff-ffff-ffff-ffff-ffffffffffff",
@@ -550,12 +591,12 @@ mod tests {
         (EventName::DaemonPhaseChanged, "from=starting to=slow"),
         (EventName::DaemonExited, "code=-9"),
         (EventName::DaemonExited, "code=none"),
-        (EventName::SidecarFailed, "reason=[text:12:0a1b2c3d]"),
-        (EventName::SidecarFailed, "reason=[text:12]"),
+        (EventName::SidecarFailed, "reason=[text:16:0a1b2c3d]"),
+        (EventName::SidecarFailed, "reason=[text:16]"),
         (EventName::DaemonText, "stream=err class=node_fatal text=[text:3]"),
         (EventName::DaemonSpawnFailed, "cause=bundle_not_found path_class=daemon_bundle"),
         (EventName::DaemonSpawnFailed, "cause=io kind=timed_out errno=none"),
-        (EventName::DaemonSpawnFailed, "cause=unclassified text=[text:9]"),
+        (EventName::DaemonSpawnFailed, "cause=unclassified text=[text:16]"),
         (EventName::PathRepaired, "source=fallback"),
         (EventName::WriterDropped, "count=0"),
         (EventName::WriterLost, "count=3 kind=storage_full errno=28"),
@@ -566,7 +607,7 @@ mod tests {
         (EventName::RejectedRecord, "event=daemon_text"),
         (EventName::DaemonLine, "id=0a1b2c3d extra_fields=3"),
         (EventName::DaemonLine, "code=ENOENT msg=ws_write_failed err_name=TypeError err_code=other extra_fields=0"),
-        (EventName::DaemonLine, "msg=[text:12:0a1b2c3d] err_msg=[text:5:ffffffff] extra_fields=0"),
+        (EventName::DaemonLine, "msg=[text:16:0a1b2c3d] err_msg=[text:32:ffffffff] extra_fields=0"),
         (EventName::DaemonLine, "frames=120:5/88:13 extra_fields=0"),
         (EventName::DaemonLine, "frames=1:1/2:2/3:3/4:4/5:5/6:6/7:7/8:8 extra_fields=0"),
         (EventName::DaemonLine, "code=session_not_found extra_fields=18446744073709551615"),
@@ -702,7 +743,7 @@ mod tests {
     #[test]
     fn accepts_the_longest_legitimate_daemon_line() {
       let pairs = format!(
-        "id=ffffffff session={SESSION} code=docs_folder_not_writable msg=[text:99999999:ffffffff] err_name=ReferenceError err_code=docs_folder_not_writable err_msg=[text:99999999:ffffffff] frames=123:456/123:456/123:456/123:456/123:456/123:456/123:456/1234:456 extra_fields=18446744073709551615"
+        "id=ffffffff session={SESSION} code=docs_folder_not_writable msg=[text:67108864:ffffffff] err_name=ReferenceError err_code=docs_folder_not_writable err_msg=[text:67108864:ffffffff] frames=123:456/123:456/123:456/123:456/123:456/123:456/123:456/1234:456 extra_fields=18446744073709551615"
       );
       let line = line_of("daemon_line", &pairs);
       assert!(line.len() > 340 && line.len() <= MAX_LINE_BYTES, "{}", line.len());

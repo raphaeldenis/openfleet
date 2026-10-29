@@ -820,7 +820,7 @@ closed_enum_names!(PathClass {
   Other => "other",
 });
 
-const SMALLEST_LENGTH_BUCKET: usize = 16;
+pub(super) const SMALLEST_LENGTH_BUCKET: usize = 16;
 
 /// Free text reduced to its byte length and, when the install has a salt, a 4-byte keyed tag.
 /// The source text is dropped inside `of`: the value holds no text, so no `Debug` or `Display` can print it.
