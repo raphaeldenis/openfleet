@@ -50,6 +50,11 @@ export class MessageQueue {
   markDelivered(id: string): void {
     this.db.prepare(`UPDATE message_queue SET status = 'delivered', delivered_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
   }
+  // True when a delivered message is queued again to be typed once more.
+  requeueDelivered(id: string): boolean {
+    const result = this.db.prepare(`UPDATE message_queue SET status = 'queued', delivered_at = NULL WHERE id = ? AND status = 'delivered'`).run(id);
+    return Number(result.changes) > 0;
+  }
   countPending(sessionId: string): number {
     const row = this.db.prepare(`SELECT count(*) AS n FROM message_queue WHERE session_id = ? AND status = 'queued'`).get(sessionId) as { n: number };
     return row.n;

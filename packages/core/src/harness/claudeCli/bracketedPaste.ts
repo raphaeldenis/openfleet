@@ -1,3 +1,5 @@
+import { textTypedByPaste } from '../textTypedByPaste.js';
+
 const ESC = '\x1b';
 
 // Bracketed paste tells Claude Code's terminal reader to treat everything between these two sequences as
@@ -8,11 +10,7 @@ const ESC = '\x1b';
 // the body onto the terminal as ordinary keystrokes, submitting whatever follows a stray '\r'.
 // Line breaks (CRLF, lone CR) become one '\n' each so lines never merge; every other C0/C1 control
 // character goes too (ETX, CSI 0x9b...) except tab and newline.
-const LINE_BREAK = /\r\n?/g;
-const CONTROL_CHARACTERS_EXCEPT_TAB_AND_NEWLINE = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
 
 export function frameForPaste(body: string): string {
-  const withNewlineLineBreaks = body.replace(LINE_BREAK, '\n');
-  const withoutControlCharacters = withNewlineLineBreaks.replace(CONTROL_CHARACTERS_EXCEPT_TAB_AND_NEWLINE, '');
-  return `${ESC}[200~${withoutControlCharacters}${ESC}[201~`;
+  return `${ESC}[200~${textTypedByPaste(body)}${ESC}[201~`;
 }

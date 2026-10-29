@@ -17,6 +17,7 @@ import { NoteRepository } from '../notes/noteRepository.js';
 import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { HumanDraft } from './humanDraft.js';
 import { MessageQueue } from './messageQueue.js';
+import { DeliveryReconciler, promptDigestsInTranscript } from './deliveryReconciler.js';
 import { SessionRuntime, type RuntimeProgress } from './sessionRuntime.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
@@ -29,7 +30,7 @@ import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConver
 // Absent, the service still closes sessions with their reason but broadcasts no error events.
 export type DescribeError = (error: unknown, scope: { sessionId?: string; where?: string }) => ErrorEnvelope;
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number;
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; turnStartTimeoutMs?: number;
   /** Probes `<bin> --version` before each spawn; defaults to a real check with a 60 s cache. */
   binaryHealth?: BinaryHealthCheck;
   /** How long a launch may show neither a PTY byte nor transcript progress before its readiness is failed; absent: launches are not watched. */
@@ -420,6 +421,7 @@ export class SessionService {
   private readonly projects: ProjectRepository;
   private readonly handoffSeed: HandoffSeed;
   private readonly queue: MessageQueue;
+  private readonly deliveryReconciler: DeliveryReconciler;
   private readonly handles = new Map<string, HarnessHandle>();
   private readonly outputBuffers = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -483,6 +485,7 @@ export class SessionService {
     this.projects = new ProjectRepository(deps.db);
     this.handoffSeed = new HandoffSeed({ notes: new NoteRepository(deps.db), projects: this.projects, files: nodeHandoffFileReader });
     this.queue = new MessageQueue(deps.db);
+    this.deliveryReconciler = new DeliveryReconciler(deps.db);
   }
 
   private assertBriefFitsFirstPrompt(brief: string | undefined): void {
@@ -943,6 +946,7 @@ export class SessionService {
     }
     if (input.kind === 'hook' && input.event.hook_event_name === 'UserPromptSubmit') {
       this.repo.setCurrentConversationPrompted(sessionId, true);
+      this.recordPromptDigest(sessionId, input.event);
     }
     this.recordResolvedModelIfPending(sessionId);
     // Judged before the same-state early return below: a tool run rarely changes the session state.
@@ -1773,7 +1777,7 @@ export class SessionService {
 
   private commitSubmission(sessionId: string, messageId: string): void {
     this.unrecordedDeliveries.set(sessionId, messageId);
-    const turnStartTimeout = this.schedule(sessionId, TURN_START_TIMEOUT_MS, () => this.stopAwaitingTurnStart(sessionId));
+    const turnStartTimeout = this.schedule(sessionId, this.deps.turnStartTimeoutMs ?? TURN_START_TIMEOUT_MS,() => this.stopAwaitingTurnStart(sessionId));
     this.enter(sessionId, { name: 'submitted', messageId }, turnStartTimeout);
     try {
       this.recordDelivery(sessionId);
@@ -1830,7 +1834,56 @@ export class SessionService {
     if (messageId === undefined) return;
     this.queue.markDelivered(messageId);
     this.unrecordedDeliveries.delete(sessionId);
+    this.recordSubmittedDigest({ sessionId, messageId });
     this.announceDelivered(sessionId, messageId);
+  }
+
+  // The digest of what the hook reports, under the CLI session id it names. Never throws into the hook handler.
+  private recordPromptDigest(sessionId: string, event: { session_id: string; user_prompt?: string; prompt?: string }): void {
+    const prompt = event.user_prompt ?? event.prompt;
+    if (prompt === undefined) return;
+    try {
+      this.deliveryReconciler.recordPromptTaken({ sessionId, cliSessionId: event.session_id.toLowerCase(), prompt });
+    } catch (err) {
+      log('error', `delivery: the digest of a submitted prompt could not be recorded for CLI session ${event.session_id}`, err);
+    }
+  }
+
+  private recordSubmittedDigest({ sessionId, messageId }: { sessionId: string; messageId: string }): void {
+    const body = this.queue.getById(messageId)?.body;
+    if (body === undefined) return;
+    try {
+      this.deliveryReconciler.recordSubmission({ messageId, sessionId, body });
+    } catch (err) {
+      log('error', `delivery: the digest of message ${messageId} could not be recorded for session ${sessionId}`, err);
+    }
+  }
+
+  // The submitted message left the target idle: unless its digest shows in the hook record or the transcript, it is queued
+  // again, once, to be typed behind the READY phase the caller enters next. A target whose transcript is unknown offers
+  // no proof either way, so its message is left as delivered.
+  private reconcileUnstartedTurn(sessionId: string, messageId: string): void {
+    try {
+      const transcriptTail = this.readTrustedTranscriptTail(sessionId);
+      const isTranscriptKnown = transcriptTail !== undefined;
+      if (!isTranscriptKnown) return;
+      const verdict = this.deliveryReconciler.judgeSubmission({
+        messageId,
+        cliSessionId: this.currentCliSessionIdOf(sessionId),
+        transcriptDigestsSince: (since) => promptDigestsInTranscript({ tail: transcriptTail, since }),
+      });
+      if (verdict === 'redeliver') this.queue.requeueDelivered(messageId);
+    } catch (err) {
+      log('error', `delivery: session ${sessionId} could not reconcile message ${messageId}`, err);
+    }
+  }
+
+  // The tail of the session's own trusted transcript; undefined when none is known, trusted or readable.
+  private readTrustedTranscriptTail(sessionId: string): string | undefined {
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (transcriptPath === undefined || !isTrustedTranscriptPath(transcriptPath) || !this.isTranscriptOfSession(sessionId, transcriptPath)) return undefined;
+    const resolvedPath = existsSync(transcriptPath) ? realpathSync(transcriptPath) : transcriptPath;
+    return this.isTranscriptOfSession(sessionId, resolvedPath) ? readTranscriptTail(resolvedPath) : undefined;
   }
 
   // A failing listener (e.g. a WS client on a closing socket) is not a delivery failure: it never feeds the retry.
@@ -1856,6 +1909,7 @@ export class SessionService {
       }, release);
       return;
     }
+    if (phase.name === 'submitted') this.reconcileUnstartedTurn(sessionId, phase.messageId);
     this.enter(sessionId, READY);
     this.advance(sessionId);
   }
