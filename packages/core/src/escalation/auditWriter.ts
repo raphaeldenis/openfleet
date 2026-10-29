@@ -9,7 +9,6 @@ import type { DataStoreService } from '../stores/dataStoreService.js';
 import type { StoredBatch } from './escalationRepository.js';
 
 export const ARBITER_AUTHOR = 'arbiter';
-export const JOURNAL_LINE_PREFIX = '[arbiter]';
 export const JOURNAL_NOT_BOUND_WARNING = 'journal_not_bound';
 export const JOURNAL_WRITE_FAILED_WARNING = 'journal_write_failed';
 export const PLAN_NOTE_UNAVAILABLE_WARNING = 'plan_note_unavailable';
@@ -74,7 +73,7 @@ export class AuditWriter {
   }
 
   /** Adds one line per entry to the journal the manager is bound to; the author column holds `arbiter` when the table has one, else the text opens with `[arbiter]`. Answers the warnings. */
-  journal({ managerId, entries }: { managerId: string; entries: readonly string[] }): string[] {
+  journal({ managerId, entries, author = ARBITER_AUTHOR }: { managerId: string; entries: readonly string[]; author?: string }): string[] {
     const { managers, sessions, stores, storeRepo } = this.deps;
     const logStoreId = managers.get(managerId)?.logStoreId;
     const projectId = sessions.get(managerId)?.projectId;
@@ -86,10 +85,10 @@ export class AuditWriter {
       if (textColumn === undefined) return [JOURNAL_NOT_BOUND_WARNING];
       const authorColumn = columns.find((column) => column.columnType === 'text' && nameOf(column) === AUTHOR_COLUMN_NAME);
       const items = entries.map((entry) => ({
-        [textColumn.id]: authorColumn ? entry : `${JOURNAL_LINE_PREFIX} ${entry}`,
-        ...(authorColumn && { [authorColumn.id]: ARBITER_AUTHOR }),
+        [textColumn.id]: authorColumn ? entry : `[${author}] ${entry}`,
+        ...(authorColumn && { [authorColumn.id]: author }),
       }));
-      stores.insertRows(logStoreId, { projectId, items, actor: { kind: 'agent', label: ARBITER_AUTHOR } });
+      stores.insertRows(logStoreId, { projectId, items, actor: { kind: 'agent', label: author } });
       return [];
     } catch (error) {
       log('warn', `arbiter audit: the journal of manager ${managerId} could not take ${entries.length} line(s)`, error);

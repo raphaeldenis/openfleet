@@ -12,6 +12,7 @@ import { ApprovalService } from './governance/approvalService.js';
 import { ArbiterRunner } from './escalation/arbiterRunner.js';
 import { AuditWriter } from './escalation/auditWriter.js';
 import { CriteriaApproval } from './escalation/criteriaApproval.js';
+import { CriteriaStatusGuard } from './escalation/criteriaStatusGuard.js';
 import { EscalationRepository } from './escalation/escalationRepository.js';
 import { EscalationService } from './escalation/escalationService.js';
 import { GovernanceQueueService } from './governance/governanceQueueService.js';
@@ -119,6 +120,7 @@ export interface Daemon {
   governanceQueue: GovernanceQueueService;
   scheduledEvents: ScheduledEventService;
   ciWatch: CiWatchService;
+  criteriaStatusGuard: CriteriaStatusGuard;
   harnesses: Harness[];
   close: () => Promise<void>;
 }
@@ -290,6 +292,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const escalationRepository = new EscalationRepository(db);
   const escalationAudit = new AuditWriter({ notes, noteRepo, managers, sessions, stores, storeRepo });
   const escalations = new EscalationService({ db, repository: escalationRepository, workingStates, audit: escalationAudit, clock: () => new Date().toISOString(), newId });
+  const criteriaStatusGuard = new CriteriaStatusGuard({ projects, managers, sessions, audit: escalationAudit });
+  stores.observeRowWrites(criteriaStatusGuard);
   const criteria = new CriteriaApproval({ repository: escalationRepository, noteRepo, stores, storeRepo, audit: escalationAudit });
   const arbiters = new ArbiterRunner({
     sessions, bus, managers, projects, repository: escalationRepository, escalations, modelTable,
@@ -365,5 +369,5 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     throw error;
   }
 
-  return { server, db, degraded, governanceQueue, scheduledEvents, ciWatch, harnesses, close };
+  return { server, db, degraded, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, harnesses, close };
 }

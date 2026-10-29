@@ -270,6 +270,57 @@ describe('QE — approve_plan_criteria', () => {
   });
 });
 
+describe('QE — F9B: the row guard on the criteria_status column warns and allows (warn mode)', () => {
+  const setCriteriaByRest = (optionId: string) => adminApi(`/api/data-stores/${seed.backlogId}/rows`, {
+    method: 'PATCH', body: JSON.stringify({ projectId: PROJECT_ID, updates: [{ rowId: seed.rowId, patch: { [seed.criteriaColumnId]: optionId } }] }),
+  });
+
+  it('allows a caller other than the daemon to set approved, journals a warning and counts it', async () => {
+    await bootManager();
+
+    const response = await setCriteriaByRest(seed.approvedOptionId);
+
+    expect(response.status).toBe(200);
+    expect(backlogCriteriaCell()).toBe(seed.approvedOptionId);
+    expect(daemon.criteriaStatusGuard.warningCount()).toBe(1);
+    const [warningLine, ...otherLines] = journalRowsMentioning('criteria_status');
+    expect(otherLines).toEqual([]);
+    expect(Object.values(warningLine!)).toContain('daemon');
+    expect(Object.values(warningLine!).join(' ')).toContain('You');
+  });
+
+  it('warns on a row inserted already approved by a caller other than the daemon', async () => {
+    await bootManager();
+
+    const response = await adminApi(`/api/data-stores/${seed.backlogId}/rows`, {
+      method: 'POST', body: JSON.stringify({ projectId: PROJECT_ID, rows: [{ [seed.criteriaColumnId]: seed.approvedOptionId }] }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(daemon.criteriaStatusGuard.warningCount()).toBe(1);
+  });
+
+  it('stays silent for a write that does not set approved', async () => {
+    await bootManager();
+
+    await setCriteriaByRest(seed.pendingOptionId);
+
+    expect(daemon.criteriaStatusGuard.warningCount()).toBe(0);
+    expect(journalRowsMentioning('criteria_status')).toEqual([]);
+  });
+
+  it('stays silent when the daemon itself approves the criteria', async () => {
+    const { manager, planNote } = await bootManager();
+    await arbitratedBatch({ manager, planNoteId: planNote.id, questions: [technical('q1')], arbiterNumber: 1, criteria: FAVOURABLE });
+
+    await approve(manager.client, planNote.id);
+
+    expect(backlogCriteriaCell()).toBe(seed.approvedOptionId);
+    expect(daemon.criteriaStatusGuard.warningCount()).toBe(0);
+    expect(journalRowsMentioning('criteria_status')).toEqual([]);
+  });
+});
+
 describe('QE — approve_plan_criteria on a backlog the daemon cannot write', () => {
   beforeEach(async () => {
     for (const client of clients) await client.close();
