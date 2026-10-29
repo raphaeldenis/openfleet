@@ -25,7 +25,24 @@ function unreadableAnswerOf(headBranch: string | undefined): { reason: string; a
   };
 }
 
-const isPassing = (line: ReviewFinding) => line.severity !== 'no-go';
+const ADVERSARIAL_MISSING = 'adversarial go';
+
+const quotedUnion = (steps: string[]) => steps.map((step) => `"${step}"`).join(' | ');
+
+/** The tool calls that log each missing step at the head, and the command a human runs, with the admin token kept out of the text, to waive the steps that may be waived. */
+function howToLogOf({ ticket, head, missing }: { ticket: string; head: string; missing: string[] }): string {
+  const reportableSteps = missing.filter((step) => step !== ADVERSARIAL_MISSING);
+  const isAdversarialMissing = missing.includes(ADVERSARIAL_MISSING);
+  const stepReport = reportableSteps.length === 0 ? [] : [`Report ${reportableSteps.join(', ')} on the head commit with report_step_finding({ step: ${quotedUnion(reportableSteps)}, severity, claims: [...], sha: "${head}" }).`];
+  const verdictReport = isAdversarialMissing ? [`The reviewer reports the delivery verdict with report_ship_verdict({ verdict: "go", reasons: [...], sha: "${head}" }).`] : [];
+  const firstWaivableStep = reportableSteps[0];
+  const skipCommand = firstWaivableStep === undefined ? [] : [
+    `A human can waive ${reportableSteps.join(', ')} with the admin token: curl -X POST <daemon-url>${SKIP_ENDPOINT} -H "Authorization: Bearer <admin token>" -H "Content-Type: application/json" -d '{"ticket":"${ticket}","step":"${firstWaivableStep}","reason":"...","sha":"${head}"}'`,
+  ];
+  return [...stepReport, ...verdictReport, ...skipCommand].join(' ');
+}
+
+const isPassing =(line: ReviewFinding) => line.severity !== 'no-go';
 const latestOf = (lines: ReviewFinding[]) => lines.at(-1);
 
 export interface FindingsGateDeps {
@@ -50,7 +67,7 @@ export class FindingsGate {
     if (missing.length === 0) return OPEN;
     return this.closed({
       reason: `findings_required: ${ticket} @${head.slice(0, SHORT_SHA_LENGTH)} lacks ${missing.join(', ')}.`,
-      alternative: `Report them on the head commit; a human logs a skip: POST ${SKIP_ENDPOINT}`,
+      alternative: howToLogOf({ ticket, head, missing }),
     });
   }
 
@@ -74,7 +91,7 @@ export class FindingsGate {
       ...(hasStrictLine('qe') ? [] : ['qe']),
       ...(hasStrictLine('qa') ? [] : ['qa']),
       ...(hasPonytailLine ? [] : ['ponytail']),
-      ...(hasGoAtHead ? [] : ['adversarial go']),
+      ...(hasGoAtHead ? [] : [ADVERSARIAL_MISSING]),
     ];
   }
 }

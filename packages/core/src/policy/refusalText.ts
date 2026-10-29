@@ -1,5 +1,5 @@
 /** The hook answer gets a ~30 character prefix from the CLI on top of this budget. */
-export const MAX_REFUSAL_TEXT_CHARS = 560;
+export const MAX_REFUSAL_TEXT_CHARS = 1000;
 
 const UNWATCHED_NOTICE = 'No human is watching this session, so the command was refused instead of asked. Rephrase and continue; do not retry the same command.';
 const ESCALATION_NOTICE = 'If you really need it, message your manager (message_parent): it can file a permission proposal.';
@@ -13,6 +13,9 @@ export function refusalTextOf({ ruleId, reason, alternative, isUnwatched }: { ru
   const headline = `OpenFleet command policy [${ruleId}]: `;
   const alternativeLabel = 'Alternative: ';
   const textBudget = MAX_REFUSAL_TEXT_CHARS - noticeChars - headline.length - alternativeLabel.length - 1;
-  const budgetPerText = Math.floor(textBudget / 2);
-  return [`${headline}${ellipsized(reason, budgetPerText)}`, `${alternativeLabel}${ellipsized(alternative, budgetPerText)}`, ...noticeLines].join('\n');
+  const halfBudget = Math.floor(textBudget / 2);
+  const reasonShare = Math.min(reason.length, halfBudget);
+  const alternativeBudget = Math.min(alternative.length, textBudget - reasonShare);
+  const reasonBudget = textBudget - alternativeBudget;
+  return [`${headline}${ellipsized(reason, reasonBudget)}`, `${alternativeLabel}${ellipsized(alternative, alternativeBudget)}`, ...noticeLines].join('\n');
 }

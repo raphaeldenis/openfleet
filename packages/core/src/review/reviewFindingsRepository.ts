@@ -20,7 +20,16 @@ export interface ReviewFinding {
 export type SkippableStep = Exclude<FindingStep, 'adversarial'>;
 export const SKIPPABLE_STEPS: readonly SkippableStep[] = ['qe', 'qa', 'ponytail'];
 
-export interface StepSkip { ticket: string; step: SkippableStep; reason: string; createdAt: string }
+/** `headSha` is the head the human named, `author` who waived the step; both are absent on skips that predate them. */
+export interface StepSkip { ticket: string; step: SkippableStep; reason: string; createdAt: string; headSha?: string; author?: string }
+
+interface SkipRow { ticket: string; step: SkippableStep; reason: string; createdAt: string; headSha: string | null; author: string | null }
+
+const toSkip = (row: SkipRow): StepSkip => ({
+  ticket: row.ticket, step: row.step, reason: row.reason, createdAt: row.createdAt,
+  ...(row.headSha === null ? {} : { headSha: row.headSha }),
+  ...(row.author === null ? {} : { author: row.author }),
+});
 
 interface Row {
   ticket: string; step: FindingStep; severity: FindingSeverity; claim: string; reasons_json: string; sha: string;
@@ -54,12 +63,13 @@ export class ReviewFindingsRepository {
   }
 
   recordSkip(skip: StepSkip): void {
-    this.db.prepare('INSERT INTO review_step_skips (ticket, step, reason, created_at) VALUES (?, ?, ?, ?)').run(skip.ticket, skip.step, skip.reason, skip.createdAt);
+    this.db.prepare('INSERT INTO review_step_skips (ticket, step, reason, created_at, head_sha, author) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(skip.ticket, skip.step, skip.reason, skip.createdAt, skip.headSha ?? null, skip.author ?? null);
   }
 
   skipsOf({ ticket }: { ticket: string }): StepSkip[] {
-    const rows = this.db.prepare('SELECT ticket, step, reason, created_at AS createdAt FROM review_step_skips WHERE ticket = ? ORDER BY id').all(ticket);
-    return rows.map((row) => ({ ...row }) as unknown as StepSkip);
+    const rows = this.db.prepare('SELECT ticket, step, reason, created_at AS createdAt, head_sha AS headSha, author FROM review_step_skips WHERE ticket = ? ORDER BY id').all(ticket) as unknown as SkipRow[];
+    return rows.map(toSkip);
   }
 
   adversarialLinesOf({ ticket }: { ticket: string }): ReviewFinding[] {

@@ -1,4 +1,4 @@
-import type { CommandPolicyDocument, PolicyRule } from '@openfleet/shared';
+import type { CommandPolicyDocument, PolicyRule, RulePredicate } from '@openfleet/shared';
 
 const GIT_DIR_GLOBS = ['**/.git', '**/.git/**'];
 const BROAD_FIND_ROOTS = ['/', '/*', '/Users/*', '/home/*', '~', '~/**', '$HOME', '$HOME/**', '..', '../**'];
@@ -99,12 +99,22 @@ const allowReadOnlyPipelines: PolicyRule = {
 
 export const FINDINGS_GATE_RULE_ID = 'findings-gate-pr-create';
 
-/** Matches the call only: whether the ticket has its findings is the FindingsGate's answer, given by the hook that sees this rule. */
+const API_CALLS_THAT_MAY_POST: RulePredicate = { flags: { any: [['f'], ['F'], ['X'], ['field'], ['raw-field'], ['method'], ['input']] } };
+
+/**
+ * Matches the call only: whether the ticket has its findings is the FindingsGate's answer, given by the hook that sees this rule.
+ * A `gh api` call to /pulls with a body or method flag is a candidate; the request parser tells a POST from a read.
+ */
 const findingsGatePrCreate: PolicyRule = {
   id: FINDINGS_GATE_RULE_ID,
   tools: ['Bash'],
   decision: 'deny',
-  when: { commandPrefix: [['gh', 'pr', 'create']] },
+  when: {
+    anyOf: [
+      { commandPrefix: [['gh', 'pr', 'create'], ['glab', 'mr', 'create|new']] },
+      { allOf: [{ commandPrefix: [['gh', 'api']] }, { argMatching: ['**/pulls'] }, API_CALLS_THAT_MAY_POST] },
+    ],
+  },
   reason: 'findings_required: the ticket of this branch lacks the findings that open a pull request.',
   alternative: 'Have QE, QA and the delivery review report on the head commit, or ask your manager for a logged step skip.',
 };

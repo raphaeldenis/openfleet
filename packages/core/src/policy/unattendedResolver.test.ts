@@ -42,6 +42,14 @@ describe('the refusal text the session reads', () => {
     expect(refusalTextOf({ ...refusal, isUnwatched: false })).not.toMatch(/message_parent|your manager/);
   });
 
+  it('keeps a long alternative whole when the reason is short', () => {
+    const longAlternative = `Run ${'step '.repeat(90)}done.`;
+
+    const text = refusalTextOf({ ruleId: 'r', reason: 'short', alternative: longAlternative, isUnwatched: true });
+
+    expect(text).toContain(`Alternative: ${longAlternative}`);
+  });
+
   it('never exceeds the budget, however long the rule texts are', () => {
     const text = refusalTextOf({ ruleId: 'r', reason: 'x'.repeat(2000), alternative: 'y'.repeat(2000), isUnwatched: true });
 

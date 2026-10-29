@@ -209,6 +209,47 @@ describe('QE — the findings gate on gh pr create, enforcing', () => {
     expect(await journaledGateRows()).toEqual([]);
   });
 
+  it.each([
+    'gh api repos/o/r/pulls -X POST -f title=t -f head=CCM-7-gate -f base=main',
+    'gh api repos/o/r/pulls --method=post -f title=t -f head=o:CCM-7-gate',
+    'gh api repos/o/r/pulls -f title=t -F base=main',
+    'glab mr create --fill',
+    'glab mr create --source-branch CCM-7-gate --target-branch main',
+  ])('refuses a child opening a request without findings through %s, with the same actionable message', async (command) => {
+    const { directory, sessionId } = await bootInEnforce();
+
+    const answer = await runCommand(sessionId, directory, command);
+
+    const reason = answer.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(answer.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(reason).toContain('CCM-7');
+    expect(reason).toContain('report_step_finding(');
+    expect(reason).toContain('/api/review-findings/skips');
+  });
+
+  it.each([
+    'gh api repos/o/r/pulls',
+    'gh api repos/o/r/pulls -X GET -f state=open',
+    'gh api repos/o/r/pulls/12/comments -f body=x',
+    'gh api repos/o/r/issues -f title=t',
+    'gh api -X POST repos/o/r/issues/1/comments -f body=x',
+    'glab mr list',
+    'glab mr view 3',
+  ])('never blocks %s: only a request creation is judged', async (command) => {
+    const { directory, sessionId } = await bootInEnforce();
+
+    expect(await runCommand(sessionId, directory, command)).toEqual({});
+    expect(await journaledGateRows()).toEqual([]);
+  });
+
+  it('opens gh api and glab creations once the ticket has its findings', async () => {
+    const { directory, sessionId } = await bootInEnforce();
+    allStepsOpenAt('CCM-7', headOf(directory));
+
+    expect(await runCommand(sessionId, directory, 'gh api repos/o/r/pulls -f title=t -f head=CCM-7-gate')).toEqual({});
+    expect(await runCommand(sessionId, directory, 'glab mr create --fill')).toEqual({});
+  });
+
   it('writes no review table: the child that runs gh pr create leaves every table as it was', async () => {
     const { directory, sessionId } = await bootInEnforce();
     const count = () => daemon!.db.prepare('SELECT (SELECT COUNT(*) FROM review_findings) AS findings, (SELECT COUNT(*) FROM review_step_skips) AS skips').get();
@@ -238,6 +279,23 @@ describe('QE — the findings gate, enforcing (the shipped mode)', () => {
     expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('qe, qa, ponytail, adversarial go');
     expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('/api/review-findings/skips');
     expect(await journaledGateRows()).toEqual([{ ruleId: FINDINGS_GATE_RULE_ID, outcome: 'denied' }]);
+  });
+
+  it('tells a child the exact report tools and the token-free skip command for the missing steps', async () => {
+    await bootDaemon();
+    const directory = worktreeOnBranch('CCM-7-gate');
+    const sessionId = await bootChildIn(directory);
+
+    const answer = await openPullRequest(sessionId, directory);
+
+    const reason = answer.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason).toContain('CCM-7');
+    expect(reason).toContain('qe, qa, ponytail, adversarial go');
+    expect(reason).toContain(`report_step_finding({ step: "qe" | "qa" | "ponytail", severity, claims: [...], sha: "${headOf(directory)}" })`);
+    expect(reason).toContain(`report_ship_verdict({ verdict: "go", reasons: [...], sha: "${headOf(directory)}" })`);
+    expect(reason).toContain('curl -X POST <daemon-url>/api/review-findings/skips');
+    expect(reason).toContain('with the admin token');
+    expect(reason).not.toContain(config.adminToken);
   });
 
   it('refuses a branch without ticket for a session run by a manager', async () => {
@@ -342,6 +400,30 @@ describe('QE — step_skipped, a human act', () => {
     expect(created.status).toBe(201);
     expect(listed.items).toEqual([expect.objectContaining({ ticket: 'CCM-7', step: 'qa', reason: 'no browser on this project', createdAt: expect.any(String) })]);
     expect(await openPullRequest(sessionId, directory)).toEqual({});
+  });
+
+  it('traces a skip with its author and the head it applies to, and the gate behaves as before', async () => {
+    const { directory, sessionId } = await bootInEnforce();
+    line('CCM-7', 'qe', 'clean', headOf(directory));
+    line('CCM-7', 'ponytail', 'clean', headOf(directory));
+    line('CCM-7', 'adversarial', 'go', headOf(directory));
+
+    const created = await skip({ ticket: 'CCM-7', step: 'qa', reason: 'no browser on this project', sha: headOf(directory) });
+    const listed = (await (await adminApi('/api/review-findings/skips?ticket=CCM-7')).json()) as { items: unknown[] };
+
+    expect(created.status).toBe(201);
+    expect(listed.items).toEqual([expect.objectContaining({ ticket: 'CCM-7', step: 'qa', author: 'human', headSha: headOf(directory) })]);
+    expect(daemon!.db.prepare('SELECT author, head_sha AS headSha FROM review_step_skips').all()).toEqual([{ author: 'human', headSha: headOf(directory) }]);
+    expect(await openPullRequest(sessionId, directory)).toEqual({});
+  });
+
+  it('keeps a skip without sha valid: no head recorded, the author still human', async () => {
+    await bootInEnforce();
+
+    const created = await skip({ ticket: 'CCM-7', step: 'qa', reason: 'no browser' });
+
+    expect(created.status).toBe(201);
+    expect(daemon!.db.prepare('SELECT author, head_sha AS headSha FROM review_step_skips').all()).toEqual([{ author: 'human', headSha: null }]);
   });
 
   it('opens qe, qa and ponytail by skips alone but still asks for the adversarial go', async () => {

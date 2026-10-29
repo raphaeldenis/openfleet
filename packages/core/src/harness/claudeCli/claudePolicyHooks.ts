@@ -132,9 +132,10 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
     const { gate, enforcement } = this.deps.findingsGate!;
     const directory = event.cwd ?? session.directory;
     const creations = pullRequestCreationsOf(commandOf(event.tool_input) ?? '');
-    const judgedCreations = creations.length === 0 ? [{}] : creations;
+    const isRequestCreation = creations.length > 0;
+    if (!isRequestCreation) return undefined;
     const answer = await this.checkFailingOpen(session, async () => {
-      const answers = await Promise.all(judgedCreations.map(({ headBranch }) => gate.check({ directory, ...(headBranch === undefined ? {} : { headBranch }) })));
+      const answers = await Promise.all(creations.map(({ headBranch }) => gate.check({ directory, ...(headBranch === undefined ? {} : { headBranch }) })));
       return answers.find((candidate) => !candidate.isOpen) ?? { isOpen: true };
     });
     if (answer === undefined || answer.isOpen) return undefined;

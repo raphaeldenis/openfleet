@@ -7,7 +7,10 @@ const SkipBodySchema = z.object({
   ticket: z.string().trim().min(1),
   step: z.enum(SKIPPABLE_STEPS as [string, ...string[]]),
   reason: z.string().trim().min(1),
+  sha: z.string().trim().min(1).optional(),
 });
+/** The routes sit behind the admin token, so whoever calls them is a human. */
+const HUMAN_AUTHOR = 'human';
 const SkipsQuerySchema = z.object({ ticket: z.string().min(1) });
 
 /** The human side of the ship gate: every route sits under /api behind the admin token, none under /mcp, so no session can waive a review step. */
@@ -15,10 +18,10 @@ export function registerReviewFindingsRoutes(router: Router, deps: { findings: P
   const { findings, clock = () => new Date().toISOString() } = deps;
 
   router.add('POST', '/api/review-findings/skips', ({ res, body }) => {
-    const { ticket, step, reason } = SkipBodySchema.parse(body);
-    const skip = { ticket, step: step as (typeof SKIPPABLE_STEPS)[number], reason, createdAt: clock() };
+    const { ticket, step, reason, sha } = SkipBodySchema.parse(body);
+    const skip = { ticket, step: step as (typeof SKIPPABLE_STEPS)[number], reason, createdAt: clock(), author: HUMAN_AUTHOR, ...(sha === undefined ? {} : { headSha: sha }) };
     findings.recordSkip(skip);
-    log('info', `review step skipped by a human: ${ticket} ${step}: ${reason}`);
+    log('info', `review step skipped by ${HUMAN_AUTHOR}: ${ticket} ${step}${sha === undefined ? '' : ` @${sha}`}: ${reason}`);
     json(res, 201, skip);
   });
 
