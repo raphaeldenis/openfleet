@@ -2,6 +2,21 @@
 
 The MCP tool contract of the OpenFleet server. One section per `contract_version`; the convention is in `docs/mcp-contract.md`.
 
+## 13 — 2026-10-29
+
+ALWAYS-REPRO01, every claim of a review report cites a reproduction or says it is not reproduced. A breaking change, on purpose.
+
+- `report_step_finding`: `claims` is no longer a list of strings. Each claim is an object `{ claim, status, command, output }`: `claim` is at most 300 characters; `status` is `proven`, `plausible` or `not_reproduced` (labels PROUVÉ, PLAUSIBLE, NON REPRODUIT); `command` is at most 300 characters (one line) and `output` at most 1500 characters (line breaks kept). `proven` and `plausible` need both `command` and `output`; a `not_reproduced` claim needs neither and says where it was read. A `clean` report carries at least one claim that is not `not_reproduced`: it says what was verified (for example `qe: 321 tests green`) with the command and output of the run; a `findings` report carries one to five claims of any status.
+- `report_ship_verdict`: `reasons` takes the same objects. A `go` carries at least one reason that is not `not_reproduced` (what the reviewer verified, with its command and output); a `no-go` carries one to five reasons of any status. A claim made only of invisible characters (control, bidi, zero-width) is refused with `invalid_body`.
+- Refused with `invalid_body`, nothing written: a plain text claim (the message shows a complete example of the new form), a claim without `status` or with another status, a `proven` or `plausible` claim without `command` or `output` (also when the output is only terminal sequences), an over-long `command` or `output`. No new error code.
+- `command` and `output` are stored as data: secrets masked, terminal colour sequences and control characters removed, CRLF turned into LF. The daemon never copies an `output` into a message; the no-go message to the manager names each reason with its status label, such as `[PROUVÉ]`.
+- The findings gate is unchanged. Its refusal text now shows the new claim shape.
+- The input schema of both tools takes `unknown` items so a client that still sends strings gets this message instead of a generic validation error.
+
+Tools added: none.
+Tools changed: `report_step_finding`, `report_ship_verdict`.
+Migrations: `053_review_finding_repro`: three nullable columns on `review_finding_items` (`repro_status`, `repro_command`, `repro_output`); earlier items read as no reproduction recorded.
+
 ## 12 — 2026-10-29
 
 CI-WAIT-WAKE01, wake a manager when the CI of a pull request it watches finishes.

@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
+import type { ReproClaim } from '@openfleet/shared';
 import { inTransaction } from '../db/transaction.js';
 
 export type FindingStep = 'qe' | 'qa' | 'ponytail' | 'adversarial';
 export type FindingSeverity = 'go' | 'no-go' | 'clean';
+
+/** What backs a claim: the run (command and output) that shows it, or the not_reproduced label. */
+export type ReproEvidence = Omit<ReproClaim, 'claim'>;
 
 export interface ReviewFinding {
   ticket: string;
@@ -12,6 +16,8 @@ export interface ReviewFinding {
   claim: string;
   /** The reasons the claim joins, kept apart so none is cut at a separator it contains. */
   reasons: string[];
+  /** The evidence of each reason, in the same order; absent on a report that carries none. */
+  repros?: ReproEvidence[];
   sha: string;
   authorSessionId: string;
   managerSessionId: string | null;
@@ -55,25 +61,35 @@ export interface ReviewFindingItem {
   authorSessionId: string;
   managerSessionId: string | null;
   createdAt: string;
+  /** The reproduction of the finding; null on an item recorded without one. */
+  repro: ReproEvidence | null;
 }
 
 export const NO_FINDINGS_CLAIM = '0 findings';
 
-/** The same report, sent again, has the same id: it names the ticket, the step, the commit, the author, the severity and the claims. */
-const reportIdOf = (finding: ReviewFinding): string =>
-  createHash('sha256').update(JSON.stringify([finding.ticket, finding.step, finding.sha, finding.authorSessionId, finding.severity, finding.reasons])).digest('hex');
+/** The same report, sent again, has the same id: it names the ticket, the step, the commit, the author, the severity, the claims and their evidence. */
+const reportIdOf = (finding: ReviewFinding): string => {
+  const evidence = finding.repros === undefined ? [] : [finding.repros];
+  return createHash('sha256').update(JSON.stringify([finding.ticket, finding.step, finding.sha, finding.authorSessionId, finding.severity, finding.reasons, ...evidence])).digest('hex');
+};
 
 interface ItemRow {
   report_id: string; position: number; ticket: string; step: FindingStep; severity: FindingSeverity; claim: string; sha: string;
   author_session_id: string; manager_session_id: string | null; created_at: string;
+  repro_status: ReproEvidence['status'] | null; repro_command: string | null; repro_output: string | null;
 }
+
+const toRepro = (row: ItemRow): ReproEvidence | null => {
+  if (row.repro_status === null) return null;
+  return { status: row.repro_status, ...(row.repro_command === null ? {} : { command: row.repro_command }), ...(row.repro_output === null ? {} : { output: row.repro_output }) };
+};
 
 const toItem = (row: ItemRow): ReviewFindingItem => ({
   reportId: row.report_id, position: row.position, ticket: row.ticket, step: row.step, severity: row.severity, claim: row.claim, sha: row.sha,
-  authorSessionId: row.author_session_id, managerSessionId: row.manager_session_id, createdAt: row.created_at,
+  authorSessionId: row.author_session_id, managerSessionId: row.manager_session_id, createdAt: row.created_at, repro: toRepro(row),
 });
 
-const ITEM_COLUMNS = 'report_id, position, ticket, step, severity, claim, sha, author_session_id, manager_session_id, created_at';
+const ITEM_COLUMNS = 'report_id, position, ticket, step, severity, claim, sha, author_session_id, manager_session_id, created_at, repro_status, repro_command, repro_output';
 
 const COLUMNS = 'ticket, step, severity, claim, reasons_json, sha, author_session_id, manager_session_id, created_at';
 
@@ -104,9 +120,13 @@ export class ReviewFindingsRepository {
   private recordItemsOf(finding: ReviewFinding): void {
     const reportId = reportIdOf(finding);
     const claims = finding.reasons.length === 0 ? [NO_FINDINGS_CLAIM] : finding.reasons;
-    const insertItem = this.db.prepare(`INSERT OR IGNORE INTO review_finding_items (${ITEM_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const insertItem = this.db.prepare(`INSERT OR IGNORE INTO review_finding_items (${ITEM_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     claims.forEach((claim, position) => {
-      insertItem.run(reportId, position, finding.ticket, finding.step, finding.severity, claim, finding.sha, finding.authorSessionId, finding.managerSessionId, finding.createdAt);
+      const repro = finding.reasons.length === 0 ? undefined : finding.repros?.[position];
+      insertItem.run(
+        reportId, position, finding.ticket, finding.step, finding.severity, claim, finding.sha, finding.authorSessionId, finding.managerSessionId, finding.createdAt,
+        repro?.status ?? null, repro?.command ?? null, repro?.output ?? null,
+      );
     });
   }
 

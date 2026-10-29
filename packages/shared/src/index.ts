@@ -1,6 +1,7 @@
 export * from './session.js';
 export * from './managers.js';
 export * from './managerBase.js';
+export * from './reproClaim.js';
 export * from './shipVerdict.js';
 export * from './stepFinding.js';
 export * from './hooks.js';
