@@ -12,4 +12,9 @@ export class OncePerWindowPerKey {
     this.lastAdmittedAt.set(key, now);
     return true;
   }
+
+  /** Drops the window of the key, so the map holds only the keys still in use. */
+  forget(key: string): void {
+    this.lastAdmittedAt.delete(key);
+  }
 }

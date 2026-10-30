@@ -23,6 +23,16 @@ describe('OncePerWindowPerKey', () => {
     expect(gate.admits('s1')).toBe(true);
   });
 
+  it('forgets the window of a key, so the key is admitted again inside the old window', () => {
+    const gate = new OncePerWindowPerKey(ONE_MINUTE_MS, () => 0);
+    gate.admits('s1');
+    gate.admits('s2');
+
+    gate.forget('s1');
+
+    expect([gate.admits('s1'), gate.admits('s2')]).toEqual([true, false]);
+  });
+
   it('keeps one window per key', () => {
     const gate = new OncePerWindowPerKey(ONE_MINUTE_MS, () => 0);
     gate.admits('s1');
