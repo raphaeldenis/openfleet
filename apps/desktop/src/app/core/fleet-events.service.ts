@@ -84,7 +84,9 @@ const REQUIRED_PAYLOAD_FIELDS: Record<PayloadCarryingEventType, readonly string[
 };
 
 function carriesItsRequiredPayload(event: ServerEvent): boolean {
-  const requiredFields = REQUIRED_PAYLOAD_FIELDS[event.type as PayloadCarryingEventType] ?? [];
+  const isPayloadCarryingType = Object.hasOwn(REQUIRED_PAYLOAD_FIELDS, event.type);
+  if (!isPayloadCarryingType) return true;
+  const requiredFields = REQUIRED_PAYLOAD_FIELDS[event.type as PayloadCarryingEventType];
   const fields = event as unknown as Record<string, unknown>;
   return requiredFields.every((field) => fields[field] != null);
 }

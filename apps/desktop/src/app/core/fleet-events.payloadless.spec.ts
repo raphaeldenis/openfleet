@@ -164,6 +164,15 @@ describe('FleetEventsService frames without their payload', () => {
     expect(consoleError).not.toHaveBeenCalled();
   });
 
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])('ignores a %s frame like any unknown type, without throwing or warning', (inheritedKey) => {
+    const stateBefore = observableStateOf(service);
+
+    expect(() => socket().dispatchMessage({ type: inheritedKey })).not.toThrow();
+
+    expect(observableStateOf(service)).toStrictEqual(stateBefore);
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
   it('covers every ServerEvent type that carries a payload, and only those', () => {
     expectTypeOf<PayloadCarryingEventType>().toEqualTypeOf<(typeof TYPES_THAT_READ_A_PAYLOAD)[number]>();
   });
