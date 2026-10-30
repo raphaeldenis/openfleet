@@ -60,6 +60,7 @@ import { IdleChildWatcher } from './managers/idleChildWatcher.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
 import { ScheduledEventRepository } from './managers/scheduledEventRepository.js';
 import { ScheduledEventService } from './managers/scheduledEventService.js';
+import { ChildSilenceRepository } from './managers/childSilenceRepository.js';
 import { ChildSilenceWatch, DEFAULT_SILENCE_CHECK_DELAY_MS } from './managers/childSilenceWatch.js';
 import { CiWatchService } from './managers/ciWatchService.js';
 import { WatchedPrRepository } from './managers/watchedPrRepository.js';
@@ -369,7 +370,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
   const scheduledEvents = new ScheduledEventService({ repository: new ScheduledEventRepository(db), sessions, managers: managerRepository, bus });
   const childSilence = new ChildSilenceWatch({
-    sessions, managers: managerRepository, bus, delayMs: options.childSilence?.delayMs ?? DEFAULT_SILENCE_CHECK_DELAY_MS,
+    sessions, managers: managerRepository, bus, checks: new ChildSilenceRepository(db), delayMs: options.childSilence?.delayMs ?? DEFAULT_SILENCE_CHECK_DELAY_MS,
     clock: options.childSilence?.clock ?? Date.now, schedule: options.childSilence?.schedule ?? scheduleOnRealClock,
   });
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
@@ -413,6 +414,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     sleepGuard.start();
     await sessions.resumeAll();
     arbiters.recover();
+    childSilence.restore();
     pulseScheduler.start();
     scheduledEvents.start();
     sleepHandoff.start();
