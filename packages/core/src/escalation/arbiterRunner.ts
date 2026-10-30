@@ -91,6 +91,7 @@ export class ArbiterRunner {
 
   /** Starts the arbiter of a batch, or hands the batch to the human when the runs of the ticket are used up or the arbiter cannot start twice. */
   async launch(batchId: string): Promise<LaunchOutcome> {
+    if (this.isStopped) return { status: 'idle' };
     const { repository } = this.deps;
     const batch = repository.findBatch(batchId);
     if (batch === undefined) return { status: 'idle' };
@@ -196,6 +197,7 @@ export class ArbiterRunner {
 
   /** The first loss of a batch starts a new arbiter; the second hands the batch to the human. */
   private async onArbiterLost(batchId: string): Promise<LaunchOutcome> {
+    if (this.isStopped) return { status: 'idle' };
     const failures = (this.failuresByBatchId.get(batchId) ?? 0) + 1;
     this.failuresByBatchId.set(batchId, failures);
     const isLastChance = failures >= FAILURES_BEFORE_FAIL_CLOSED;
@@ -216,7 +218,11 @@ export class ArbiterRunner {
     return run;
   }
 
-  /** Closes the session; a close that fails is tried again later, so a live arbiter never outlives its run. */
+  /**
+   * Closes the session; a close that fails is tried again later, so a live arbiter never outlives its run.
+   * Once the runner is stopped no retry is armed: an arbiter whose creation resolves during shutdown and whose single close fails stays live
+   * until the next boot, where recover() closes it.
+   */
   private async closeQuietly(sessionId: string, attempt = 1): Promise<void> {
     try {
       await this.deps.sessions.close(sessionId);

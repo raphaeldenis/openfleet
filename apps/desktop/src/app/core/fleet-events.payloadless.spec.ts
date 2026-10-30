@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { Observable } from 'rxjs';
-import { FleetEventsService, type PayloadCarryingEventType } from './fleet-events.service';
+import { EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD, FleetEventsService, type PayloadCarryingEventType } from './fleet-events.service';
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -64,8 +64,6 @@ const TYPES_THAT_READ_A_PAYLOAD = [
 ] as const;
 
 const aSession = { id: 's1', name: 'Gimli', emoji: '⚔️', directory: '/tmp', harness: 'fake', state: 'idle', stateSince: 't', createdAt: 't' };
-
-const TYPES_WITHOUT_REQUIRED_PAYLOAD = ['session.attention', 'session.relaunching', 'message.queued', 'message.held', 'command.denied'] as const;
 
 const MINIMAL_VALID_FRAME_OF: Record<(typeof TYPES_THAT_READ_A_PAYLOAD)[number], Record<string, unknown>> = {
   'snapshot': { sessions: [], approvals: [] },
@@ -240,7 +238,7 @@ describe('FleetEventsService frames without their payload', () => {
     expect(consoleError).not.toHaveBeenCalled();
   });
 
-  it.each([...TYPES_WITHOUT_REQUIRED_PAYLOAD, 'a.type.from.the.future'])('does not warn on a bare %s frame', (type) => {
+  it.each([...EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD, 'a.type.from.the.future'])('does not warn on a bare %s frame', (type) => {
     socket().dispatchMessage({ type });
 
     expect(consoleWarn).not.toHaveBeenCalled();

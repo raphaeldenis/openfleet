@@ -182,7 +182,11 @@ describe('QE — the arbiter the daemon spawns', () => {
     const dataStart = prompt.indexOf('--- BEGIN QUESTIONS');
     expect(prompt).toContain(mandateLine);
     expect(prompt.indexOf(mandateLine)).toBeLessThan(dataStart);
-    expect(prompt.indexOf(`ticket: ${TICKET}`)).toBeLessThan(dataStart);
+    const headerLines = ['batch_id: ', `ticket: ${TICKET}`, `plan note: ${planNote.id}`];
+    for (const headerLine of headerLines) {
+      expect(prompt).toContain(headerLine);
+      expect(prompt.indexOf(headerLine)).toBeLessThan(dataStart);
+    }
   });
 
   it('puts the mandate line before the batch_id, ticket and plan note header it names', async () => {
