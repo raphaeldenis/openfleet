@@ -119,6 +119,24 @@ const questionViewOf = (question: StoredQuestion): EscalationQuestionView => {
   };
 };
 
+/** A resolution is data the manager wrote: it is cleaned before routing, storage, the arbiter prompt and the journal, and one that says nothing once cleaned is refused. */
+const cleanResolutionOf = (question: PlanQuestion): ReproClaim | undefined => {
+  if (question.resolution === undefined) return undefined;
+  const cleanResolution = sanitizedReproClaim(question.resolution);
+  if (hasBlankClaim(cleanResolution)) throw new OpenFleetError('invalid_body', `${question.id}: ${BLANK_CLAIM_MESSAGE}`);
+  if (lacksExecutedEvidence(cleanResolution)) throw new OpenFleetError('invalid_body', `${question.id}: ${EVIDENCE_MESSAGE}`);
+  return cleanResolution;
+};
+
+const withCleanResolutions = (batch: PlanQuestionBatch): PlanQuestionBatch => ({
+  ...batch,
+  questions: batch.questions.map((question) => {
+    const resolution = cleanResolutionOf(question);
+    const { resolution: _raw, ...withoutResolution } = question;
+    return resolution === undefined ? withoutResolution : { ...withoutResolution, resolution };
+  }),
+});
+
 const readableOptional =(text: string | undefined) => (text === undefined ? undefined : humanReadableText(text));
 
 /** Routes the questions a manager submits, stores the batch, and keeps the single open escalation of a ticket in step with the questions that need a human. */
@@ -126,7 +144,7 @@ export class EscalationService {
   constructor(private readonly deps: EscalationServiceDeps) {}
 
   submitBatch(batch: PlanQuestionBatch): SubmittedPlanQuestions {
-    const submitted = this.storeBatch(batch);
+    const submitted = this.storeBatch(withCleanResolutions(batch));
     this.journalSelfResolved({ managerId: batch.managerId, ticket: batch.ticket, submitted });
     this.journalReopened({ managerId: batch.managerId, ticket: batch.ticket, submitted });
     if (submitted.human) this.emitRaised(submitted.human.escalationId);
