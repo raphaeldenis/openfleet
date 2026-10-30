@@ -1,9 +1,10 @@
 import { dirname, join } from 'node:path';
 import {
-  MANAGER_ROLE, WORKING_STATE_TOOL_NAMES,
+  WORKING_STATE_TOOL_NAMES,
   type ClaudeHookEvent, type PermissionRequestHookOutput, type PolicyActor, type PolicyPresence, type PolicyRequest, type PolicySource, type PolicyVerdict,
   type PreToolUseHookOutput, type ServerEvent, type Session,
 } from '@openfleet/shared';
+import { isAttendedManager, managerAskUserRefusalOf } from '../../escalation/managerAskUserGuard.js';
 import { log } from '../../logger.js';
 import type { DegradedRegistry } from '../../process/degradedRegistry.js';
 import type { CommandPolicySettings, PolicyEvaluate } from '../../policy/commandPolicySettings.js';
@@ -109,7 +110,9 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
   constructor(private readonly deps: ClaudePolicyHooksDeps) {}
 
   onPreToolUse(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PreToolUse' }>): PreToolUseHookOutput | undefined | Promise<PreToolUseHookOutput | undefined> {
-    this.journalRootManagerQuestion(session, event);
+    const questionRefusal = this.managerQuestionRefusalOf(session, event);
+    if (questionRefusal !== undefined) return this.refuseManagerQuestion(session, event, questionRefusal);
+    this.journalAttendedManagerQuestion(session, event);
     const verdict = this.evaluateFailingOpen(session, event, 'pre_tool_use');
     if (verdict === undefined) return undefined;
     const waitsOnFindingsGate = this.deps.findingsGate !== undefined && isFindingsGateVerdict(verdict);
@@ -125,6 +128,11 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
   onPermissionRequest(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PermissionRequest' }>): PermissionRequestHookOutput | undefined {
     const isWorkingStateTool = (WORKING_STATE_TOOL_NAMES as readonly string[]).includes(event.tool_name);
     if (isWorkingStateTool) return undefined;
+    const questionRefusal = this.managerQuestionRefusalOf(session, event);
+    if (questionRefusal !== undefined) {
+      this.recordAfterAnswering(session, event, { ...questionRefusal, outcome: 'denied' });
+      return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: this.textOf(session, questionRefusal) } } };
+    }
     const verdict = this.evaluateFailingOpen(session, event, 'permission_request');
     const isExplicitlyAllowed = verdict?.decision === 'allow' && verdict.allowedBy !== undefined;
     if (isExplicitlyAllowed) return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
@@ -136,12 +144,23 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
     return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: this.textOf(session, refusal) } } };
   }
 
-  /** A root manager has no superior to answer it: its question goes to the human, and the journal keeps the trace of it. */
-  private journalRootManagerQuestion(session: Session, event: ToolHookEvent): void {
-    const isRootManagerAsking = event.tool_name === ASK_USER_QUESTION_TOOL && session.role === MANAGER_ROLE && presenceOf(session) === 'attended';
-    if (!isRootManagerAsking) return;
+  /** Refuses at once, whatever the policy mode, the free-text question of a manager no human accompanies; the policy rule never sees the call, so nothing is journaled twice. */
+  private managerQuestionRefusalOf(session: Session, event: ToolHookEvent): Refusal | undefined {
+    const refusal = managerAskUserRefusalOf({ session, toolName: event.tool_name });
+    return refusal === undefined ? undefined : { ...refusal, source: 'policy' };
+  }
+
+  private refuseManagerQuestion(session: Session, event: ToolHookEvent, refusal: Refusal): PreToolUseHookOutput {
+    this.recordAfterAnswering(session, event, { ...refusal, outcome: 'denied' });
+    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: this.textOf(session, refusal) } };
+  }
+
+  /** An attended manager has a human beside it: its question goes to the human, and the journal keeps the trace of it. */
+  private journalAttendedManagerQuestion(session: Session, event: ToolHookEvent): void {
+    const isAttendedManagerAsking = event.tool_name === ASK_USER_QUESTION_TOOL && isAttendedManager(session);
+    if (!isAttendedManagerAsking) return;
     this.recordAfterAnswering(session, event, {
-      ruleId: ROOT_MANAGER_ASK_USER_EVENT_ID, reason: 'A root manager asked the human directly.', alternative: '', source: 'policy', outcome: 'observed',
+      ruleId: ROOT_MANAGER_ASK_USER_EVENT_ID, reason: 'An attended manager asked the human directly.', alternative: '', source: 'policy', outcome: 'observed',
     });
   }
 
