@@ -40,7 +40,7 @@ export interface CreatedWorktree {
 /**
  * Creates the worktree, gives it the repository's git hooks directory, links the overlay of a shared repository, then runs the project's post-create hook in it.
  * A missing hooks directory, a missing overlay or a failing hook is reported as a warning and never fails the creation: the worktree exists whatever happened after.
- * A worktree that could not be created runs no hook.
+ * A worktree that could not be created runs no hook. The only script that runs is the one the project configures; nothing found in the repository is executed.
  */
 export async function createWorktreeWithHook(input: { repoPath: string; branchName: string; baseRef?: string; worktreesRoot: string; env?: NodeJS.ProcessEnv; hook?: PostCreateHook; overlay?: Overlay }): Promise<CreatedWorktree> {
   const { path, branch } = await createWorktree(input);

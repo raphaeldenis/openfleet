@@ -1,7 +1,7 @@
 import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ErrorEnvelope, Page, Project } from '@openfleet/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -133,6 +133,22 @@ describe('PATCH /api/projects/:id: the post-create hook setting', () => {
     expect(envelope).toMatchObject({ error: 'invalid_body', kind: 'invalid_request' });
     expect(JSON.stringify(envelope)).not.toContain(script);
     expect(await listProjects()).toEqual([project]);
+  });
+
+  it('refuses a script owned by another user with a message that names the owner and the write rights', async () => {
+    const project = await createProject();
+    const script = aScript();
+    const daemonUidSpy = vi.spyOn(process, 'getuid').mockReturnValue(process.getuid!() + 1);
+
+    try {
+      const res = await patchProject(project.id, { postCreateHookScript: script });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: 'invalid_body', message: expect.stringContaining('the post-create script must be owned by the daemon user and must not be writable by group or others.') });
+      expect(await listProjects()).toEqual([project]);
+    } finally {
+      daemonUidSpy.mockRestore();
+    }
   });
 
   it.each([0, -5, 601, 1.5, '60'])('refuses the timeout %j with 400 invalid_body', async (timeout) => {

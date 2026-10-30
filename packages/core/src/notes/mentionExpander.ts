@@ -3,6 +3,7 @@ import { MENTION_KINDS, type MentionKind, type MentionRef } from '@openfleet/sha
 const DEFAULT_DEPTH = 2;
 const DEFAULT_BUDGET_BYTES = 64 * 1024;
 const MAX_SKIP_LINES = 50;
+const ALREADY_EXPANDED = 'already expanded';
 const BLOCK_SEPARATOR = '\n\n';
 const MENTION_PATTERN = new RegExp(`(?<![A-Za-z0-9_])@(${MENTION_KINDS.join('|')}):([A-Za-z0-9_-]+)`, 'g');
 
@@ -23,6 +24,7 @@ export interface ExpandMentionsOptions {
   depth?: number;
   budgetBytes?: number;
   rootNoteId?: string;
+  rootNoteSkipReason?: string;
 }
 
 interface BodyToScan {
@@ -34,6 +36,8 @@ interface Walk {
   lookup: MentionLookup;
   maxDepth: number;
   expandedNoteIds: Set<string>;
+  rootNoteId: string | undefined;
+  rootNoteSkipReason: string;
   bodiesToScan: BodyToScan[];
   bytesLeft: number;
   isBudgetExhausted: boolean;
@@ -54,11 +58,13 @@ export function expandMentions(bodyMd: string, lookup: MentionLookup, opts: Expa
 
 /** Returns only the blocks `expandMentions` appends after the body, one per mention; empty when the body mentions nothing. */
 export function expandMentionBlocks(bodyMd: string, lookup: MentionLookup, opts: ExpandMentionsOptions = {}): string[] {
-  const { depth = DEFAULT_DEPTH, budgetBytes = DEFAULT_BUDGET_BYTES, rootNoteId } = opts;
+  const { depth = DEFAULT_DEPTH, budgetBytes = DEFAULT_BUDGET_BYTES, rootNoteId, rootNoteSkipReason = ALREADY_EXPANDED } = opts;
   const walk: Walk = {
     lookup,
     maxDepth: depth,
     expandedNoteIds: new Set(rootNoteId === undefined ? [] : [rootNoteId]),
+    rootNoteId,
+    rootNoteSkipReason,
     bodiesToScan: [{ bodyMd, level: 1 }],
     bytesLeft: budgetBytes - utf8Bytes(bodyMd),
     isBudgetExhausted: false,
@@ -112,7 +118,10 @@ function renderMention(mention: MentionRef, level: number, walk: Walk): string |
 function renderNoteBlock(id: string, level: number, walk: Walk): string | undefined {
   const tag = mentionTag('note', id);
 
-  if (walk.expandedNoteIds.has(id)) return skipLine(walk, notExpandedLine(tag, 'already expanded'));
+  if (walk.expandedNoteIds.has(id)) {
+    const skipReason = id === walk.rootNoteId ? walk.rootNoteSkipReason : ALREADY_EXPANDED;
+    return skipLine(walk, notExpandedLine(tag, skipReason));
+  }
 
   const note = walk.lookup.getNote(id);
   if (!note) return skipLine(walk, notResolvedLine(tag));

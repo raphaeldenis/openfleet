@@ -209,8 +209,8 @@ describe('a manager with a long mission gets a preview that never claims to be c
     expect(context).toContain('HEAD-OF-MISSION');
     expect(context).not.toContain('END-OF-MISSION');
     expect(context).toContain(`truncated, ${REAL_SIZED_MISSION_BYTES} bytes in total`);
-    expect(context).toContain('get_argus_status');
-    expect(context).toContain('missionText');
+    expect(context).toContain('get_manager_mission');
+    expect(context).not.toContain('get_argus_status');
   });
 
   it('counts the preview and the total in UTF-8 bytes, never cutting a character in two', async () => {
