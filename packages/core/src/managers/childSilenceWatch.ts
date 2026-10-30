@@ -4,6 +4,7 @@ import { log } from '../logger.js';
 import { SCHEDULED_EVENT_PREFIX } from '../sessions/daemonLines.js';
 import type { AgentMessageSent, SessionService } from '../sessions/sessionService.js';
 import { localDateTimeOf } from './localDateTime.js';
+import type { ChildSilenceRepository, StoredSilenceCheck } from './childSilenceRepository.js';
 import { modeOf, type ManagerRepository } from './managerRepository.js';
 
 export const SILENCE_CHECK_TITLE = 'silence_check';
@@ -16,6 +17,7 @@ export interface ChildSilenceWatchDeps {
   managers: Pick<ManagerRepository, 'getWithinBounds'>;
   bus: EventBus;
   delayMs: number;
+  checks: ChildSilenceRepository;
   clock: () => number;
   /** Runs the callback after the delay and returns the function that cancels it. */
   schedule: (callback: () => void, delayMs: number) => () => void;
@@ -25,15 +27,18 @@ interface SilenceCheck {
   managerId: string;
   childId: string;
   messageSentAt: number;
+  isRestoredAfterRestart: boolean;
   cancel: () => void;
 }
 
 const minutesBetween = (earlier: number, later: number): number => Math.max(0, Math.round((later - earlier) / MINUTE_MS));
+const isoOf = (instantMs: number): string => new Date(instantMs).toISOString();
 
 /**
  * One deadline per child: ten minutes after a manager messages a live child, the manager is woken unless the child
- * answered, closed or changed state meanwhile. The deadlines live in memory only and are neither scheduled events nor
- * counted in their cap. Several children that fall silent together wake the manager once each.
+ * answered, closed or changed state meanwhile. The deadlines are stored in the database and re-armed by `restore`
+ * when the daemon boots, so a restart does not lose them. They are neither scheduled events nor counted in their cap.
+ * Several children that fall silent together wake the manager once each.
  */
 export class ChildSilenceWatch {
   private readonly checksByChildId = new Map<string, SilenceCheck>();
@@ -45,6 +50,23 @@ export class ChildSilenceWatch {
     });
   }
 
+  /**
+   * Re-arms the stored checks of the children still open under their open manager, each with the time that remains
+   * before its deadline (none when the deadline passed while the daemon was stopped, so the wake follows at once).
+   * Deletes the stored checks of every other child.
+   */
+  restore(): void {
+    for (const stored of this.deps.checks.list()) {
+      if (!this.isStillWatchable(stored)) {
+        this.deps.checks.remove(stored.childId);
+        continue;
+      }
+      const remainingMs = Math.max(0, Date.parse(stored.dueAt) - this.deps.clock());
+      this.watch({ managerId: stored.managerId, childId: stored.childId, messageSentAt: Date.parse(stored.armedAt), isRestoredAfterRestart: true }, remainingMs);
+    }
+  }
+
+  /** Stops the timers and leaves the stored checks, which the next boot restores. */
   stop(): void {
     for (const check of this.checksByChildId.values()) check.cancel();
     this.checksByChildId.clear();
@@ -61,16 +83,31 @@ export class ChildSilenceWatch {
     if (isChildAnsweringItsManager && isCheckOfThisManager) this.cancelCheckOf(sender.id);
   }
 
+  private isStillWatchable({ childId, managerId }: StoredSilenceCheck): boolean {
+    const child = this.deps.sessions.get(childId);
+    const manager = this.deps.sessions.get(managerId);
+    const isChildOpenUnderManager = child !== undefined && child.state !== 'closed' && child.parentId === managerId;
+    const isManagerOpen = manager !== undefined && manager.state !== 'closed';
+    return isChildOpenUnderManager && isManagerOpen;
+  }
+
   private arm({ managerId, childId }: { managerId: string; childId: string }): void {
-    this.cancelCheckOf(childId);
-    const check: SilenceCheck = { managerId, childId, messageSentAt: this.deps.clock(), cancel: () => {} };
-    check.cancel = this.deps.schedule(() => this.wakeManager(check), this.deps.delayMs);
-    this.checksByChildId.set(childId, check);
+    const messageSentAt = this.deps.clock();
+    this.deps.checks.save({ childId, managerId, armedAt: isoOf(messageSentAt), dueAt: isoOf(messageSentAt + this.deps.delayMs) });
+    this.watch({ managerId, childId, messageSentAt, isRestoredAfterRestart: false }, this.deps.delayMs);
+  }
+
+  private watch(details: Omit<SilenceCheck, 'cancel'>, delayMs: number): void {
+    this.checksByChildId.get(details.childId)?.cancel();
+    const check: SilenceCheck = { ...details, cancel: () => {} };
+    check.cancel = this.deps.schedule(() => this.wakeManager(check), delayMs);
+    this.checksByChildId.set(details.childId, check);
   }
 
   private cancelCheckOf(childId: string): void {
     this.checksByChildId.get(childId)?.cancel();
     this.checksByChildId.delete(childId);
+    this.deps.checks.remove(childId);
   }
 
   private forgetChecksOf(closedSessionId: string): void {
@@ -85,6 +122,7 @@ export class ChildSilenceWatch {
     const isCurrentCheck = this.checksByChildId.get(check.childId) === check;
     if (!isCurrentCheck) return;
     this.checksByChildId.delete(check.childId);
+    this.deps.checks.remove(check.childId);
     const child = this.deps.sessions.get(check.childId);
     const isChildStillOpen = child !== undefined && child.state !== 'closed';
     if (!isChildStillOpen) return;
@@ -92,7 +130,7 @@ export class ChildSilenceWatch {
     const isManagerDisabled = managerRecord !== undefined && modeOf(managerRecord) === 'disabled';
     if (isManagerDisabled) return;
     const now = this.deps.clock();
-    const lastSignOfLifeAt = Date.parse(child.stateSince);
+    const lastSignOfLifeAt = check.isRestoredAfterRestart ? check.messageSentAt : Date.parse(child.stateSince);
     const hasChangedStateRecently = now - lastSignOfLifeAt < this.deps.delayMs;
     if (hasChangedStateRecently) return;
     const silentMinutes = minutesBetween(check.messageSentAt, now);
