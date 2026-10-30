@@ -1,0 +1,1 @@
+DROP INDEX plan_questions_by_reopened_question;

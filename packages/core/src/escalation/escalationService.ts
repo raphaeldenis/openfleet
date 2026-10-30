@@ -207,6 +207,13 @@ export class EscalationService {
     return escalated;
   }
 
+  /** Journals that a reopening question reaches the arbiter without the decision it contests, because no stored decision was found. */
+  journalMissingEarlierDecision({ batchId, questionId }: { batchId: string; questionId: string }): void {
+    const batch = this.deps.repository.findBatch(batchId);
+    if (batch === undefined) return;
+    this.deps.audit.journal({ managerId: batch.managerId, entries: [`${batch.ticket} ${questionId} reopens an arbiter decision that is no longer stored: the arbiter reviews it without the earlier decision`] });
+  }
+
   /** A human retries the listing of an escalation card in the questions_for_human of its manager; it fails visibly, the card unchanged, while the list is still full. */
   retryHandover(escalationId: string): EscalationView {
     const { repository } = this.deps;

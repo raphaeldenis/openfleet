@@ -1,0 +1,1 @@
+CREATE INDEX plan_questions_by_reopened_question ON plan_questions(reopens_batch_id, reopens_question_id);

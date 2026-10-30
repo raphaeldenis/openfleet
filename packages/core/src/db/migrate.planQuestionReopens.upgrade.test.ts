@@ -69,3 +69,31 @@ describe('migration 060, the reopen link of a plan question', () => {
     expect(databaseAfter.prepare('SELECT count(*) AS count FROM plan_questions').get()).toEqual({ count: 1 });
   });
 });
+
+describe('migration 061, the index on the reopen link of a plan question', () => {
+  const WITH_REOPENS_INDEX = '061_plan_question_reopens_index.sql';
+  const reopensIndexDownMigration = new URL('./migrations-down/061_plan_question_reopens_index.down.sql', import.meta.url);
+  const IS_REOPENED_QUERY = 'SELECT 1 AS found FROM plan_questions WHERE reopens_batch_id = ? AND reopens_question_id = ? LIMIT 1';
+
+  const queryPlanOf = (db: DatabaseSync): string =>
+    (db.prepare(`EXPLAIN QUERY PLAN ${IS_REOPENED_QUERY}`).all('b1', 'q1') as { detail: string }[]).map(({ detail }) => detail).join(' | ');
+
+  it('turns the full scan of the is-reopened lookup into an index search', () => {
+    const planWithoutIndex = queryPlanOf(databaseUpTo(WITH_REOPENS));
+    const planWithIndex = queryPlanOf(databaseUpTo(WITH_REOPENS_INDEX));
+
+    expect(planWithoutIndex).toMatch(/SCAN plan_questions/);
+    expect(planWithIndex).toMatch(/SEARCH plan_questions USING (COVERING )?INDEX plan_questions_by_reopened_question/);
+  });
+
+  it('is undone by its down migration, which drops the index and keeps the questions', () => {
+    const db = databaseUpTo(WITH_REOPENS_INDEX);
+    insertManagerAndBatch(db);
+    insertQuestion(db, 'q1');
+
+    db.exec(readFileSync(reopensIndexDownMigration, 'utf8'));
+
+    expect(queryPlanOf(db)).toMatch(/SCAN plan_questions/);
+    expect(db.prepare('SELECT count(*) AS count FROM plan_questions').get()).toEqual({ count: 1 });
+  });
+});

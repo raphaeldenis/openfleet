@@ -38,6 +38,7 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
 
   sessionsById.set(MANAGER_ID, { id: MANAGER_ID, name: 'Manager', role: 'manager', parentId: '', state: 'running', directory: '/work', harness: 'fake' });
   const escalateBatchToHuman = vi.fn(() => undefined);
+  const journalMissingEarlierDecision = vi.fn();
   const deps = {
     sessions: {
       create: async (spec: Record<string, unknown>) => {
@@ -70,7 +71,7 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
       arbiterRunsOfTicket: () => 0,
       batchIdsWithOpenArbiterQuestions: () => batchesWithOpenQuestions,
     },
-    escalations: { escalateBatchToHuman },
+    escalations: { escalateBatchToHuman, journalMissingEarlierDecision },
     modelTable: DEFAULT_MODEL_TABLE,
     workspaces: {
       create: () => { const path = `/arbiter-workspaces/w${workspaces.created.length + 1}`; workspaces.created.push(path); return path; },
@@ -93,10 +94,34 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
   const createSpecs: Record<string, unknown>[] = [];
   const createdBySession = deps.sessions.create;
   deps.sessions.create = async (spec: Record<string, unknown>) => { createSpecs.push(spec); return createdBySession(spec); };
-  return { runner, state, created, closeCalls, scheduled, escalateBatchToHuman, addLiveArbiter, emitClosed, sessionsById, workspaces, realPaths, createSpecs };
+  return { runner, state, created, closeCalls, scheduled, escalateBatchToHuman, journalMissingEarlierDecision, repository: deps.repository, addLiveArbiter, emitClosed, sessionsById, workspaces, realPaths, createSpecs };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('ArbiterRunner — a reopening question whose earlier decision is not stored', () => {
+  const reopeningQuestion = { questionId: 'n1', route: 'arbiter', status: 'open', declaredClass: 'technical', text: 'which name, again?', reopensBatchId: 'older-batch', reopensQuestionId: 'q1' };
+
+  it('journals that the arbiter reviews it without the earlier decision, and still starts the arbiter', async () => {
+    const { runner, repository, journalMissingEarlierDecision, created } = aRunner();
+    Object.assign(repository, { questionsOfBatch: () => [reopeningQuestion], decisionsOfBatch: () => [] });
+
+    await runner.launch(BATCH_ID);
+
+    expect(journalMissingEarlierDecision).toHaveBeenCalledWith({ batchId: BATCH_ID, questionId: 'n1' });
+    expect(created).toHaveLength(1);
+  });
+
+  it('journals nothing when the earlier decision is stored', async () => {
+    const { runner, repository, journalMissingEarlierDecision } = aRunner();
+    const stored = [{ questionId: 'q1', decision: 'use the plain name', rationale: 'it reads best' }];
+    Object.assign(repository, { questionsOfBatch: () => [reopeningQuestion], decisionsOfBatch: () => stored });
+
+    await runner.launch(BATCH_ID);
+
+    expect(journalMissingEarlierDecision).not.toHaveBeenCalled();
+  });
+});
 
 describe('ArbiterRunner — the arbiter starts in a neutral workspace', () => {
   it('starts in a fresh workspace and reads the directory of the manager through a read directory', async () => {

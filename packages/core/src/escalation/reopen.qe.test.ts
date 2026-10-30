@@ -183,6 +183,7 @@ describe('QE — one reopen of an arbiter decision, then a dispute for the human
     const refusal = await submit(booted.manager.client, { plan_note_id: booted.planNote.id, questions: [reopening('n1', 'nope')] });
 
     expect(refusal.isError).toBe(true);
+    expect(rawText(refusal)).toContain(`n1: reopens nope, but the arbiter decided no question with this id on ${TICKET}`);
     expect(rowsOf('n1')).toHaveLength(0);
   });
 
@@ -195,6 +196,8 @@ describe('QE — one reopen of an arbiter decision, then a dispute for the human
 
     expect(reopenOpen.isError).toBe(true);
     expect(reopenHuman.isError).toBe(true);
+    expect(rawText(reopenOpen)).toContain(`n1: reopens q1, but the arbiter decided no question with this id on ${TICKET}`);
+    expect(rawText(reopenHuman)).toContain(`n2: reopens q2, but the arbiter decided no question with this id on ${TICKET}`);
     expect(rowsOf('n1')).toHaveLength(0);
     expect(rowsOf('n2')).toHaveLength(0);
   });
@@ -206,6 +209,7 @@ describe('QE — one reopen of an arbiter decision, then a dispute for the human
     const refusal = await submit(booted.manager.client, { plan_note_id: booted.planNote.id, questions: [reopening('n1', 'q1')] }, TICKET);
 
     expect(refusal.isError).toBe(true);
+    expect(rawText(refusal)).toContain(`n1: reopens q1, but the arbiter decided no question with this id on ${TICKET}`);
     expect(rowsOf('n1')).toHaveLength(0);
   });
 
@@ -217,6 +221,7 @@ describe('QE — one reopen of an arbiter decision, then a dispute for the human
     const refusal = await submit(second.manager.client, { plan_note_id: second.planNote.id, questions: [reopening('n1', 'q1')] });
 
     expect(refusal.isError).toBe(true);
+    expect(rawText(refusal)).toContain(`n1: reopens q1, but the arbiter decided no question with this id on ${TICKET}`);
     expect(rowsOf('n1')).toHaveLength(0);
   });
 
@@ -227,6 +232,7 @@ describe('QE — one reopen of an arbiter decision, then a dispute for the human
     const refusal = await submit(booted.manager.client, { plan_note_id: booted.planNote.id, questions: [reopening('n1', 'q1'), reopening('n2', 'q1')] });
 
     expect(refusal.isError).toBe(true);
+    expect(rawText(refusal)).toContain('n2: the arbiter decision of q1 was already reopened once');
     expect(rowsOf('n1')).toHaveLength(0);
     expect(rowsOf('n2')).toHaveLength(0);
   });
@@ -267,5 +273,36 @@ describe('QE — one reopen of an arbiter decision, then a dispute for the human
     expect(reopened.human.question_ids).toEqual(['n1']);
     expect(rowOf('n1')).toMatchObject({ route: 'human', status: 'pending_human', reopens_question_id: 'q1' });
     expect(arbiterRows()).toHaveLength(1);
+  });
+
+  it('puts the earlier decision under the reopens key of the question line, after the data marker, never in the header', async () => {
+    const booted = await bootManager();
+    await submitAndDecide(booted, [technical('q1')]);
+
+    await submit(booted.manager.client, { plan_note_id: booted.planNote.id, questions: [reopening('n1', 'q1')] });
+
+    const prompt = (await waitForArbiters(2)).at(-1)!.seeded_prompt!;
+    const dataMarkerAt = prompt.indexOf('--- BEGIN QUESTIONS');
+    const endMarkerAt = prompt.indexOf('--- END QUESTIONS ---');
+    const earlierDecisionAt = prompt.indexOf('"reopens":{"question_id":"q1","earlier_decision":"use the plain name for q1","earlier_rationale":"it reads best, q1"}');
+    expect(dataMarkerAt).toBeGreaterThan(-1);
+    expect(earlierDecisionAt).toBeGreaterThan(dataMarkerAt);
+    expect(earlierDecisionAt).toBeLessThan(endMarkerAt);
+    expect(prompt.slice(0, dataMarkerAt)).not.toContain('use the plain name for q1');
+  });
+
+  it('hands a reopen to the human when the arbiter answers it needs_human', async () => {
+    const booted = await bootManager();
+    await submitAndDecide(booted, [technical('q1')]);
+    const reopened = parsed(await submit(booted.manager.client, { plan_note_id: booted.planNote.id, questions: [reopening('n1', 'q1')] }));
+    const secondArbiter = (await waitForArbiters(2)).at(-1)!;
+    const needsHuman = { question_id: 'n1', verdict: 'needs_human', decision: 'a human should settle the name', rationale: 'both names are defensible' };
+
+    const result = await report(await connect(secondArbiter.id), opinion(reopened.batch_id, [needsHuman]));
+
+    expect(result.isError).toBeFalsy();
+    expect(rowOf('n1')).toMatchObject({ route: 'arbiter', status: 'pending_human', reason: 'arbiter_deferred', reopens_question_id: 'q1' });
+    expect(escalationRows()).toEqual([expect.objectContaining({ status: 'pending' })]);
+    expect(questionsForHumanOf(booted.manager.id).filter((item) => item.startsWith('[esc:'))).toHaveLength(1);
   });
 });
