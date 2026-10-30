@@ -116,7 +116,7 @@ const COLLAPSED_ENTRY_COUNT = 5;
     .muted { margin: 0; font-size: .75rem; color: var(--mut); font-weight: 400; }
     .subtitle-row { display: flex; align-items: baseline; gap: .5rem; }
     .link { font-size: .75rem; color: var(--accent); font-weight: 400; }
-    .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .link:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem; }
     .entries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .375rem; }
     .entry { display: flex; flex-direction: column; gap: .125rem; min-width: 0; }
     .summary { white-space: pre-wrap; overflow-wrap: anywhere; }

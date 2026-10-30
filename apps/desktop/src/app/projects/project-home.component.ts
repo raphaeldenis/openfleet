@@ -228,13 +228,13 @@ function rememberLastVisitedProjectId(projectId: string): void {
     .switcher-prefix { color: var(--mut); font-weight: 400; }
     .project-option { display: flex; align-items: center; gap: .5rem; width: 100%; height: 1.75rem; padding: 0 .5rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; text-align: left; cursor: pointer; }
     .project-option[aria-selected='true'], .project-option:hover { background: var(--hover); }
-    .project-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .project-option:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem; }
     .check { width: .75rem; }
     .project-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .tiles { display: flex; flex-wrap: wrap; gap: .75rem; }
     .tile { flex: 1 1 10rem; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: .375rem; padding: .75rem .875rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); color: var(--fg); text-decoration: none; }
     .tile:hover { border-color: var(--line-2); }
-    .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+    .tile:focus-visible { outline: .125rem solid var(--accent); outline-offset: 0; }
     .tile-label { font-size: .6875rem; color: var(--mut); }
     .total { font-family: var(--mono); font-size: 1.25rem; font-weight: 500; letter-spacing: -.02em; color: var(--fg); }
     .pending { color: var(--mut); }
@@ -259,7 +259,7 @@ function rememberLastVisitedProjectId(projectId: string): void {
     .rows li:not(:last-child) { border-bottom: 1px solid var(--line); }
     .row { display: flex; align-items: center; gap: .625rem; padding: .5rem .875rem; color: var(--fg); text-decoration: none; font-size: .8125rem; }
     .row:hover { background: var(--hover); }
-    .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .row:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem; }
     .emoji-tile { display: flex; flex: none; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); }
     .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
     .meta { font-family: var(--mono); font-size: .6875rem; color: var(--mut); }

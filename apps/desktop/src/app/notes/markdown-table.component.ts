@@ -44,7 +44,7 @@ import type { InlineSegment, TableAlignment, TableCell } from './markdown-blocks
   styles: `
     :host { display: block; min-width: 0 }
     .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: .375rem }
-    .scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .scroll:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: inherit; line-height: 1.5 }
     th, td { padding: .375rem .625rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: normal }
     th { background: var(--sunk); font-weight: 600; white-space: nowrap }

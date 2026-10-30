@@ -108,7 +108,7 @@ function clockTimeOf(isoDate: string): string {
     .progress-text { font-weight: 600; }
     .detail { color: var(--mut); }
     .list-region { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .5rem; }
-    .list-region:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .list-region:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem; }
     .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .25rem; }
     .row { display: flex; align-items: baseline; flex-wrap: wrap; gap: .375rem; padding: .375rem .5rem; border-radius: .375rem; background: var(--panel); border: 1px solid var(--line); }
     .row[data-status='completed'] { color: var(--mut); }

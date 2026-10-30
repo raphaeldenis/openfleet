@@ -26,7 +26,7 @@ import type { DataStore } from '@openfleet/shared';
     }
     .pill.active { background: var(--active) }
     .add { padding: 0 .5rem; color: var(--mut) }
-    .pill:focus-visible, .add:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .pill:focus-visible, .add:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
   `,
 })
 export class TableListComponent {

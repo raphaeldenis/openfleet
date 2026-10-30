@@ -96,11 +96,11 @@ const FAILURES_A_MISSING_PATH_CAN_CAUSE: readonly LastLineKind[] = ['unrecognise
     .fine-print { font-size: .6875rem; color: var(--mut) }
     .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap }
     h2 { margin: 0; font-size: .875rem; font-weight: 500 }
-    h2:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem }
+    h2:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
     .ready-mark { color: var(--fg); font-weight: 600 }
     .hint-strong { font-size: .75rem; color: var(--fg) }
     .last-line { margin: 0; max-height: 7.5rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text }
-    .last-line:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem }
+    .last-line:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
     .spinner { flex: none; width: .75rem; height: .75rem; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: of-daemon-spin 1s linear infinite }
     @keyframes of-daemon-spin { to { transform: rotate(360deg) } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation: none } }

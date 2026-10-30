@@ -65,7 +65,7 @@ interface HandoffListState {
     [role='listbox'] { max-height: 14rem; overflow-y: auto }
     .handoff-option { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; width: 100%; min-height: 1.75rem; padding: .375rem .5rem; border: 0; border-radius: .25rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; text-align: left; cursor: pointer }
     .handoff-option:hover, .handoff-option[aria-selected='true'] { background: var(--panel) }
-    .handoff-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .handoff-option:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
   `,
 })
 export class HandoffPickerComponent {
