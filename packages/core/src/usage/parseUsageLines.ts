@@ -5,6 +5,9 @@ const ZONED_ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]
 export const MAX_IDENTIFIER_LENGTH = 128;
 const IDENTIFIER_PATTERN = new RegExp(`^[A-Za-z0-9_.:-]{1,${MAX_IDENTIFIER_LENGTH}}$`);
 
+/** The model Claude Code writes on the messages it makes up itself, which call no model and carry no usage worth keeping. */
+const CLAUDE_CODE_SYNTHETIC_MODEL = '<synthetic>';
+
 /** A realistic ceiling for one count of one message: 1000 times a large context window. */
 export const MAX_TOKEN_COUNT = 1_000_000_000;
 
@@ -56,6 +59,8 @@ function outcomeOfLine(line: string): LineOutcome {
   const { timestamp } = entry;
   if (typeof id !== 'string' || id === '') return SKIPPED;
   if (typeof model !== 'string' || model === '') return SKIPPED;
+  const isSyntheticMessage = model === CLAUDE_CODE_SYNTHETIC_MODEL;
+  if (isSyntheticMessage) return SKIPPED;
   const hasHostileIdentifier = !IDENTIFIER_PATTERN.test(id) || !IDENTIFIER_PATTERN.test(model);
   if (hasHostileIdentifier) return REJECTED;
   const hasValidTimestamp = typeof timestamp === 'string' && ZONED_ISO_TIMESTAMP.test(timestamp) && !Number.isNaN(Date.parse(timestamp));

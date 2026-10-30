@@ -178,6 +178,14 @@ describe('parseUsageLines', () => {
       expect(result.rejectedLineCount).toBe(1);
     });
 
+    it('skips without rejecting the synthetic messages Claude Code writes itself', () => {
+      const result = parseUsageLines(assistantLine({ model: '<synthetic>' }));
+
+      expect(result.rows).toEqual([]);
+      expect(result.skippedLineCount).toBe(1);
+      expect(result.rejectedLineCount).toBe(0);
+    });
+
     it('does not count an ordinary non-assistant line as rejected', () => {
       const result = parseUsageLines(JSON.stringify({ type: 'user', message: { content: 'x' } }));
 
