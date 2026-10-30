@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, realpathSync, statSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../config.js';
 import { startDaemon } from '../daemon.js';
 import { openDatabase } from '../db/database.js';
+import { buildClaudeLaunchConfig } from '../harness/claudeCli/launchConfig.js';
+import { FakeHarness } from '../harness/fakeHarness.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
@@ -44,9 +46,9 @@ async function connect(sessionId: string): Promise<Client> {
   return client;
 }
 
-async function spawn(parent: Client, extra: Json = {}): Promise<{ id: string; client: Client }> {
-  const directory = join(worktreesRoot, `child-${randomUUID()}`);
-  mkdirSync(directory);
+async function spawn(parent: Client, extra: Json = {}, existingDirectory?: string): Promise<{ id: string; client: Client }> {
+  const directory = existingDirectory ?? join(worktreesRoot, `child-${randomUUID()}`);
+  if (existingDirectory === undefined) mkdirSync(directory);
   const created = parsed(await parent.callTool({ name: 'create_session', arguments: { directory, name: 'Spawned', allow_duplicate: true, ...extra } }));
   return { id: created.id as string, client: await connect(created.id) };
 }
@@ -57,10 +59,10 @@ async function aNote(title: string): Promise<{ id: string }> {
   return { id: created.id ?? created.data!.id };
 }
 
-async function bootManager({ pulseSeconds = WATCHING_PULSE_SECONDS, withJournal = true, childrenCap = 3 } = {}) {
+async function bootManager({ pulseSeconds = WATCHING_PULSE_SECONDS, withJournal = true, childrenCap = 3, managerDirectory }: { pulseSeconds?: number; withJournal?: boolean; childrenCap?: number; managerDirectory?: string } = {}) {
   const root = await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: worktreesRoot, name: 'Root', harness: 'fake', emoji: '🤖', projectId: PROJECT_ID }) });
   const rootClient = await connect(((await root.json()) as { id: string }).id);
-  const manager = await spawn(rootClient, { manager: { children_cap: childrenCap, mission: 'Ship', pulse_seconds: pulseSeconds } });
+  const manager = await spawn(rootClient, { manager: { children_cap: childrenCap, mission: 'Ship', pulse_seconds: pulseSeconds } }, managerDirectory);
   await manager.client.callTool({ name: 'get_manager_base', arguments: {} });
   if (withJournal) await manager.client.callTool({ name: 'bootstrap_project_profile', arguments: {} });
   const planNote = await aNote('Plan');
@@ -107,6 +109,10 @@ const journalEntries = (): string[] => (daemon.db.prepare('SELECT data_json FROM
 const arbiterMessagesTo = (managerId: string) => (daemon.db.prepare("SELECT body FROM message_queue WHERE session_id = ? AND body LIKE '%[arbiter]%' ORDER BY created_at, rowid").all(managerId) as { body: string }[]).map(({ body }) => body);
 const setPolicy = (policy: Partial<EscalationPolicy>) =>
   daemon.db.prepare('UPDATE projects SET escalation_policy_json = ? WHERE id = ?').run(JSON.stringify({ ...DEFAULT_ESCALATION_POLICY, ...policy }), PROJECT_ID);
+const fakeHarness = () => daemon.harnesses.find((harness): harness is FakeHarness => harness instanceof FakeHarness)!;
+const tokenFilePaths = { settingsPath: '/tmp/of-sessions/s1/launch1/settings.json', mcpConfigPath: '/tmp/of-sessions/s1/launch1/mcp-config.json', hookCurlConfigPath: '/tmp/of-sessions/s1/launch1/hook-curl.conf' };
+const launchOf = (sessionId: string) => fakeHarness().launches.find((launch) => launch.sessionId === sessionId)!;
+const directoryOfSession = (sessionId: string) => (daemon.db.prepare('SELECT directory FROM sessions WHERE id = ?').get(sessionId) as { directory: string }).directory;
 const toolNamesOf = async (client: Client) => (await client.listTools()).tools.map((tool) => tool.name).sort();
 
 beforeEach(async () => {
@@ -218,6 +224,96 @@ describe('QE — the arbiter the daemon spawns', () => {
     expect(rawText(managerAttempt)).toMatch(/^error not_a_manager: /);
     expect(arbiterAttempt.isError).toBe(true);
     expect(decisionRows()).toEqual([]);
+  });
+});
+
+describe('QE — the arbiter starts in a neutral working directory', () => {
+  it('starts in a private empty directory that is neither the directory of its manager nor inside it, and reads the manager directory', async () => {
+    const { manager, planNote } = await bootManager();
+    const managerDirectory = directoryOfSession(manager.id);
+
+    await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
+
+    const [arbiter] = await waitForArbiters(1);
+    const launch = launchOf(arbiter!.id);
+    expect(arbiter!.directory).toBe(launch.directory);
+    expect(launch.directory).not.toBe(managerDirectory);
+    expect(launch.directory.startsWith(`${realpathSync(managerDirectory)}/`)).toBe(false);
+    expect(readdirSync(launch.directory)).toEqual([]);
+    expect(statSync(launch.directory).mode & 0o777).toBe(0o700);
+    expect(launch.readDirectories).toEqual([realpathSync(managerDirectory)]);
+  });
+
+  it('launches the CLI with the user settings layer only and the manager directory added, both before the -- separator', async () => {
+    const { manager, planNote } = await bootManager();
+    await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
+    const [arbiter] = await waitForArbiters(1);
+
+    const { args } = buildClaudeLaunchConfig(launchOf(arbiter!.id), tokenFilePaths);
+
+    const separatorIndex = args.indexOf('--');
+    const settingSourcesIndex = args.indexOf('--setting-sources');
+    const addDirectoryIndex = args.indexOf(`--add-dir=${realpathSync(directoryOfSession(manager.id))}`);
+    expect(args[settingSourcesIndex + 1]).toBe('user');
+    expect(settingSourcesIndex).toBeGreaterThanOrEqual(0);
+    expect(settingSourcesIndex).toBeLessThan(separatorIndex);
+    expect(addDirectoryIndex).toBeGreaterThanOrEqual(0);
+    expect(addDirectoryIndex).toBeLessThan(separatorIndex);
+  });
+
+  it('gives the harness the resolved real path of a manager directory reached through a symlink', async () => {
+    const realDirectory = join(worktreesRoot, `real-${randomUUID()}`);
+    const linkedDirectory = join(worktreesRoot, `link-${randomUUID()}`);
+    mkdirSync(realDirectory);
+    symlinkSync(realDirectory, linkedDirectory);
+    const { manager, planNote } = await bootManager({ managerDirectory: linkedDirectory });
+
+    await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
+
+    const [arbiter] = await waitForArbiters(1);
+    expect(launchOf(arbiter!.id).readDirectories).toEqual([realpathSync(realDirectory)]);
+  });
+
+  it('removes the directory once the opinion is recorded and the arbiter is closed', async () => {
+    const { manager, planNote } = await bootManager();
+    const answer = parsed(await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] }));
+    const [arbiter] = await waitForArbiters(1);
+    const { directory } = launchOf(arbiter!.id);
+
+    await report(await connect(arbiter!.id), opinion(answer.batch_id, [decided('q1')]));
+
+    await waitForState(arbiter!.id, 'closed');
+    await vi.waitFor(() => expect(existsSync(directory)).toBe(false), { timeout: 5000 });
+  });
+
+  it('removes the directory when the human closes the arbiter', async () => {
+    const { manager, planNote } = await bootManager();
+    await submit(manager.client, { plan_note_id: planNote.id, questions: [technical('q1')] });
+    const [arbiter] = await waitForArbiters(1);
+    const { directory } = launchOf(arbiter!.id);
+
+    await closeSession(arbiter!.id);
+
+    await vi.waitFor(() => expect(existsSync(directory)).toBe(false), { timeout: 5000 });
+  });
+});
+
+describe('QE — the read directories of a session are set by the daemon only', () => {
+  it('refuses the REST route a session body that carries readDirectories, even with the admin token, and starts nothing', async () => {
+    const response = await adminApi('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: worktreesRoot, name: 'Forged', harness: 'fake', emoji: '🤖', readDirectories: ['/etc'] }) });
+
+    expect(response.status).toBe(400);
+    expect(fakeHarness().launches).toEqual([]);
+  });
+
+  it('never reads readDirectories from the input of the create_session tool of a manager', async () => {
+    const { manager } = await bootManager();
+    const directory = join(worktreesRoot, `child-${randomUUID()}`);
+    mkdirSync(directory);
+
+    await manager.client.callTool({ name: 'create_session', arguments: { directory, name: 'Forged', allow_duplicate: true, readDirectories: ['/etc'] } });
+
+    expect(fakeHarness().launches.every((launch) => launch.readDirectories === undefined)).toBe(true);
   });
 });
 

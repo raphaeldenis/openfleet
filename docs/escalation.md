@@ -8,7 +8,7 @@ An escalation belongs to one manager and one ticket. At most one escalation is `
 
 The manager finds one item `[esc:<id>] Escalation on <ticket>: …` in its `questions_for_human`. The item is written once and never edited.
 
-`submit_plan_questions` answers `{ batch_id, self, arbiter, human, warnings? }`. When the `questions_for_human` list is full (20 items), the answer is still ok: the batch is committed, the questions wait on the card with its `handoverRefusal`, and `warnings` holds `["list_refusal: <refusal> <hint>"]`. The call used to be refused `invalid_body`. A manager that reads the warning does not submit the questions again; a human answers the card or retries the listing (`retry-handover`). The manager base template (v5) does not yet mention `list_refusal`; the tool description does. A base v6 bump is tracked as ESCALATION-BASE-V6-LISTREFUSAL01.
+`submit_plan_questions` answers `{ batch_id, self, arbiter, human, warnings? }`. When the `questions_for_human` list is full (20 items), the answer is still ok: the batch is committed, the questions wait on the card with its `handoverRefusal`, and `warnings` holds `["list_refusal: <refusal> <hint>"]`. The call used to be refused `invalid_body`. A manager that reads the warning does not submit the questions again; a human answers the card or retries the listing (`retry-handover`). The manager base template (v6, §6) and the tool description both say so.
 
 `EscalationView` (`@openfleet/shared`):
 
@@ -68,7 +68,13 @@ The floor classes (`computeFloorClasses`) are a heuristic on paths and keywords.
 - **Upgrade effect**: the managers that exist before migration 058 have `attended = 0` and become supervised. Upgrade: a live manager that must keep AskUserQuestion is recreated with the box ticked.
 - The "attended" checkbox of the desktop "New manager" form is specified in jsdom and not verified in a browser (ESCALATION-ATTENDED-QA01).
 - On a daemon shutdown, the arbiter whose creation resolves after `stop()` gets one close attempt and no retry. If that close fails, the arbiter stays live until the next boot, where `recover()` closes every live arbiter it does not track: the leak is bounded to one daemon run. After `stop()`, `launch()` and a lost arbiter start nothing and escalate nothing.
-- The arbiter starts in the ticket worktree or the manager's directory; neutral cwd with read access is tracked in ESCALATION-ARBITER-NEUTRAL-CWD01.
+- The arbiter starts in a neutral working directory: an empty directory of its own (`<OPENFLEET_HOME>/arbiter-workspaces/arbiter-<random>`, mode 0700). What the CLI loads from the directories around it, measured with claude 2.1.308 on 2026-10-30 (re-check on every CLI upgrade):
+  - The `CLAUDE.md` of the added worktree is loaded only when `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`. OpenFleet forces `0` in the environment of every launch that adds a read directory, whatever the daemon environment says. A user-level `settings.json` `env` block may still set it: accepted residual.
+  - The skills of the added worktree (`.claude/skills`) are not loaded, because the harness launches with `--setting-sources user`.
+  - The `CLAUDE.md` files of the **parent** directories of the working directory are loaded by the CLI. Keep `OPENFLEET_HOME` outside any repository: inside one, the `CLAUDE.md` of that repository would reach the arbiter.
+
+  It reads the worktree of the ticket (else the manager's directory) through `--add-dir=<real path>`: the daemon resolves symlinks first, and the harness refuses a path that is not absolute. `readDirectories` is set by the daemon only; `POST /api/sessions` refuses a body that carries it (`invalid_body`, admin token included) and the `create_session` tool does not read it. The daemon removes the directory when the arbiter closes (opinion, expiry, human close, launch failure) and sweeps the unused ones at `recover()`; a daemon shutdown keeps it so the arbiter can be resumed.
+- A **resumed** arbiter (after a daemon restart) reads only its neutral working directory until `recover()` replaces it: the extra read directory is not stored with the session and a resume does not pass `--add-dir`. The arbiter still sees the questions of its batch; reading the repository needs a fresh arbiter.
 
 ## Migrations that touch the sessions table
 

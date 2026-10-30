@@ -32,7 +32,9 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
   };
   let createGate: Promise<void> | undefined;
   let gatedAttempt: number | undefined;
-  const emitClosed = (sessionId: string) => listeners.forEach((listener) => listener({ type: 'session.closed', sessionId, reason: 'harness_exit' } as ServerEvent));
+  const emitClosed = (sessionId: string, reason = 'harness_exit') => listeners.forEach((listener) => listener({ type: 'session.closed', sessionId, reason } as ServerEvent));
+  const workspaces = { created: [] as string[], removed: [] as string[], swept: [] as ReadonlySet<string>[] };
+  const realPaths = { byPath: {} as Record<string, string>, unresolvable: false };
 
   sessionsById.set(MANAGER_ID, { id: MANAGER_ID, name: 'Manager', role: 'manager', parentId: '', state: 'running', directory: '/work', harness: 'fake' });
   const escalateBatchToHuman = vi.fn(() => undefined);
@@ -70,6 +72,15 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
     },
     escalations: { escalateBatchToHuman },
     modelTable: DEFAULT_MODEL_TABLE,
+    workspaces: {
+      create: () => { const path = `/arbiter-workspaces/w${workspaces.created.length + 1}`; workspaces.created.push(path); return path; },
+      remove: (path: string) => { workspaces.removed.push(path); },
+      removeAllExcept: (keep: ReadonlySet<string>) => { workspaces.swept.push(keep); },
+    },
+    realPathOf: (path: string) => {
+      if (realPaths.unresolvable) throw new Error(`cannot resolve ${path}`);
+      return realPaths.byPath[path] ?? path;
+    },
     schedule: (run: () => void, delayMs: number) => {
       const entry: Scheduled = { delayMs, run: () => { if (!entry.cancelled) run(); }, cancelled: false };
       scheduled.push(entry);
@@ -79,10 +90,104 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
   const runner = new ArbiterRunner(deps as unknown as ArbiterRunnerDeps);
   const addLiveArbiter = (id: string, name = `Arbiter CCM-1 ${BATCH_TAG}`) =>
     sessionsById.set(id, { id, name, role: 'arbiter', parentId: MANAGER_ID, state: 'running', directory: '/work', harness: 'fake' });
-  return { runner, state, created, closeCalls, scheduled, escalateBatchToHuman, addLiveArbiter, emitClosed, sessionsById };
+  const createSpecs: Record<string, unknown>[] = [];
+  const createdBySession = deps.sessions.create;
+  deps.sessions.create = async (spec: Record<string, unknown>) => { createSpecs.push(spec); return createdBySession(spec); };
+  return { runner, state, created, closeCalls, scheduled, escalateBatchToHuman, addLiveArbiter, emitClosed, sessionsById, workspaces, realPaths, createSpecs };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('ArbiterRunner — the arbiter starts in a neutral workspace', () => {
+  it('starts in a fresh workspace and reads the directory of the manager through a read directory', async () => {
+    const { runner, createSpecs, workspaces } = aRunner();
+
+    await runner.launch(BATCH_ID);
+
+    expect(createSpecs).toEqual([expect.objectContaining({ directory: workspaces.created[0], readDirectories: ['/work'] })]);
+    expect(createSpecs[0]!.directory).not.toBe('/work');
+  });
+
+  it('gives the arbiter the resolved real path of the directory it reads', async () => {
+    const { runner, createSpecs, realPaths } = aRunner();
+    realPaths.byPath['/work'] = '/real/work';
+
+    await runner.launch(BATCH_ID);
+
+    expect(createSpecs[0]!.readDirectories).toEqual(['/real/work']);
+  });
+
+  it('reads the worktree of the ticket when a child of the manager works on it', async () => {
+    const { runner, createSpecs, sessionsById } = aRunner();
+    sessionsById.set('dev-1', { id: 'dev-1', name: 'Dev', role: 'dev', parentId: MANAGER_ID, state: 'running', directory: '/worktrees/CCM-1', harness: 'fake', branch: 'feature/CCM-1-x' });
+
+    await runner.launch(BATCH_ID);
+
+    expect(createSpecs[0]!.readDirectories).toEqual(['/worktrees/CCM-1']);
+    expect(createSpecs[0]!.directory).not.toBe('/worktrees/CCM-1');
+  });
+
+  it('creates no workspace and hands the batch over when the directory to read cannot be resolved', async () => {
+    const { runner, workspaces, realPaths, created, escalateBatchToHuman } = aRunner();
+    realPaths.unresolvable = true;
+
+    await runner.launch(BATCH_ID);
+
+    expect(created).toEqual([]);
+    expect(workspaces.created).toEqual([]);
+    expect(escalateBatchToHuman).toHaveBeenCalledOnce();
+  });
+
+  it('removes the workspace when the arbiter session closes', async () => {
+    const { runner, emitClosed, workspaces } = aRunner();
+    await runner.launch(BATCH_ID);
+
+    runner.settle('arbiter-1');
+    emitClosed('arbiter-1', 'user');
+
+    expect(workspaces.removed).toEqual([workspaces.created[0]]);
+  });
+
+  it('removes the workspace of an arbiter that could not be created', async () => {
+    const { runner, state, workspaces } = aRunner();
+    state.createRejects = true;
+
+    await runner.launch(BATCH_ID);
+
+    expect(workspaces.created.length).toBeGreaterThan(0);
+    expect(workspaces.removed).toEqual(workspaces.created);
+  });
+
+  it('keeps the workspace when the daemon shuts down, so the arbiter can be resumed', async () => {
+    const { runner, emitClosed, workspaces } = aRunner();
+    await runner.launch(BATCH_ID);
+
+    emitClosed('arbiter-1', 'daemon_shutdown');
+
+    expect(workspaces.removed).toEqual([]);
+  });
+
+  it('removes at recovery every workspace but those of the live arbiters', () => {
+    const { runner, addLiveArbiter, workspaces, sessionsById } = aRunner();
+    addLiveArbiter('resumed-1');
+    sessionsById.get('resumed-1')!.directory = '/arbiter-workspaces/resumed';
+
+    runner.recover();
+
+    expect(workspaces.swept).toEqual([new Set(['/arbiter-workspaces/resumed'])]);
+  });
+
+  it('removes at recovery the workspace of a resumed arbiter that is closed because no batch waits for it', async () => {
+    const { runner, addLiveArbiter, workspaces, sessionsById, emitClosed } = aRunner({ batchesWithOpenQuestions: [] });
+    addLiveArbiter('orphan-1');
+    sessionsById.get('orphan-1')!.directory = '/arbiter-workspaces/orphan';
+
+    runner.recover();
+    emitClosed('orphan-1', 'user');
+
+    expect(workspaces.removed).toEqual(['/arbiter-workspaces/orphan']);
+  });
+});
 
 describe('ArbiterRunner — no arbiter session stays live without a run', () => {
   it('closes at recovery a resumed arbiter whose batch has no open question', () => {

@@ -58,7 +58,7 @@ export class ClaudeCliHarness implements Harness {
         cols: 120,
         rows: 40,
         cwd: launch.directory,
-        env: { ...childEnvironmentForClaudeCli(this.env), TERM: 'xterm-256color', ...(launch.configDir !== undefined && { CLAUDE_CONFIG_DIR: launch.configDir }) },
+        env: { ...childEnvironmentForClaudeCli(this.env), TERM: 'xterm-256color', ...(launch.configDir !== undefined && { CLAUDE_CONFIG_DIR: launch.configDir }), ...instructionFilesOfAddedDirectoriesOff(launch) },
       });
     } catch (err) {
       deleteTokenFiles(tokenFilesDir);
@@ -101,6 +101,14 @@ const SIGNAL_EXIT_CODE_BASE = 128;
 const CONVERSATION_NOT_FOUND_PHRASE = 'No conversation found with session ID';
 const RESUME_OUTPUT_TAIL_LENGTH = 2048;
 const ANSI_ESCAPE_SEQUENCE = /\u001b\[[0-9;?]*[A-Za-z]/g;
+
+// The CLI loads the CLAUDE.md of a directory added with --add-dir when this variable is 1; a launch that adds directories to read never loads it, whatever the daemon environment says.
+const ADDED_DIRECTORIES_CLAUDE_MD_VARIABLE = 'CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD';
+
+function instructionFilesOfAddedDirectoriesOff(launch: HarnessLaunch): NodeJS.ProcessEnv {
+  const addsDirectories = (launch.readDirectories ?? []).length > 0;
+  return addsDirectories ? { [ADDED_DIRECTORIES_CLAUDE_MD_VARIABLE]: '0' } : {};
+}
 
 // Reads the pty output of a resume, keeping only a bounded tail, so a phrase split across chunks or colored still matches.
 function watchForConversationNotFound(process: pty.IPty): { hasConversationNotFound(): boolean } {

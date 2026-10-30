@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHandoffRouteDeps } from './api/handoffRoutes.js';
@@ -10,6 +11,7 @@ import { describeError } from './errors/describeError.js';
 import { EventBus } from './events/eventBus.js';
 import { ApprovalService } from './governance/approvalService.js';
 import { ArbiterRunner } from './escalation/arbiterRunner.js';
+import { createArbiterWorkspaces } from './escalation/arbiterWorkspaces.js';
 import { AskUserGate } from './escalation/askUserGate.js';
 import { AuditWriter } from './escalation/auditWriter.js';
 import { CriteriaApproval } from './escalation/criteriaApproval.js';
@@ -98,6 +100,7 @@ import { WorkingStateService } from './workingState/workingStateService.js';
 import { loadDaemonSettings } from './workingState/workingStateSettings.js';
 
 const COMMAND_POLICY_FILE_NAME = 'command-policy.json';
+const ARBITER_WORKSPACES_DIRECTORY = 'arbiter-workspaces';
 const REFUSED_BOOT_CLOSE_TIMEOUT_MS = 5000;
 const ISSUE_EXPIRY_SWEEP_MS = 30_000;
 
@@ -314,6 +317,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const criteria = new CriteriaApproval({ repository: escalationRepository, noteRepo, stores, storeRepo, audit: escalationAudit });
   const arbiters = new ArbiterRunner({
     sessions, bus, managers, projects, repository: escalationRepository, escalations, modelTable,
+    workspaces: createArbiterWorkspaces(join(config.home, ARBITER_WORKSPACES_DIRECTORY)), realPathOf: (path) => realpathSync.native(path),
     schedule: options.arbiter?.schedule ?? scheduleOnRealClock, ticketPattern: findingsGateSettings.ticketPattern,
   });
   const usageLedger = new UsageLedgerService(db);

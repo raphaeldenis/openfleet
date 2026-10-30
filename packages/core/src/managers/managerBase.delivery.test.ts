@@ -24,6 +24,7 @@ const RELEASED_BASE_SHAS: Record<number, string> = {
   3: '0ecc04887dbd48ab066dfe6b2fe23c583213e7ac582cff8e7db82781a7906607',
   4: 'e5e32b25404777c5885746f8d460bedf2aa89b0887c41ae928487285aa73cdb2',
   5: '6a4f96f827efa9ac37ee928ec35f460fdd8150811895c5a4bcf970afb077385d',
+  6: 'e0275aa03e15cd99ddcf031faa05f05b66f736a018a8c26a8f974f9d0707228e',
 };
 
 const tempDirs = createTempDirTracker();
@@ -136,6 +137,14 @@ describe('the shipped manager base', () => {
     expect(ladder).toMatch(/favourable, call `approve_plan_criteria`\. Never write criteria_status\./);
     expect(ladder).toContain('`manager.escalationPolicy`');
     expect(ladder).toContain('Never write it.');
+  });
+
+  it('tells the manager in §6 not to submit a batch again when submit_plan_questions warns list_refusal', () => {
+    const ladder = loadManagerBase().sections.find((section) => section.id === '§6')?.text ?? '';
+
+    expect(ladder).toContain('`warnings: ["list_refusal: …"]`');
+    expect(ladder).toMatch(/card waits in the Inbox/);
+    expect(ladder).toMatch(/never submit the batch again/);
   });
 
   it('cites the two manager escalation tools the real daemon registers', () => {
