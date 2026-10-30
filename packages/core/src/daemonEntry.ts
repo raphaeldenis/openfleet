@@ -7,12 +7,13 @@ import { createDegradedRegistry } from './process/degradedRegistry.js';
 import { installProcessGuards } from './process/processGuards.js';
 import { installShutdownHandler } from './process/shutdownHandler.js';
 import { shutdownOnStdinEof } from './process/stdinEofShutdown.js';
+import { usageIngestionEnabledBy } from './usageIngestionEnv.js';
 
 const degraded = createDegradedRegistry();
 let isShuttingDown = false;
 installProcessGuards(process, { degraded, crashDir: join(resolveHome(), CRASH_FOLDER_NAME), isShuttingDown: () => isShuttingDown });
 
-const booting = refuseBootOnFailure(() => startDaemon(loadConfig(), { degraded, usageIngestion: process.env.OPENFLEET_USAGE_INGESTION === '1' }), {
+const booting = refuseBootOnFailure(() => startDaemon(loadConfig(), { degraded, usageIngestion: usageIngestionEnabledBy(process.env) }), {
   configPath: join(resolveHome(), 'config.json'),
   writeStderr: (text) => process.stderr.write(text),
   exit: (code) => process.exit(code),

@@ -9,6 +9,7 @@ import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import { PerSessionCoalescer } from '../usage/perSessionCoalescer.js';
 import type { TranscriptUsageIngestion } from '../usage/transcriptUsageIngestion.js';
 import { handoverReminder, type HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
@@ -71,11 +72,13 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
       if (startsFreshConversation) deps.contextNotice?.clearForNewConversation(sessionId);
     });
 
-  const ingestUsageAfterAnswering = (sessionId: string, event: ClaudeHookEvent): void => {
+  const stopIngestions = new PerSessionCoalescer();
+
+  const ingestUsageAfterAnswering =(sessionId: string, event: ClaudeHookEvent): void => {
     const endsTurn = event.hook_event_name === 'Stop';
     if (!endsTurn || !deps.usageIngestion) return;
     const { usageIngestion } = deps;
-    setImmediate(() => failingOpen(deps.degraded, 'usage ingestion failed, recording nothing', () => usageIngestion.ingestAtStop(sessionId)));
+    stopIngestions.request(sessionId, () => failingOpen(deps.degraded, 'usage ingestion failed, recording nothing', () => usageIngestion.ingestAtStop(sessionId)));
   };
 
   return async ({ res, params, body }) => {

@@ -1,34 +1,78 @@
-import { readFileSync } from 'node:fs';
 import { log } from '../logger.js';
+import { readTranscriptChunk, type ChunkRead } from '../todos/transcriptChunkReader.js';
 import type { UsageLedgerService } from './usageLedgerService.js';
+
+/** The most bytes of a transcript read at one Stop; a larger backlog is caught up over the following Stops. */
+export const USAGE_INGESTION_CHUNK_BYTES = 1024 * 1024;
+
+const WHOLE_FILE_FROM_THE_START = Number.MAX_SAFE_INTEGER;
+
+const INGESTION_FAILED_MESSAGE = 'usage ingestion: the transcript could not be ingested, recording nothing';
 
 export interface TranscriptUsageIngestionDeps {
   ledger: Pick<UsageLedgerService, 'ingestTranscript'>;
   /** The path of the session's own transcript when it passed the daemon's trust checks, else undefined. */
   trustedTranscriptFileOf: (sessionId: string) => string | undefined;
   parentOf: (sessionId: string) => string | undefined;
-  readTextFile?: (path: string) => string;
+  readChunk?: typeof readTranscriptChunk;
+  /** Defaults to USAGE_INGESTION_CHUNK_BYTES. */
+  chunkBytes?: number;
 }
 
-const readUtf8 = (path: string): string => readFileSync(path, 'utf8');
+interface Cursor {
+  path: string;
+  inode: number;
+  offset: number;
+}
 
 /**
- * Hands the transcript of a session to the usage ledger when the operator has enabled the ingestion. The ledger keeps
- * the token counts of the assistant lines and nothing else; this class stores, returns and logs no text of the file.
+ * Hands the new complete lines of a session's transcript to the usage ledger when the operator has enabled the ingestion.
+ * Each call reads at most USAGE_INGESTION_CHUNK_BYTES past the session's cursor, which lives in memory: after a restart the
+ * transcript is read again from its start, chunk by chunk over the following Stops (the ledger upsert is idempotent).
+ * The ledger keeps the token counts of the assistant lines and nothing else; this class stores, returns and logs no text of the file.
  */
 export class TranscriptUsageIngestion {
+  private readonly cursors = new Map<string, Cursor>();
+
   constructor(private readonly deps: TranscriptUsageIngestionDeps) {}
 
-  /** Never throws: a failure is logged with a fixed message and changes nothing. */
+  /** Throws an error with a fixed message when the ingestion fails; the caller decides what a failure counts for. */
   ingestAtStop(sessionId: string): void {
     try {
-      const transcriptFile = this.deps.trustedTranscriptFileOf(sessionId);
-      if (transcriptFile === undefined) return;
-      const transcriptText = (this.deps.readTextFile ?? readUtf8)(transcriptFile);
-      this.deps.ledger.ingestTranscript({ sessionId, biller: 'subscription', transcriptText, billingCodeOf: (id) => this.rootOf(id) });
+      this.ingestNextChunk(sessionId);
     } catch {
-      log('warn', 'usage ingestion: the transcript could not be ingested, recording nothing', undefined, { code: 'usage_ingest_failed', sessionId });
+      throw new Error(INGESTION_FAILED_MESSAGE);
     }
+  }
+
+  forget(sessionId: string): void {
+    this.cursors.delete(sessionId);
+  }
+
+  private ingestNextChunk(sessionId: string): void {
+    const transcriptFile = this.deps.trustedTranscriptFileOf(sessionId);
+    if (transcriptFile === undefined) return;
+    const cursor = this.cursorFor(sessionId, transcriptFile);
+    const read = this.readFrom(transcriptFile, cursor);
+    if (read.kind === 'nothing') return;
+    if (read.kind === 'reset') {
+      this.cursors.delete(sessionId);
+      return;
+    }
+    const { rejectedLineCount } = this.deps.ledger.ingestTranscript({ sessionId, biller: 'subscription', transcriptText: read.text, billingCodeOf: (id) => this.rootOf(id) });
+    this.cursors.set(sessionId, { path: transcriptFile, inode: read.inode, offset: read.nextOffset });
+    if (rejectedLineCount > 0) log('warn', 'usage ingestion: lines that no honest transcript writes were rejected', undefined, { code: 'usage_lines_rejected', sessionId, rejectedLineCount });
+  }
+
+  private cursorFor(sessionId: string, transcriptFile: string): Cursor | undefined {
+    const cursor = this.cursors.get(sessionId);
+    const followsAnotherFile = cursor !== undefined && cursor.path !== transcriptFile;
+    return followsAnotherFile ? undefined : cursor;
+  }
+
+  private readFrom(transcriptFile: string, cursor: Cursor | undefined): ChunkRead {
+    const readChunk = this.deps.readChunk ?? readTranscriptChunk;
+    return readChunk(transcriptFile, { offset: cursor?.offset ?? 0, inode: cursor?.inode, maxBytes: this.deps.chunkBytes ?? USAGE_INGESTION_CHUNK_BYTES, windowBytes: WHOLE_FILE_FROM_THE_START });
   }
 
   private rootOf(sessionId: string): string {
