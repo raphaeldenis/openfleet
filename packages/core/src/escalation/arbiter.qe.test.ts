@@ -251,9 +251,11 @@ describe('QE — the arbiter starts in a neutral working directory', () => {
 
     const { args } = buildClaudeLaunchConfig(launchOf(arbiter!.id), tokenFilePaths);
 
+    expect(launchOf(arbiter!.id).directory).not.toBe(directoryOfSession(manager.id));
     const separatorIndex = args.indexOf('--');
     const settingSourcesIndex = args.indexOf('--setting-sources');
     const addDirectoryIndex = args.indexOf(`--add-dir=${realpathSync(directoryOfSession(manager.id))}`);
+    expect(separatorIndex).toBeGreaterThanOrEqual(0);
     expect(args[settingSourcesIndex + 1]).toBe('user');
     expect(settingSourcesIndex).toBeGreaterThanOrEqual(0);
     expect(settingSourcesIndex).toBeLessThan(separatorIndex);

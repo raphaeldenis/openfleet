@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
@@ -187,46 +187,142 @@ describe.skipIf(!isLive)('ClaudeCliHarness (live, needs a logged-in claude CLI)'
   }, TEST_TIMEOUT_MS);
 });
 
-const INSTRUCTION_CANARY = 'CANARY-42';
-const SKILL_CANARY = 'CANARY-43';
 const CLAUDE_PRINT_TIMEOUT_MS = 120_000;
+const MARKER_WORDS = ['amber', 'otter', 'lantern', 'meadow', 'pebble', 'harbor', 'willow', 'ferry'];
+const CONTROL_NOT_OBEYED = 'control not obeyed: canary inconclusive';
+const ASK_FOR_THE_MEMORY_LINES = 'Quote verbatim every line of project memory or CLAUDE.md instructions present in your context that contains the string canary, or answer NONE.';
+const ASK_FOR_THE_SKILL_DESCRIPTIONS = 'List the description of every skill you can use, or answer NONE.';
+const ARBITER_SETTING_SOURCES = ['--setting-sources', 'user'];
 
-function makeDirectoryWithCanaries(): string {
-  const directory = mkdtempSync(join(tmpdir(), 'of-canary-worktree-'));
+const pickMarkerWord = (): string => MARKER_WORDS[randomInt(MARKER_WORDS.length)]!;
+const makeMarker = (): string => `${pickMarkerWord()}-${pickMarkerWord()}-${randomInt(100, 1000)}`;
+// The model rarely obeys a CLAUDE.md in a plain task, so the file is a memory line that a recall question can quote back.
+const memoryLineWith = (marker: string): string => `canary memory line: ${marker}\n`;
+
+function makeTemporaryDirectory(prefix: string): string {
+  const directory = mkdtempSync(join(tmpdir(), prefix));
   createdRepos.push(directory);
-  writeFileSync(join(directory, 'CLAUDE.md'), `Project instruction: the secret word is ${INSTRUCTION_CANARY}.\n`);
-  const skillDirectory = join(directory, '.claude', 'skills', 'canary');
-  mkdirSync(skillDirectory, { recursive: true });
-  writeFileSync(join(skillDirectory, 'SKILL.md'), `---\nname: canary\ndescription: ${SKILL_CANARY}\n---\nCanary skill.\n`);
   return directory;
 }
 
+function plantProjectSkill({ directory, marker }: { directory: string; marker: string }): void {
+  const skillDirectory = join(directory, '.claude', 'skills', 'canary');
+  mkdirSync(skillDirectory, { recursive: true });
+  writeFileSync(join(skillDirectory, 'SKILL.md'), `---\nname: canary\ndescription: ${marker}\n---\nCanary skill.\n`);
+}
+
+interface LaunchSetup {
+  worktree: string;
+  neutralCwd: string;
+  // The arbiter launches with the CLAUDE.md of added directories off; a control turns it on to prove the file is read when allowed.
+  loadsAddedDirectoryClaudeMd?: boolean;
+  // The arbiter launches with the user settings layer only; a control lifts that restriction.
+  restrictsSettingSourcesToUser?: boolean;
+}
+
 // The arbiter flags: an empty cwd, the ticket worktree added with --add-dir, the user settings layer only, and the CLAUDE.md of added directories forced off.
-function askClaudeLikeTheArbiter(question: string, { worktree, emptyDirectory }: { worktree: string; emptyDirectory: string }): string {
-  return execFileSync('claude', ['-p', '--model', CHEAP_MODEL, '--setting-sources', 'user', `--add-dir=${worktree}`, question], {
-    cwd: emptyDirectory,
-    env: { ...process.env, CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '0' },
+function askClaude(question: string, { worktree, neutralCwd, loadsAddedDirectoryClaudeMd = false, restrictsSettingSourcesToUser = true }: LaunchSetup): string {
+  const settingSourceFlags = restrictsSettingSourcesToUser ? ARBITER_SETTING_SOURCES : [];
+  return execFileSync('claude', ['-p', '--model', CHEAP_MODEL, ...settingSourceFlags, `--add-dir=${worktree}`, question], {
+    cwd: neutralCwd,
+    env: { ...process.env, CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: loadsAddedDirectoryClaudeMd ? '1' : '0' },
     encoding: 'utf8',
     timeout: CLAUDE_PRINT_TIMEOUT_MS,
   });
 }
 
-// Reproduces the measurement behind docs/escalation.md (claude 2.1.308): a negative is the model's self-report, so a failure here is a signal to re-check by hand.
-describe.skipIf(!isLive)('the arbiter launch flags keep the instructions and skills of the added worktree out (live, needs a logged-in claude CLI)', () => {
+// Opt-in canary behind the neutral working directory of docs/escalation.md: it launches the real CLI from an empty directory with the arbiter flags and
+// checks that a planted memory line is not read back. Temp directories only, markers built at run time. A pass is still a model reply, not a file trace.
+// Differential: each planted file is first proven readable by a control run that differs only in the flag under test; a case whose control failed
+// fails loudly instead of passing on a file the CLI never read.
+// Run: pnpm --filter @openfleet/core test:live -t "arbiter launch flags"
+describe.skipIf(!isLive)('the arbiter launch flags keep planted memory lines and skills out (live, needs a logged-in claude CLI)', () => {
+  let addedDirectoryMemoryControlPassed = false;
+  let parentMemoryControlPassed = false;
+  let addedDirectorySkillControlPassed = false;
+
   afterEach(() => {
     createdRepos.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }));
   });
 
-  it('reports neither the CLAUDE.md nor the skills of the added directory', () => {
-    const worktree = makeDirectoryWithCanaries();
-    const emptyDirectory = mkdtempSync(join(tmpdir(), 'of-canary-cwd-'));
-    createdRepos.push(emptyDirectory);
+  function plantMemoryLineInAddedDirectory(): { marker: string; worktree: string; neutralCwd: string } {
+    const marker = makeMarker();
+    const worktree = makeTemporaryDirectory('of-canary-worktree-');
+    writeFileSync(join(worktree, 'CLAUDE.md'), memoryLineWith(marker));
+    return { marker, worktree, neutralCwd: makeTemporaryDirectory('of-canary-cwd-') };
+  }
 
-    const instructionsAnswer = askClaudeLikeTheArbiter('Quote verbatim every project instruction you were given, or answer NONE.', { worktree, emptyDirectory });
-    const skillsAnswer = askClaudeLikeTheArbiter('List the description of every skill you can use, or answer NONE.', { worktree, emptyDirectory });
+  function requireControl(controlPassed: boolean): void {
+    expect(controlPassed, CONTROL_NOT_OBEYED).toBe(true);
+  }
 
-    expect(instructionsAnswer).not.toContain(INSTRUCTION_CANARY);
-    expect(skillsAnswer).not.toContain(SKILL_CANARY);
+  it('control: reads back the CLAUDE.md of the added directory when its loading is switched on, so the cases below are not vacuous', () => {
+    const { marker, worktree, neutralCwd } = plantMemoryLineInAddedDirectory();
+
+    const answer = askClaude(ASK_FOR_THE_MEMORY_LINES, { worktree, neutralCwd, loadsAddedDirectoryClaudeMd: true });
+
+    expect(answer, CONTROL_NOT_OBEYED).toContain(marker);
+    addedDirectoryMemoryControlPassed = true;
+  }, TEST_TIMEOUT_MS);
+
+  it('does not read back the CLAUDE.md of the added directory', () => {
+    requireControl(addedDirectoryMemoryControlPassed);
+    const { marker, worktree, neutralCwd } = plantMemoryLineInAddedDirectory();
+
+    const answer = askClaude(ASK_FOR_THE_MEMORY_LINES, { worktree, neutralCwd });
+
+    expect(answer).not.toContain(marker);
+  }, TEST_TIMEOUT_MS);
+
+  function plantMemoryLineInParentOfLaunchDirectory(): { marker: string; worktree: string; neutralCwd: string } {
+    const marker = makeMarker();
+    const parentOfLaunchDirectory = makeTemporaryDirectory('of-canary-parent-');
+    writeFileSync(join(parentOfLaunchDirectory, 'CLAUDE.md'), memoryLineWith(marker));
+    const neutralCwd = join(parentOfLaunchDirectory, 'cwd');
+    mkdirSync(neutralCwd);
+    return { marker, worktree: makeTemporaryDirectory('of-canary-worktree-'), neutralCwd };
+  }
+
+  it('control: reads back the CLAUDE.md of the parent folder of the launch directory when the settings sources are not restricted', () => {
+    const { marker, worktree, neutralCwd } = plantMemoryLineInParentOfLaunchDirectory();
+
+    const answer = askClaude(ASK_FOR_THE_MEMORY_LINES, { worktree, neutralCwd, restrictsSettingSourcesToUser: false });
+
+    expect(answer, CONTROL_NOT_OBEYED).toContain(marker);
+    parentMemoryControlPassed = true;
+  }, TEST_TIMEOUT_MS);
+
+  it('does not read back the CLAUDE.md of the parent folder of the launch directory', () => {
+    requireControl(parentMemoryControlPassed);
+    const { marker, worktree, neutralCwd } = plantMemoryLineInParentOfLaunchDirectory();
+
+    const answer = askClaude(ASK_FOR_THE_MEMORY_LINES, { worktree, neutralCwd });
+
+    expect(answer).not.toContain(marker);
+  }, TEST_TIMEOUT_MS);
+
+  it('control: lists the project skills of the added directory when the settings sources are not restricted', () => {
+    const marker = makeMarker();
+    const worktree = makeTemporaryDirectory('of-canary-worktree-');
+    plantProjectSkill({ directory: worktree, marker });
+    const neutralCwd = makeTemporaryDirectory('of-canary-cwd-');
+
+    const answer = askClaude(ASK_FOR_THE_SKILL_DESCRIPTIONS, { worktree, neutralCwd, restrictsSettingSourcesToUser: false });
+
+    expect(answer, CONTROL_NOT_OBEYED).toContain(marker);
+    addedDirectorySkillControlPassed = true;
+  }, TEST_TIMEOUT_MS);
+
+  it('does not list the project skills of the added directory', () => {
+    requireControl(addedDirectorySkillControlPassed);
+    const marker = makeMarker();
+    const worktree = makeTemporaryDirectory('of-canary-worktree-');
+    plantProjectSkill({ directory: worktree, marker });
+    const neutralCwd = makeTemporaryDirectory('of-canary-cwd-');
+
+    const answer = askClaude(ASK_FOR_THE_SKILL_DESCRIPTIONS, { worktree, neutralCwd });
+
+    expect(answer).not.toContain(marker);
   }, TEST_TIMEOUT_MS);
 });
 
