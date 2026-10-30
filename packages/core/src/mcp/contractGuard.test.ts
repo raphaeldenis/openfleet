@@ -39,7 +39,7 @@ const HOW_TO_FIX = [
   'The MCP tool contract changed. To accept it:',
   '1. raise CONTRACT_VERSION in packages/shared/src/mcpContract.ts by one, unless that version is not published: then keep it and record the change in its section of CHANGELOG.md (see docs/mcp-contract.md),',
   '2. replace packages/core/src/mcp/contract.pinned.json with the contract printed below (same contractVersion),',
-  '3. add a section for the new version to CHANGELOG.md.',
+  '3. add or complete the section for the version in CHANGELOG.md.',
 ].join('\n');
 
 let fixture: GovernanceFixture;

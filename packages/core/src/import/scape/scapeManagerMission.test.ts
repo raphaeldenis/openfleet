@@ -22,6 +22,30 @@ describe('composeMission and a note that sends the manager to the status tool fo
   });
 });
 
+describe('composeMission with a mission note, permissions and exposed resources that all speak of the mission', () => {
+  it('points every mission read of the composed mission at get_manager_mission, the permissions included, and keeps the other status reads', () => {
+    const noteBody = '# Rules\n\nRelis ta mission avec mcp__scape__get_argus_status.\nVérifie ton cap avec mcp__scape__get_argus_status.';
+    const permission = anApprovedRequest({ kind: 'permission', text: 'Read your mission with mcp__scape__get_argus_status before any spawn.' });
+
+    const { text } = composeMission({ noteBody, governanceRequests: [permission], resourceGrants: [{ resourceType: 'note', resourceId: 'n-1', access: 'read' }], availabilityOf: () => 'available' });
+
+    expect(text).toBe([
+      '# Rules',
+      '',
+      'Relis ta mission avec mcp__openfleet__get_manager_mission.',
+      'Vérifie ton cap avec mcp__openfleet__get_argus_status.',
+      '',
+      '## Laws',
+      '',
+      '### Permissions',
+      '- Read your mission with mcp__openfleet__get_manager_mission before any spawn.',
+      '',
+      '## Exposed Resources',
+      '- @note:n-1 (read)',
+    ].join('\n'));
+  });
+});
+
 describe('composeMission and the approved laws', () => {
   it('has neither a Laws section nor a Standing laws section when the Argus has only laws', () => {
     const { text } = composeWith({ governanceRequests: [anApprovedRequest({ kind: 'law', text: 'First law.' }), anApprovedRequest({ kind: 'law', text: 'Second law.' })] });

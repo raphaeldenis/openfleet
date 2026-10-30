@@ -64,7 +64,7 @@ const lastSectionStartOf = (text: string, marker: string): number => {
 /** The start of the last `## Laws` section the import composes (the standing laws one or the permissions one), or -1. */
 const importLawsSectionStartOf = (missionText: string): number => Math.max(...IMPORT_SECTION_MARKERS.map((marker) => lastSectionStartOf(missionText, marker)));
 
-/** The bullet the earlier import wrote for a law: its text with the tool references rewritten, continuation lines indented. */
+/** The bullet the earlier import wrote for a law: its text with the tool references renamed, continuation lines indented. It rebuilds the earlier rewrite only: a law text that speaks of reading the mission with get_argus_status does not match this bullet if an import that points mission reads at get_manager_mission wrote it. */
 const legacyStandingLawBullet = (lawText: string) => `${BULLET_MARK}${renameScapeToolReferences(lawText).text.replaceAll('\n', `\n${CONTINUATION_INDENT}`)}`;
 
 function bulletsOf(blockLines: string[]): string[] | undefined {

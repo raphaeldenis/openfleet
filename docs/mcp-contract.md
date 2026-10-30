@@ -44,7 +44,7 @@ One pull request that adds or changes tools does all three.
 
 `submit_plan_questions`, `report_arbiter_opinion` and `approve_plan_criteria` were added at version 15. The pin gained three entries and the version rose by one, with the `CHANGELOG.md` section "15". The same section records the `AskUserQuestion` call that a manager session used to make and is now refused: the guard cannot see it, so it was raised by hand with the tools.
 
-Version 15 had no release and no tag when `get_manager_mission` was added to it (`git tag --list` was empty; the rule holds as long as that is true), so it became the fourth added tool without a new version: the pin gained a fourth entry, and the section "15" records an output change, `get_argus_status` no longer returns `manager.missionText` but `manager.missionBytes` and `manager.missionSha256`, in an entry that starts with "BREAKING vs 14".
+Version 15 was unpublished when `get_manager_mission` was added to it, so it became the fourth added tool without a new version: the pin gained a fourth entry, and the section "15" records an output change, `get_argus_status` no longer returns `manager.missionText` but `manager.missionBytes` and `manager.missionSha256`, in an entry that starts with "BREAKING vs 14".
 
 ## The guard test
 

@@ -46,6 +46,9 @@ describe('rewriteScapeToolReferences', () => {
       'Check the progress of the mission and your children with mcp__scape__get_argus_status.',
       'The mission is long. Read the cap with get_argus_status.',
       'Compare manager.missionText of the old copy, then call get_argus_status for your cap.',
+      'Read the mission note, then check your children with get_argus_status.',
+      'Read the mission note; check your children with get_argus_status.',
+      'Use read-only access to the mission through get_argus_status.',
     ])('leaves the status tool alone on %j, which speaks of the mission without reading it from the tool', (line) => {
       const { text } = rewriteScapeToolReferences(line);
 
@@ -57,6 +60,50 @@ describe('rewriteScapeToolReferences', () => {
       const { text } = rewriteScapeToolReferences('Compare manager.missionText of the old copy with manager.missionText of get_argus_status.');
 
       expect(text).toBe('Compare manager.missionText of the old copy with get_manager_mission.');
+    });
+
+    describe('on a very long line', () => {
+      const LONG_LINE_BYTES = 100_000;
+      const FAST_ENOUGH_MS = 200;
+      const durationOfRewriting = (text: string) => {
+        const startedAt = performance.now();
+        const rewritten = rewriteScapeToolReferences(text).text;
+        return { rewritten, milliseconds: performance.now() - startedAt };
+      };
+
+      it('rewrites a line of "read mission" repeated, without the status tool, in under 200 ms and leaves it as it is', () => {
+        const line = 'read mission '.repeat(LONG_LINE_BYTES / 'read mission '.length);
+
+        const { rewritten, milliseconds } = durationOfRewriting(line);
+
+        expect(rewritten).toBe(line);
+        expect(milliseconds).toBeLessThan(FAST_ENOUGH_MS);
+      });
+
+      it('rewrites a line with one "read", many "mission" and the status tool at the end in under 200 ms', () => {
+        const line = `read ${'mission '.repeat(LONG_LINE_BYTES / 'mission '.length)}get_argus_status`;
+
+        const { milliseconds } = durationOfRewriting(line);
+
+        expect(milliseconds).toBeLessThan(FAST_ENOUGH_MS);
+      });
+
+      it('rewrites a line of "read mission" repeated that ends with the status tool in under 200 ms', () => {
+        const line = `${'read mission '.repeat(LONG_LINE_BYTES / 'read mission '.length)}get_argus_status`;
+
+        const { milliseconds } = durationOfRewriting(line);
+
+        expect(milliseconds).toBeLessThan(FAST_ENOUGH_MS);
+      });
+
+      it('rewrites a status tool followed by a long run of spaces in under 200 ms', () => {
+        const line = `get_argus_status${' '.repeat(LONG_LINE_BYTES * 12)}x`;
+
+        const { rewritten, milliseconds } = durationOfRewriting(line);
+
+        expect(rewritten).toBe(line);
+        expect(milliseconds).toBeLessThan(FAST_ENOUGH_MS);
+      });
     });
 
     it('does not follow a sentence cut over two lines (known limit)', () => {
