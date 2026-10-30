@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseUsageLines } from './parseUsageLines.js';
+import { MAX_IDENTIFIER_LENGTH, MAX_LINE_LENGTH, MAX_TOKEN_COUNT, parseUsageLines } from './parseUsageLines.js';
 
 interface LineOverrides {
   id?: string;
@@ -140,8 +140,50 @@ describe('parseUsageLines', () => {
   });
 
   it('returns no rows and no skipped lines for an empty transcript', () => {
-    expect(parseUsageLines('')).toEqual({ rows: [], skippedLineCount: 0 });
-    expect(parseUsageLines('\n\n')).toEqual({ rows: [], skippedLineCount: 0 });
+    expect(parseUsageLines('')).toEqual({ rows: [], skippedLineCount: 0, rejectedLineCount: 0 });
+    expect(parseUsageLines('\n\n')).toEqual({ rows: [], skippedLineCount: 0, rejectedLineCount: 0 });
+  });
+
+  describe('hostile values', () => {
+    it.each([
+      ['a message id with a forbidden character', { id: 'msg 1' }],
+      ['a message id longer than the limit', { id: 'm'.repeat(MAX_IDENTIFIER_LENGTH + 1) }],
+      ['a model with a forbidden character', { model: 'model/<a>' }],
+      ['a model longer than the limit', { model: 'm'.repeat(MAX_IDENTIFIER_LENGTH + 1) }],
+      ['a token count above the realistic limit', { usage: { input_tokens: MAX_TOKEN_COUNT + 1, output_tokens: 0 } }],
+    ])('rejects, skips and counts a line with %s', (_name, overrides) => {
+      const result = parseUsageLines(assistantLine(overrides));
+
+      expect(result.rows).toEqual([]);
+      expect(result.skippedLineCount).toBe(1);
+      expect(result.rejectedLineCount).toBe(1);
+    });
+
+    it('accepts an id and a model at the limits of the pattern', () => {
+      const atLimit = 'Az09_.:-'.padEnd(MAX_IDENTIFIER_LENGTH, 'x');
+
+      const result = parseUsageLines(assistantLine({ id: atLimit, model: atLimit, usage: { input_tokens: MAX_TOKEN_COUNT, output_tokens: 0 } }));
+
+      expect(result.rows).toHaveLength(1);
+      expect(result.rejectedLineCount).toBe(0);
+    });
+
+    it('rejects, skips and counts a line longer than the limit without parsing it', () => {
+      const oversizedLine = assistantLine({ id: 'msg_1' }).padEnd(MAX_LINE_LENGTH + 1, ' ');
+
+      const result = parseUsageLines(oversizedLine);
+
+      expect(result.rows).toEqual([]);
+      expect(result.skippedLineCount).toBe(1);
+      expect(result.rejectedLineCount).toBe(1);
+    });
+
+    it('does not count an ordinary non-assistant line as rejected', () => {
+      const result = parseUsageLines(JSON.stringify({ type: 'user', message: { content: 'x' } }));
+
+      expect(result.skippedLineCount).toBe(1);
+      expect(result.rejectedLineCount).toBe(0);
+    });
   });
 
   it('treats a missing cache count as zero', () => {

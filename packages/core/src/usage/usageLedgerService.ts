@@ -16,6 +16,7 @@ export interface IngestTranscriptInput {
 export interface IngestResult {
   messageCount: number;
   skippedLineCount: number;
+  rejectedLineCount: number;
 }
 
 export interface UsageDailyRow {
@@ -78,7 +79,7 @@ export class UsageLedgerService {
   }
 
   ingestTranscript({ sessionId, biller, transcriptText, billingCodeOf }: IngestTranscriptInput): IngestResult {
-    const { rows, skippedLineCount } = parseUsageLines(transcriptText);
+    const { rows, skippedLineCount, rejectedLineCount } = parseUsageLines(transcriptText);
     const ledgerRows = buildLedgerRows({ sessionId, biller, rows, billingCodeOf });
     inTransaction(this.db, 'usage_ingest', () => {
       const touchedBuckets = new Map<string, BucketKey>();
@@ -90,7 +91,7 @@ export class UsageLedgerService {
       }
       for (const bucket of touchedBuckets.values()) this.rebuildBucket(bucket);
     });
-    return { messageCount: ledgerRows.length, skippedLineCount };
+    return { messageCount: ledgerRows.length, skippedLineCount, rejectedLineCount };
   }
 
   dailyUsage(filter: UsageDailyFilter): UsageDailyRow[] {

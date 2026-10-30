@@ -116,7 +116,31 @@ describe('UsageLedgerService', () => {
 
     const result = service.ingestTranscript({ sessionId: 's1', biller: 'api', transcriptText: transcriptOf(sessionOne, 'not json'), billingCodeOf: rootBillingCode });
 
-    expect(result).toEqual({ messageCount: 2, skippedLineCount: 1 });
+    expect(result).toEqual({ messageCount: 2, skippedLineCount: 1, rejectedLineCount: 0 });
+  });
+
+  it('stores nothing and counts the lines whose model has a forbidden character or whose id is oversized', () => {
+    const service = newService();
+    const forgedModel = assistantLine({ id: 'm1', timestamp: DAY_ONE, model: 'x'.repeat(10_000) });
+    const forgedId = assistantLine({ id: 'm'.repeat(10_000), timestamp: DAY_ONE, model: 'model-a' });
+
+    const result = service.ingestTranscript({ sessionId: 's1', biller: 'api', transcriptText: transcriptOf(forgedModel, forgedId), billingCodeOf: rootBillingCode });
+
+    expect(result).toEqual({ messageCount: 0, skippedLineCount: 2, rejectedLineCount: 2 });
+    expect(service.dailyUsage({})).toEqual([]);
+  });
+
+  it('does not overflow the bucket sums with more than 1024 forged lines at the largest safe count', () => {
+    const service = newService();
+    const forgedLines = Array.from({ length: 1100 }, (_, index) => JSON.stringify({
+      type: 'assistant', timestamp: DAY_ONE,
+      message: { id: `forged-${index}`, model: 'model-a', content: 'fixture', usage: { input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 0 } },
+    }));
+    const ingest = () => service.ingestTranscript({ sessionId: 's1', biller: 'api', transcriptText: transcriptOf(...forgedLines, sessionOne), billingCodeOf: rootBillingCode });
+
+    expect(ingest).not.toThrow();
+
+    expect(service.dailyUsage({ sessionId: 's1' }).reduce((total, bucket) => total + bucket.messageCount, 0)).toBe(2);
   });
 
   it('filters by day range, session, billing code and model', () => {

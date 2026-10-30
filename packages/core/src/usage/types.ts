@@ -17,6 +17,8 @@ export interface UsageRow {
 export interface ParseResult {
   rows: UsageRow[];
   skippedLineCount: number;
+  /** The skipped lines that no honest transcript writes; a subset of skippedLineCount. */
+  rejectedLineCount: number;
 }
 
 export interface LedgerRow extends UsageRow {
