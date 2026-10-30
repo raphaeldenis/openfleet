@@ -476,7 +476,7 @@ export class EscalationService {
     const paths = question.paths?.map(humanReadableText);
     const resolution = reopen?.evidence ?? question.resolution;
     return {
-      batchId, questionId: question.id, text: humanReadableText(question.text), declaredClass: question.class,
+      batchId, questionId: question.id, text: humanReadableText(question.text), declaredClass: humanReadableText(question.class),
       computedClasses: routing.computed, effectiveClasses: routing.effective, route: routing.route, status: STATUS_OF_ROUTE[routing.route],
       ...(reason !== undefined && { reason }), ...(options && { options }), ...(recommendation && { recommendation }), ...(paths && { paths }),
       ...(resolution && { resolution }),

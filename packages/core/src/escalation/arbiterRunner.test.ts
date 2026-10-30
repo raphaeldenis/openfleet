@@ -112,6 +112,18 @@ describe('ArbiterRunner — a reopening question whose earlier decision is not s
     expect(created).toHaveLength(1);
   });
 
+  it('journals it once when a failed spawn is followed by the relaunch of the same batch', async () => {
+    const { runner, repository, journalMissingEarlierDecision, state } = aRunner();
+    Object.assign(repository, { questionsOfBatch: () => [reopeningQuestion], decisionsOfBatch: () => [] });
+    state.createRejects = true;
+
+    await runner.launch(BATCH_ID);
+    state.createRejects = false;
+    await runner.launch(BATCH_ID);
+
+    expect(journalMissingEarlierDecision).toHaveBeenCalledTimes(1);
+  });
+
   it('journals nothing when the earlier decision is stored', async () => {
     const { runner, repository, journalMissingEarlierDecision } = aRunner();
     const stored = [{ questionId: 'q1', decision: 'use the plain name', rationale: 'it reads best' }];

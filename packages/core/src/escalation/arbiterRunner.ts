@@ -73,6 +73,7 @@ export const expiryMsOf = (manager: Pick<ManagerRecord, 'mode' | 'pulseEnabled' 
 export class ArbiterRunner {
   private readonly runBySessionId = new Map<string, Run>();
   private readonly failuresByBatchId = new Map<string, number>();
+  private readonly journaledMissingDecisions = new Set<string>();
   private readonly workspaceBySessionId = new Map<string, string>();
   private readonly cancelCloseRetries = new Set<() => void>();
   private isStopped = false;
@@ -177,10 +178,18 @@ export class ArbiterRunner {
       if (!isReopening) continue;
       const earlier = this.deps.repository.decisionsOfBatch(reopensBatchId).filter((decision) => decision.questionId === reopensQuestionId).at(-1);
       const hasNoEarlierDecision = earlier === undefined;
-      if (hasNoEarlierDecision) { this.deps.escalations.journalMissingEarlierDecision({ batchId, questionId }); continue; }
+      if (hasNoEarlierDecision) { this.journalMissingEarlierDecisionOnce({ batchId, questionId }); continue; }
       earlierDecisions.set(questionId, { decision: earlier.decision, rationale: earlier.rationale });
     }
     return earlierDecisions;
+  }
+
+  private journalMissingEarlierDecisionOnce({ batchId, questionId }: { batchId: string; questionId: string }): void {
+    const journalKey = `${batchId}:${questionId}`;
+    const isAlreadyJournaled = this.journaledMissingDecisions.has(journalKey);
+    if (isAlreadyJournaled) return;
+    this.journaledMissingDecisions.add(journalKey);
+    this.deps.escalations.journalMissingEarlierDecision({ batchId, questionId });
   }
 
   private track({ arbiterSessionId, batchId, manager }: { arbiterSessionId: string; batchId: string; manager: ManagerRecord }): void {

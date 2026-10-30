@@ -8,7 +8,7 @@ const INVISIBLE_CHARACTERS = /[\u{80}-\u{9f}\u{e0000}-\u{e007f}]|\p{Cf}/gu;
 
 const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();
 const withoutControlCharacters = (text: string) => text.replace(TERMINAL_COLOUR_SEQUENCE, '').replace(CONTROL_CHARACTERS_BUT_LINE_BREAK_AND_TAB, '').replace(INVISIBLE_CHARACTERS, '');
-const withLfLineBreaks = (text: string) => text.replace(/\r\n?/g, '\n');
+const withLfLineBreaks = (text: string) => text.replace(/\r\n?|[\p{Zl}\p{Zp}]/gu, '\n');
 
 const claimOf = (claim: string) => maskedSecrets(oneLine(withoutControlCharacters(claim)));
 const commandOf = (command: string) => maskedSecrets(oneLine(withoutControlCharacters(command)));

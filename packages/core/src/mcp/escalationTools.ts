@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { ESCALATING_CLASSES, MAX_QUESTIONS_PER_BATCH, PlanQuestionSchema, QUESTION_CLASSES, REPRO_CLAIM_EXAMPLE, type Session } from '@openfleet/shared';
+import { ESCALATING_CLASSES, isQuestionIdentifier, MAX_QUESTIONS_PER_BATCH, PlanQuestionSchema, QUESTION_CLASSES, REPRO_CLAIM_EXAMPLE, type Session } from '@openfleet/shared';
 import { z } from 'zod';
 import type { ArbiterRunner } from '../escalation/arbiterRunner.js';
 import type { CriteriaApproval } from '../escalation/criteriaApproval.js';
@@ -16,7 +16,7 @@ const TICKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const TicketSchema = z.string().trim().min(1).max(MAX_TICKET_CHARS).regex(TICKET_PATTERN, 'ticket must be an identifier of letters, digits, dots, underscores and hyphens, such as CCM-123');
 
 const repeatedIdOf = (questions: readonly { id: string }[]): string | undefined =>
-  questions.map(({ id }) => id).find((id, position, ids) => ids.indexOf(id) !== position);
+  questions.map(({ id }) => id).filter(isQuestionIdentifier).find((id, position, ids) => ids.indexOf(id) !== position);
 
 const PlanQuestionsSubmissionSchema = z.object({
   ticket: TicketSchema,

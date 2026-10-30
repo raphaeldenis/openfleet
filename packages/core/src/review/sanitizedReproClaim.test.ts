@@ -28,6 +28,29 @@ describe('sanitizedReproClaim', () => {
     expect(sanitizedReproClaim(proven({ output: 'one\r\ntwo\rthree' })).output).toBe('one\ntwo\nthree');
   });
 
+  describe('Unicode line and paragraph separators and the next-line character', () => {
+    const lineSeparator = String.fromCharCode(0x2028);
+    const paragraphSeparator = String.fromCharCode(0x2029);
+    const nextLine = String.fromCharCode(0x85);
+    const visualSeparator = new RegExp(`[${lineSeparator}${paragraphSeparator}${nextLine}]`);
+    const anyLineBreak = new RegExp(`[\\r\\n${lineSeparator}${paragraphSeparator}${nextLine}]`);
+
+    it('turns them into LF in the output, which JSON escapes, so no visual line break survives serialization', () => {
+      const sanitized = sanitizedReproClaim(proven({ output: `one${lineSeparator}two${paragraphSeparator}three${nextLine}four` }));
+
+      expect(sanitized.output).toBe('one\ntwo\nthreefour');
+      expect(JSON.stringify(sanitized)).not.toMatch(visualSeparator);
+    });
+
+    it('folds them to a space in the claim and the command, which stay on one line', () => {
+      const sanitized = sanitizedReproClaim(proven({ claim: `a${lineSeparator}b${paragraphSeparator}c${nextLine}d`, command: `pnpm${lineSeparator}test${nextLine}now` }));
+
+      expect(sanitized.claim).toBe('a b cd');
+      expect(sanitized.command).toBe('pnpm testnow');
+      expect(`${sanitized.claim}${sanitized.command}`).not.toMatch(anyLineBreak);
+    });
+  });
+
   it('removes terminal colour sequences and control characters from the output and the command', () => {
     const sanitized = sanitizedReproClaim(proven({ command: `pnpm${bell} test`, output: `${escape}[31mFAIL${escape}[0m the filter${bell}` }));
 
