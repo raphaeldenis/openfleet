@@ -46,6 +46,8 @@ export interface ImportReport extends SourceLosses {
   mergedStateSections: number;
   /** One line per imported manager: what its mission holds that the shared manager base owns. Read-only: no mission is rewritten. */
   managerMissions: ManagerMissionReport[];
+  /** One line per manager whose model or working state is not converted as the Scape card or state file says, led by the manager name. */
+  managerFindings: string[];
   /** What the Scape laws came to: counts only, never a law text. */
   laws: LawsReport;
   reportPath?: string;
@@ -72,6 +74,7 @@ export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
   missionToolReferences: { renamed: 0, pointedAtPlaybookShims: 0, withoutEquivalent: {} },
   mergedStateSections: 0,
   managerMissions: [],
+  managerFindings: [],
   laws: emptyLawsReport(),
 });
 
@@ -181,6 +184,9 @@ export function renderImportReport(report: ImportReport): string {
     ...bulletList(toolsWithoutEquivalent),
     '',
     ...managerMissionsSection(report.managerMissions),
+    '## Managers with a model or a working state not converted',
+    ...bulletList(report.managerFindings),
+    '',
     ...lawsSection(report),
     '## Working states',
     `${report.mergedStateSections} section(s) of the state files were merged into a working state section under a line carrying their heading. Not converted: a state file with an item cut, items dropped for the item limit or the size cap, or a manager whose own record was left as it is.`,

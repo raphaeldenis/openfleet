@@ -87,12 +87,32 @@ describe('importScape: managers', () => {
       expect(sessionOf(LEAD_ARGUS_ID)!.model).toBe(alias);
     });
 
-    it('stores no model when the Argus names none', () => {
-      writeArguses(fixture, [anArgus({ model: undefined })]);
+    it.each([
+      ['absent', undefined],
+      ['empty', ''],
+    ])('stores the default alias sonnet when the Argus model is %s, and the report says so', (_label, scapeModel) => {
+      writeArguses(fixture, [anArgus({ name: 'Alpha', model: scapeModel })]);
 
-      run();
+      const report = run();
+
+      expect(sessionOf(LEAD_ARGUS_ID)!.model).toBe('sonnet');
+      expect(report.managerFindings).toContain('Alpha — model defaulted to sonnet (Scape card had none)');
+      expect(report.counts.managers.notConverted).toBe(0);
+    });
+
+    it('keeps an exact model id with no alias unstored and names the manager and the id in the report', () => {
+      writeArguses(fixture, [anArgus({ name: 'Alpha', model: 'unknown-model' })]);
+
+      const report = run();
 
       expect(sessionOf(LEAD_ARGUS_ID)!.model).toBeNull();
+      expect(report.managerFindings).toContain('Alpha — model not converted: "unknown-model" is no known alias');
+    });
+
+    it('adds no model finding for a model it recognizes', () => {
+      writeArguses(fixture, [anArgus({ model: 'claude-opus-4-1-20250805' })]);
+
+      expect(run().managerFindings).toEqual([]);
     });
 
     it('refuses an Argus on a harness OpenFleet does not know with SCAPE_SOURCE_UNREADABLE and writes nothing', () => {

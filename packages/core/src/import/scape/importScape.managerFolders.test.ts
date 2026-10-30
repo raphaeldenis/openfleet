@@ -64,6 +64,17 @@ describe('importScape: manager folders', () => {
       expect(first!.toLowerCase()).not.toBe(second!.toLowerCase());
     });
 
+    it.each([
+      ['Mnémosyne', 'Mnemosyne'],
+      ['Yuri&Neil', 'Yuri-Neil'],
+    ])('names the folder of the manager %s %s, accents removed', (name, folderName) => {
+      writeArguses(fixture, [anArgus({ name })]);
+
+      run();
+
+      expect(directoriesOf(LEAD_ARGUS_ID)).toEqual([join(managersRoot, folderName)]);
+    });
+
     it('falls back to a safe single-component folder name when the name leaves nothing usable', () => {
       writeArguses(fixture, [anArgus({ name: '...' }), aSecondArgus({ name: '///' })]);
 

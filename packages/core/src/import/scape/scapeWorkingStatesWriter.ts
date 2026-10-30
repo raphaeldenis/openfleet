@@ -27,6 +27,13 @@ function writeWorkingState(input: { db: DatabaseSync; ledger: ImportLedger; plan
   });
 }
 
+function unconvertedReasonOf(input: { planned: PlannedWorkingState; isRefusedByTheWorkingState: boolean; isManagerOurs: boolean }): string | undefined {
+  if (input.isRefusedByTheWorkingState) return 'refused by the working state limits';
+  if (!input.isManagerOurs) return 'left as it is: the manager record was changed in OpenFleet';
+  if (input.planned.isNotFullyConverted) return 'not fully converted';
+  return undefined;
+}
+
 /**
  * Seeds the working state of each imported manager that has a state file. A state OpenFleet moved on from since the last import is a conflict
  * and is never replaced; one equal to what the last import wrote follows the state file.
@@ -41,7 +48,11 @@ export function writeWorkingStates(db: DatabaseSync, plan: ImportPlan, report: I
     const isRefusedByTheWorkingState = !WorkingStateSectionsSchema.safeParse(planned.sections).success;
     const managerOutcome = managerOutcomes.get(planned.managerId);
     const isManagerOurs = managerOutcome !== undefined && MANAGER_OUTCOMES_THAT_OWN_THEIR_STATE.includes(managerOutcome);
-    if (planned.isNotFullyConverted || isRefusedByTheWorkingState || !isManagerOurs) counts.notConverted++;
+    const unconvertedReason = unconvertedReasonOf({ planned, isRefusedByTheWorkingState, isManagerOurs });
+    if (unconvertedReason !== undefined) {
+      counts.notConverted++;
+      report.managerFindings.push(`${planned.managerName} — working state ${unconvertedReason}`);
+    }
     if (isRefusedByTheWorkingState) continue;
     if (!isManagerOurs) { counts.conflict++; continue; }
 

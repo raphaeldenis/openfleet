@@ -8,6 +8,7 @@ import { renderImportReport } from './importReport.js';
 import { importScape } from './importScape.js';
 import { anArgus, CAPTAIN_ARGUS_ID, LEAD_ARGUS_ID, writeArguses } from './scapeArguses.testkit.js';
 import { buildScapeFixture, OPENFLEET_NOTE_ID, type ScapeFixture } from './scapeFixture.testkit.js';
+import { stateFileStemOf } from './scapeWorkingStates.js';
 
 const STATE_FILE_MODIFIED_AT = new Date('2026-10-03T08:30:00.000Z');
 const SYNTHETIC_STATE_FILE = [
@@ -286,6 +287,70 @@ describe('importScape: working states of the managers', () => {
     const secondReport = run({ refuseReimport: false });
 
     expect(secondReport.counts.workingStates).toMatchObject({ conflict: 1, notConverted: 1 });
+  });
+
+  describe('the file name of a manager', () => {
+    it.each([
+      ['Mnémosyne', 'mnemosyne'],
+      ['Yuri&Neil', 'yuri-neil'],
+      ['Lead (CCM)', 'lead-ccm'],
+    ])('turns the name %s into the stem %s', (name, stem) => {
+      expect(stateFileStemOf(name)).toBe(stem);
+    });
+
+    it('finds the state file of a manager whose name holds an accent under the unaccented stem', () => {
+      writeArguses(fixture, [anArgus({ name: 'Mnémosyne' })]);
+      writeStateFile('mnemosyne.md');
+
+      const report = run();
+
+      expect(report.counts.workingStates).toMatchObject({ expected: 1, written: 1 });
+      expect(stateRead(LEAD_ARGUS_ID)?.plan).toContain('ship the synthetic thing');
+    });
+
+    it('still finds a state file named under the former stem', () => {
+      writeArguses(fixture, [anArgus({ name: 'Mnémosyne' })]);
+      writeStateFile('mn-mosyne.md');
+
+      expect(run().counts.workingStates).toMatchObject({ expected: 1, written: 1 });
+    });
+
+    it('prefers the unaccented stem over the former one when both files exist', () => {
+      writeArguses(fixture, [anArgus({ name: 'Mnémosyne' })]);
+      writeStateFile('mn-mosyne.md', '## Plan\n- the former file');
+      writeStateFile('mnemosyne.md', '## Plan\n- the unaccented file');
+
+      run();
+
+      expect(stateRead(LEAD_ARGUS_ID)?.plan).toEqual(['the unaccented file']);
+    });
+  });
+
+  describe('the managers whose state is not converted, by name', () => {
+    it('names the manager whose state file is not fully converted', () => {
+      writeStateFile('alpha.md', 'only words, no heading');
+
+      const report = run();
+
+      expect(report.managerFindings).toContain('Alpha — working state not fully converted');
+      expect(renderImportReport(report)).toContain('- Alpha — working state not fully converted');
+    });
+
+    it('names the manager whose own record is left as it is', () => {
+      writeStateFile('alpha.md');
+      run();
+      openTarget().prepare('UPDATE managers SET mission_text = ? WHERE session_id = ?').run('edited in OpenFleet', LEAD_ARGUS_ID);
+
+      const secondReport = run({ refuseReimport: false });
+
+      expect(secondReport.managerFindings).toContain('Alpha — working state left as it is: the manager record was changed in OpenFleet');
+    });
+
+    it('names nobody when every state is converted', () => {
+      writeStateFile('alpha.md');
+
+      expect(run().managerFindings).toEqual([]);
+    });
   });
 
   it('puts the merged sections and the working states in the report', () => {

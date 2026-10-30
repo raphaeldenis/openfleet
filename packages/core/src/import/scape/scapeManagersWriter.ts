@@ -96,6 +96,7 @@ export function writeManagers(db: DatabaseSync, plan: ImportPlan, report: Import
     counts.expected++;
     countOutcome(counts, outcome);
     if (planned.isNotFullyConverted) counts.notConverted++;
+    if (planned.modelFinding !== undefined) report.managerFindings.push(`${planned.session.name} — ${planned.modelFinding}`);
     report.pendingPlaybookMentions += planned.pendingPlaybookMentionCount;
     addToolReferencesToReport(report, planned);
   }

@@ -5,6 +5,7 @@ import { readUtf8Prefix } from './boundedUtf8File.js';
 import type { PlannedManager } from './scapeManagers.js';
 import { resolveStateFolder } from './scapeStateFolder.js';
 import { parseWorkingStateFile } from './scapeWorkingStateFile.js';
+import { withoutAccents } from './withoutAccents.js';
 
 const STATE_FILE_EXTENSION = '.md';
 const MAX_STATE_FILE_BYTES = 256 * 1024;
@@ -13,6 +14,7 @@ const EDGE_DASHES = /^-+|-+$/g;
 
 export interface PlannedWorkingState {
   managerId: string;
+  managerName: string;
   sections: WorkingStateSections;
   /** The modification time of the state file: the moment the state was last true in Scape. */
   updatedAt: string;
@@ -20,8 +22,13 @@ export interface PlannedWorkingState {
   isNotFullyConverted: boolean;
 }
 
-/** The file name stem of a manager: its name in lower case with every run of other characters as one dash ("Lead (CCM)" is "lead-ccm"). */
-export const stateFileStemOf = (managerName: string): string => managerName.toLowerCase().replace(NOT_A_FILE_NAME_CHARACTER, '-').replace(EDGE_DASHES, '');
+const dashedStemOf = (text: string): string => text.toLowerCase().replace(NOT_A_FILE_NAME_CHARACTER, '-').replace(EDGE_DASHES, '');
+
+/** The file name stem of a manager: its name unaccented, in lower case, with every run of other characters as one dash ("Lead (CCM)" is "lead-ccm", "Mnémosyne" is "mnemosyne"). */
+export const stateFileStemOf = (managerName: string): string => dashedStemOf(withoutAccents(managerName));
+
+/** The stem an accented letter used to leave behind: each accented letter was replaced by a dash ("Mnémosyne" was "mn-mosyne"). */
+const formerStateFileStemOf = (managerName: string): string => dashedStemOf(managerName);
 
 function stateFileNamesIn(folder: string): string[] {
   try {
@@ -66,12 +73,12 @@ export function planWorkingStates(input: PlanWorkingStatesInput): PlannedWorking
   const fileNames = stateFileNamesIn(folder);
   const planned: PlannedWorkingState[] = [];
   for (const manager of input.managers) {
-    const fileName = stateFileNameOf(stateFileStemOf(manager.session.name), fileNames);
+    const fileName = stateFileNameOf(stateFileStemOf(manager.session.name), fileNames) ?? stateFileNameOf(formerStateFileStemOf(manager.session.name), fileNames);
     const file = fileName === undefined ? undefined : readStateFile(folder, fileName);
     if (file === undefined) continue;
     const parsed = parseWorkingStateFile(file.text);
     planned.push({
-      managerId: manager.id, sections: parsed.sections, updatedAt: file.modifiedAt,
+      managerId: manager.id, managerName: manager.session.name, sections: parsed.sections, updatedAt: file.modifiedAt,
       mergedSectionCount: parsed.mergedSectionCount, isNotFullyConverted: parsed.isNotFullyConverted || file.isTruncated,
     });
   }
