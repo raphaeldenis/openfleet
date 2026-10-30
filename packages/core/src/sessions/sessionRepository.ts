@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
 import { configProfileOf } from './configDir.js';
+import { parseStoredReadDirectories } from './readDirectories.js';
 import { PERMISSION_MODES, parseReadinessFailureReason, parseSessionCloseReason, parseSessionReadiness, type ReadinessFailureReason, type SessionReadiness, type HarnessId, type PermissionMode, type Session, type SessionCloseReason, type SessionState } from '@openfleet/shared';
 
 interface Row {
@@ -10,10 +11,10 @@ interface Row {
   created_at: string; closed_at: string | null; project_id: string | null;
   resolved_model: string | null; cli_version: string | null; model_drifted_from: string | null; resolved_for_model: string | null;
   context_notice_tokens: number | null; effort: string | null; config_dir: string | null; attended: number;
-  readiness: string | null; readiness_reason: string | null; launch_retries: number;
+  readiness: string | null; readiness_reason: string | null; launch_retries: number; read_directories: string | null;
 }
 
-type NewSessionRow = Omit<Row, 'exit_code' | 'close_reason' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model' | 'context_notice_tokens' | 'effort' | 'config_dir' | 'attended' | 'readiness' | 'readiness_reason' | 'launch_retries'> & { project_id?: string | null; effort?: string | null; config_dir?: string | null; attended?: boolean };
+type NewSessionRow = Omit<Row, 'exit_code' | 'close_reason' | 'closed_at' | 'project_id' | 'resolved_model' | 'cli_version' | 'model_drifted_from' | 'resolved_for_model' | 'context_notice_tokens' | 'effort' | 'config_dir' | 'attended' | 'readiness' | 'readiness_reason' | 'launch_retries' | 'read_directories'> & { project_id?: string | null; effort?: string | null; config_dir?: string | null; attended?: boolean; read_directories?: string[] };
 
 export interface NormalizedPermissionMode { mode: PermissionMode | undefined; wasRecognized: boolean }
 
@@ -64,9 +65,15 @@ export class SessionRepository {
   constructor(private readonly db: DatabaseSync) {}
 
   insert(row: NewSessionRow): void {
-    const rowWithProject = { ...row, project_id: row.project_id ?? null, effort: row.effort ?? null, config_dir: row.config_dir ?? null, attended: row.attended === true ? 1 : 0 };
-    this.db.prepare(`INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, branch, project_id, effort, config_dir, attended, created_at)
-      VALUES (@id, @name, @emoji, @directory, @worktree, @model, @parent_id, @role, @harness, @state, @state_since, @hook_token, @mcp_token, @permission_mode, @branch, @project_id, @effort, @config_dir, @attended, @created_at)`).run(rowWithProject as never);
+    const hasReadDirectories = (row.read_directories ?? []).length > 0;
+    const rowWithProject = { ...row, project_id: row.project_id ?? null, effort: row.effort ?? null, config_dir: row.config_dir ?? null, attended: row.attended === true ? 1 : 0, read_directories: hasReadDirectories ? JSON.stringify(row.read_directories) : null };
+    this.db.prepare(`INSERT INTO sessions (id, name, emoji, directory, worktree, model, parent_id, role, harness, state, state_since, hook_token, mcp_token, permission_mode, branch, project_id, effort, config_dir, attended, read_directories, created_at)
+      VALUES (@id, @name, @emoji, @directory, @worktree, @model, @parent_id, @role, @harness, @state, @state_since, @hook_token, @mcp_token, @permission_mode, @branch, @project_id, @effort, @config_dir, @attended, @read_directories, @created_at)`).run(rowWithProject as never);
+  }
+  /** The read directories the daemon gave the session at creation, as stored and not yet validated; they never leave the daemon. */
+  readDirectoriesOf(id: string): string[] {
+    const row = this.db.prepare('SELECT read_directories FROM sessions WHERE id = ?').get(id) as { read_directories: string | null } | undefined;
+    return parseStoredReadDirectories(row?.read_directories ?? null);
   }
   /** The raw config directory a launch needs; it never leaves the daemon, the public Session carries only its profile name. */
   configDirOf(id: string): string | undefined {
