@@ -404,7 +404,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return ok(sessions.updateModel(targetId, resolveModel(modelTable, model)));
   });
 
-  server.registerTool('get_argus_status', { description: 'Your manager record (if any) and each child: state, pending permission, queued messages', inputSchema: {} }, async () => {
+  server.registerTool('get_argus_status', { description: 'Your manager record (if any) and each child: state, pending permission, queued messages. The record holds the size and sha256 of your mission, not its body; mission body: get_manager_mission', inputSchema: {} }, async () => {
     const children = sessions.list().filter((s) => s.parentId === caller.id).map((child) => ({
       id: child.id, name: child.name, state: child.state, stateSince: child.stateSince,
       pendingPermission: pendingPermissionFor(child.id),
