@@ -137,6 +137,8 @@ export interface DaemonOptions {
   claudeConfigPath?: string;
   /** Replaces the real `--version` check of the harness binary before a spawn, so a test can boot a daemon whose binary is a stand-in. */
   binaryHealth?: BinaryHealthCheck;
+  /** How long a new session waits for its harness's start signal before it fails; absent: the harness's own delay, else 60 seconds. */
+  firstStartTimeoutMs?: number;
   /** Overrides BASE_NOT_READ_ENFORCEMENT: 'warn_only' turns the base_not_read refusal of a spawn into a warning. */
   baseNotReadEnforcement?: BaseNotReadEnforcement;
   /** Overrides NOTE_NOT_READ_ENFORCEMENT: 'refuse' turns the note_not_read warning of a spawn into a refusal; absent, the warning only warns. */
@@ -194,7 +196,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     const { document, unattended } = commandPolicyService.settings();
     return document.mode !== 'off' || unattended.askBecomesDeny;
   };
-  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, binaryHealth: options.binaryHealth, launchOutputTimeoutMs: DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, isDeliveryHeld: (sessionId) => managerRepository.get(sessionId)?.mode === 'disabled', isMessageObsolete: (message) => managerRepository.isObsoleteSleepHandoff(message), profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}), isCommandPolicyActive });
+  const sessions = new SessionService({ db, bus, harnesses, baseUrl, worktreesRoot: config.worktreesRoot, describeError, binaryHealth: options.binaryHealth, firstStartTimeoutMs: options.firstStartTimeoutMs, launchOutputTimeoutMs: DEFAULT_LAUNCH_OUTPUT_TIMEOUT_MS, missionOf: (sessionId) => managerRepository.get(sessionId)?.missionText, isDeliveryHeld: (sessionId) => managerRepository.get(sessionId)?.mode === 'disabled', isMessageObsolete: (message) => managerRepository.isObsoleteSleepHandoff(message), profileRecallOf: (sessionId) => profileRecallOf(managerRepository.get(sessionId) ?? {}), isCommandPolicyActive });
   const approvals = new ApprovalService({ db, bus, timeoutMs: options.approvalTimeoutMs });
   // A row still 'pending' from before this boot has no live waiter any more (AUD-07): the pre-restart
   // process that would have decided it is gone with the old daemon.

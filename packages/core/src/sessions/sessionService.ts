@@ -10,6 +10,7 @@ import { BinaryHealthCheck, brokenBinaryError, type BinaryHealth } from '../harn
 import { claudeProjectsDir } from '../harness/claudeProjectsDir.js';
 import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
+import { maskedSecrets } from '../redact.js';
 import { ProjectNotFoundError } from '../projects/projectErrors.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { HandoffSeed } from '../notes/handoffSeed.js';
@@ -32,7 +33,7 @@ import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConver
 // Absent, the service still closes sessions with their reason but broadcasts no error events.
 export type DescribeError = (error: unknown, scope: { sessionId?: string; where?: string }) => ErrorEnvelope;
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; turnStartTimeoutMs?: number;
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; forceKillGraceMs?: number; submitKeystrokeDelayMs?: number; turnStartTimeoutMs?: number;
   /** Probes `<bin> --version` before each spawn; defaults to a real check with a 60 s cache. */
   binaryHealth?: BinaryHealthCheck;
   /** How long a launch may show neither a PTY byte nor transcript progress before its readiness is failed; absent: launches are not watched. */
@@ -141,6 +142,9 @@ const FRESH_START_PROMPT_TOO_LARGE_NOTICE = '\r\n[OpenFleet] Started a new conve
 // A cold real CLI can sit waiting on an auth or trust prompt far longer than a resume ever should, so a
 // first launch gets its own, more generous ceiling instead of sharing resumeTimeoutMs (AUD-06).
 const DEFAULT_FIRST_START_TIMEOUT_MS = 60_000;
+const START_FAILURE_DETAIL_LIMIT = 2048;
+// How long a process may outlive the force kill before its session is closed without its exit.
+const DEFAULT_FORCE_KILL_GRACE_MS = 10_000;
 // ponytail: fixed delay giving Claude Code's composer time to settle after typeMessage's bracketed-paste
 // write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
 // from the pty output instead of trusting a fixed delay.
@@ -444,6 +448,10 @@ export class SessionService {
   private readonly outputBuffers = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly launchWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  // Sessions whose start signal timed out and whose process is still being stopped: nothing they report brings them back.
+  private readonly sessionsFailedToStart = new Set<string>();
+  // The masked output tail of a session that never signalled its start; in memory only, so a daemon restart forgets it.
+  private readonly startFailureDetails = new Map<string, string>();
   private readonly sessionsWithOutput = new Set<string>();
   private readonly binaryHealth: BinaryHealthCheck;
   private readonly deliveries = new Map<string, Delivery>();
@@ -561,6 +569,7 @@ export class SessionService {
     this.handles.set(id, handle);
     activeHandleBySessionId.set(id, handle);
     handle.onData((data) => {
+      if (activeHandleBySessionId.get(id) !== handle) return;
       this.noteOutputReceived(id);
       this.appendOutput(id, data);
       this.deps.bus.emit({ type: 'session.output', sessionId: id, data });
@@ -913,12 +922,17 @@ export class SessionService {
 
   private async performRelaunch(sessionId: string): Promise<void> {
     try {
-      await this.retireForRelaunch(sessionId);
+      const hasOldProcessExited = await this.retireForRelaunch(sessionId);
       const session = this.repo.get(sessionId);
       if (!session || session.state === 'closed') return; // closed by something else while the relaunch was in flight
       const isCloseRequested = this.deliveryOf(sessionId).phase.name === 'closing';
       if (isCloseRequested) {
         this.markClosed(sessionId, { reason: this.reasonOfRequestedClose(sessionId) });
+        return;
+      }
+      // A second process resuming the same conversation next to a survivor would double the session: it is closed instead.
+      if (!hasOldProcessExited) {
+        this.markClosed(sessionId, { reason: 'launch_failed' });
         return;
       }
       if (this.modelSwitchesAwaitingRelaunch.delete(sessionId)) {
@@ -938,7 +952,8 @@ export class SessionService {
 
   // Revokes the old tokens first so the dying process's late hooks and MCP calls reach no session, then
   // forgets its handle before killing it: its exit must not trip markClosed, and nothing may kill it twice.
-  private async retireForRelaunch(sessionId: string): Promise<void> {
+  // Resolves false when the old process outlived the force kill: it may still be running.
+  private async retireForRelaunch(sessionId: string): Promise<boolean> {
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
     // Any approval still gating this session belonged to the process about to die: ApprovalService
@@ -947,14 +962,16 @@ export class SessionService {
     this.deps.bus.emit({ type: 'session.relaunching', sessionId });
     this.repo.setTokens(sessionId, newToken(), newToken());
     const handle = this.handles.get(sessionId);
-    if (!handle) return;
+    if (!handle) return true;
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
-    await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
+    return this.killWithEscalation({ handle, escalateAfterMs: DEFAULT_CLOSE_ESCALATE_MS, sessionId });
   }
 
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
+    const isIgnoredAfterFailedStart = this.sessionsFailedToStart.has(sessionId) && input.kind !== 'harness_exit';
+    if (isIgnoredAfterFailedStart) return;
     const isProgressHook = input.kind === 'hook' && input.event.hook_event_name !== 'Notification';
     if (isProgressHook && session.state !== 'closed') this.runtime.observeHook(sessionId);
     // The outgoing conversation's SessionEnd carries its old transcript; the SessionStart that follows names the new one.
@@ -1446,7 +1463,8 @@ export class SessionService {
       // The CLI ended its session but never exited: this kill is the daemon's own, so its exit is no failure.
       this.forgetSessionEndCause(sessionId);
     }
-    await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
+    const hasExited = await this.killWithEscalation({ handle, escalateAfterMs: options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS, sessionId });
+    if (!hasExited) this.markClosed(sessionId, { reason: this.reasonOfRequestedClose(sessionId) });
   }
 
   // The CLI's own SessionEnd, fired because the daemon killed it, is the echo of a close somebody already asked for.
@@ -1484,19 +1502,28 @@ export class SessionService {
     });
   }
 
-  private async killWithEscalation(handle: HarnessHandle, escalateAfterMs: number): Promise<void> {
+  // Resolves true when the process exited, false when it outlived the force kill by the grace: the caller closes the session itself.
+  private async killWithEscalation({ handle, escalateAfterMs, sessionId }: { handle: HarnessHandle; escalateAfterMs: number; sessionId: string }): Promise<boolean> {
     const exited = waitForExit(handle);
     handle.kill();
-    let escalateTimer: ReturnType<typeof setTimeout>;
-    const gracePeriodExpired = new Promise<false>((resolve) => {
-      escalateTimer = setTimeout(() => resolve(false), escalateAfterMs);
-    });
-    const exitedGracefully = await Promise.race([exited.then(() => true as const), gracePeriodExpired]);
-    clearTimeout(escalateTimer!);
-    if (exitedGracefully) return;
+    const exitedGracefully = await this.exitedWithin(exited, escalateAfterMs);
+    if (exitedGracefully) return true;
     const exitedAfterForce = waitForExit(handle);
     handle.kill({ force: true });
-    await exitedAfterForce;
+    const forceKillGraceMs = this.deps.forceKillGraceMs ?? DEFAULT_FORCE_KILL_GRACE_MS;
+    const hasExited = await this.exitedWithin(exitedAfterForce, forceKillGraceMs);
+    if (!hasExited) log('warn', `session ${sessionId}: a process survived the force kill for ${forceKillGraceMs} ms, the session is closed without its exit`, undefined, { code: 'kill_failed', sessionId });
+    return hasExited;
+  }
+
+  private async exitedWithin(exit: Promise<void>, graceMs: number): Promise<boolean> {
+    let graceTimer: ReturnType<typeof setTimeout>;
+    const graceExpired = new Promise<false>((resolve) => {
+      graceTimer = setTimeout(() => resolve(false), graceMs);
+    });
+    const hasExited = await Promise.race([exit.then(() => true as const), graceExpired]);
+    clearTimeout(graceTimer!);
+    return hasExited;
   }
 
   async closeAll(): Promise<void> {
@@ -1519,7 +1546,8 @@ export class SessionService {
   private projected(session: Session): Session {
     const harnessEnforcement = this.deps.harnesses.find((harness) => harness.id === session.harness)?.policyEnforcement ?? 'none';
     const isPolicyActive = this.deps.isCommandPolicyActive?.() ?? true;
-    return { ...this.runtime.project(session), policyEnforcement: isPolicyActive ? harnessEnforcement : 'none' };
+    const readinessDetail = this.startFailureDetails.get(session.id);
+    return { ...this.runtime.project(session), policyEnforcement: isPolicyActive ? harnessEnforcement : 'none', ...(readinessDetail !== undefined && { readinessDetail }) };
   }
   hasLiveLaunch(id: string): boolean { return this.handles.has(id); }
   runtimeProgressOf(id: string): RuntimeProgress | undefined {
@@ -1586,7 +1614,7 @@ export class SessionService {
       // whatever exit code the harness reports over the launch_failed closure below.
       activeHandleBySessionId.delete(sessionId);
       try {
-        await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
+        await this.killWithEscalation({ handle, escalateAfterMs: DEFAULT_CLOSE_ESCALATE_MS, sessionId });
       } catch (err) {
         // A kill that throws must not leave the session wedged: it is closed below all the same.
         log('error', `resume: session ${sessionId} could not kill its process after a resume error`, err);
@@ -2101,6 +2129,7 @@ export class SessionService {
     const { exitCode, reason } = closure;
     this.clearResumeTimer(sessionId);
     this.clearLaunchWatchdog(sessionId);
+    this.sessionsFailedToStart.delete(sessionId);
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
     this.dropPendingRecording(sessionId);
@@ -2162,6 +2191,9 @@ export class SessionService {
     const hookToken = newToken();
     const mcpToken = newToken();
     this.repo.setTokens(session.id, hookToken, mcpToken);
+    this.startFailureDetails.delete(session.id);
+    const hasFailedReadiness = this.repo.get(session.id)?.readiness === 'failed';
+    if (hasFailedReadiness) this.repo.clearReadiness(session.id);
     this.startPendingRecording(session.id, session.model);
     let handle: HarnessHandle;
     let isNewConversationAnnounced = false;
@@ -2204,6 +2236,7 @@ export class SessionService {
     this.handles.set(session.id, handle);
     activeHandleBySessionId.set(session.id, handle);
     handle.onData((data) => {
+      if (activeHandleBySessionId.get(session.id) !== handle) return;
       this.appendOutput(session.id, data);
       this.deps.bus.emit({ type: 'session.output', sessionId: session.id, data });
     });
@@ -2352,7 +2385,9 @@ export class SessionService {
   }
 
   private markReady(sessionId: string): void {
-    if (this.repo.get(sessionId)?.readiness === 'ready') return;
+    const session = this.repo.get(sessionId);
+    const hasFailedToStart = session?.readiness === 'failed' && session.readinessReason === 'no_start_signal';
+    if (session?.readiness === 'ready' || hasFailedToStart) return;
     this.repo.setReadiness(sessionId, { readiness: 'ready' });
     this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
   }
@@ -2410,7 +2445,7 @@ export class SessionService {
   private relaunchStalledLaunch(session: Session, stalledHandle: HarnessHandle): void {
     this.repo.incrementLaunchRetries(session.id);
     activeHandleBySessionId.delete(session.id); // detached first: the stalled process's exit must not close the session
-    void this.killWithEscalation(stalledHandle, DEFAULT_CLOSE_ESCALATE_MS);
+    void this.killWithEscalation({ handle: stalledHandle, escalateAfterMs: DEFAULT_CLOSE_ESCALATE_MS, sessionId: session.id });
     this.clearResumeTimer(session.id);
     const harness = this.harnessFor(session.harness);
     const hookToken = newToken();
@@ -2432,6 +2467,7 @@ export class SessionService {
     this.handles.set(session.id, handle);
     activeHandleBySessionId.set(session.id, handle);
     handle.onData((data) => {
+      if (activeHandleBySessionId.get(session.id) !== handle) return;
       this.noteOutputReceived(session.id);
       this.appendOutput(session.id, data);
       this.deps.bus.emit({ type: 'session.output', sessionId: session.id, data });
@@ -2448,23 +2484,44 @@ export class SessionService {
   }
 
   private armFirstStartTimeout(sessionId: string, handle: HarnessHandle): void {
-    this.armStartTimeout(sessionId, handle, this.deps.firstStartTimeoutMs ?? DEFAULT_FIRST_START_TIMEOUT_MS);
+    const harnessTimeoutMs = this.harnessFor(this.require(sessionId).harness).startSignalTimeoutMs;
+    const timeoutMs = this.deps.firstStartTimeoutMs ?? harnessTimeoutMs ?? DEFAULT_FIRST_START_TIMEOUT_MS;
+    this.armStartTimeout(sessionId, handle, timeoutMs, () => this.failStartSignal(sessionId));
   }
 
-  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number): void {
+  private failStartSignal(sessionId: string): void {
+    const detail = this.startFailureDetailOf(sessionId);
+    this.sessionsFailedToStart.add(sessionId);
+    this.startFailureDetails.set(sessionId, detail);
+    this.repo.setReadiness(sessionId, { readiness: 'failed', reason: 'no_start_signal' });
+    log('warn', `session ${sessionId} never signalled its start`, undefined, { code: 'no_start_signal', sessionId });
+    this.deps.bus.emit({ type: 'session.updated', session: this.get(sessionId)! });
+    this.deps.bus.emit({ type: 'session.failed', sessionId, reason: 'no_start_signal', detail });
+  }
+
+  private startFailureDetailOf(sessionId: string): string {
+    const drawnText = textDrawnBy(this.outputBuffers.get(sessionId) ?? '');
+    const maskedText = maskedSecrets(drawnText);
+    return trimToTail(maskedText, START_FAILURE_DETAIL_LIMIT).trim();
+  }
+
+  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number, onTimedOut?: () => void): void {
     this.clearResumeTimer(sessionId);
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
+      onTimedOut?.();
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
       // timeout's own resume_timeout closure with whatever exit code the harness happens to report.
       activeHandleBySessionId.delete(sessionId);
-      void this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS).then(() => {
+      void this.killWithEscalation({ handle, escalateAfterMs: DEFAULT_CLOSE_ESCALATE_MS, sessionId }).then(() => {
         // Re-check: killWithEscalation can run for up to DEFAULT_CLOSE_ESCALATE_MS, long enough for another
         // instance sharing this db (a second daemon restart mid-escalation) to resume this same session
         // under a new handle. Our own deletion above already left this slot empty — that's the expected,
         // common case and must still proceed to markClosed; only a handle claimed by someone else means skip.
         if (activeHandleBySessionId.has(sessionId)) return;
-        this.markClosed(sessionId, { reason: 'resume_timeout' });
+        const isClosedOnRequest = this.isCloseRequested(sessionId) && this.closeCauses.get(sessionId) !== 'shutdown';
+        const reason = isClosedOnRequest ? this.reasonOfRequestedClose(sessionId) : 'resume_timeout';
+        this.markClosed(sessionId, { reason });
       });
     }, timeoutMs);
     this.resumeTimers.set(sessionId, timer);
