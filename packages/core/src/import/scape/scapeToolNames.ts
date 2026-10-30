@@ -46,18 +46,22 @@ const missionToolWrittenLike = ({ scapePrefix }: StatusToolMatchGroups) => `${sc
 
 const pointStatusToolOfSentence = (sentence: string) => sentence.replace(STATUS_TOOL_REFERENCE, (...replaceArguments) => missionToolWrittenLike(groupsOf(replaceArguments)));
 
+const pointStatusToolPrecededByMissionField = (...replaceArguments: unknown[]) => {
+  const groups = groupsOf(replaceArguments);
+  return `${groups.openingBacktick}${missionToolWrittenLike(groups)}`;
+};
+
+const pointStatusToolFollowedByMissionField = (...replaceArguments: unknown[]) => {
+  const groups = groupsOf(replaceArguments);
+  return `${missionToolWrittenLike(groups)}${groups.closingBacktick}`;
+};
+
 function pointMissionReadsOfLine(line: string): string {
   const mentionsStatusTool = line.includes(STATUS_TOOL_NAME);
   if (!mentionsStatusTool) return line;
   return line
-    .replace(MISSION_FIELD_RIGHT_BEFORE_STATUS_TOOL, (...replaceArguments) => {
-      const groups = groupsOf(replaceArguments);
-      return `${groups.openingBacktick}${missionToolWrittenLike(groups)}`;
-    })
-    .replace(MISSION_FIELD_RIGHT_AFTER_STATUS_TOOL, (...replaceArguments) => {
-      const groups = groupsOf(replaceArguments);
-      return `${missionToolWrittenLike(groups)}${groups.closingBacktick}`;
-    })
+    .replace(MISSION_FIELD_RIGHT_BEFORE_STATUS_TOOL, pointStatusToolPrecededByMissionField)
+    .replace(MISSION_FIELD_RIGHT_AFTER_STATUS_TOOL, pointStatusToolFollowedByMissionField)
     .replace(SENTENCE_READING_THE_MISSION_UP_TO_STATUS_TOOL, pointStatusToolOfSentence);
 }
 

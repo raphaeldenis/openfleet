@@ -46,6 +46,16 @@ describe('composeMission with a mission note, permissions and exposed resources 
   });
 });
 
+describe('composeMission and a permission that uses the status tool without reading the mission', () => {
+  it('keeps the status tool of the permission, with its prefix renamed', () => {
+    const permission = anApprovedRequest({ kind: 'permission', text: 'Check your cap with mcp__scape__get_argus_status before any spawn.' });
+
+    const { text } = composeMission({ noteBody: NOTE_BODY, governanceRequests: [permission], resourceGrants: [], availabilityOf: () => 'available' });
+
+    expect(text).toContain('- Check your cap with mcp__openfleet__get_argus_status before any spawn.');
+  });
+});
+
 describe('composeMission and the approved laws', () => {
   it('has neither a Laws section nor a Standing laws section when the Argus has only laws', () => {
     const { text } = composeWith({ governanceRequests: [anApprovedRequest({ kind: 'law', text: 'First law.' }), anApprovedRequest({ kind: 'law', text: 'Second law.' })] });
