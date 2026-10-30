@@ -180,6 +180,8 @@ describe('the start signal timeout of a new session', () => {
   });
 
   describe('a session found failed by a daemon that did not fail it', () => {
+    // The first service is never stopped: its kill escalation stays armed on fake timers that no test here advances before the assertions,
+    // and its stale handle is ignored by the resumed session (the active handle map is global to the module).
     const failedInADaemonThatDiesDuringTheEscalation = async () => {
       const first = bootDaemon();
       const session = await first.service.create(spec);
