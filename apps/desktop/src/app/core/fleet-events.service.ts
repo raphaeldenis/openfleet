@@ -42,6 +42,51 @@ function parseServerEvent(text: string): ServerEvent | undefined {
   }
 }
 
+/** The event types the service reads no payload field of: a frame of one of them is never dropped. */
+const EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD = ['session.attention', 'session.relaunching', 'message.queued', 'message.held', 'command.denied'] as const;
+
+export type PayloadCarryingEventType = Exclude<ServerEvent['type'], (typeof EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD)[number]>;
+
+const REQUIRED_PAYLOAD_FIELDS: Record<PayloadCarryingEventType, readonly string[]> = {
+  'snapshot': ['sessions', 'approvals'],
+  'session.todos': ['todos'],
+  'session.working_state': ['state'],
+  'session.created': ['session'],
+  'session.updated': ['session'],
+  'session.state': ['sessionId', 'state'],
+  'session.closed': ['sessionId'],
+  'session.output': ['sessionId', 'data'],
+  'session.replay': ['sessionId', 'data'],
+  'session.model_changed': ['sessionId', 'model'],
+  'session.permission_mode_changed': ['sessionId', 'mode'],
+  'session.reopened': ['sessionId'],
+  'message.delivered': ['messageId'],
+  'approval.created': ['approval'],
+  'approval.resolved': ['approval'],
+  'governance.proposed': ['proposal'],
+  'governance.resolved': ['proposal'],
+  'governance.queue_changed': ['managerId', 'queuedCount'],
+  'law.created': ['law'],
+  'law.updated': ['law'],
+  'law.withdrawn': ['law'],
+  'manager.created': ['manager'],
+  'manager.pulsed': ['manager'],
+  'manager.updated': ['manager'],
+  'error': ['error'],
+  'daemon.issues': ['issues'],
+  'permission.silent_blocks': ['blocks'],
+  'notification.trigger': ['category'],
+  'note.created': ['noteId'],
+  'note.updated': ['noteId'],
+  'note.deleted': ['noteId'],
+};
+
+function carriesItsRequiredPayload(event: ServerEvent): boolean {
+  const requiredFields = REQUIRED_PAYLOAD_FIELDS[event.type as PayloadCarryingEventType] ?? [];
+  const fields = event as unknown as Record<string, unknown>;
+  return requiredFields.every((field) => fields[field] != null);
+}
+
 function notificationTriggerOf({ type: _type, ...trigger }: Extract<ServerEvent, { type: 'notification.trigger' }>): NotificationTrigger {
   return trigger;
 }
@@ -182,7 +227,12 @@ export class FleetEventsService {
     });
     socket.addEventListener('message', (m) => {
       const event = parseServerEvent(String(m.data));
-      if (event) this.reduce(event);
+      if (!event) return;
+      if (!carriesItsRequiredPayload(event)) {
+        console.warn(`Dropped a ${event.type} frame that lacks its payload`);
+        return;
+      }
+      this.reduce(event);
     });
     socket.addEventListener('close', () => this.scheduleReconnect());
   }
