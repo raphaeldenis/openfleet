@@ -110,6 +110,9 @@ export class SessionRepository {
   setReadiness(id: string, input: { readiness: SessionReadiness; reason?: ReadinessFailureReason }): void {
     this.db.prepare('UPDATE sessions SET readiness = ?, readiness_reason = ? WHERE id = ?').run(input.readiness, input.reason ?? null, id);
   }
+  clearReadiness(id: string): void {
+    this.db.prepare('UPDATE sessions SET readiness = NULL, readiness_reason = NULL WHERE id = ?').run(id);
+  }
   incrementLaunchRetries(id: string): void {
     this.db.prepare('UPDATE sessions SET launch_retries = launch_retries + 1 WHERE id = ?').run(id);
   }

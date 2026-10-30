@@ -11,6 +11,7 @@ import { recentLogLines } from '../logger.js';
 import { SessionService } from './sessionService.js';
 
 const LAUNCH_OUTPUT_TIMEOUT_MS = 30_000;
+const START_SIGNAL_TIMEOUT_BEYOND_THESE_TESTS_MS = 600_000;
 const FAKE_BINARY_PATH = '/fake/bin/claude';
 const spec = { name: 'worker', emoji: '🤖', directory: '/tmp', harness: 'fake' } as const;
 
@@ -27,7 +28,7 @@ function bootDaemon({ harness = new FakeHarness(), binaryHealth, launchOutputTim
   const events: ServerEvent[] = [];
   bus.subscribe((event) => events.push(event));
   const db = openDatabase(':memory:');
-  const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', binaryHealth, launchOutputTimeoutMs });
+  const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', binaryHealth, launchOutputTimeoutMs, firstStartTimeoutMs: START_SIGNAL_TIMEOUT_BEYOND_THESE_TESTS_MS });
   return { service, harness, events };
 }
 

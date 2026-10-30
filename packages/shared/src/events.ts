@@ -4,7 +4,7 @@ import type { ErrorEnvelope } from './errors.js';
 import type { EscalationView } from './escalation.js';
 import type { GovernanceProposalView, LawView } from './governance.js';
 import type { ManagerView } from './managers.js';
-import type { Approval, PermissionMode, RuntimeAttention, Session, SessionCloseReason, SessionState } from './session.js';
+import type { Approval, PermissionMode, ReadinessFailureReason, RuntimeAttention, Session, SessionCloseReason, SessionState } from './session.js';
 import type { SessionTodos, TodoSummary } from './todos.js';
 import type { WorkingState } from './workingState.js';
 
@@ -52,6 +52,7 @@ export type ServerEvent =
   | { type: 'session.state'; sessionId: string; state: SessionState; stateSince: string }
   | { type: 'session.attention'; sessionId: string; runtimeAttention: RuntimeAttention | null }
   | { type: 'session.closed'; sessionId: string; exitCode?: number; reason?: SessionCloseReason }
+  | { type: 'session.failed'; sessionId: string; reason: ReadinessFailureReason; detail?: string }
   | { type: 'session.output'; sessionId: string; data: string }
   | { type: 'session.replay'; sessionId: string; data: string }
   | { type: 'session.model_changed'; sessionId: string; model: string }
