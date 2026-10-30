@@ -435,6 +435,8 @@ interface AskUserJournalRow {
 // Opt-in canary behind the ask-user rule of docs/escalation.md: a throwaway in-process daemon (temp OPENFLEET_HOME, ephemeral port, real claude-cli harness)
 // launches one supervised and one attended manager on the real CLI, and the journal of the daemon says what the guard did with the AskUserQuestion the model called.
 // Whether the model calls the tool is up to the model: a manager whose journal has no AskUserQuestion row fails loudly instead of passing.
+// Side effect: the folder trust writes of the temp repos land in the real ~/.claude.json and the CLI transcripts under ~/.claude/projects;
+// startDaemon's claudeConfigPath is not passed because the redirected run closed both managers with resume_timeout and no journal row.
 // Run: pnpm --filter @openfleet/core test:live -t "AskUserQuestion"
 describe.skipIf(!isLive)('a manager calling AskUserQuestion on the real CLI (live, needs a logged-in claude CLI)', () => {
   let daemon: Daemon | undefined;
@@ -454,7 +456,7 @@ describe.skipIf(!isLive)('a manager calling AskUserQuestion on the real CLI (liv
     const port = await allocatePort();
     const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: String(port) });
     adminToken = config.adminToken;
-    daemon =await startDaemon(config, { power: { api: { acquire: () => ({ release: () => {} }) } } });
+    daemon = await startDaemon(config, { power: { api: { acquire: () => ({ release: () => {} }) } } });
     const response = await fetch(`${daemon.server.url}/api/sessions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${config.adminToken}` },
