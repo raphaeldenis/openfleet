@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { loadManagerBase } from '../../managers/managerBase.js';
-import { emptyReport, hasChanges, renderImportReport, type ImportReport } from './importReport.js';
+import { addManagerFinding, emptyReport, hasChanges, inlineMarkdownText, renderImportReport, type ImportReport } from './importReport.js';
 import { reportManagerMission, type ManagerMissionReport } from './managerMissionReport.js';
 import { prepareManagerFolders, type PreparedManagerFolders } from './managerFolders.js';
 import { ScapeImportError } from './scapeImportError.js';
@@ -44,7 +44,7 @@ export interface ImportScapeOptions {
   scapeClaudeDir?: string;
 }
 
-const managersRootOf = (options: ImportScapeOptions) => options.managersRoot ?? join(options.home, MANAGERS_FOLDER_NAME);
+const managersRootOf = (options: ImportScapeOptions) => resolve(options.managersRoot ?? join(options.home, MANAGERS_FOLDER_NAME));
 
 function writeReportFile(report: ImportReport, directory: string): string {
   mkdirSync(directory, { recursive: true });
@@ -75,8 +75,57 @@ function assertNoProjectImportedYet(db: DatabaseSync, plan: ImportPlan): void {
 
 const MANAGER_OUTCOMES_NEEDING_A_FOLDER: UpsertOutcome[] = ['written', 'updated', 'alreadyPresent'];
 
-function foldersOfManagersKept(plan: ImportPlan, outcomes: Map<string, UpsertOutcome>): string[] {
-  return plan.managers.filter((manager) => MANAGER_OUTCOMES_NEEDING_A_FOLDER.includes(outcomes.get(manager.id)!)).map((manager) => manager.session.directory);
+const storedDirectoryOf = (db: DatabaseSync, managerId: string): string | undefined =>
+  (db.prepare('SELECT directory FROM sessions WHERE id = ?').get(managerId) as { directory: string } | undefined)?.directory;
+
+interface ManagerFolderChoice { managerName: string; directory: string; plannedDirectory: string; isStored: boolean }
+
+/** The folder of each manager kept: the one already stored for a manager already present, else the planned one. */
+function folderChoicesOfManagersKept(input: { plan: ImportPlan; outcomes: Map<string, UpsertOutcome>; db: DatabaseSync }): ManagerFolderChoice[] {
+  const managersKept = input.plan.managers.filter((manager) => MANAGER_OUTCOMES_NEEDING_A_FOLDER.includes(input.outcomes.get(manager.id)!));
+  return managersKept.map((manager) => {
+    const isWrittenByThisRun = input.outcomes.get(manager.id) === 'written';
+    const storedDirectory = isWrittenByThisRun ? undefined : storedDirectoryOf(input.db, manager.id);
+    return { managerName: manager.session.name, directory: storedDirectory ?? manager.session.directory, plannedDirectory: manager.session.directory, isStored: storedDirectory !== undefined };
+  });
+}
+
+type StoredFolderVerdict = 'preparable' | 'outsideManagersRoot' | 'symbolicLink';
+
+const realPathOrResolved = (path: string): string => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+};
+
+/**
+ * A stored folder is the import's to prepare when it is an absolute, direct child of the managers root (compared through real paths) and no link itself.
+ * The folder planned for a manager not stored yet is always prepared: a link there is refused by the preparation.
+ */
+const folderVerdictFor = (managersRoot: string) => (choice: ManagerFolderChoice): StoredFolderVerdict => {
+  if (!choice.isStored) return 'preparable';
+  const { directory } = choice;
+  const isOutsideManagersRoot = !isAbsolute(directory) || realPathOrResolved(dirname(resolve(directory))) !== realPathOrResolved(managersRoot);
+  if (isOutsideManagersRoot) return 'outsideManagersRoot';
+  const isSymbolicLink = lstatSync(resolve(directory), { throwIfNoEntry: false })?.isSymbolicLink() ?? false;
+  return isSymbolicLink ? 'symbolicLink' : 'preparable';
+};
+
+const STORED_FOLDER_FINDINGS: Record<Exclude<StoredFolderVerdict, 'preparable'>, string> = {
+  outsideManagersRoot: 'stored folder is outside managers/, left as it is',
+  symbolicLink: 'stored folder is a symbolic link, left as it is',
+};
+
+function reportFoldersNeedingALook(report: ImportReport, input: { choices: ManagerFolderChoice[]; verdictOf: (choice: ManagerFolderChoice) => StoredFolderVerdict }): void {
+  for (const choice of input.choices) {
+    const { managerName, directory, plannedDirectory } = choice;
+    const verdict = input.verdictOf(choice);
+    if (verdict !== 'preparable') { addManagerFinding(report, { managerName, text: STORED_FOLDER_FINDINGS[verdict] }); continue; }
+    const isKeptUnderAnotherName = basename(directory) !== basename(plannedDirectory);
+    if (isKeptUnderAnotherName) addManagerFinding(report, { managerName, text: `folder kept as ${inlineMarkdownText(basename(directory))}, its name now maps to ${inlineMarkdownText(basename(plannedDirectory))}` });
+  }
 }
 
 function managerMissionsOf(plan: ImportPlan): ManagerMissionReport[] {
@@ -95,8 +144,14 @@ function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportRep
   };
   let preparedFolders: PreparedManagerFolders | undefined;
   const prepareFoldersBeforeCommit = (managerOutcomes: Map<string, UpsertOutcome>) => {
+    const folderChoices = folderChoicesOfManagersKept({ plan, outcomes: managerOutcomes, db: target!.db });
+    const managersRoot = managersRootOf(options);
+    const verdictOf = folderVerdictFor(managersRoot);
+    reportFoldersNeedingALook(report, { choices: folderChoices, verdictOf });
     if (dryRun) return;
-    preparedFolders = prepareManagerFolders({ managersRoot: managersRootOf(options), directories: foldersOfManagersKept(plan, managerOutcomes), forbiddenRoot: options.scapeDir });
+    const preparableChoices = folderChoices.filter((choice) => verdictOf(choice) === 'preparable');
+    const directoriesToPrepare = preparableChoices.map((choice) => join(managersRoot, basename(choice.directory)));
+    preparedFolders = prepareManagerFolders({ managersRoot, directories: directoriesToPrepare, forbiddenRoot: options.scapeDir });
     mustBackUpBeforeCommit();
   };
   const memoryFilesJournal = new MemoryFilesJournal();

@@ -4,7 +4,7 @@ import { newToken } from '../../ids.js';
 import { inTransaction } from '../../db/transaction.js';
 import { ManagerRepository } from '../../managers/managerRepository.js';
 import { SessionRepository } from '../../sessions/sessionRepository.js';
-import { countOutcome, type ImportReport } from './importReport.js';
+import { addManagerFinding, countOutcome, type ImportReport } from './importReport.js';
 import { ImportLedger } from './scapeLedger.js';
 import type { ImportPlan } from './scapePlan.js';
 import type { PlannedManager } from './scapeManagers.js';
@@ -12,6 +12,7 @@ import { reconcileRecord, type RecordValues, type UpsertOutcome } from './scapeT
 
 const MANAGER_EMOJI = '🤖';
 const STORED_MANAGER_STATE = 'closed';
+const MANAGER_OUTCOMES_THAT_STORE_THE_PLANNED_MODEL: UpsertOutcome[] = ['written', 'updated'];
 
 export interface Repositories { sessions: SessionRepository; managers: ManagerRepository }
 
@@ -96,6 +97,9 @@ export function writeManagers(db: DatabaseSync, plan: ImportPlan, report: Import
     counts.expected++;
     countOutcome(counts, outcome);
     if (planned.isNotFullyConverted) counts.notConverted++;
+    const isDefaultStoredByThisRun = planned.isModelDefaulted && MANAGER_OUTCOMES_THAT_STORE_THE_PLANNED_MODEL.includes(outcome);
+    const hasModelFindingToReport = planned.modelFinding !== undefined && (!planned.isModelDefaulted || isDefaultStoredByThisRun);
+    if (hasModelFindingToReport) addManagerFinding(report, { managerName: planned.session.name, text: planned.modelFinding! });
     report.pendingPlaybookMentions += planned.pendingPlaybookMentionCount;
     addToolReferencesToReport(report, planned);
   }
