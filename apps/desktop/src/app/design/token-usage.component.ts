@@ -1,5 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
-import type { TokenUsageLoad } from '../core/session-usage.service';
+
+/** `undefined` while loading, `null` when there is no usage to show, `'unavailable'` when the request failed. */
+export type TokenUsageReading = { inputTokens: number; outputTokens: number } | null | undefined | 'unavailable';
 
 const COMPACT_UNITS = [
   { symbol: 'k', size: 1_000 },
@@ -31,7 +33,7 @@ const exactCount = (count: number): string => count.toLocaleString('en-US');
 })
 export class TokenUsageComponent {
   /** `undefined` while loading, `null` when the daemon has no usage for the session, `'unavailable'` when the request failed. */
-  readonly usage = input.required<TokenUsageLoad>();
+  readonly usage = input.required<TokenUsageReading>();
 
   protected readonly text = computed(() => {
     const usage = this.usage();

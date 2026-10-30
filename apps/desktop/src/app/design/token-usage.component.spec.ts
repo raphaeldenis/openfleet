@@ -1,10 +1,9 @@
 import { inputBinding } from '@angular/core';
 import { render, screen } from '@testing-library/angular/zoneless';
 import { describe, expect, it } from 'vitest';
-import type { TokenUsageLoad } from '../core/session-usage.service';
-import { TokenUsageComponent } from './token-usage.component';
+import { TokenUsageComponent, type TokenUsageReading } from './token-usage.component';
 
-async function renderUsage(usage: TokenUsageLoad) {
+async function renderUsage(usage: TokenUsageReading) {
   await render(TokenUsageComponent, { bindings: [inputBinding('usage', () => usage)] });
   return screen.getByTestId('token-usage');
 }
