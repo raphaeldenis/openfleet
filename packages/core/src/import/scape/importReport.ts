@@ -38,6 +38,8 @@ export interface ImportReport extends SourceLosses {
   counts: Record<EntityName, EntityCounts>;
   projectsWithoutDocsFolder: string[];
   unconvertedNodeTypes: Record<string, number>;
+  /** Each note version (the version number is its rev) holding at least one lexical node without a markdown form, with those node types. */
+  unconvertedNoteVersions: { noteTitle: string; rev: number; nodeTypes: string[] }[];
   /** Playbook mentions in manager missions that have no native resource to resolve. */
   pendingPlaybookMentions: number;
   /** Scape tool references in manager missions: renamed to the OpenFleet tool, pointed at the playbook shims, or left because OpenFleet has no equivalent (name -> occurrences). */
@@ -80,6 +82,7 @@ export const emptyReport = (input: { dryRun: boolean }): ImportReport => ({
   counts: Object.fromEntries(ENTITY_NAMES.map((name) => [name, emptyCounts()])) as Record<EntityName, EntityCounts>,
   projectsWithoutDocsFolder: [],
   unconvertedNodeTypes: {},
+  unconvertedNoteVersions: [],
   pendingPlaybookMentions: 0,
   missionToolReferences: { renamed: 0, pointedAtPlaybookShims: 0, withoutEquivalent: {} },
   mergedStateSections: 0,
@@ -139,6 +142,7 @@ function managerMissionsSection(missions: ManagerMissionReport[]): string[] {
 
 export function renderImportReport(report: ImportReport): string {
   const unconvertedNodeTypes = Object.entries(report.unconvertedNodeTypes).map(([type, count]) => `${type}: ${count}`);
+  const unconvertedNoteVersions = report.unconvertedNoteVersions.map(({ noteTitle, rev, nodeTypes }) => `${inlineMarkdownText(noteTitle)} — version ${rev}: ${nodeTypes.map(inlineMarkdownText).join(', ')}`);
   const toolsWithoutEquivalent = Object.entries(report.missionToolReferences.withoutEquivalent).map(([toolName, count]) => `${toolName}: ${count}`);
   const droppedColumnFormats = report.droppedColumnFormats.map(({ columnId, format }) => `${columnId}: ${format}`);
   const droppedViewFields = report.droppedViewFields.map(({ viewId, fields }) => `${viewId}: ${fields.join(', ')}`);
@@ -180,11 +184,15 @@ export function renderImportReport(report: ImportReport): string {
     ...bulletList(droppedOptionColors),
     '',
     '## View settings not converted',
-    'OpenFleet keeps supported kanban grouping, card fields, title, column order and ungrouped settings. Unsupported or invalid source properties listed below are lost in whole or in part.',
+    'OpenFleet keeps supported kanban grouping, card fields, title, column order and ungrouped settings, and the sort column and direction of any view. Unsupported or invalid source properties listed below are lost in whole or in part. sortMode is always listed with its raw value: its semantics are not established on the Scape side, so it is not converted.',
     ...bulletList(droppedViewFields),
     '',
     '## Lexical node types not converted',
     ...bulletList(unconvertedNodeTypes),
+    '',
+    '## Note versions with unconverted lexical nodes',
+    'Each version below keeps its text; a node without a markdown form is replaced by a "[non converti: type]" marker followed by its text or children. `text-format:N` is a text run carrying a style bit with no markdown form (8 underline, 32 subscript, 64 superscript, 128 highlight); the text stays, the style is lost.',
+    ...bulletList(unconvertedNoteVersions),
     '',
     '## Playbook mentions — MIG-05 archives and native resolution',
     `${report.pendingPlaybookMentions} playbook mention(s) in manager missions have no native playbook resource to resolve. MIG-05 archives their authoring text as notes; native playbook mentions remain "not resolved".`,
