@@ -10,6 +10,7 @@ import { PulseScheduler } from '../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../models.js';
 import { createDegradedRegistry } from '../process/degradedRegistry.js';
 import { SessionService } from '../sessions/sessionService.js';
+import type { PerSessionTrailingThrottleOptions } from '../usage/perSessionTrailingThrottle.js';
 import type { TranscriptUsageIngestion } from '../usage/transcriptUsageIngestion.js';
 import { startServer } from './server.js';
 
@@ -18,10 +19,12 @@ let hookToken: string;
 let sessionId: string;
 let degraded: ReturnType<typeof createDegradedRegistry>;
 
-const NO_WINDOW_MS = 0;
+const NO_WINDOW = { windowMs: 0 };
 let bus: EventBus;
 
-async function startWith(usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>, { usageIngestionWindowMs = NO_WINDOW_MS }: { usageIngestionWindowMs?: number } = {}) {
+const listenerCountOf = (eventBus: EventBus): number => (eventBus as unknown as { listeners: Set<unknown> }).listeners.size;
+
+async function startWith(usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>, { usageIngestionThrottle = NO_WINDOW }: { usageIngestionThrottle?: Partial<PerSessionTrailingThrottleOptions> } = {}) {
   const db = openDatabase(':memory:');
   bus = new EventBus();
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
@@ -30,7 +33,7 @@ async function startWith(usageIngestion?: Pick<TranscriptUsageIngestion, 'ingest
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
   degraded = createDegradedRegistry();
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', degraded, usageIngestion, usageIngestionWindowMs });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', degraded, usageIngestion, usageIngestionThrottle });
   const session = await sessions.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
   sessionId = session.id;
   hookToken = (db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(session.id) as { hook_token: string }).hook_token;
@@ -102,31 +105,94 @@ describe('usage ingestion on the Stop hook', () => {
 
   describe('throughput bound of one session', () => {
     const WINDOW_MS = 300;
-    const pause = (durationMs: number) => new Promise((resolve) => setTimeout(resolve, durationMs));
+
+    function startWithManualTime() {
+      const ingestAtStop = vi.fn();
+      let nowMs = 0;
+      const scheduled: (() => void)[] = [];
+      const timers = new Map<number, { dueAtMs: number; task: () => void }>();
+      let nextTimerId = 0;
+      const throttle = {
+        windowMs: WINDOW_MS,
+        clock: () => nowMs,
+        schedule: (task: () => void) => { scheduled.push(task); },
+        startTimer: (task: () => void, delayMs: number) => {
+          const timerId = nextTimerId++;
+          timers.set(timerId, { dueAtMs: nowMs + delayMs, task });
+          return () => timers.delete(timerId);
+        },
+      };
+      const started = startWith({ ingestAtStop }, { usageIngestionThrottle: throttle });
+      const runScheduled = () => scheduled.splice(0).forEach((task) => task());
+      const advanceTo = (targetMs: number) => {
+        nowMs = targetMs;
+        for (const [timerId, { dueAtMs, task }] of [...timers]) {
+          if (dueAtMs > nowMs) continue;
+          timers.delete(timerId);
+          task();
+        }
+      };
+      return { ingestAtStop, started, runScheduled, advanceTo };
+    }
 
     it('runs one ingestion at once and one trailing ingestion at the end of the window for a burst of Stops', async () => {
-      const ingestAtStop = vi.fn();
-      await startWith({ ingestAtStop }, { usageIngestionWindowMs: WINDOW_MS });
+      const { ingestAtStop, started, runScheduled, advanceTo } = startWithManualTime();
+      await started;
 
       for (let stop = 1; stop <= 5; stop += 1) await hook('Stop');
-      await expect.poll(() => ingestAtStop.mock.calls.length).toBe(1);
-      await expect.poll(() => ingestAtStop.mock.calls.length).toBe(2);
-      await pause(WINDOW_MS + 100);
+      runScheduled();
+      const callsInsideTheWindow = ingestAtStop.mock.calls.length;
+      advanceTo(WINDOW_MS);
+      advanceTo(10 * WINDOW_MS);
+
+      expect([callsInsideTheWindow, ingestAtStop.mock.calls.length]).toEqual([1, 2]);
+    });
+
+    it('drops the trailing ingestion of a session that closes inside the window', async () => {
+      const { ingestAtStop, started, runScheduled, advanceTo } = startWithManualTime();
+      await started;
+      await hook('Stop');
+      runScheduled();
+      await hook('Stop');
+
+      bus.emit({ type: 'session.closed', sessionId });
+      advanceTo(WINDOW_MS);
+
+      expect(ingestAtStop.mock.calls.length).toBe(1);
+    });
+
+    it('ingests the trailing Stop when the server begins to shut down, while the transcripts are still reachable', async () => {
+      const { ingestAtStop, started, runScheduled } = startWithManualTime();
+      await started;
+      await hook('Stop');
+      runScheduled();
+      await hook('Stop');
+
+      server.beginShutdown();
 
       expect(ingestAtStop.mock.calls.length).toBe(2);
     });
 
-    it('drops the trailing ingestion of a session that closes inside the window', async () => {
-      const ingestAtStop = vi.fn();
-      await startWith({ ingestAtStop }, { usageIngestionWindowMs: WINDOW_MS });
-      await hook('Stop');
-      await expect.poll(() => ingestAtStop.mock.calls.length).toBe(1);
-      await hook('Stop');
+    it('ingests nothing for a Stop that arrives after the shutdown began', async () => {
+      const { ingestAtStop, started, runScheduled, advanceTo } = startWithManualTime();
+      await started;
+      server.beginShutdown();
 
-      bus.emit({ type: 'session.closed', sessionId });
-      await pause(WINDOW_MS + 100);
+      await hook('Stop');
+      runScheduled();
+      advanceTo(WINDOW_MS);
 
-      expect(ingestAtStop.mock.calls.length).toBe(1);
+      expect(ingestAtStop).not.toHaveBeenCalled();
+    });
+
+    it('stops listening to the closing of sessions when the server begins to shut down', async () => {
+      const { started } = startWithManualTime();
+      await started;
+      const listenerCountBefore = listenerCountOf(bus);
+
+      server.beginShutdown();
+
+      expect(listenerCountOf(bus)).toBe(listenerCountBefore - 1);
     });
   });
 

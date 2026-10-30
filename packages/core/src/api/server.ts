@@ -43,6 +43,7 @@ import { registerGovernanceE2eRoutes } from './governanceE2eRoutes.js';
 import { registerCommandPolicyRoutes } from './commandPolicyRoutes.js';
 import { registerReviewFindingsRoutes } from './reviewFindingsRoutes.js';
 import { registerUsageRoutes } from './usageRoutes.js';
+import type { PerSessionTrailingThrottleOptions } from '../usage/perSessionTrailingThrottle.js';
 import type { TranscriptUsageIngestion } from '../usage/transcriptUsageIngestion.js';
 import type { UsageLedgerService } from '../usage/usageLedgerService.js';
 import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
@@ -99,8 +100,8 @@ export interface ServerDeps {
   contextNotice?: ContextNotice;
   /** Present only when the operator enabled the usage ingestion. */
   usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>;
-  /** The length of the window in which a session's Stops cause one usage ingestion; defaults to one second. */
-  usageIngestionWindowMs?: number;
+  /** The window in which a session's Stops cause one usage ingestion (one second by default) and the clock, scheduler and timer that drive it. */
+  usageIngestionThrottle?: Partial<PerSessionTrailingThrottleOptions>;
   // Without it the daemon reports no degraded state: /health says ok and the snapshot carries no daemonIssues.
   degraded?: DegradedRegistry;
   // Without it PreToolUse is answered {} and a PermissionRequest always opens an approval, as before the command policy.
@@ -245,9 +246,13 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   return {
     url: `http://${deps.host}:${port}`,
     routes: router.list(),
-    /** Makes /health answer 503 while the sessions are still closing and the port is still bound. */
-    beginShutdown: () => { isShuttingDown = true; },
+    /** Makes /health answer 503 while the sessions are still closing and the port is still bound; ingests the usage still waiting in a window while the transcripts are reachable. */
+    beginShutdown: () => {
+      isShuttingDown = true;
+      handleHook.dispose();
+    },
     close: () => {
+      handleHook.dispose();
       // closeAllConnections() only ever covered plain HTTP sockets — an upgraded WS connection is not one
       // of "server's" connections any more as far as node:http is concerned, so server.close() would wait
       // on it forever with the UI still open (MAJ-08/AUD-08). Close those out first, then the rest as before.

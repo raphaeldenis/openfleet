@@ -11,7 +11,7 @@ import type { ManagerService } from '../managers/managerService.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { OncePerWindowPerKey } from '../usage/oncePerWindowPerKey.js';
-import { PerSessionTrailingThrottle } from '../usage/perSessionTrailingThrottle.js';
+import { PerSessionTrailingThrottle, type PerSessionTrailingThrottleOptions } from '../usage/perSessionTrailingThrottle.js';
 import type { TranscriptUsageIngestion } from '../usage/transcriptUsageIngestion.js';
 import { handoverReminder, type HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
@@ -51,7 +51,7 @@ function trackTodosFailingOpen(todos: TodoTracker | undefined, sessionId: string
 /** A conversation that starts, restarts or resumes has the base and the mission note only if it reads them again; a manager that never read them is unaffected. */
 const SESSION_START_SOURCES_THAT_RESET_THE_BASE_AND_NOTE_READS = ['startup', 'compact', 'clear', 'resume'];
 
-export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead' | 'forgetNoteRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>; usageIngestionWindowMs?: number; bus?: Pick<EventBus, 'subscribe'>; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
+export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead' | 'forgetNoteRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>; usageIngestionThrottle?: Partial<PerSessionTrailingThrottleOptions>; bus?: Pick<EventBus, 'subscribe'>; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler & { dispose(): void } {
   const decideStopRefusalFailingOpen = (sessionId: string, stopHookActive: boolean): StopHookOutput | undefined =>
     failingOpen(deps.degraded, 'stop refusal check failed, letting the turn end', () => deps.stopRefusal?.decide({ sessionId, stopHookActive }));
 
@@ -80,15 +80,20 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
       if (startsFreshConversation) deps.contextNotice?.clearForNewConversation(sessionId);
     });
 
-  const stopIngestions = new PerSessionTrailingThrottle({ windowMs: deps.usageIngestionWindowMs ?? USAGE_INGESTION_WINDOW_MS });
+  const stopIngestions = new PerSessionTrailingThrottle({ windowMs: USAGE_INGESTION_WINDOW_MS, ...deps.usageIngestionThrottle });
 
   const degradedCountsOfUsageFailures = new OncePerWindowPerKey(USAGE_FAILURE_COUNT_WINDOW_MS);
 
-  deps.bus?.subscribe((event) => {
+  const stopListeningToClosedSessions = deps.bus?.subscribe((event) => {
     if (event.type !== 'session.closed') return;
     stopIngestions.forget(event.sessionId);
     degradedCountsOfUsageFailures.forget(event.sessionId);
   });
+
+  const dispose = (): void => {
+    stopListeningToClosedSessions?.();
+    stopIngestions.dispose();
+  };
 
   const ingestUsageFailingOpen = (usageIngestion: Pick<TranscriptUsageIngestion, 'ingestAtStop'>, sessionId: string): void => {
     try {
@@ -107,7 +112,7 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
     stopIngestions.request(sessionId, () => ingestUsageFailingOpen(usageIngestion, sessionId));
   };
 
-  return async ({ res, params, body }) => {
+  const handleHook: Handler = async ({ res, params, body }) => {
     const session = deps.sessions.byHookToken(params.hookToken ?? '');
     const parsed = ClaudeHookEventSchema.safeParse(body);
     const isIgnorable = !session || !parsed.success || session.state === 'closed';
@@ -149,4 +154,6 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
     const message = decision === 'deny' ? 'denied in OpenFleet' : undefined;
     return json(res, 200, { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: decision, message } } });
   };
+
+  return Object.assign(handleHook, { dispose });
 }

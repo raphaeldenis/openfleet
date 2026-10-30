@@ -27,7 +27,8 @@ function newThrottle() {
       task();
     }
   };
-  return { throttle, runScheduled, advanceTo, pendingTimerCount: () => timers.size };
+  const moveClockWithoutFiringTimers = (targetMs: number) => { nowMs = targetMs; };
+  return { throttle, runScheduled, advanceTo, moveClockWithoutFiringTimers, pendingTimerCount: () => timers.size };
 }
 
 describe('PerSessionTrailingThrottle', () => {
@@ -126,7 +127,92 @@ describe('PerSessionTrailingThrottle', () => {
     expect(nextTask).toHaveBeenCalledTimes(1);
   });
 
+  it('waits at most one window for the trailing task when the clock jumps back', () => {
+    const { throttle, runScheduled, advanceTo } = newThrottle();
+    const trailingTask = vi.fn();
+    advanceTo(3_600_000);
+    throttle.request('s1', vi.fn());
+    runScheduled();
+
+    advanceTo(0);
+    throttle.request('s1', trailingTask);
+    advanceTo(WINDOW_MS);
+
+    expect(trailingTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs a request made after a late timer right away and never replays the older trailing task', () => {
+    const { throttle, runScheduled, advanceTo, moveClockWithoutFiringTimers, pendingTimerCount } = newThrottle();
+    const olderTrailingTask = vi.fn();
+    const newerTask = vi.fn();
+    throttle.request('s1', vi.fn());
+    runScheduled();
+    advanceTo(400);
+    throttle.request('s1', olderTrailingTask);
+
+    moveClockWithoutFiringTimers(WINDOW_MS + 500);
+    throttle.request('s1', newerTask);
+    runScheduled();
+    advanceTo(3 * WINDOW_MS);
+
+    expect([olderTrailingTask.mock.calls.length, newerTask.mock.calls.length, pendingTimerCount()]).toEqual([0, 1, 0]);
+  });
+
+  describe('dispose', () => {
+    it('runs the pending trailing task once and cancels its timer', () => {
+      const { throttle, runScheduled, advanceTo, pendingTimerCount } = newThrottle();
+      const trailingTask = vi.fn();
+      throttle.request('s1', vi.fn());
+      runScheduled();
+      throttle.request('s1', trailingTask);
+
+      throttle.dispose();
+      advanceTo(WINDOW_MS);
+
+      expect([trailingTask.mock.calls.length, pendingTimerCount()]).toEqual([1, 0]);
+    });
+
+    it('runs the pending trailing task of every session', () => {
+      const { throttle, runScheduled } = newThrottle();
+      const trailingTasks = [vi.fn(), vi.fn()];
+      throttle.request('s1', vi.fn());
+      throttle.request('s2', vi.fn());
+      runScheduled();
+      throttle.request('s1', trailingTasks[0]!);
+      throttle.request('s2', trailingTasks[1]!);
+
+      throttle.dispose();
+
+      expect(trailingTasks.map((task) => task.mock.calls.length)).toEqual([1, 1]);
+    });
+
+    it('ignores the requests made after it', () => {
+      const { throttle, runScheduled, advanceTo, pendingTimerCount } = newThrottle();
+      const task = vi.fn();
+      throttle.dispose();
+
+      throttle.request('s1', task);
+      runScheduled();
+      advanceTo(WINDOW_MS);
+
+      expect([task.mock.calls.length, pendingTimerCount()]).toEqual([0, 0]);
+    });
+  });
+
   describe('forget', () => {
+    it('drops a task scheduled before the forget even when the session asks again before it runs', () => {
+      const { throttle, runScheduled } = newThrottle();
+      const droppedTask = vi.fn();
+      const newTask = vi.fn();
+      throttle.request('s1', droppedTask);
+
+      throttle.forget('s1');
+      throttle.request('s1', newTask);
+      runScheduled();
+
+      expect([droppedTask.mock.calls.length, newTask.mock.calls.length]).toEqual([0, 1]);
+    });
+
     it('cancels the trailing timer of the session', () => {
       const { throttle, runScheduled, advanceTo, pendingTimerCount } = newThrottle();
       const task = vi.fn();
