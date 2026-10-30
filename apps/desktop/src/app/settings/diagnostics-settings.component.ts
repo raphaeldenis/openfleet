@@ -38,7 +38,7 @@ const COPY_FAILURE_TEXT = {
         <div class="row">
           <div class="label">
             <span class="name">Export diagnostics bundle…</span>
-            <span class="detail">Logs, daemon version, recent errors (secrets masked) · {{ exporter.isAvailable ? 'opens the macOS save dialog' : unavailableTooltip }}</span>
+            <span class="detail">Logs, daemon version, recent errors (typed fields only, free text left out) · {{ exporter.isAvailable ? 'opens the macOS save dialog' : unavailableTooltip }}</span>
           </div>
           <button
             type="button"
@@ -140,7 +140,8 @@ export class DiagnosticsSettingsComponent {
     if (daemonDocument === undefined) return this.exportState.set({ kind: 'failed', cause: 'daemon_silent' });
     try {
       const desktopLog = await this.exporter.readDesktopLog();
-      const bundle = buildBundle({ daemonDocument, desktopLog, at: new Date() });
+      const projectDaemonRecords = (records: unknown[]) => this.exporter.projectDaemonRecords(records);
+      const bundle = await buildBundle({ daemonDocument, desktopLog, at: new Date(), projectDaemonRecords });
       const outcome = await this.exporter.saveBundle(bundle);
       const wasDismissed = outcome.status === 'cancelled';
       this.exportState.set(wasDismissed ? { kind: 'idle' } : { kind: 'saved', fileName: bundle.fileName, sizeLabel: sizeLabelOf(bundle.bytes.length) });

@@ -1,4 +1,4 @@
-import { BACKTICKED_TOOL_NAME, CHILDREN_COUNT_PHRASES, EXACT_MODEL_ID, HUMAN_QA_PHRASES } from './managerContentPatterns.js';
+import { BACKTICKED_TOOL_NAME, CHILDREN_COUNT_PHRASES, EXACT_MODEL_ID, FILE_COUNT_PAUSE_PHRASES, HUMAN_QA_PHRASES } from './managerContentPatterns.js';
 
 const MAX_BASE_BYTES = 8192;
 
@@ -19,6 +19,7 @@ export function lintManagerBase({ source, bodyBytes, registeredToolNames }: Mana
     const found: string[] = [];
     if (HUMAN_QA_PHRASES.test(line)) found.push(`line ${lineNumber} says QA belongs to the human`);
     if (CHILDREN_COUNT_PHRASES.some((phrase) => phrase.test(line))) found.push(`line ${lineNumber} writes a number of children`);
+    if (FILE_COUNT_PAUSE_PHRASES.test(line)) found.push(`line ${lineNumber} pauses on a number of files`);
     if (EXACT_MODEL_ID.test(line)) found.push(`line ${lineNumber} names an exact model id`);
     for (const [, toolName] of line.matchAll(BACKTICKED_TOOL_NAME)) {
       if (!registeredToolNames.has(toolName!)) found.push(`line ${lineNumber} cites the tool ${toolName}, which the daemon does not register`);

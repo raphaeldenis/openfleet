@@ -55,10 +55,7 @@ warn_about_uncommitted_test_inputs() {
 }
 
 run_cargo_checks() {
-  if ! command -v cargo >/dev/null 2>&1; then
-    echo "pre-push: cargo skipped — cargo is not installed (CI still runs the Rust checks)"
-    return 0
-  fi
+  require_cargo || fail "✖ cargo missing — push aborted (bypass: git push --no-verify)"
   command -v rustup >/dev/null 2>&1 || fail "rustup is required for the CI Rust toolchains"
   export TAURI_CONFIG='{"bundle":{"externalBin":[],"resources":[]}}'
   run_step "Rust test toolchain" rustup toolchain install "$TAURI_RUST_VERSION" --profile minimal
@@ -101,7 +98,8 @@ if [ -t 0 ]; then
 else
   pushed_refs=$(cat)
 fi
-planned_steps=$(printf '%s\n' "$pushed_refs" | pushed_files | steps_for_files)
+pushed_file_names=$(printf '%s\n' "$pushed_refs" | pushed_files) || fail "✖ cannot list the pushed files — push aborted (bypass: git push --no-verify)"
+planned_steps=$(printf '%s\n' "$pushed_file_names" | steps_for_files)
 e2e_touched=no
 is_planned e2e && e2e_touched=yes
 
@@ -128,7 +126,7 @@ run_step "desktop tests" pnpm --filter @openfleet/desktop test
 if is_planned cargo; then
   run_cargo_checks
 else
-  echo "pre-push: cargo skipped — the push does not touch $TAURI_DIR"
+  echo "pre-push: cargo skipped (no src-tauri change) — the push does not touch $TAURI_DIR"
 fi
 run_e2e_when_decided
 

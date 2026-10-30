@@ -237,6 +237,22 @@ describe('FleetApiService', () => {
       });
     });
 
+    it('posts attended: true only when the human chose it', async () => {
+      fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({ id: 'm-1' }) }));
+
+      await api.createManagerSession({ directory: '/tmp/wt', name: 'Lead', childrenCap: 2, mission: 'Ship', attended: true });
+
+      expect(postedBody()).toMatchObject({ attended: true });
+    });
+
+    it('posts no attended flag by default', async () => {
+      fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({ id: 'm-1' }) }));
+
+      await api.createManagerSession({ directory: '/tmp/wt', name: 'Lead', childrenCap: 2, mission: 'Ship' });
+
+      expect(postedBody()).not.toHaveProperty('attended');
+    });
+
     it('posts no permission mode when none is chosen', async () => {
       fetchMock.mockResolvedValue(fakeResponse({ ok: true, status: 200, json: () => Promise.resolve({ id: 'm-1' }) }));
 

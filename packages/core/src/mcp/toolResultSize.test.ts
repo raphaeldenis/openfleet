@@ -614,7 +614,7 @@ describe('MCP tool results are compact', () => {
       expect(count).toBe(ROW_COUNT);
       expect(truncated).toBe(false);
       for (const row of rows) {
-        expect(keysOf(row)).toEqual(['data', 'id', 'updatedAt']);
+        expect(keysOf(row)).toEqual(['data', 'id', 'rev', 'updatedAt']);
         expect(Object.keys(row.data)).toHaveLength(COLUMN_COUNT);
       }
     });
@@ -629,8 +629,8 @@ describe('MCP tool results are compact', () => {
       const rowObjectsFromColumnar = (columnar: { columns: string[]; rows: unknown[][] }) => columnar.rows.map((cells) => Object.fromEntries(columnar.columns.map((header, index) => [header, cells[index]])));
 
       /** The row objects of the default format, every cell of `columnIds` present, a missing one as null. */
-      const rowsWithEveryCell = (rows: { id: string; data: Record<string, unknown>; updatedAt?: string }[], columnIds: string[]) => rows.map((row) => ({
-        id: row.id, updatedAt: row.updatedAt, ...Object.fromEntries(columnIds.map((columnId) => [columnId, row.data[columnId] ?? null])),
+      const rowsWithEveryCell = (rows: { id: string; data: Record<string, unknown>; rev: number; updatedAt?: string }[], columnIds: string[]) => rows.map((row) => ({
+        id: row.id, updatedAt: row.updatedAt, ...Object.fromEntries(columnIds.map((columnId) => [columnId, row.data[columnId] ?? null])), rev: row.rev,
       }));
 
       async function seedMixedTypeTable(rowCount: number) {
@@ -661,7 +661,7 @@ describe('MCP tool results are compact', () => {
         expect(isCompactJson(result)).toBe(true);
         expect(bytesOf(result)).toBeLessThanOrEqual(BYTE_BUDGET.queryDataStoreColumnar);
         const { columns, rows, count, truncated } = parsed(result);
-        expect(columns).toHaveLength(2 + COLUMN_COUNT);
+        expect(columns).toHaveLength(3 + COLUMN_COUNT);
         expect(columns.slice(0, 2)).toEqual(['id', 'updatedAt']);
         expect(rows).toHaveLength(ROW_COUNT);
         expect(count).toBe(ROW_COUNT);
@@ -690,7 +690,7 @@ describe('MCP tool results are compact', () => {
 
         expect(asObjects.rows[0].data).toEqual({ [textId]: 'missing number' });
         expect(asObjects.rows[0].data).not.toHaveProperty(numberId);
-        expect(columnar.rows.map((cells: unknown[]) => cells.slice(1))).toEqual([['missing number', null], ['null number', null]]);
+        expect(columnar.rows.map((cells: unknown[]) => cells.slice(1, -1))).toEqual([['missing number', null], ['null number', null]]);
         expect(asObjects.rows[1].data[numberId] ?? null).toBeNull();
       });
 
@@ -701,7 +701,7 @@ describe('MCP tool results are compact', () => {
         const asObjects = parsed(await call('query_data_store', { store: storeId }));
 
         expect(columnar).toEqual({
-          columns: ['id', 'updatedAt', ...columnIds], names: ['id', 'updatedAt', 'title', 'points', 'due', 'extra', 'status'], rows: [], truncated: false, count: 0, total: 0, next_offset: null,
+          columns: ['id', 'updatedAt', ...columnIds, 'rev'], names: ['id', 'updatedAt', 'title', 'points', 'due', 'extra', 'status', 'rev'], rows: [], truncated: false, count: 0, total: 0, next_offset: null,
         });
         expect(asObjects).toEqual({ rows: [], truncated: false, count: 0, total: 0, next_offset: null });
       });
@@ -712,7 +712,7 @@ describe('MCP tool results are compact', () => {
         const columnar = parsed(await columnarQuery({ store: storeId, columns: ['points', textId] }));
         const asObjects = parsed(await call('query_data_store', { store: storeId, columns: [textId, 'points'] }));
 
-        expect(columnar.columns).toEqual(['id', 'updatedAt', numberId, textId]);
+        expect(columnar.columns).toEqual(['id', 'updatedAt', numberId, textId, 'rev']);
         for (const row of columnar.rows) expect(row).toHaveLength(columnar.columns.length);
         for (const row of asObjects.rows) expect(Object.keys(row.data).every((key) => [textId, numberId].includes(key))).toBe(true);
         expect(asObjects.rows.some((row: { data: object }) => textId in row.data)).toBe(true);
@@ -725,7 +725,7 @@ describe('MCP tool results are compact', () => {
         const asObjects = parsed(await call('query_data_store', { store: storeId, columns: ['sTaTuS'] }));
         const wrongCaseId = await columnarQuery({ store: storeId, columns: [selectId.toLowerCase() === selectId ? selectId.toUpperCase() : selectId.toLowerCase()] });
 
-        expect(columnar.columns).toEqual(['id', 'updatedAt', selectId, textId]);
+        expect(columnar.columns).toEqual(['id', 'updatedAt', selectId, textId, 'rev']);
         expect(Object.keys(asObjects.rows[1].data)).toEqual([selectId]);
         expect(wrongCaseId.isError).toBe(true);
       });
@@ -742,15 +742,15 @@ describe('MCP tool results are compact', () => {
         const everyColumn = await namedColumnar({});
 
         for (const columnar of [byName, byId, mixed]) {
-          expect(columnar.columns).toEqual(['id', 'updatedAt', numberId, textId]);
-          expect(columnar.names).toEqual(['id', 'updatedAt', 'points', 'title']);
+          expect(columnar.columns).toEqual(['id', 'updatedAt', numberId, textId, 'rev']);
+          expect(columnar.names).toEqual(['id', 'updatedAt', 'points', 'title', 'rev']);
         }
-        expect(deduplicated.columns).toEqual(['id', 'updatedAt', textId, numberId]);
-        expect(deduplicated.names).toEqual(['id', 'updatedAt', 'title', 'points']);
-        expect(withoutUpdatedAt.columns).toEqual(['id', numberId]);
-        expect(withoutUpdatedAt.names).toEqual(['id', 'points']);
+        expect(deduplicated.columns).toEqual(['id', 'updatedAt', textId, numberId, 'rev']);
+        expect(deduplicated.names).toEqual(['id', 'updatedAt', 'title', 'points', 'rev']);
+        expect(withoutUpdatedAt.columns).toEqual(['id', numberId, 'rev']);
+        expect(withoutUpdatedAt.names).toEqual(['id', 'points', 'rev']);
         expect(everyColumn.names).toHaveLength(everyColumn.columns.length);
-        expect(everyColumn.names.slice(2)).toEqual(['title', 'points', 'due', 'extra', 'status']);
+        expect(everyColumn.names.slice(2, -1)).toEqual(['title', 'points', 'due', 'extra', 'status']);
       });
 
       it('agent is told which columns it sent are unknown, as columns, in columns, where and order_by alike', async () => {
@@ -787,10 +787,10 @@ describe('MCP tool results are compact', () => {
         expect(columnarWithout.columns).toHaveLength(columnarWith.columns.length - 1);
         expect(columnarWithout.names.slice(0, 2)).toEqual(['id', columnarWith.names[2]]);
         for (const row of columnarWithout.rows) expect(row).toHaveLength(columnarWithout.columns.length);
-        for (const row of objectsWithout.rows) expect(keysOf(row)).toEqual(['data', 'id']);
+        for (const row of objectsWithout.rows) expect(keysOf(row)).toEqual(['data', 'id', 'rev']);
         expect(columnarWith.columns.slice(0, 2)).toEqual(['id', 'updatedAt']);
         for (const row of columnarWith.rows) expect(row).toHaveLength(columnarWith.columns.length);
-        for (const row of objectsWith.rows) expect(keysOf(row)).toEqual(['data', 'id', 'updatedAt']);
+        for (const row of objectsWith.rows) expect(keysOf(row)).toEqual(['data', 'id', 'rev', 'updatedAt']);
       });
 
       it('agent gets the same rows, count and truncation in both formats when the result passes the byte budget', async () => {
@@ -895,7 +895,7 @@ describe('MCP tool results are compact', () => {
         expect(description).toContain('an empty list keeps NO data columns');
         expect(description).toContain('columnar rows are [rowId, updatedAt] or [rowId] with include_updated_at false');
         expect(description).toContain('rows format has data: {}');
-        expect(description).toContain('columns lists id, updatedAt (unless dropped) then the data column ids, names labels the same positions');
+        expect(description).toContain('columns lists id, updatedAt (unless dropped), the data column ids then rev, names labels the same positions');
         expect(description).toContain('name a column by id or display name');
         expect(description).toContain('names resolve to ids');
         expect(description).toContain('an id wins over a name');
@@ -923,8 +923,8 @@ describe('MCP tool results are compact', () => {
 
         const columnar = parsed(await columnarQuery({ store: storeId, columns: ['gamma', 'alpha'], include_updated_at: false, order_by: [{ columnId: alphaId, dir: 'asc' }] }));
 
-        expect(columnar.columns).toEqual(['id', gammaId, alphaId]);
-        expect(columnar.rows.map((row: unknown[]) => row.slice(1))).toEqual([['g1', 'a1'], ['g2', 'a2']]);
+        expect(columnar.columns).toEqual(['id', gammaId, alphaId, 'rev']);
+        expect(columnar.rows.map((row: unknown[]) => row.slice(1, -1))).toEqual([['g1', 'a1'], ['g2', 'a2']]);
       });
 
       it('agent gets a column once when it names it twice, by name and by id', async () => {
@@ -933,8 +933,8 @@ describe('MCP tool results are compact', () => {
         const columnar = parsed(await columnarQuery({ store: storeId, columns: ['alpha', alphaId, 'alpha'] }));
         const asObjects = parsed(await call('query_data_store', { store: storeId, columns: ['alpha', alphaId, 'alpha'] }));
 
-        expect(columnar.columns).toEqual(['id', 'updatedAt', alphaId]);
-        for (const row of columnar.rows) expect(row).toHaveLength(3);
+        expect(columnar.columns).toEqual(['id', 'updatedAt', alphaId, 'rev']);
+        for (const row of columnar.rows) expect(row).toHaveLength(4);
         expect(Object.keys(asObjects.rows[0].data)).toEqual([alphaId]);
       });
 
@@ -945,7 +945,7 @@ describe('MCP tool results are compact', () => {
 
         const columnar = parsed(await columnarQuery({ store: storeId, columns: [alphaId], include_updated_at: false }));
 
-        expect(columnar.columns).toEqual(['id', alphaId]);
+        expect(columnar.columns).toEqual(['id', alphaId, 'rev']);
         expect(columnar.rows.map((row: unknown[]) => row[1])).toEqual(['a1', 'a2', null]);
       });
 
@@ -955,9 +955,9 @@ describe('MCP tool results are compact', () => {
         const columnar = parsed(await columnarQuery({ store: storeId, columns: [] }));
         const asObjects = parsed(await call('query_data_store', { store: storeId, columns: [] }));
 
-        expect(columnar.columns).toEqual(['id', 'updatedAt']);
-        expect(columnar.names).toEqual(['id', 'updatedAt']);
-        for (const row of columnar.rows) expect(row).toHaveLength(2);
+        expect(columnar.columns).toEqual(['id', 'updatedAt', 'rev']);
+        expect(columnar.names).toEqual(['id', 'updatedAt', 'rev']);
+        for (const row of columnar.rows) expect(row).toHaveLength(3);
         for (const row of asObjects.rows) expect(row.data).toEqual({});
       });
 
@@ -967,9 +967,9 @@ describe('MCP tool results are compact', () => {
         const columnar = parsed(await columnarQuery({ store: storeId, columns: [], include_updated_at: false }));
 
         expect(columnar.count).toBe(2);
-        expect(columnar.columns).toEqual(['id']);
-        expect(columnar.names).toEqual(['id']);
-        for (const row of columnar.rows) expect(row).toHaveLength(1);
+        expect(columnar.columns).toEqual(['id', 'rev']);
+        expect(columnar.names).toEqual(['id', 'rev']);
+        for (const row of columnar.rows) expect(row).toHaveLength(2);
       });
 
       it.each(['Columnar', 'csv', '', null])('agent is refused format %j instead of silently getting the default rows', async (format) => {

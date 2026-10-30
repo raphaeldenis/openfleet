@@ -1,6 +1,6 @@
 import { Injectable, computed, signal } from '@angular/core';
 import { TodoSummarySchema, closeReasonOfExitCode, parseSessionCloseReason } from '@openfleet/shared';
-import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, GovernanceProposalView, ManagerView, NoteChangeEvent, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, EscalationView, GovernanceProposalView, ManagerView, NoteChangeEvent, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { parseSessionTodos } from './session-todos-parser';
@@ -9,6 +9,7 @@ import { isUserTyping } from './terminal-keystrokes';
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 const MAX_BACKGROUND_FAILURES = 50;
+const MIN_JITTER_SHARE = 0.5;
 
 export interface BackgroundFailure {
   key: string;
@@ -28,6 +29,70 @@ function isBackgroundFailure({ error: envelope, scope }: { error: ErrorEnvelope;
 
 /** Names one prompt of one session: the same prompt keeps its key for as long as it stays undecided. */
 export const silentBlockKey = ({ sessionId, waitingSince }: SilentBlock): string => `${sessionId}@${waitingSince}`;
+
+const isAwaitingAnswer = ({ status }: EscalationView): boolean => status === 'pending';
+
+function parseServerEvent(text: string): ServerEvent | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const isObjectFrame = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+    return isObjectFrame ? (parsed as ServerEvent) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The event types the service reads no payload field of: a frame of one of them is never dropped.
+ * A payload read added to reduce() for one of these types requires moving the type out of this list and into REQUIRED_PAYLOAD_FIELDS with the fields it reads.
+ */
+export const EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD = ['session.attention', 'session.relaunching', 'message.queued', 'message.held', 'command.denied'] as const;
+
+export type PayloadCarryingEventType = Exclude<ServerEvent['type'], (typeof EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD)[number]>;
+
+const REQUIRED_PAYLOAD_FIELDS: Record<PayloadCarryingEventType, readonly string[]> = {
+  'snapshot': ['sessions', 'approvals'],
+  'session.todos': ['todos'],
+  'session.working_state': ['state'],
+  'session.created': ['session'],
+  'session.updated': ['session'],
+  'session.state': ['sessionId', 'state'],
+  'session.closed': ['sessionId'],
+  'session.output': ['sessionId', 'data'],
+  'session.replay': ['sessionId', 'data'],
+  'session.model_changed': ['sessionId', 'model'],
+  'session.permission_mode_changed': ['sessionId', 'mode'],
+  'session.reopened': ['sessionId'],
+  'message.delivered': ['messageId'],
+  'approval.created': ['approval'],
+  'approval.resolved': ['approval'],
+  'governance.proposed': ['proposal'],
+  'governance.resolved': ['proposal'],
+  'governance.queue_changed': ['managerId', 'queuedCount'],
+  'escalation.raised': ['escalation'],
+  'escalation.resolved': ['escalation'],
+  'law.created': ['law'],
+  'law.updated': ['law'],
+  'law.withdrawn': ['law'],
+  'manager.created': ['manager'],
+  'manager.pulsed': ['manager'],
+  'manager.updated': ['manager'],
+  'error': ['error'],
+  'daemon.issues': ['issues'],
+  'permission.silent_blocks': ['blocks'],
+  'notification.trigger': ['category'],
+  'note.created': ['noteId'],
+  'note.updated': ['noteId'],
+  'note.deleted': ['noteId'],
+};
+
+function carriesItsRequiredPayload(event: ServerEvent): boolean {
+  const isPayloadCarryingType = Object.hasOwn(REQUIRED_PAYLOAD_FIELDS, event.type);
+  if (!isPayloadCarryingType) return true;
+  const requiredFields = REQUIRED_PAYLOAD_FIELDS[event.type as PayloadCarryingEventType];
+  const fields = event as unknown as Record<string, unknown>;
+  return requiredFields.every((field) => fields[field] != null);
+}
 
 function notificationTriggerOf({ type: _type, ...trigger }: Extract<ServerEvent, { type: 'notification.trigger' }>): NotificationTrigger {
   return trigger;
@@ -73,6 +138,11 @@ export class FleetEventsService {
   readonly managers = signal<ManagerView[]>([]);
   /** The governance proposals still awaiting a human decision; empty for a daemon that reports none. */
   readonly proposals = signal<GovernanceProposalView[]>([]);
+  /** The escalations still awaiting a human answer; empty for a daemon that reports none. */
+  readonly escalations = signal<EscalationView[]>([]);
+  private readonly settledEscalationIds = signal<ReadonlySet<string>>(new Set());
+  /** The ids of the escalations awaiting an answer and of those this client saw settled; the snapshot does not forget the settled ones. */
+  readonly knownEscalationIds = computed(() => new Set([...this.escalations().map(({ id }) => id), ...this.settledEscalationIds()]));
   private readonly queuedCounts = signal<Readonly<Record<string, number>>>({});
   /** How many proposals wait for a pending place across all managers; zero for a daemon that reports no waiting list. */
   readonly queuedTotal = computed(() => Object.values(this.queuedCounts()).reduce((sum, count) => sum + count, 0));
@@ -132,6 +202,15 @@ export class FleetEventsService {
   // is what makes the second one a no-op instead of a duplicate replay. Cleared the moment the socket
   // drops, so a real future reconnect still attaches normally.
   private readonly attachedSinceOpenSessionIds = new Set<string>();
+  // A daemon that keeps sending the same malformed frame would flood the console: each type is reported once per connection.
+  private readonly typesWarnedAboutSinceOpen = new Set<string>();
+
+  private warnOnceAboutDroppedFrame(type: string): void {
+    const isAlreadyReported = this.typesWarnedAboutSinceOpen.has(type);
+    if (isAlreadyReported) return;
+    this.typesWarnedAboutSinceOpen.add(type);
+    console.warn(`Dropped a ${type} frame that lacks its payload`);
+  }
 
   connect(): Promise<void> {
     const isAlreadyConnectingOrOpen =
@@ -160,9 +239,18 @@ export class FleetEventsService {
       this.reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
       if (this.hasConnectedBefore) this.reconnectCount.update((n) => n + 1);
       this.hasConnectedBefore = true;
+      this.typesWarnedAboutSinceOpen.clear();
       this.flushQueuedSends();
     });
-    socket.addEventListener('message', (m) => this.reduce(JSON.parse(String(m.data)) as ServerEvent));
+    socket.addEventListener('message', (m) => {
+      const event = parseServerEvent(String(m.data));
+      if (!event) return;
+      if (!carriesItsRequiredPayload(event)) {
+        this.warnOnceAboutDroppedFrame(event.type);
+        return;
+      }
+      this.reduce(event);
+    });
     socket.addEventListener('close', () => this.scheduleReconnect());
   }
 
@@ -185,7 +273,8 @@ export class FleetEventsService {
   private scheduleReconnect(): void {
     this.connected.set(false);
     this.attachedSinceOpenSessionIds.clear();
-    setTimeout(() => { void this.openSocket(); }, this.reconnectDelayMs);
+    const jitteredDelayMs = this.reconnectDelayMs * (MIN_JITTER_SHARE + (1 - MIN_JITTER_SHARE) * Math.random());
+    setTimeout(() => { void this.openSocket(); }, jitteredDelayMs);
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
   }
 
@@ -252,6 +341,8 @@ export class FleetEventsService {
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
         this.proposals.set(event.proposals ?? []);
+        this.escalations.set((event.escalations ?? []).filter(isAwaitingAnswer));
+        this.rememberSettled((event.escalations ?? []).filter((escalation) => !isAwaitingAnswer(escalation)));
         this.queuedCounts.set(event.queuedCounts ?? {});
         this.workingStates.set(new Map((event.workingStates ?? []).map((state) => [state.sessionId, state])));
         this.workingStatesReported.set(event.workingStates !== undefined);
@@ -289,6 +380,8 @@ export class FleetEventsService {
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
       case 'governance.proposed': return this.upsertProposal(event.proposal);
       case 'governance.resolved': return this.proposals.update((all) => all.filter((p) => p.id !== event.proposal.id));
+      case 'escalation.raised': return this.upsertEscalation(event.escalation);
+      case 'escalation.resolved': return this.settleEscalation(event.escalation);
       case 'governance.queue_changed': return this.queuedCounts.update((all) => ({ ...all, [event.managerId]: event.queuedCount }));
       case 'law.created':
       case 'law.updated':
@@ -382,6 +475,21 @@ export class FleetEventsService {
     const isStillAwaitingDecision = proposal.status === 'pending';
     if (!isStillAwaitingDecision) return;
     this.proposals.update((all) => (all.some((p) => p.id === proposal.id) ? all.map((p) => (p.id === proposal.id ? proposal : p)) : [...all, proposal]));
+  }
+
+  private upsertEscalation(incoming: EscalationView): void {
+    if (!isAwaitingAnswer(incoming)) return this.settleEscalation(incoming);
+    this.escalations.update((all) => (all.some((escalation) => escalation.id === incoming.id) ? all.map((escalation) => (escalation.id === incoming.id ? incoming : escalation)) : [...all, incoming]));
+  }
+
+  private settleEscalation(settled: EscalationView): void {
+    this.escalations.update((all) => all.filter((escalation) => escalation.id !== settled.id));
+    this.rememberSettled([settled]);
+  }
+
+  private rememberSettled(settled: readonly EscalationView[]): void {
+    if (settled.length === 0) return;
+    this.settledEscalationIds.update((ids) => new Set([...ids, ...settled.map(({ id }) => id)]));
   }
 
   private upsertManager(manager: ManagerView): void {

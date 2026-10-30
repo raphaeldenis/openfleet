@@ -125,7 +125,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
 
       @if (isManagerMode()) {
         <div class="of-section-title">Manager</div>
-        <of-manager-fields [isLocked]="pending()" [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" [(isMissionTouched)]="isMissionTouched" />
+        <of-manager-fields [isLocked]="pending()" [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" [(isMissionTouched)]="isMissionTouched" [offersAttended]="true" [(isAttended)]="isAttended" />
       }
       </fieldset>
 
@@ -157,7 +157,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
     .mode-toggle button { height: 1.625rem; padding: 0 .75rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer }
     .mode-toggle button[aria-pressed='true'] { background: var(--panel) }
     .mode-toggle button[aria-disabled='true'] { color: var(--mut); cursor: not-allowed }
-    .mode-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .mode-toggle button:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .card { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; margin: 0; padding: 1.25rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel) }
     .form-error { margin: 0 }
     .project-note { margin: 0; font-size: .75rem; color: var(--mut) }
@@ -230,6 +230,7 @@ export class NewSessionFormComponent {
   protected readonly childrenCap = signal(2);
   protected readonly mission = signal('');
   protected readonly isMissionTouched = signal(false);
+  protected readonly isAttended = signal(false);
 
   protected readonly hasSubmitted = signal(false);
   private readonly serverFailure = signal<ServerFailure | undefined>(undefined);
@@ -250,7 +251,7 @@ export class NewSessionFormComponent {
     if (!this.isManagerMode()) return { kind: 'session' as const, fields: { ...sharedSpec, ...(seededPrompt ? { seededPrompt } : {}), ...(handoffFile ? { handoffFile } : {}) } };
     const pulseSeconds = this.pulseSeconds();
     const hasEditedPulseSeconds = typeof pulseSeconds === 'number';
-    const managerFields = { ...sharedSpec, ...(hasEditedPulseSeconds ? { pulseSeconds } : {}), childrenCap: this.childrenCap(), mission: this.mission().trim() };
+    const managerFields = { ...sharedSpec, ...(hasEditedPulseSeconds ? { pulseSeconds } : {}), childrenCap: this.childrenCap(), mission: this.mission().trim(), ...(this.isAttended() ? { attended: true } : {}) };
     return { kind: 'manager' as const, fields: managerFields };
   });
   private readonly formFingerprint = computed(() => JSON.stringify(this.spec()));

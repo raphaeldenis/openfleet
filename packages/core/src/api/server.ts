@@ -23,6 +23,7 @@ import type { TodoTracker } from '../todos/todoTracker.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { answerError } from './answerError.js';
+import { refuseAttendedChange } from './refuseAttendedChange.js';
 import { registerDataStoreRoutes } from './dataStoreRoutes.js';
 import type { SessionStartContext } from '../workingState/sessionStartContext.js';
 import type { ContextNotice } from '../workingState/contextNotice.js';
@@ -45,6 +46,8 @@ import { registerUsageRoutes } from './usageRoutes.js';
 import type { UsageLedgerService } from '../usage/usageLedgerService.js';
 import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
 import { registerGovernanceRoutes } from './governanceRoutes.js';
+import { registerEscalationRoutes } from './escalationRoutes.js';
+import type { EscalationService } from '../escalation/escalationService.js';
 import type { CommandPolicyService } from '../policy/commandPolicyService.js';
 import type { DenialReader } from '../policy/ports.js';
 import type { GovernanceQueueService } from '../governance/governanceQueueService.js';
@@ -78,6 +81,8 @@ export interface ServerDeps {
   worktrees?: WorktreeService;
   // Without it the governance routes do not exist and the snapshot carries no proposals.
   governanceQueue?: GovernanceQueueService;
+  // Without it the escalation routes do not exist and the snapshot carries no escalations.
+  escalations?: EscalationService;
   // The working-state route, event and snapshot fields exist only when the daemon hands over the service.
   workingStates?: WorkingStateService; workingStateMaxAgeMinutes?: number;
   // Without it the snapshot reports no silent blocks.
@@ -176,6 +181,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.projects) registerProjectRoutes(router, { projects: deps.projects, projectService: deps.projectService, storeRepo: deps.storeRepo });
   if (deps.worktrees) registerWorktreeRoutes(router, { worktrees: deps.worktrees });
   if (deps.governanceQueue) registerGovernanceRoutes(router, { governanceQueue: deps.governanceQueue });
+  if (deps.escalations) registerEscalationRoutes(router, { escalations: deps.escalations, isManager: (sessionId) => deps.managers.get(sessionId) !== undefined });
   if (deps.commandPolicyAdmin) registerCommandPolicyRoutes(router, deps.commandPolicyAdmin);
   if (deps.reviewFindings) registerReviewFindingsRoutes(router, { findings: deps.reviewFindings });
   if (deps.usageLedger) registerUsageRoutes(router, { usageLedger: deps.usageLedger });
@@ -205,7 +211,9 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
       if (!match) throw new OpenFleetError('not_found', 'the route does not exist.');
       const isProtected = url.pathname.startsWith('/api/');
       if (isProtected && !tokensMatch(req.headers.authorization ?? '', `Bearer ${deps.adminToken}`)) throw new OpenFleetError('unauthorized', 'the admin token is missing or wrong.');
-      await match.handler({ req, res, params: match.params, body: await readJson(req) });
+      const body = await readJson(req);
+      refuseAttendedChange(url.pathname, body);
+      await match.handler({ req, res, params: match.params, body });
     } catch (error) {
       try {
         answerError(res, error, { where: `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500` });

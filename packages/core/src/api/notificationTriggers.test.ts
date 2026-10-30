@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WORKING_STATE_TOOL_NAMES, type NotificationTrigger, type ServerEvent } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { syntheticToken } from '../syntheticTokens.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -21,7 +22,7 @@ import { startServer } from './server.js';
 
 const FAIL_FAST_MS = 1000;
 const APPROVAL_TIMEOUT_MS = 100;
-const SECRET_TOOL_INPUT = 'sk-live-TOOL-INPUT-SECRET';
+const SECRET_TOOL_INPUT = syntheticToken({ shape: 'openai', bodyLength: 19 });
 const SECRET_TRANSCRIPT_TEXT = 'TRANSCRIPT-SECRET-TEXT';
 const SECRET_NOTIFICATION_MESSAGE = 'NOTIFICATION-SECRET-MESSAGE';
 const SECRET_QUESTION_TEXT = 'QUESTION-SECRET-TEXT';

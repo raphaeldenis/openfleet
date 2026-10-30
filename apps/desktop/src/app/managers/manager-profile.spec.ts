@@ -2,7 +2,7 @@ import { signal } from '@angular/core';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { render, screen, waitFor, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import type { ManagerProfile, ManagerView, Page, Project, ScapeImportStatus } from '@openfleet/shared';
+import type { EscalationView, ManagerProfile, ManagerView, Page, Project, ScapeImportStatus } from '@openfleet/shared';
 import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
@@ -49,9 +49,9 @@ function fakeApi(overrides: ApiOverrides = {}) {
   };
 }
 
-async function openProfile({ api = fakeApi(), session = sessionOf() } = {}) {
+async function openProfile({ api = fakeApi(), session = sessionOf(), escalations = signal<EscalationView[]>([]) } = {}) {
   const events = {
-    sessions: signal([session]), approvals: signal([]), proposals: signal([]), queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: signal([managerViewOf()]), snapshotReceived: signal(true),
+    sessions: signal([session]), approvals: signal([]), proposals: signal([]), escalations, queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: signal([managerViewOf()]), snapshotReceived: signal(true),
     workingStates: signal(new Map()), workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
   };
   await render(ManagerDashboardComponent, {
@@ -113,6 +113,35 @@ describe('the manager profile', () => {
       expect(factOf('Pulse interval')).toHaveTextContent('10 min');
       expect(factOf('Children cap')).toHaveTextContent('4');
       expect(factOf('Model')).toHaveTextContent('sonnet');
+    });
+
+    describe('the escalations still waiting for a human answer', () => {
+      const escalationOf = (id: string, managerId = 'm1'): EscalationView => ({ id, managerId, ticket: `CCM-${id}`, status: 'pending', body: 'Escalation', createdAt: TEN_MINUTES_AGO, questions: [] });
+
+      it('user sees that the manager has none', async () => {
+        await openProfile();
+        await screen.findByRole('region', { name: 'Profile' });
+
+        expect(factOf('Open escalations')).toHaveTextContent('0');
+      });
+
+      it('user sees how many of this manager wait, not those of another manager', async () => {
+        const escalations = signal([escalationOf('1'), escalationOf('2'), escalationOf('3', 'other')]);
+        await openProfile({ escalations });
+        await screen.findByRole('region', { name: 'Profile' });
+
+        expect(factOf('Open escalations')).toHaveTextContent('2');
+      });
+
+      it('user sees the count follow an escalation the daemon announces', async () => {
+        const escalations = signal<EscalationView[]>([]);
+        await openProfile({ escalations });
+        await screen.findByRole('region', { name: 'Profile' });
+
+        escalations.set([escalationOf('1')]);
+
+        await waitFor(() => expect(factOf('Open escalations')).toHaveTextContent('1'));
+      });
     });
 
     it('user still sees the profile, without a project name, when the projects cannot be loaded', async () => {

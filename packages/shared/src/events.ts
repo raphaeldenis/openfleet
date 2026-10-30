@@ -1,6 +1,7 @@
 import type { DeniedCommand } from './commandPolicy.js';
 import type { DaemonIssue } from './daemonIssues.js';
 import type { ErrorEnvelope } from './errors.js';
+import type { EscalationView } from './escalation.js';
 import type { GovernanceProposalView, LawView } from './governance.js';
 import type { ManagerView } from './managers.js';
 import type { Approval, PermissionMode, RuntimeAttention, Session, SessionCloseReason, SessionState } from './session.js';
@@ -46,7 +47,7 @@ export type NotificationTrigger =
   | { category: 'chatMessage'; sessionId: string; questionKey: string; questionCount: number };
 
 export type ServerEvent =
-  | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; proposals?: GovernanceProposalView[]; queuedCounts?: Record<string, number>; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }
+  | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; proposals?: GovernanceProposalView[]; escalations?: EscalationView[]; queuedCounts?: Record<string, number>; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }
   | { type: 'session.created'; session: Session }
   | { type: 'session.state'; sessionId: string; state: SessionState; stateSince: string }
   | { type: 'session.attention'; sessionId: string; runtimeAttention: RuntimeAttention | null }
@@ -66,6 +67,8 @@ export type ServerEvent =
   | { type: 'governance.proposed'; proposal: GovernanceProposalView }
   | { type: 'governance.resolved'; proposal: GovernanceProposalView }
   | { type: 'governance.queue_changed'; managerId: string; queuedCount: number }
+  | { type: 'escalation.raised'; escalation: EscalationView }
+  | { type: 'escalation.resolved'; escalation: EscalationView }
   | { type: 'law.created'; law: LawView }
   | { type: 'law.updated'; law: LawView }
   | { type: 'law.withdrawn'; law: LawView }

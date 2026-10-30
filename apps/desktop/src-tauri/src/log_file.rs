@@ -274,9 +274,9 @@ impl DesktopLog {
     Self { sender, salt, messages_dropped_by_the_queue, output_ended: Arc::new(AtomicBool::new(false)) }
   }
 
-  /// Reduces a free text to its length and its tag under this install's salt.
+  /// Reduces a free text to the bucket of its length and its tag under this install's salt.
   pub fn opaque(&self, text: &[u8]) -> Opaque {
-    Opaque::of(text, self.salt.as_deref())
+    Opaque::bucketed(text, self.salt.as_deref())
   }
 
   /// Queues an event; the writer stamps it with its clock.
@@ -345,6 +345,7 @@ pub fn start_on_disk(openfleet_home: &Path, clock: impl Fn() -> u64 + Send + 'st
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::event_log::synthetic_tokens::github_token;
   use crate::event_log::{DaemonTextClass, Pid, SALT_FILE_NAME};
   use std::collections::HashMap;
   use std::sync::atomic::{AtomicUsize, Ordering};
@@ -643,7 +644,7 @@ mod tests {
       fs.lines(LOG),
       vec![
         format!("{EPOCH_PREFIX} info daemon_text stream=out class=other text=[text:5]"),
-        format!("{EPOCH_PREFIX} warn daemon_line msg=[text:5] extra_fields=0"),
+        format!("{EPOCH_PREFIX} warn daemon_line msg=[text:16] extra_fields=0"),
         format!("{EPOCH_PREFIX} warn daemon_text stream=err class=other text=[text:13]"),
       ]
     );
@@ -671,17 +672,30 @@ mod tests {
   #[test]
   fn the_writer_tags_free_text_under_the_install_salt_and_never_stores_it() {
     let fs = Arc::new(FakeFs::default());
-    let log = writer_over(&fs, 100_000, Some(salt()), 16);
-    let secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let secret = format!("{}AB", github_token());
+    let install_salt = salt();
+    let exact_length_tag = Opaque::of(secret.as_bytes(), Some(&install_salt)).to_string();
+    let log = writer_over(&fs, 100_000, Some(install_salt), 16);
 
     ingest(&log, Stream::Err, &format!("{secret}\n"));
     log.record_event(DesktopEvent::SidecarFailed { reason: log.opaque(secret.as_bytes()) });
 
     wait_until(|| fs.lines(LOG).len() == 2);
-    let expected_tag = log.opaque(secret.as_bytes()).to_string();
-    assert_eq!(fs.lines(LOG)[0], format!("{EPOCH_PREFIX} warn daemon_text stream=err class=other text={expected_tag}"));
-    assert_eq!(fs.lines(LOG)[1], format!("{EPOCH_PREFIX} error sidecar_failed reason={expected_tag}"));
+    let bucketed_tag = log.opaque(secret.as_bytes()).to_string();
+    assert_eq!(fs.lines(LOG)[0], format!("{EPOCH_PREFIX} warn daemon_text stream=err class=other text={exact_length_tag}"));
+    assert_eq!(fs.lines(LOG)[1], format!("{EPOCH_PREFIX} error sidecar_failed reason={bucketed_tag}"));
     assert!(!fs.text(LOG).contains("ghp_"));
+  }
+
+  #[test]
+  fn a_sidecar_reason_past_the_largest_bucket_is_stored_with_a_bucket_inside_the_grammar() {
+    let fs = Arc::new(FakeFs::default());
+    let log = writer_over(&fs, 100_000, None, 16);
+
+    log.record_event(DesktopEvent::SidecarFailed { reason: log.opaque(&vec![b'a'; (1 << 26) + 1]) });
+
+    wait_until(|| fs.lines(LOG).len() == 1);
+    assert_eq!(fs.lines(LOG)[0], format!("{EPOCH_PREFIX} error sidecar_failed reason=[text:67108864]"));
   }
 
   #[test]
@@ -1013,7 +1027,7 @@ mod tests {
 
     let log = start_on_disk(&blocked_home, || 0);
 
-    assert_eq!(log.opaque(b"abcd").to_string(), "[text:4]");
+    assert_eq!(log.opaque(b"abcd").to_string(), "[text:16]");
     assert!(log.flush_and_close(Duration::from_secs(5)));
   }
 }

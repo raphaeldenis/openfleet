@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
@@ -8,6 +8,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../../api/server.js';
+import { loadConfig } from '../../config.js';
+import { startDaemon, type Daemon } from '../../daemon.js';
 import { openDatabase } from '../../db/database.js';
 import { EventBus } from '../../events/eventBus.js';
 import { ApprovalService } from '../../governance/approvalService.js';
@@ -15,6 +17,7 @@ import { ManagerRepository } from '../../managers/managerRepository.js';
 import { ManagerService } from '../../managers/managerService.js';
 import { PulseScheduler } from '../../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../../models.js';
+import { ASK_USER_QUESTION_TOOL, MANAGER_ASK_USER_RULE_ID, ROOT_MANAGER_ASK_USER_EVENT_ID } from '../../policy/defaultCommandPolicy.js';
 import { SessionService } from '../../sessions/sessionService.js';
 import type { HarnessHandle } from '../harness.js';
 import { ClaudeCliHarness } from './claudeCliHarness.js';
@@ -187,6 +190,145 @@ describe.skipIf(!isLive)('ClaudeCliHarness (live, needs a logged-in claude CLI)'
   }, TEST_TIMEOUT_MS);
 });
 
+const CLAUDE_PRINT_TIMEOUT_MS = 120_000;
+const MARKER_WORDS = ['amber', 'otter', 'lantern', 'meadow', 'pebble', 'harbor', 'willow', 'ferry'];
+const CONTROL_NOT_OBEYED = 'control not obeyed: canary inconclusive';
+const ASK_FOR_THE_MEMORY_LINES = 'Quote verbatim every line of project memory or CLAUDE.md instructions present in your context that contains the string canary, or answer NONE.';
+const ASK_FOR_THE_SKILL_DESCRIPTIONS = 'List the description of every skill you can use, or answer NONE.';
+const ARBITER_SETTING_SOURCES = ['--setting-sources', 'user'];
+
+const pickMarkerWord = (): string => MARKER_WORDS[randomInt(MARKER_WORDS.length)]!;
+const makeMarker = (): string => `${pickMarkerWord()}-${pickMarkerWord()}-${randomInt(100, 1000)}`;
+// The model rarely obeys a CLAUDE.md in a plain task, so the file is a memory line that a recall question can quote back.
+const memoryLineWith = (marker: string): string => `canary memory line: ${marker}\n`;
+
+function makeTemporaryDirectory(prefix: string): string {
+  const directory = mkdtempSync(join(tmpdir(), prefix));
+  createdRepos.push(directory);
+  return directory;
+}
+
+function plantProjectSkill({ directory, marker }: { directory: string; marker: string }): void {
+  const skillDirectory = join(directory, '.claude', 'skills', 'canary');
+  mkdirSync(skillDirectory, { recursive: true });
+  writeFileSync(join(skillDirectory, 'SKILL.md'), `---\nname: canary\ndescription: ${marker}\n---\nCanary skill.\n`);
+}
+
+interface LaunchSetup {
+  worktree: string;
+  neutralCwd: string;
+  // The arbiter launches with the CLAUDE.md of added directories off; a control turns it on to prove the file is read when allowed.
+  loadsAddedDirectoryClaudeMd?: boolean;
+  // The arbiter launches with the user settings layer only; a control lifts that restriction.
+  restrictsSettingSourcesToUser?: boolean;
+}
+
+// The arbiter flags: an empty cwd, the ticket worktree added with --add-dir, the user settings layer only, and the CLAUDE.md of added directories forced off.
+function askClaude(question: string, { worktree, neutralCwd, loadsAddedDirectoryClaudeMd = false, restrictsSettingSourcesToUser = true }: LaunchSetup): string {
+  const settingSourceFlags = restrictsSettingSourcesToUser ? ARBITER_SETTING_SOURCES : [];
+  return execFileSync('claude', ['-p', '--model', CHEAP_MODEL, ...settingSourceFlags, `--add-dir=${worktree}`, question], {
+    cwd: neutralCwd,
+    env: { ...process.env, CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: loadsAddedDirectoryClaudeMd ? '1' : '0' },
+    encoding: 'utf8',
+    timeout: CLAUDE_PRINT_TIMEOUT_MS,
+  });
+}
+
+// Opt-in canary behind the neutral working directory of docs/escalation.md: it launches the real CLI from an empty directory with the arbiter flags and
+// checks that a planted memory line is not read back. Temp directories only, markers built at run time. A pass is still a model reply, not a file trace.
+// Differential: each planted file is first proven readable by a control run that differs only in the flag under test; a case whose control failed
+// fails loudly instead of passing on a file the CLI never read.
+// Run: pnpm --filter @openfleet/core test:live -t "arbiter launch flags"
+describe.skipIf(!isLive)('the arbiter launch flags keep planted memory lines and skills out (live, needs a logged-in claude CLI)', () => {
+  let addedDirectoryMemoryControlPassed = false;
+  let parentMemoryControlPassed = false;
+  let addedDirectorySkillControlPassed = false;
+
+  afterEach(() => {
+    createdRepos.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }));
+  });
+
+  function plantMemoryLineInAddedDirectory(): { marker: string; worktree: string; neutralCwd: string } {
+    const marker = makeMarker();
+    const worktree = makeTemporaryDirectory('of-canary-worktree-');
+    writeFileSync(join(worktree, 'CLAUDE.md'), memoryLineWith(marker));
+    return { marker, worktree, neutralCwd: makeTemporaryDirectory('of-canary-cwd-') };
+  }
+
+  function requireControl(controlPassed: boolean): void {
+    expect(controlPassed, CONTROL_NOT_OBEYED).toBe(true);
+  }
+
+  it('control: reads back the CLAUDE.md of the added directory when its loading is switched on, so the cases below are not vacuous', () => {
+    const { marker, worktree, neutralCwd } = plantMemoryLineInAddedDirectory();
+
+    const answer = askClaude(ASK_FOR_THE_MEMORY_LINES, { worktree, neutralCwd, loadsAddedDirectoryClaudeMd: true });
+
+    expect(answer, CONTROL_NOT_OBEYED).toContain(marker);
+    addedDirectoryMemoryControlPassed = true;
+  }, TEST_TIMEOUT_MS);
+
+  it('does not read back the CLAUDE.md of the added directory', () => {
+    requireControl(addedDirectoryMemoryControlPassed);
+    const { marker, worktree, neutralCwd } = plantMemoryLineInAddedDirectory();
+
+    const answer = askClaude(ASK_FOR_THE_MEMORY_LINES, { worktree, neutralCwd });
+
+    expect(answer).not.toContain(marker);
+  }, TEST_TIMEOUT_MS);
+
+  function plantMemoryLineInParentOfLaunchDirectory(): { marker: string; worktree: string; neutralCwd: string } {
+    const marker = makeMarker();
+    const parentOfLaunchDirectory = makeTemporaryDirectory('of-canary-parent-');
+    writeFileSync(join(parentOfLaunchDirectory, 'CLAUDE.md'), memoryLineWith(marker));
+    const neutralCwd = join(parentOfLaunchDirectory, 'cwd');
+    mkdirSync(neutralCwd);
+    return { marker, worktree: makeTemporaryDirectory('of-canary-worktree-'), neutralCwd };
+  }
+
+  it('control: reads back the CLAUDE.md of the parent folder of the launch directory when the settings sources are not restricted', () => {
+    const { marker, worktree, neutralCwd } = plantMemoryLineInParentOfLaunchDirectory();
+
+    const answer = askClaude(ASK_FOR_THE_MEMORY_LINES, { worktree, neutralCwd, restrictsSettingSourcesToUser: false });
+
+    expect(answer, CONTROL_NOT_OBEYED).toContain(marker);
+    parentMemoryControlPassed = true;
+  }, TEST_TIMEOUT_MS);
+
+  it('does not read back the CLAUDE.md of the parent folder of the launch directory', () => {
+    requireControl(parentMemoryControlPassed);
+    const { marker, worktree, neutralCwd } = plantMemoryLineInParentOfLaunchDirectory();
+
+    const answer = askClaude(ASK_FOR_THE_MEMORY_LINES, { worktree, neutralCwd });
+
+    expect(answer).not.toContain(marker);
+  }, TEST_TIMEOUT_MS);
+
+  it('control: lists the project skills of the added directory when the settings sources are not restricted', () => {
+    const marker = makeMarker();
+    const worktree = makeTemporaryDirectory('of-canary-worktree-');
+    plantProjectSkill({ directory: worktree, marker });
+    const neutralCwd = makeTemporaryDirectory('of-canary-cwd-');
+
+    const answer = askClaude(ASK_FOR_THE_SKILL_DESCRIPTIONS, { worktree, neutralCwd, restrictsSettingSourcesToUser: false });
+
+    expect(answer, CONTROL_NOT_OBEYED).toContain(marker);
+    addedDirectorySkillControlPassed = true;
+  }, TEST_TIMEOUT_MS);
+
+  it('does not list the project skills of the added directory', () => {
+    requireControl(addedDirectorySkillControlPassed);
+    const marker = makeMarker();
+    const worktree = makeTemporaryDirectory('of-canary-worktree-');
+    plantProjectSkill({ directory: worktree, marker });
+    const neutralCwd = makeTemporaryDirectory('of-canary-cwd-');
+
+    const answer = askClaude(ASK_FOR_THE_SKILL_DESCRIPTIONS, { worktree, neutralCwd });
+
+    expect(answer).not.toContain(marker);
+  }, TEST_TIMEOUT_MS);
+});
+
 // AUD-12b (MAJ-04, §6): a project's own .claude/settings.json can declare permissions.defaultMode:
 // "bypassPermissions" and/or an auto-approving PreToolUse/PermissionRequest hook. This checks the real
 // daemon path (SessionService -> ApprovalService -> the hooks HTTP route), not just the raw harness, since
@@ -271,5 +413,91 @@ describe.skipIf(!isLive)('ClaudeCliHarness via the daemon, project settings cann
       warnSpy.mockRestore();
       await sessions.close(session.id);
     }
+  }, TEST_TIMEOUT_MS);
+});
+
+const ASK_USER_CANARY_PROMPT = 'Call the AskUserQuestion tool once with the question "canary?" and options "a","b", then say done.';
+const ASK_USER_NOT_CALLED = 'canary inconclusive: the model did not call AskUserQuestion';
+const ASK_USER_POLL_INTERVAL_MS = 500;
+
+async function closeSessionOnDaemon({ daemon, adminToken, sessionId }: { daemon: Daemon; adminToken: string; sessionId: string }): Promise<void> {
+  await fetch(`${daemon.server.url}/api/sessions/${sessionId}/close`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` }, body: '{}',
+  }).catch(() => undefined);
+}
+
+interface AskUserJournalRow {
+  rule_id: string;
+  outcome: string;
+  alternative: string | null;
+}
+
+// Opt-in canary behind the ask-user rule of docs/escalation.md: a throwaway in-process daemon (temp OPENFLEET_HOME, ephemeral port, real claude-cli harness)
+// launches one supervised and one attended manager on the real CLI, and the journal of the daemon says what the guard did with the AskUserQuestion the model called.
+// Whether the model calls the tool is up to the model: a manager whose journal has no AskUserQuestion row fails loudly instead of passing.
+// Side effect: the folder trust writes of the temp repos land in the real ~/.claude.json and the CLI transcripts under ~/.claude/projects;
+// startDaemon's claudeConfigPath is not passed because the redirected run closed both managers with resume_timeout and no journal row.
+// Run: pnpm --filter @openfleet/core test:live -t "AskUserQuestion"
+describe.skipIf(!isLive)('a manager calling AskUserQuestion on the real CLI (live, needs a logged-in claude CLI)', () => {
+  let daemon: Daemon | undefined;
+  let managerId: string | undefined;
+  let adminToken = '';
+
+  afterEach(async () => {
+    if (daemon && managerId) await closeSessionOnDaemon({ daemon, adminToken, sessionId: managerId });
+    await daemon?.close();
+    daemon = undefined;
+    managerId = undefined;
+    createdRepos.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }));
+  });
+
+  async function createManagerOnThrowawayDaemon({ attended }: { attended: boolean }): Promise<string> {
+    const home = makeTemporaryDirectory('of-askuser-home-');
+    const port = await allocatePort();
+    const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: String(port) });
+    adminToken = config.adminToken;
+    daemon = await startDaemon(config, { power: { api: { acquire: () => ({ release: () => {} }) } } });
+    const response = await fetch(`${daemon.server.url}/api/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${config.adminToken}` },
+      body: JSON.stringify({
+        directory: makeRepo(), name: 'Ask-user canary', emoji: '🧪', harness: 'claude-cli', model: CHEAP_MODEL,
+        manager: { childrenCap: 1, mission: ASK_USER_CANARY_PROMPT }, ...(attended ? { attended: true } : {}),
+      }),
+    });
+    expect(response.status).toBeLessThan(300);
+    const created = (await response.json()) as { id: string };
+    managerId = created.id;
+    return created.id;
+  }
+
+  async function waitForAskUserJournalRow(sessionId: string): Promise<AskUserJournalRow> {
+    const readRow = () => daemon!.db
+      .prepare('SELECT rule_id, outcome, alternative FROM denied_commands WHERE session_id = ? AND tool_name = ? ORDER BY created_at, rowid')
+      .get(sessionId, ASK_USER_QUESTION_TOOL) as AskUserJournalRow | undefined;
+    const deadline = Date.now() + HOOK_WAIT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const row = readRow();
+      if (row) return row;
+      await new Promise((resolve) => setTimeout(resolve, ASK_USER_POLL_INTERVAL_MS));
+    }
+    throw new Error(`${ASK_USER_NOT_CALLED} (no journal row within ${HOOK_WAIT_TIMEOUT_MS} ms)`);
+  }
+
+  it('refuses the AskUserQuestion of a supervised manager, with the pointer to submit_plan_questions, and journals it denied', async () => {
+    const sessionId = await createManagerOnThrowawayDaemon({ attended: false });
+
+    const row = await waitForAskUserJournalRow(sessionId);
+
+    expect(row).toMatchObject({ rule_id: MANAGER_ASK_USER_RULE_ID, outcome: 'denied' });
+    expect(row.alternative).toContain('submit_plan_questions');
+  }, TEST_TIMEOUT_MS);
+
+  it('lets an attended manager call AskUserQuestion and journals it observed', async () => {
+    const sessionId = await createManagerOnThrowawayDaemon({ attended: true });
+
+    const row = await waitForAskUserJournalRow(sessionId);
+
+    expect(row).toMatchObject({ rule_id: ROOT_MANAGER_ASK_USER_EVENT_ID, outcome: 'observed' });
   }, TEST_TIMEOUT_MS);
 });

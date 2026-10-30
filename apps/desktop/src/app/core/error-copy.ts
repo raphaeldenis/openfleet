@@ -4,7 +4,7 @@ import { ApiError } from './fleet-api.service';
 import { REFUSAL_COPY_BY_REASON, refusalReasonOf } from './worktree-refusal';
 
 /** What the user was doing when the error came back: it decides the advice ("shorten the mission" vs "shorten the name"). */
-export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff' | 'save_project' | 'reopen_manager' | 'save_manager' | 'pause_manager' | 'load_worktrees' | 'remove_worktree' | 'save_project_hook';
+export type ErrorAction = 'generic' | 'send' | 'create_session' | 'create_manager' | 'resume' | 'load_todos' | 'rename' | 'close' | 'load_handoff' | 'save_handoff' | 'save_project' | 'reopen_manager' | 'save_manager' | 'pause_manager' | 'load_worktrees' | 'remove_worktree' | 'save_project_hook' | 'save_project_escalation' | 'retry_escalation_handover';
 
 export interface ErrorContext {
   action: ErrorAction;
@@ -59,10 +59,11 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   manager_not_found: { what: 'That manager no longer exists' },
   proposal_not_found: { what: 'That proposal no longer exists' },
   law_not_found: { what: 'That law no longer exists' },
+  escalation_not_found: { what: 'That escalation no longer exists' },
   handoff_not_found: { what: 'That handoff is no longer in the docs folder', fix: 'pick another handoff or remove it' },
 
   session_closed: { what: 'The session is closed', fix: 'resume it first' },
-  stale_revision: { what: 'This note changed since you opened it' },
+  stale_revision: { what: 'This item changed since you opened it' },
   file_backed: { what: 'This note lives in a file', fix: 'edit the file instead' },
   file_unreadable: { what: 'The daemon cannot read the note file right now' },
   path_escapes_docs_folder: { what: 'That path leaves the docs folder', fix: 'pick one inside it' },
@@ -78,6 +79,9 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   message_id_reused: { what: 'That message id was already used with another text' },
   too_many_pending: { what: 'Too many messages are waiting for this session' },
   governance_queue_full: { what: 'This manager already has as many proposals as allowed (10 pending + 50 waiting)', fix: 'answer or withdraw one first' },
+  question_unclassified: { what: 'That question was not sent through the escalation ladder', fix: 'the manager must submit it with its class' },
+  escalation_open: { what: 'A human answer is still open on this ticket', fix: 'answer the escalation first' },
+  criteria_stale: { what: 'The plan changed since the arbiter gave its opinion', fix: 'ask for a new opinion on the current plan' },
   law_revision_conflict: { what: 'This law changed since you opened it' },
   law_withdrawn: { what: 'This law was withdrawn' },
   children_cap: { what: 'This manager already runs as many sessions as allowed' },
@@ -216,6 +220,13 @@ const COPY_BY_ACTION: Record<ErrorAction, ActionCopy> = {
     invalid_body: { what: 'That script cannot be used: give the absolute path of an executable file that only you can write' },
     project_not_found: { what: 'That project no longer exists' },
   },
+  save_project_escalation: {
+    invalid_body: { what: 'The daemon rejected this policy', fix: 'contract and security always stay on the list' },
+    project_not_found: { what: 'That project no longer exists' },
+  },
+  retry_escalation_handover: {
+    invalid_body: { what: 'The manager list is still full', fix: 'free a place in its questions_for_human, then retry' },
+  },
   load_worktrees: {},
   remove_worktree: {
     not_found: { what: 'That worktree no longer exists' },
@@ -238,6 +249,8 @@ const FALLBACK_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   save_handoff: 'The handoff was not written — try again.',
   save_project: 'The project was not saved — try again.',
   save_project_hook: 'The hook was not saved — try again.',
+  save_project_escalation: 'The escalation policy was not saved — try again.',
+  retry_escalation_handover: 'The hand-over was not retried — try again.',
   load_worktrees: 'The worktrees could not be listed — try again.',
   remove_worktree: 'The worktree was not removed — try again.',
 };
@@ -256,11 +269,38 @@ const NOT_CONNECTED_BY_ACTION: Partial<Record<ErrorAction, string>> = {
   save_handoff: 'The handoff was not written — check your connection, then try again.',
   save_project: 'The project was not saved — check your connection, then try again.',
   save_project_hook: 'The hook was not saved — check your connection, then try again.',
+  save_project_escalation: 'The escalation policy was not saved — check your connection, then try again.',
+  retry_escalation_handover: 'The hand-over was not retried — check your connection, then try again.',
   load_worktrees: 'The worktrees could not be listed — check your connection, then try again.',
   remove_worktree: 'The worktree was not removed — check your connection, then try again.',
 };
 
 const isKnownCode = (code: string | undefined): code is ErrorCode => code !== undefined && Object.hasOwn(ERROR_CODES, code);
+
+const STALE_ROW_RESOURCE = 'data_store_row';
+
+/** What moved, when the `stale_revision` detail names the resource: a table row or a manager profile; a note names none. */
+const STALE_REVISION_COPY_BY_RESOURCE = new Map<string, CodeCopy>([
+  [STALE_ROW_RESOURCE, { what: 'This row changed since you opened it' }],
+  ['manager_profile', { what: 'This manager profile changed since you opened it' }],
+]);
+
+function staleRevisionResourceOf(envelope: ErrorEnvelope | undefined): string | undefined {
+  const detail = envelope?.detail;
+  const isRecord = typeof detail === 'object' && detail !== null;
+  const resource = isRecord ? (detail as Record<string, unknown>)['resource'] : undefined;
+  return typeof resource === 'string' ? resource : undefined;
+}
+
+/** Whether a write was refused because the table row it targets changed since the user opened it. */
+export function isStaleRowError(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'stale_revision' && staleRevisionResourceOf(error.envelope) === STALE_ROW_RESOURCE;
+}
+
+function staleRevisionCopyOf(envelope: ErrorEnvelope | undefined): CodeCopy {
+  const resource = staleRevisionResourceOf(envelope);
+  return (resource === undefined ? undefined : STALE_REVISION_COPY_BY_RESOURCE.get(resource)) ?? COPY_BY_CODE.stale_revision;
+}
 
 const endsWithPeriod = (sentence: string) => (/[.!?]$/.test(sentence) ? sentence : `${sentence}.`);
 const capitalized = (sentence: string) => sentence.charAt(0).toUpperCase() + sentence.slice(1);
@@ -295,7 +335,8 @@ function withRef(text: string, envelope: ErrorEnvelope | undefined): ErrorCopy {
 function copyOfKnownCode({ action, code, envelope }: { action: ErrorAction; code: ErrorCode; envelope: ErrorEnvelope | undefined }): CodeCopy {
   const refusalReason = action === 'remove_worktree' ? refusalReasonOf(envelope) : undefined;
   if (refusalReason) return REFUSAL_COPY_BY_REASON[refusalReason];
-  return COPY_BY_ACTION[action][code] ?? COPY_BY_CODE[code];
+  const copyOfCode = code === 'stale_revision' ? staleRevisionCopyOf(envelope) : COPY_BY_CODE[code];
+  return COPY_BY_ACTION[action][code] ?? copyOfCode;
 }
 
 function copyOfFailure(failure: Failure, { action }: ErrorContext): ErrorCopy {

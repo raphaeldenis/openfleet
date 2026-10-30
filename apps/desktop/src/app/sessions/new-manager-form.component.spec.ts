@@ -273,3 +273,33 @@ describe('the New manager form: pulse cadence and children cap', () => {
     expect(screen.getByRole('radio', { name: 'manual' })).toHaveAccessibleDescription('Asks before risky tools, except those already allowed in your Claude settings.');
   });
 });
+
+describe('the New manager form: attended checkbox', () => {
+  const attendedBox = () => screen.getByRole('checkbox', { name: /I sit beside this manager/ });
+
+  it('is unchecked by default and explains in plain words what it changes and that it is final', async () => {
+    await renderManagerForm();
+
+    expect(attendedBox()).not.toBeChecked();
+    expect(attendedBox()).toHaveAccessibleDescription(/escalation ladder.*AskUserQuestion.*cannot be changed/);
+  });
+
+  it('sends no attended flag when left unchecked', async () => {
+    const api = await renderManagerForm();
+    await fillEverythingButTheManagerNumbers();
+
+    await userEvent.click(submitButton());
+
+    expect(api.createManagerSession).toHaveBeenCalledWith(expect.not.objectContaining({ attended: true }));
+  });
+
+  it('sends attended: true once the human ticks it', async () => {
+    const api = await renderManagerForm();
+    await fillEverythingButTheManagerNumbers();
+
+    await userEvent.click(attendedBox());
+    await userEvent.click(submitButton());
+
+    expect(api.createManagerSession).toHaveBeenCalledWith(expect.objectContaining({ attended: true }));
+  });
+});

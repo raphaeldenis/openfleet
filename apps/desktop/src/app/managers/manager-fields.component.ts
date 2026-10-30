@@ -112,6 +112,18 @@ function kilobytesLabelOf(bytes: number): string {
         <of-error-line id="manager-mission-error" role="alert" data-testid="manager-mission-error">{{ error }}</of-error-line>
       }
     </div>
+    @if (offersAttended()) {
+      <div class="of-field">
+        <label class="attended-label" for="manager-attended">
+          <input
+            id="manager-attended" type="checkbox" data-testid="manager-attended" name="attended" [disabled]="isLocked()"
+            [ngModel]="isAttended()" (ngModelChange)="isAttended.set($event)" aria-describedby="manager-attended-hint"
+          />
+          I sit beside this manager and answer its questions myself
+        </label>
+        <span id="manager-attended-hint" class="hint hint--wrap" data-testid="manager-attended-hint">Leave this unticked for a manager that works without you: it raises its questions through the escalation ladder and is refused AskUserQuestion. The choice cannot be changed once the manager exists.</span>
+      </div>
+    }
   `,
   styles: `
     :host { display: flex; flex-direction: column; gap: 1.25rem }
@@ -123,7 +135,7 @@ function kilobytesLabelOf(bytes: number): string {
     .preset { flex: 1 1 3rem; height: 2rem; padding: 0 .375rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; font-size: .75rem; white-space: nowrap; cursor: pointer }
     .preset[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-bg) }
     .preset[aria-disabled='true'] { cursor: not-allowed }
-    .preset:focus-visible, .step:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .preset:focus-visible, .step:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .custom, .stepper { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem }
     .pulse-input { flex: none; width: 9rem; font-family: var(--mono); font-size: .75rem }
     .cap-input { flex: none; width: 4rem; text-align: center; font-family: var(--mono); appearance: textfield; -moz-appearance: textfield }
@@ -131,6 +143,9 @@ function kilobytesLabelOf(bytes: number): string {
     .step { flex: none; width: 2rem; height: 2rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; cursor: pointer }
     .step:disabled { color: var(--mut); cursor: not-allowed }
     .hint { font-size: .6875rem; color: var(--mut); white-space: nowrap }
+    .attended-label { display: flex; align-items: center; gap: .5rem; font-size: .875rem; cursor: pointer }
+    .attended-label input:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
+    .hint--wrap { display: block; white-space: normal }
     .mission-size { align-self: flex-end }
     .maximum { font-size: .75rem; color: var(--fg) }
     .maximum-icon { font-weight: 700; color: var(--state-waiting-permission) }
@@ -148,6 +163,9 @@ export class ManagerFieldsComponent implements OnInit {
   readonly childrenCap = model(2);
   readonly mission = model('');
   readonly isMissionTouched = model(false);
+  /** Only the creation form offers the choice: the flag is fixed once the manager exists. */
+  readonly offersAttended = input(false);
+  readonly isAttended = model(false);
   /** The mission as the daemon stores it: a stored mission above the delta limit may shrink, never grow. Absent for a new manager. */
   readonly storedMission = input<string | undefined>(undefined);
   private readonly pulseSecondsInput = viewChild<ElementRef<HTMLInputElement>>('pulseSecondsInput');

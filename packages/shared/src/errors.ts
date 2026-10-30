@@ -74,6 +74,13 @@ export const ERROR_CODES = {
   law_revision_conflict: { kind: 'conflict', retry: 'after_refresh' },
   // A withdrawn law is history: it is neither edited nor withdrawn again.
   law_withdrawn: { kind: 'conflict', retry: 'never' },
+  // A new item of questions_for_human that no escalation of the daemon produced: submitting the question with its class goes through the ladder.
+  question_unclassified: { kind: 'invalid_request' },
+  // The ticket has an escalation a human has not answered yet: the same call succeeds once the human answers.
+  escalation_open: { kind: 'conflict', retry: 'later' },
+  // The note of the plan moved after the opinion of the arbiter: a new opinion on the current revision is what lets the same call succeed.
+  criteria_stale: { kind: 'conflict', retry: 'never' },
+  escalation_not_found: { kind: 'not_found' },
   outside_lineage: { kind: 'conflict', retry: 'never' },
   not_a_manager: { kind: 'conflict', retry: 'never' },
   // Resuming the manager is what lets a pulse through again.

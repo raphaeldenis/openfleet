@@ -1,0 +1,6 @@
+port_in_use stop the other process or set OPENFLEET_PORT
+port_invalid set OPENFLEET_PORT to a port between 0 and 65535
+path_not_permitted check the permissions of
+schema_newer_than_code quit the app, delete openfleet.db-wal and openfleet.db-shm, then copy the .db backup named
+migration_failed the database from before this upgrade is saved at
+config_file_invalid config:

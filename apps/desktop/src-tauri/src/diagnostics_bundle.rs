@@ -1,8 +1,11 @@
+use crate::event_log::{project_daemon_records as project_records, ProjectedRecord, Salt, Ts};
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Manager;
 
 const BUNDLE_EXTENSION: &str = "zip";
 const PRIVATE_FILE_MODE: u32 = 0o600;
@@ -106,6 +109,26 @@ pub fn save_bundle(default_name: &str, bytes: &[u8], choose: impl FnOnce(&str) -
   validate_destination(&chosen)?;
   write_private_file(&chosen, bytes).map_err(|err| format!("could not write the bundle: {err}"))?;
   Ok(SaveOutcome::Saved(chosen))
+}
+
+/// Projects the records of the daemon's diagnostics ring buffer onto the allowlist of `desktop.log`, tagged under the install's salt.
+/// The bundle keeps only this projection, so no daemon free text leaves through it.
+#[tauri::command(async)]
+pub fn project_daemon_records(app: tauri::AppHandle, records: Vec<serde_json::Value>) -> Result<Vec<ProjectedRecord>, String> {
+  let user_home = app.path().home_dir().map_err(|err| err.to_string())?;
+  let openfleet_home = crate::admin_token::openfleet_home_dir(std::env::var("OPENFLEET_HOME").ok(), &user_home);
+  Ok(projected_ring_buffer(&records, &openfleet_home, unix_seconds_now()))
+}
+
+/// Projects `records` under the salt of `openfleet_home`; a record without a daemon time is stamped at `unix_seconds`.
+pub fn projected_ring_buffer(records: &[serde_json::Value], openfleet_home: &Path, unix_seconds: u64) -> Vec<ProjectedRecord> {
+  let salt = Salt::load_or_create(openfleet_home);
+  let now = Ts::from_unix_seconds(unix_seconds).unwrap_or_else(|| Ts::from_unix_seconds(0).expect("the epoch is a valid timestamp"));
+  project_records(records, salt.as_ref(), now)
+}
+
+fn unix_seconds_now() -> u64 {
+  SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
 }
 
 /// Shows the macOS save sheet and waits for the user; blocks until it closes, so callers run it off the main thread.
@@ -243,6 +266,19 @@ mod tests {
 
     assert!(failed.is_err());
     assert!(unwritable.is_err());
+  }
+
+  #[test]
+  fn the_ring_buffer_is_tagged_under_the_salt_of_the_install_and_stamped_at_the_given_time() {
+    let home = scratch_folder("projection");
+    let records = [serde_json::Value::String("plain text".to_string())];
+
+    let first = projected_ring_buffer(&records, &home, 0);
+    let second = projected_ring_buffer(&records, &home, 0);
+
+    assert_eq!(first[0].ts, "1970-01-01T00:00:00Z");
+    assert!(first[0].fields["text"].starts_with("[text:10:"), "{first:?}");
+    assert_eq!(first, second);
   }
 
   #[test]

@@ -41,13 +41,13 @@ const CURRENT_USER_AUTHOR = 'You';
     .label { color: var(--fg); font-weight: 600 }
     .glyph { color: var(--state-waiting-permission) }
     .message { flex: 1; min-width: 0; overflow-wrap: anywhere }
-    .bar:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .bar:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .versions { display: flex; flex-direction: column; gap: .5rem; padding: .75rem 1.25rem; font-size: .8125rem }
     .version {
       max-height: 9rem; overflow: auto; overflow-wrap: anywhere; padding: .625rem .75rem;
       border-left: 3px solid; border-radius: 0 .375rem .375rem 0; white-space: pre-wrap;
     }
-    .version:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .version:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .version--ours { border-color: var(--state-idle); background: color-mix(in oklch, var(--state-idle) 8%, transparent) }
     .version--theirs { border-color: var(--state-generating); background: color-mix(in oklch, var(--state-generating) 8%, transparent) }
     .version-label { font-size: .6875rem; color: var(--mut); margin-bottom: .25rem }

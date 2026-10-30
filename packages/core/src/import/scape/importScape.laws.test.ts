@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LawRepository } from '../../governance/lawRepository.js';
+import { tokenPrefixOf } from '../../syntheticTokens.js';
 import { runImportCli } from '../importCli.js';
 import { importScape } from './importScape.js';
 import { appleReferenceToIso } from './scapeTime.js';
@@ -161,7 +162,7 @@ describe('importing the approved Scape laws into the laws table', () => {
   });
 
   it('masks a secret in the stored text', () => {
-    importWithLaws([aLaw({ id: 'req-1', text: 'Never print sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 anywhere.' })]);
+    importWithLaws([aLaw({ id: 'req-1', text: `Never print ${tokenPrefixOf('anthropic')}abcdefghijklmnopqrstuvwxyz0123456789 anywhere.` })]);
 
     expect(lawsOf(LEAD_ARGUS_ID)[0]!.text).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');
   });

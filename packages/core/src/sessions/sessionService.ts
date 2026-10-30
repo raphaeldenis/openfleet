@@ -22,6 +22,7 @@ import { DeliveryReconciler, promptDigestsInTranscript } from './deliveryReconci
 import { SessionRuntime, type RuntimeProgress } from './sessionRuntime.js';
 import { findLatestContextTokens, findResolvedModel, readTranscriptTail } from './resolvedModel.js';
 import { wrapAgentMessage } from './messageEnvelope.js';
+import { stillReadableDirectories } from './readDirectories.js';
 import { normalizePermissionMode, SessionRepository } from './sessionRepository.js';
 import { agentFinishedBy, notificationTriggerOf } from './notificationTriggers.js';
 import { ToolCompletionLedger } from './toolCompletionLedger.js';
@@ -426,6 +427,12 @@ function trimToTail(text: string, maxLength: number): string {
   return text.slice(startsMidSurrogatePair ? start + 1 : start);
 }
 
+/** Only a manager without a parent can be attended: a child, whatever it asks for, never is. */
+function isCreatedAttended({ attended, role, parentId }: SessionSpec): boolean {
+  const isParentlessManager = role === MANAGER_ROLE && parentId === undefined;
+  return attended === true && isParentlessManager;
+}
+
 export class SessionService {
   private readonly runtime: SessionRuntime;
   private readonly repo: SessionRepository;
@@ -526,7 +533,7 @@ export class SessionService {
     const now = new Date().toISOString();
     this.repo.insert({ id, name: spec.name, emoji: spec.emoji, directory: spec.directory, worktree: null, model: spec.model ?? null,
       parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken,
-      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, project_id: spec.projectId ?? null, effort: spec.effort ?? null, config_dir: spec.configDir ?? null, created_at: now });
+      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, project_id: spec.projectId ?? null, effort: spec.effort ?? null, config_dir: spec.configDir ?? null, attended: isCreatedAttended(spec), read_directories: spec.readDirectories, created_at: now });
     // Captured now so a later reopen can tell a directory that still resolves the same way apart from an
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
@@ -540,7 +547,7 @@ export class SessionService {
     let handle: HarnessHandle;
     try {
       handle = harness.start({
-        sessionId: id, directory: spec.directory, model: spec.model, seededPrompt,
+        sessionId: id, directory: spec.directory, readDirectories: spec.readDirectories, model: spec.model, seededPrompt,
         hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
         permissionMode: spec.permissionMode, effort: spec.effort, configDir: spec.configDir,
       });
@@ -2159,6 +2166,8 @@ export class SessionService {
     let handle: HarnessHandle;
     let isNewConversationAnnounced = false;
     let freshStartNotice: string | undefined;
+    const stillReadable = stillReadableDirectories(this.repo.readDirectoriesOf(session.id));
+    const readDirectoriesToResume = stillReadable.length > 0 ? { readDirectories: stillReadable } : {};
     try {
       const conversation = isConversationFresh ? { cliSessionId: newId(), isResumed: false, isNewConversationAnnounced: false } : this.conversationToLaunch(session, harness);
       const freshStart = isConversationFresh ? this.freshStartSeedOf(session) : undefined;
@@ -2168,6 +2177,7 @@ export class SessionService {
         cliSessionId: conversation.cliSessionId,
         seededPrompt,
         directory: session.directory,
+        ...readDirectoriesToResume,
         model: session.model,
         effort: session.effort,
         configDir: this.repo.configDirOf(session.id),

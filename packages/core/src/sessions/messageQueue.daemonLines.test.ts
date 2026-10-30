@@ -51,6 +51,24 @@ describe('the daemon lines a session waiting on the human skips', () => {
     expect(next?.body).toBe('human hello');
   });
 
+  it('skips an [arbiter] line, bare and wrapped in an agent message envelope, and still finds a human message behind them', () => {
+    const arbiterEnvelope = wrapAgentMessage({ fromSessionId: 'a1a1a1a1-0000-0000-0000-000000000000', messageId: 'm4', body: '[arbiter] decided Q1,Q2 on CCM-5151; criteria favourable' });
+    const queue = aQueueWith(['[arbiter] escalated Q3 on CCM-5151 to a human: arbiter_unavailable', arbiterEnvelope, 'human hello']);
+
+    const next = queue.nextPending('s1', { skipDaemonLines: true });
+
+    expect(next?.body).toBe('human hello');
+  });
+
+  it('delivers an agent message that mentions [arbiter] without it opening the payload', () => {
+    const chattyEnvelope = wrapAgentMessage({ fromSessionId: 'c1c1c1c1-0000-0000-0000-000000000000', messageId: 'm5', body: 'FYI the [arbiter] said no' });
+    const queue = aQueueWith([chattyEnvelope]);
+
+    const next = queue.nextPending('s1', { skipDaemonLines: true });
+
+    expect(next?.body).toBe(chattyEnvelope);
+  });
+
   it('delivers an agent message that mentions [verdict] without it opening the payload', () => {
     const chattyEnvelope = wrapAgentMessage({ fromSessionId: 'c1c1c1c1-0000-0000-0000-000000000000', messageId: 'm2', body: 'FYI the [verdict] no-go was wrong' });
     const queue = aQueueWith([chattyEnvelope]);

@@ -5,8 +5,9 @@ import {
   type AutoValue, type ColumnChanges, type ColumnWrap, type ColumnFormat, type ColumnType, type DataStore, type DsColumn, type DsRow, type DsView, type DsViewConfig, type OptionReplacement, type OrderTerm, type SelectOption, type ViewType, type WhereClause,
 } from '@openfleet/shared';
 import { z } from 'zod';
-import { inTransaction as runInTransaction } from '../db/transaction.js';
+import { afterCommit, inTransaction as runInTransaction } from '../db/transaction.js';
 import { DuplicateNameError, RowNotFoundError, StoreNotFoundError, UnknownColumnError, type ColumnMetadata, type DataStoreRepository, type RowActor } from './dataStoreRepository.js';
+import { log } from '../logger.js';
 import { BACKLOG_TABLE } from '../managers/projectProfileTemplate.js';
 import { rowGuardViolationOf } from './rowGuard.js';
 
@@ -135,6 +136,20 @@ const LOG_KIND_COLUMN_NAME = 'kind';
 const isLogKindColumn = (column: DsColumn): boolean => column.displayName.trim().toLowerCase() === LOG_KIND_COLUMN_NAME;
 const labelOfSelectedOption = (column: DsColumn, optionId: unknown): unknown => (column.options ?? []).find((option) => option.id === optionId)?.label ?? optionId;
 const isPermittedLogKind =(kind: unknown): boolean => (MANAGER_LOG_KINDS as readonly unknown[]).includes(kind);
+
+/** What an observer sees of a row write before it happens: the store, the cells set and who sets them. */
+export interface ObservedRowWrite {
+  projectId: string;
+  storeName: string;
+  columns: DsColumn[];
+  cells: Record<string, unknown>;
+  actor: RowActor;
+  writtenByDaemon: boolean;
+}
+/** Watches row writes without refusing them: an observer that throws never stops a write. */
+export interface RowWriteObserver {
+  observeRowWrite(write: ObservedRowWrite): void;
+}
 
 export interface DataStoreServiceDeps {
   repo: DataStoreRepository;
@@ -276,8 +291,29 @@ export class DataStoreService {
   private readonly clock: () => string;
   private readonly newId: () => string;
 
+  private rowWriteObserver: RowWriteObserver | undefined;
+
   constructor(deps: DataStoreServiceDeps) {
     ({ repo: this.repo, db: this.db, clock: this.clock, newId: this.newId } = deps);
+  }
+
+  observeRowWrites(observer: RowWriteObserver): void {
+    this.rowWriteObserver = observer;
+  }
+
+  /** Tells the observer about a row write that succeeded, once every transaction around it has committed; a write that fails or rolls back is never announced. */
+  private notifyRowWrite({ storeId, columns, cells, projectId, actor, writtenByDaemon = false }: {
+    storeId: string; columns: DsColumn[]; cells: Record<string, unknown>; projectId: string; actor: RowActor; writtenByDaemon?: boolean;
+  }): void {
+    if (this.rowWriteObserver === undefined) return;
+    afterCommit(this.db, () => {
+      try {
+        const storeName = this.repo.findStore(storeId)?.displayName ?? '';
+        this.rowWriteObserver?.observeRowWrite({ projectId, storeName, columns, cells, actor, writtenByDaemon });
+      } catch (error) {
+        log('warn', `data store: the row write observer failed on store ${storeId}`, error);
+      }
+    });
   }
 
   createStore(input: Scope & { displayName: string }): DataStore {
@@ -499,11 +535,13 @@ export class DataStoreService {
     return this.inTransaction(() => {
       const rowId = this.newId();
       this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, data);
-      return this.repo.insertRow(storeId, { id: rowId, data, actor: input.actor, at });
+      const inserted = this.repo.insertRow(storeId, { id: rowId, data, actor: input.actor, at });
+      this.notifyRowWrite({ storeId, columns, cells: data, projectId: input.projectId, actor: input.actor });
+      return inserted;
     });
   }
 
-  updateRow(storeId: string, rowId: string, input: Scope & { patch: Record<string, unknown>; actor: RowActor }): DsRow {
+  updateRow(storeId: string, rowId: string, input: Scope & { patch: Record<string, unknown>; actor: RowActor; writtenByDaemon?: boolean }): DsRow {
     this.authorize(storeId, input.projectId);
     this.refuseDaemonSetCells(storeId, input.patch);
     const columns = this.repo.listColumns(storeId);
@@ -511,7 +549,9 @@ export class DataStoreService {
     this.refuseKindOutsideManagerLogList(storeId, columns, input.patch);
     this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, input.patch);
     this.refuseRowGuardViolation(storeId, rowId, input);
-    return this.guarded(() => this.repo.updateRow(rowId, { storeId, patch: input.patch, actor: input.actor, at: this.clock() }));
+    const updated = this.guarded(() => this.repo.updateRow(rowId, { storeId, patch: input.patch, actor: input.actor, at: this.clock() }));
+    this.notifyRowWrite({ storeId, columns, cells: input.patch, projectId: input.projectId, actor: input.actor, writtenByDaemon: input.writtenByDaemon });
+    return updated;
   }
 
   deleteRow(storeId: string, rowId: string, input: Scope & { actor: RowActor }): void {
@@ -546,7 +586,9 @@ export class DataStoreService {
     return this.inTransaction(() => stampedRows.map(({ data, at }) => {
       const rowId = this.newId();
       this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, data);
-      return this.repo.insertRow(storeId, { id: rowId, data, actor: input.actor, at });
+      const inserted = this.repo.insertRow(storeId, { id: rowId, data, actor: input.actor, at });
+      this.notifyRowWrite({ storeId, columns, cells: data, projectId: input.projectId, actor: input.actor });
+      return inserted;
     }));
   }
 
@@ -590,7 +632,8 @@ export class DataStoreService {
     return this.daemonSetColumns(this.repo.listColumns(storeId)).map((column) => column.id).filter((columnId) => input.items.some((item) => Object.hasOwn(item, columnId)));
   }
 
-  updateRows(storeId: string, input: Scope & { items: { rowId: string; patch: Record<string, unknown> }[]; actor: RowActor }): DsRow[] {
+  /** An item with `expectedRev` is refused with `stale_revision` when the row has moved on; the whole call then writes nothing. */
+  updateRows(storeId: string, input: Scope & { items: { rowId: string; patch: Record<string, unknown>; expectedRev?: number | undefined }[]; actor: RowActor }): DsRow[] {
     this.authorize(storeId, input.projectId);
     const columns = this.repo.listColumns(storeId);
     for (const { patch } of input.items) {
@@ -598,10 +641,12 @@ export class DataStoreService {
       this.validateCells(columns, patch);
       this.refuseKindOutsideManagerLogList(storeId, columns, patch);
     }
-    return this.inTransaction(() => input.items.map(({ rowId, patch }) => {
+    return this.inTransaction(() => input.items.map(({ rowId, patch, expectedRev }) => {
       this.refuseNaturalKeyHeldByAnotherRow(storeId, rowId, patch);
       this.refuseRowGuardViolation(storeId, rowId, { projectId: input.projectId, patch });
-      return this.repo.updateRow(rowId, { storeId, patch, actor: input.actor, at: this.clock() });
+      const updated = this.repo.updateRow(rowId, { storeId, patch, ...(expectedRev === undefined ? {} : { expectedRev }), actor: input.actor, at: this.clock() });
+      this.notifyRowWrite({ storeId, columns, cells: patch, projectId: input.projectId, actor: input.actor });
+      return updated;
     }));
   }
 

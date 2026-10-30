@@ -63,7 +63,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   });
 
   server.registerTool('get_data_store', {
-    description: 'Read schema and one page of rows from a store by id or display name. columns selects ids or case-insensitive display names (duplicates removed; [] keeps no cells). Rows are {id, data keyed by column id, updatedAt}, newest updatedAt first then binary id ascending; select values use option labels. limit defaults to 100, max 1000; offset defaults to 0. Returns columns, rows, totalRowCount, returned, offset, next_offset (null when exhausted), truncated (only when the 1 MiB JSON output budget cuts the page). An oversized schema or first row is refused with invalid_body; select fewer columns or a smaller limit.',
+    description: 'Read schema and one page of rows from a store by id or display name. columns selects ids or case-insensitive display names (duplicates removed; [] keeps no cells). Rows are {id, data keyed by column id, rev, updatedAt}, newest updatedAt first then binary id ascending; rev is the row revision to send back as expected_rev; select values use option labels. limit defaults to 100, max 1000; offset defaults to 0. Returns columns, rows, totalRowCount, returned, offset, next_offset (null when exhausted), truncated (only when the 1 MiB JSON output budget cuts the page). An oversized schema or first row is refused with invalid_body; select fewer columns or a smaller limit.',
     inputSchema: { store: z.string().min(1), columns: z.array(z.string().min(1)).optional(), limit: z.number().int().min(1).max(MAX_QUERY_LIMIT).optional(), offset: z.number().int().min(0).optional() },
   }, async ({ store, columns, limit, offset }) => {
     const scope = requireProject();
@@ -227,14 +227,15 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
 
   server.registerTool('update_data_store_rows', {
     description: 'Change cells of many rows, in exactly ONE of two modes per call. store is its id or display name; cells are keyed by column id or display name (any case), a numeric string is read as a number, a select cell takes an option label (any case) or id. '
-      + `LIST mode: updates [{row_id, values}] (up to ${MAX_BATCH_ROWS}; patch is accepted in place of values); each update is written on its own, a bad one fails alone and the others commit. `
+      + `LIST mode: updates [{row_id, values, expected_rev?}] (up to ${MAX_BATCH_ROWS}; patch is accepted in place of values); each update is written on its own, a bad one fails alone and the others commit. `
+      + 'expected_rev is the rev the row had when you read it (query_data_store and get_data_store rows carry it): when the row has changed since, that update fails with the current rev and nothing is written for it. Leave it out to overwrite whatever the row holds. '
       + 'FILTER mode: where {column: value, ...} and set {column: value, ...}; every row matching all the where equalities (ANDed; a select matches by option label or id, null matches an empty cell) gets the set cells. '
       + 'FILTER mode is all-or-nothing: an unknown column or an invalid value refuses the whole call, a failing write undoes the others, and matching no row succeeds with matched 0. '
       + 'A natural key value another row holds is refused, and so is setting the natural key through a filter matching several rows. '
       + 'Returns {updated, failed, failures: ["row N: reason"], updatedRowIDs, matched (filter mode), ids, count}, not the rows themselves',
     inputSchema: {
       store: z.string().min(1),
-      updates: z.array(z.object({ row_id: z.string().min(1), values: z.record(z.string(), z.unknown()).optional(), patch: z.record(z.string(), z.unknown()).optional() })).max(MAX_BATCH_ROWS).optional(),
+      updates: z.array(z.object({ row_id: z.string().min(1), values: z.record(z.string(), z.unknown()).optional(), patch: z.record(z.string(), z.unknown()).optional(), expected_rev: z.number().int().positive().optional() })).max(MAX_BATCH_ROWS).optional(),
       where: z.record(z.string(), z.unknown()).optional(),
       set: z.record(z.string(), z.unknown()).optional(),
     },
@@ -258,9 +259,9 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
   server.registerTool('update_data_store_row', {
     description: 'Change cells of one row, addressed by exactly one of row_id (every queried row carries its id) or key (the value of the store\'s natural key column, see describe_data_store). '
       + 'store is its id or display name. values is keyed by column id or display name (any case); a select cell takes an option label (any case) or id. '
-      + 'All-or-nothing: an unknown column or an invalid value changes nothing. Returns the id of the row',
-    inputSchema: { store: z.string().min(1), row_id: z.string().min(1).optional(), key: z.string().min(1).optional(), values: z.record(z.string(), z.unknown()) },
-  }, async ({ store, row_id, key, values }) => {
+      + 'All-or-nothing: an unknown column or an invalid value changes nothing. expected_rev is the rev the row had when you read it: when the row has changed since, the call is refused with stale_revision and the current rev, and nothing is written. Leave it out to overwrite whatever the row holds. Returns the id of the row',
+    inputSchema: { store: z.string().min(1), row_id: z.string().min(1).optional(), key: z.string().min(1).optional(), values: z.record(z.string(), z.unknown()), expected_rev: z.number().int().positive().optional() },
+  }, async ({ store, row_id, key, values, expected_rev }) => {
     const scope = requireProject();
     if (!scope) return refuse('project_not_found', 'this session has no project');
     const isAddressedByExactlyOne = (row_id === undefined) !== (key === undefined);
@@ -270,7 +271,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
       const ownStore = ownStoreOf(store, scope);
       const rowId = row_id ?? stores.findRowByNaturalKey(ownStore.id, { ...scope, key: key! }).id;
       const patch = cellsKeyedByColumnId(storeRepo.listColumns(ownStore.id), values);
-      const [updated] = stores.updateRows(ownStore.id, { ...scope, items: [{ rowId, patch }], actor: agentActor(caller) });
+      const [updated] = stores.updateRows(ownStore.id, { ...scope, items: [{ rowId, patch, expectedRev: expected_rev }], actor: agentActor(caller) });
       return { id: updated!.id };
     });
   });
@@ -292,8 +293,8 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
 
   server.registerTool('query_data_store', {
     description: `Filter, sort and page a store's rows (limit ≤ ${MAX_QUERY_LIMIT}, default ${DEFAULT_QUERY_LIMIT}, offset default 0). Returns total matching rows or groups, next_offset for the next page, and truncated when the limit or ${MAX_QUERY_RESULT_BYTES}-byte budget cuts off results. `
-      + 'By default each row is {id, data keyed by column id, updatedAt}. format "columnar" returns {columns, names, rows: [[rowId, updatedAt, ...one cell per data column]], truncated, count} instead (an empty cell is null): '
-      + 'columns lists id, updatedAt (unless dropped) then the data column ids, names labels the same positions, so columns[k] and names[k] describe row[k]. '
+      + 'By default each row is {id, data keyed by column id, rev, updatedAt}; rev is the row revision to send back as expected_rev when updating. format "columnar" returns {columns, names, rows: [[rowId, updatedAt, ...one cell per data column, rev]], truncated, count} instead (an empty cell is null): '
+      + 'columns lists id, updatedAt (unless dropped), the data column ids then rev, names labels the same positions, so columns[k] and names[k] describe row[k]. '
       + 'columns (ids or display names, names match case-insensitively) keeps only those data columns in both formats: names resolve to ids, an id wins over a name, duplicates are dropped, order is preserved, and an empty list keeps NO data columns (columnar rows are [rowId, updatedAt] or [rowId] with include_updated_at false, rows format has data: {}); '
       + 'select accepts column names (another name for columns; pass one) or aggregate objects [{agg:"count", column?, as?}]. store is its id or display name. '
       + 'where [{column, op, value}] and order_by [{column, dir}] name a column by id or display name (any case; columnId stays accepted); op is eq, ne (or neq), gt, gte, lt, lte, contains, or in (value is a list). '
@@ -348,7 +349,7 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
         const dataColumns = resolveColumns(ownStore.id, requestedColumns);
         const columnIds = dataColumns.map((column) => column.id);
         const leadingHeaders = includeUpdatedAt ? ['id', 'updatedAt'] : ['id'];
-        const header = { columns: [...leadingHeaders, ...columnIds], names: [...leadingHeaders, ...dataColumns.map((column) => column.displayName)] };
+        const header = { columns: [...leadingHeaders, ...columnIds, 'rev'], names: [...leadingHeaders, ...dataColumns.map((column) => column.displayName), 'rev'] };
         const columnarRows = rows.map((row) => columnarRowView(row, { columnIds, includeUpdatedAt, cellOf }));
         return queryPage({ rows: columnarRows, header, total: matchingRows.length, offset: pageOffset, maxBytes: MAX_QUERY_RESULT_BYTES });
       }
@@ -358,12 +359,12 @@ export function registerTableTools(server: McpServer, deps: RegisterTableToolsDe
     });
   });
 
-  function updateRowsByIds(ownStore: DataStore, scope: { projectId: string }, updates: { row_id: string; values?: Record<string, unknown> | undefined; patch?: Record<string, unknown> | undefined }[]): RowBatchReport & { matched?: number } {
+  function updateRowsByIds(ownStore: DataStore, scope: { projectId: string }, updates: { row_id: string; values?: Record<string, unknown> | undefined; patch?: Record<string, unknown> | undefined; expected_rev?: number | undefined }[]): RowBatchReport & { matched?: number } {
     const columns = storeRepo.listColumns(ownStore.id);
     return writeRowByRow(updates, {
-      write: ({ row_id, values, patch }) => {
+      write: ({ row_id, values, patch, expected_rev }) => {
         const cells = cellsKeyedByColumnId(columns, values ?? patch ?? {});
-        const [updated] = stores.updateRows(ownStore.id, { ...scope, items: [{ rowId: row_id, patch: cells }], actor: agentActor(caller) });
+        const [updated] = stores.updateRows(ownStore.id, { ...scope, items: [{ rowId: row_id, patch: cells, expectedRev: expected_rev }], actor: agentActor(caller) });
         return { outcome: 'updated', rowId: updated!.id };
       },
       rejectionReasonOf: refusalReasonOf,

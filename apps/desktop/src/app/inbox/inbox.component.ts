@@ -1,6 +1,6 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, Injector, afterNextRender, computed, effect, inject, linkedSignal, signal, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { MANAGER_ROLE } from '@openfleet/shared';
+import { MANAGER_ROLE, type Approval } from '@openfleet/shared';
 import { ReplyDraftStore } from '../sessions/reply-draft.store';
 import { detailsTextOf } from '../core/copy-details';
 import { decideApproval } from '../core/decide-approval';
@@ -14,9 +14,10 @@ import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { REPLY_DELIVERED_COPY } from '../sessions/reply-delivered-copy';
 import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
-import { answeredItemsOf, attentionItemsOf, itemsNeedingYouOf } from '../working-state/attention-items';
+import { answeredItemsOf, attentionItemsOf, itemsNeedingYouOf, statesWithoutKnownEscalationLines } from '../working-state/attention-items';
 import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
 import { AttentionCardComponent } from './attention-card.component';
+import { EscalationCardsComponent } from './escalation-cards.component';
 import { GovernanceApprovedTexts } from './governance-approved-texts.store';
 import { waitingCountLabelOf } from './governance-details';
 import { GovernanceProposalsComponent } from './governance-proposals.component';
@@ -24,7 +25,7 @@ import { InboxNeedingYou } from './inbox-needing-you';
 import { minutesWaiting, silentBlockCopyOf, silentBlockDetailsMessageOf } from './silent-block-copy';
 import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 
-type FilterKey = 'all' | 'questions' | 'governance';
+type FilterKey = 'all' | 'questions' | 'governance' | 'escalations';
 
 interface FilterOption {
   readonly key: FilterKey;
@@ -32,6 +33,7 @@ interface FilterOption {
   readonly showsGates: boolean;
   readonly showsQuestions: boolean;
   readonly showsProposals: boolean;
+  readonly showsEscalations: boolean;
 }
 
 const DELIVERED_REPLY_SHOWN_MS = 2500;
@@ -39,9 +41,10 @@ const DELIVERED_REPLY_SHOWN_MS = 2500;
 // Only the filters the backend data can serve are listed: it has no read-tracking, assignee or
 // blocking flag yet, so Unread, Mine, Blocked and Recent join this list when it does.
 const FILTERS: readonly FilterOption[] = [
-  { key: 'all', label: 'All', showsGates: true, showsQuestions: true, showsProposals: true },
-  { key: 'questions', label: 'Questions', showsGates: false, showsQuestions: true, showsProposals: false },
-  { key: 'governance', label: 'Governance', showsGates: false, showsQuestions: false, showsProposals: true },
+  { key: 'all', label: 'All', showsGates: true, showsQuestions: true, showsProposals: true, showsEscalations: true },
+  { key: 'questions', label: 'Questions', showsGates: false, showsQuestions: true, showsProposals: false, showsEscalations: false },
+  { key: 'governance', label: 'Governance', showsGates: false, showsQuestions: false, showsProposals: true, showsEscalations: false },
+  { key: 'escalations', label: 'Escalations', showsGates: false, showsQuestions: false, showsProposals: false, showsEscalations: true },
 ];
 
 interface FormattedInput {
@@ -70,7 +73,7 @@ function formatInput(toolInput: unknown): FormattedInput {
 @Component({
   selector: 'of-inbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ErrorLineComponent, KindBadgeComponent,AttentionCardComponent, CopyDetailsButtonComponent, GovernanceProposalsComponent, RouterLink],
+  imports: [ErrorLineComponent, KindBadgeComponent,AttentionCardComponent, CopyDetailsButtonComponent, EscalationCardsComponent, GovernanceProposalsComponent, RouterLink],
   template: `
     <section class="inbox" data-testid="inbox">
       <header class="title-row" data-testid="inbox-title-row">
@@ -164,6 +167,9 @@ function formatInput(toolInput: unknown): FormattedInput {
           @if (activeFilter().showsProposals) {
             <of-governance-proposals (noCardLeft)="focusGovernanceFilter()" />
           }
+          @if (activeFilter().showsEscalations) {
+            <of-escalation-cards (noCardLeft)="focusEscalationsFilter()" />
+          }
           @if (isListEmpty()) {
             <div class="empty" data-testid="inbox-empty">
               <span class="empty-title">Nothing needs you</span>
@@ -217,7 +223,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     .issue-dismiss { flex: none; }
     .answered { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); overflow: hidden; }
     .answered-toggle { display: flex; align-items: center; gap: .5rem; height: 2.25rem; padding: 0 .875rem; border: 0; background: transparent; color: var(--fg); cursor: pointer; font: inherit; font-weight: 600; text-align: left; }
-    .answered-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .answered-toggle:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem; }
     .answered-caret { width: .75rem; color: var(--mut); }
     .answered-hint { margin-left: auto; font-size: .6875rem; font-weight: 400; color: var(--mut); }
     .answered-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
@@ -228,7 +234,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     .filters { display: flex; flex-wrap: wrap; gap: .375rem; }
     .filter-chip { display: flex; align-items: center; gap: .375rem; height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; white-space: nowrap; }
     .filter-chip[aria-pressed='true'] { background: var(--active); }
-    .filter-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .filter-chip:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem; }
     .filter-count { color: var(--mut); }
     .gate-list { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
     .gate-card { display: flex; gap: .75rem; min-width: 0; padding: .875rem 1rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
@@ -237,7 +243,7 @@ function formatInput(toolInput: unknown): FormattedInput {
     .gate-meta { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
     .session-label { font-weight: 500; }
     .session-link { color: var(--fg); overflow-wrap: anywhere; }
-    .session-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .session-link:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem; }
     .gate-sentence { margin: 0; }
     .tool-name { font-family: var(--mono); font-size: .75rem; padding: 0 .375rem; border-radius: .25rem; background: var(--sunk); }
     .age { margin-left: auto; font-size: .6875rem; color: var(--mut); }
@@ -280,35 +286,44 @@ export class InboxComponent {
     });
   }
 
-  private formattedInputsById = new Map<string, FormattedInput>();
-
   private readonly sessionsById = computed(() => new Map(this.events.sessions().map((session) => [session.id, session])));
+
+  /** Each approval's formatted tool input; an input that did not change since the last approvals is not formatted again. */
+  private readonly formattedInputsById = linkedSignal<Approval[], ReadonlyMap<string, FormattedInput>>({
+    source: () => this.events.approvals(),
+    computation: (approvals, previous) => {
+      const previousFormattedInputs = previous?.value ?? new Map<string, FormattedInput>();
+      return new Map(
+        approvals.map((approval): [string, FormattedInput] => {
+          const previousFormattedInput = previousFormattedInputs.get(approval.id);
+          const isUnchanged = previousFormattedInput !== undefined && previousFormattedInput.toolInput === approval.toolInput;
+          return [approval.id, isUnchanged ? previousFormattedInput : formatInput(approval.toolInput)];
+        }),
+      );
+    },
+  });
 
   private readonly gates = computed(() => {
     const sessionsById = this.sessionsById();
-    const previousFormattedInputs = this.formattedInputsById;
-    const currentFormattedInputs = new Map<string, FormattedInput>();
-    const gates = this.events.approvals().map((approval) => {
+    const formattedInputsById = this.formattedInputsById();
+    return this.events.approvals().map((approval) => {
       const session = sessionsById.get(approval.sessionId);
       const sessionName = session ? session.name : approval.sessionId;
       const sessionEmoji = session ? session.emoji : '';
-      const previous = previousFormattedInputs.get(approval.id);
-      const isUnchanged = previous !== undefined && previous.toolInput === approval.toolInput;
-      const formattedInput = isUnchanged ? previous : formatInput(approval.toolInput);
-      currentFormattedInputs.set(approval.id, formattedInput);
       return {
         ...approval,
         toolName: showBidiControlsAsEscapes(approval.toolName),
         sessionName: showInvisibleControlsAsEscapes(sessionName),
         sessionEmoji,
-        formattedInput: formattedInput.text,
+        formattedInput: formattedInputsById.get(approval.id)!.text,
       };
     });
-    this.formattedInputsById = currentFormattedInputs;
-    return gates;
   });
 
-  private readonly attentionItems = computed(() => attentionItemsOf(this.events.sessions(), this.events.workingStates(), this.answeredReplies.answeredReplyBySessionId()));
+  private readonly attentionItems = computed(() => {
+    const statesToAsk = statesWithoutKnownEscalationLines(this.events.workingStates(), this.events.knownEscalationIds());
+    return attentionItemsOf(this.events.sessions(), statesToAsk, this.answeredReplies.answeredReplyBySessionId());
+  });
   protected readonly attentionItemsNeedingYou = computed(() => itemsNeedingYouOf(this.attentionItems()));
   protected readonly isAnsweredSectionOpen = signal(false);
 
@@ -446,6 +461,10 @@ export class InboxComponent {
     return waitingTotal > 0 ? waitingCountLabelOf(waitingTotal) : '';
   });
 
+  protected focusEscalationsFilter(): void {
+    this.host.nativeElement.querySelector<HTMLElement>('[data-testid="inbox-filter-escalations"]')?.focus();
+  }
+
   protected focusGovernanceFilter(): void {
     this.host.nativeElement.querySelector<HTMLElement>('[data-testid="inbox-filter-governance"]')?.focus();
   }
@@ -463,13 +482,15 @@ export class InboxComponent {
     const gateCount = this.items().length;
     const questionCount = this.attentionItemsNeedingYou().length;
     const proposalCount = this.events.proposals().length;
-    return { all: gateCount + questionCount + proposalCount, questions: questionCount, governance: proposalCount };
+    const escalationCount = this.events.escalations().length;
+    return { all: gateCount + questionCount + proposalCount + escalationCount, questions: questionCount, governance: proposalCount, escalations: escalationCount };
   });
 
   protected readonly isListEmpty = computed(() => {
-    const { showsGates, showsQuestions, showsProposals } = this.activeFilter();
+    const { showsGates, showsQuestions, showsProposals, showsEscalations } = this.activeFilter();
     const proposalCardCount = this.events.proposals().length + this.approvedTexts().length;
-    const shownCardCount = (showsGates ? this.items().length : 0) + (showsQuestions ? this.attentionCards().length : 0) + (showsProposals ? proposalCardCount : 0);
+    const shownCardCount =
+      (showsGates ? this.items().length : 0) + (showsQuestions ? this.attentionCards().length : 0) + (showsProposals ? proposalCardCount : 0) + (showsEscalations ? this.events.escalations().length : 0);
     const hasNoIssueOrNotice = this.issues().length === 0 && this.contextNotices().length === 0;
     return shownCardCount === 0 && hasNoIssueOrNotice;
   });

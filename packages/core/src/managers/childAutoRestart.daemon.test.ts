@@ -115,6 +115,18 @@ describe('a child that crashes on its own', () => {
     expect(messageBodiesOf(managerId).some((body) => body.startsWith('[child_restarted]'))).toBe(true);
   });
 
+  it('is never restarted when it is an arbiter: the arbiter runner replaces a lost arbiter itself', async () => {
+    const { client } = await aManager();
+    const { childId } = await spawnChild(client);
+    daemon.db.prepare("UPDATE sessions SET role = 'arbiter' WHERE id = ?").run(childId);
+
+    crashAfterOutput(childId);
+
+    expect(pendingRestarts()).toEqual([]);
+    expect(stateOf(childId)).toBe('closed');
+    expect(launchCountOf(childId)).toBe(1);
+  });
+
   it('stays closed when the option is off', async () => {
     const { client } = await aManager({ childAutoRestart: false });
     const { childId } = await spawnChild(client);

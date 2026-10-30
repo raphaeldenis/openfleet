@@ -80,6 +80,8 @@ export interface DsRow {
   id: string;
   storeId: string;
   data: Record<string, unknown>;
+  /** Starts at 1 and rises by one with each write that changes a cell; a writer sends it back as `expectedRev` to refuse a stale write. */
+  rev: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -205,6 +207,6 @@ export type InsertRowsRequest = z.infer<typeof InsertRowsRequestSchema>;
 
 export const UpdateRowsRequestSchema = z.object({
   projectId: z.string().min(1),
-  updates: z.array(z.object({ rowId: z.string().min(1), patch: CellsSchema })).max(MAX_ROW_BATCH),
+  updates: z.array(z.object({ rowId: z.string().min(1), patch: CellsSchema, expectedRev: z.number().int().positive().optional() })).max(MAX_ROW_BATCH),
 });
 export type UpdateRowsRequest = z.infer<typeof UpdateRowsRequestSchema>;

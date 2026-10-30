@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { OpenFleetError, contractVersionInstructions, type Session } from '@openfleet/shared';
+import { ARBITER_ROLE, OpenFleetError, contractVersionInstructions, type Session } from '@openfleet/shared';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { BaseNotReadEnforcement } from '../managers/baseReadGuard.js';
 import type { NoteNotReadEnforcement } from '../managers/noteReadGuard.js';
@@ -23,6 +23,12 @@ import type { GovernanceQueueService } from '../governance/governanceQueueServic
 import type { ManagerDenials } from '../policy/managerDenials.js';
 import type { DenialJournal } from '../policy/ports.js';
 import { registerDeniedCommandTools } from './deniedCommandTools.js';
+import type { ArbiterRunner } from '../escalation/arbiterRunner.js';
+import type { AskUserGate } from '../escalation/askUserGate.js';
+import type { CriteriaApproval } from '../escalation/criteriaApproval.js';
+import type { EscalationService } from '../escalation/escalationService.js';
+import { ARBITER_TOOL_NAMES, registerArbiterTools } from './arbiterTools.js';
+import { registerEscalationTools } from './escalationTools.js';
 import { registerGovernanceTools } from './governanceTools.js';
 import { registerManagerBaseTools } from './managerBaseTools.js';
 import { registerManagerLinkTools } from './managerLinkTools.js';
@@ -69,7 +75,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
+export function createMcpHandler(deps: { askUserGate?: AskUserGate; criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -79,7 +85,8 @@ export function createMcpHandler(deps: { scheduledEvents?: ScheduledEventService
     const server = new McpServer({ name: 'openfleet', version: DAEMON_VERSION }, { instructions: contractVersionInstructions() });
     const answeringServer = answeringThrowsInGrammar(server, caller);
     const isReviewer = caller.role === REVIEWER_ROLE;
-    const toolServer = isReviewer ? registeringOnly(answeringServer, REVIEWER_TOOL_NAMES) : answeringServer;
+    const isArbiter = caller.role === ARBITER_ROLE;
+    const toolServer = isReviewer ? registeringOnly(answeringServer, REVIEWER_TOOL_NAMES) : isArbiter ? registeringOnly(answeringServer, ARBITER_TOOL_NAMES) : answeringServer;
     registerTools(toolServer, { ...deps, caller });
     if (deps.reviewFindings) registerShipVerdictTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, sessions: deps.sessions, caller, ...(deps.ticketPattern === undefined ? {} : { ticketPattern: deps.ticketPattern }) });
     if (deps.reviewFindings) registerStepFindingTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, caller, ...(deps.ticketPattern === undefined ? {} : { ticketPattern: deps.ticketPattern }) });
@@ -91,6 +98,8 @@ export function createMcpHandler(deps: { scheduledEvents?: ScheduledEventService
     if (deps.managerBase) registerManagerBaseTools(toolServer, { managerBase: deps.managerBase, managers: deps.managers, caller });
     if (deps.managerDenials) registerDeniedCommandTools(toolServer, { managerDenials: deps.managerDenials, sessions: deps.sessions, caller });
     registerGovernanceTools(toolServer, { governanceQueue: deps.governanceQueue, caller });
+    if (deps.escalations && deps.arbiters && deps.criteria) registerEscalationTools(toolServer, { criteria: deps.criteria, escalations: deps.escalations, arbiters: deps.arbiters, managers: deps.managers, noteRepo: deps.noteRepo, projects: deps.projects, caller });
+    if (deps.escalations && deps.arbiters) registerArbiterTools(toolServer, { escalations: deps.escalations, arbiters: deps.arbiters, managers: deps.managers, caller });
     registerKnowledgeTools(toolServer, { knowledgeSearch: deps.knowledgeSearch, caller });
     registerTableTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
     registerTableViewTools(toolServer, { stores: deps.stores, storeRepo: deps.storeRepo, caller });
@@ -101,7 +110,7 @@ export function createMcpHandler(deps: { scheduledEvents?: ScheduledEventService
     registerNoteVersionTools(toolServer, noteToolDeps);
     registerProjectTools(toolServer, { projects: deps.projects, noteRepo: deps.noteRepo, caller });
     registerWorktreeTools(toolServer, { worktrees: new WorktreeService({ projects: deps.projects, sessions: deps.sessions, worktreesRoot: deps.worktreesRoot }), caller });
-    registerWorkingStateTools(toolServer, { workingStates: deps.workingStates, sessions: deps.sessions, caller });
+    registerWorkingStateTools(toolServer, { workingStates: deps.workingStates, sessions: deps.sessions, caller, ...(deps.askUserGate && { askUserGate: deps.askUserGate }) });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => { void transport.close(); void server.close(); });
     await server.connect(transport);

@@ -88,12 +88,12 @@ function groupNameOf(note: NoteSummary): GroupName {
       flex: 1; min-width: 0; height: 1.625rem; padding: 0 .5rem; border: 1px solid var(--line); border-radius: .375rem;
       background: var(--sunk); color: var(--fg); font: inherit; font-size: .75rem; outline: 0;
     }
-    .filter:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .filter:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .new {
       width: 1.625rem; height: 1.625rem; border: 1px solid var(--line); border-radius: .375rem;
       background: var(--panel); color: var(--fg); cursor: pointer; font: inherit;
     }
-    .new:focus-visible, .item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .new:focus-visible, .item:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .items { flex: 1; min-height: 0; overflow: auto; padding: .375rem; display: flex; flex-direction: column }
     .row { display: flex; flex-direction: column }
     .group {

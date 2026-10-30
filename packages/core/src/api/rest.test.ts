@@ -44,6 +44,38 @@ async function wsUrl(): Promise<string> {
   return `${server.url.replace('http', 'ws')}/ws?ticket=${ticket}`;
 }
 
+const CONDITION_DEADLINE_MS = 5000;
+
+async function untilTrue(condition: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + CONDITION_DEADLINE_MS;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+interface WsFrame { type: string; sessionId?: string }
+
+function recordFrames(ws: WebSocket): WsFrame[] {
+  const received: WsFrame[] = [];
+  ws.addEventListener('message', (m) => received.push(JSON.parse(String(m.data)) as WsFrame));
+  return received;
+}
+
+// The server handles the frames of one socket in order, so the replay answering a later attach proves every earlier frame was handled.
+function attachAndAwaitReplay(ws: WebSocket, sessionId: string): Promise<void> {
+  return new Promise((resolve) => {
+    const onMessage = (m: MessageEvent) => {
+      const frame = JSON.parse(String(m.data)) as WsFrame;
+      if (frame.type !== 'session.replay' || frame.sessionId !== sessionId) return;
+      ws.removeEventListener('message', onMessage);
+      resolve();
+    };
+    ws.addEventListener('message', onMessage);
+    ws.send(JSON.stringify({ type: 'attach', sessionId }));
+  });
+}
+
 describe('REST', () => {
   it('answers /health with no auth required, for CI/e2e readiness probes', async () => {
     const res = await fetch(`${server.url}/health`);
@@ -688,7 +720,7 @@ describe('REST', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ pulsed: true });
-    await new Promise((resolve) => setTimeout(resolve, 0)); // let the (0ms) submit-keystroke timer fire
+    await untilTrue(() => harness.handles[0]!.written.length === 2, 'the pulse and its submit keystroke to reach the pty');
     expect(harness.handles[0]!.written).toEqual(['[pulse] Re-read your mission and continue: check your children, unblock them, record what you did. Wake reason: manual.', '\r']);
   });
 
@@ -770,6 +802,7 @@ describe('REST', () => {
   it('answers attach with a replay of recent output, addressed only to the requesting socket', async () => {
     const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     harness.handles[0]!.emitData('hello from pty');
+    const otherSession = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'O', harness: 'fake' }) })).json();
 
     // Both tickets are fetched before either socket connects: fetch and WebSocket share undici's connection
     // pool to the same origin, and a fetch interleaved between the two connects starves the first socket's
@@ -780,15 +813,14 @@ describe('REST', () => {
     const bystander = new WebSocket(bystanderUrl);
     await Promise.all([requester, bystander].map((ws) => new Promise((r) => ws.addEventListener('message', r, { once: true })))); // wait past each socket's snapshot
 
-    const bystanderSawReplay = new Promise<boolean>((resolve) => {
-      bystander.addEventListener('message', (m) => resolve(JSON.parse(String(m.data)).type === 'session.replay'));
-    });
+    const bystanderFrames = recordFrames(bystander);
     const replay = new Promise<string>((resolve) => requester.addEventListener('message', (m) => resolve(String(m.data)), { once: true }));
     requester.send(JSON.stringify({ type: 'attach', sessionId: session.id }));
 
     expect(JSON.parse(await replay)).toEqual({ type: 'session.replay', sessionId: session.id, data: 'hello from pty' });
-    const raceResult = await Promise.race([bystanderSawReplay, new Promise((r) => setTimeout(() => r('no-message'), 100))]);
-    expect(raceResult).not.toBe(true);
+    // The bystander's own later attach is answered after any frame the requester's attach would have leaked to it.
+    await attachAndAwaitReplay(bystander, otherSession.id);
+    expect(bystanderFrames.filter((frame) => frame.type === 'session.replay' && frame.sessionId === session.id)).toEqual([]);
     requester.close();
     bystander.close();
   });
@@ -796,8 +828,9 @@ describe('REST', () => {
   it('ignores a malformed websocket frame instead of crashing the daemon', async () => {
     const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('open', r, { once: true }));
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     ws.send('not json');
-    await new Promise((r) => setTimeout(r, 50));
+    await attachAndAwaitReplay(ws, session.id); // the same socket still answers after the malformed frame
     const res = await api('/api/sessions');
     expect(res.status).toBe(200);
     ws.close();
@@ -808,7 +841,7 @@ describe('REST', () => {
     const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('message', r, { once: true })); // wait past the snapshot
     ws.send(JSON.stringify({ type: 'resize', sessionId: session.id, cols: -1, rows: 10 }));
-    await new Promise((r) => setTimeout(r, 50));
+    await attachAndAwaitReplay(ws, session.id); // handled after the resize, so the resize has been decided by now
     expect(harness.handles[0]!.resizes).toEqual([]);
     const res = await api('/api/sessions');
     expect(res.status).toBe(200);
@@ -818,8 +851,9 @@ describe('REST', () => {
   it('ignores an attach message with a missing sessionId instead of crashing', async () => {
     const ws = new WebSocket(await wsUrl());
     await new Promise((r) => ws.addEventListener('message', r, { once: true })); // wait past the snapshot
+    const session = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'G', harness: 'fake' }) })).json();
     ws.send(JSON.stringify({ type: 'attach' }));
-    await new Promise((r) => setTimeout(r, 50));
+    await attachAndAwaitReplay(ws, session.id); // the same socket still answers after the invalid attach
     const res = await api('/api/sessions');
     expect(res.status).toBe(200);
     ws.close();

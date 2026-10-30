@@ -247,3 +247,68 @@ describe('PATCH /api/projects/:id: the shared repo setting', () => {
     expect(await res.json()).toEqual({ ...project, sharedRepo: true, rowGuardEnabled: true });
   });
 });
+
+describe('PATCH /api/projects/:id: the escalation setting', () => {
+  const withoutSpend = ['contract', 'security', 'deployment', 'history_rewrite', 'dod_waiver', 'visual_qa'];
+  const storedPolicy = { humanClasses: withoutSpend, extraRules: [], arbiterModel: 'opus', maxArbiterRunsPerTicket: 3, criteriaStatusColumn: 'criteria_status', approvedOption: 'approved', askUserGate: 'warn' };
+
+  it('is absent from a new project: the defaults of the ladder apply', async () => {
+    const project = await createProject();
+
+    expect(project).not.toHaveProperty('escalation');
+  });
+
+  it('stores the policy with its defaults filled in and lists it with the project', async () => {
+    const project = await createProject();
+
+    const res = await patchProject(project.id, { escalation: { humanClasses: withoutSpend } });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ...project, escalation: storedPolicy });
+    expect(await listProjects()).toEqual([{ ...project, escalation: storedPolicy }]);
+  });
+
+  it('clears the policy with null, which brings the defaults back', async () => {
+    const project = await createProject();
+    await patchProject(project.id, { escalation: { humanClasses: withoutSpend } });
+
+    const res = await patchProject(project.id, { escalation: null });
+
+    expect(await res.json()).toEqual(project);
+  });
+
+  it('keeps the policy when only the name changes', async () => {
+    const project = await createProject();
+    await patchProject(project.id, { escalation: { askUserGate: 'enforce' } });
+
+    const res = await patchProject(project.id, { name: 'Renamed' });
+
+    expect(await res.json()).toMatchObject({ name: 'Renamed', escalation: { askUserGate: 'enforce' } });
+  });
+
+  it.each([
+    ['removes contract from the human list', { humanClasses: ['security', 'spend'] }],
+    ['removes security from the human list', { humanClasses: ['contract', 'spend'] }],
+    ['names a field the policy does not have', { arbiterBudget: 5 }],
+    ['asks for an arbiter model below opus', { arbiterModel: 'haiku' }],
+  ])('refuses a policy that %s, and changes nothing', async (_label, escalation) => {
+    const project = await createProject();
+
+    const res = await patchProject(project.id, { escalation });
+
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as ErrorEnvelope).error).toBe('invalid_body');
+    expect(await listProjects()).toEqual([project]);
+  });
+
+  it('refuses the request of a caller that does not hold the admin token', async () => {
+    const project = await createProject();
+
+    const res = await fetch(`${server.url}/api/projects/${project.id}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json', authorization: 'Bearer a-session-mcp-token' }, body: JSON.stringify({ escalation: { askUserGate: 'off' } }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(await listProjects()).toEqual([project]);
+  });
+});

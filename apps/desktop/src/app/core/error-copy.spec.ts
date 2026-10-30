@@ -36,6 +36,22 @@ describe('copyFor', () => {
     });
   });
 
+  describe('a stale revision', () => {
+    const staleRevisionOf = (detail?: unknown) => copyFor(apiErrorOf(envelopeOf('stale_revision', { detail })), { action: 'generic' }).text;
+
+    it('names a row when the detail says the resource is a table row', () => {
+      expect(staleRevisionOf({ resource: 'data_store_row', rowId: 'r1', currentRev: 3 })).toBe('This row changed since you opened it — reload, then try again.');
+    });
+
+    it('names a manager profile when the detail says so', () => {
+      expect(staleRevisionOf({ resource: 'manager_profile', currentRev: 7 })).toBe('This manager profile changed since you opened it — reload, then try again.');
+    });
+
+    it.each([undefined, { currentRev: 4 }, { resource: 'something_new', currentRev: 4 }, 'not an object'])('says "item", never "note", when the detail %j names no known resource', (detail) => {
+      expect(staleRevisionOf(detail)).toBe('This item changed since you opened it — reload, then try again.');
+    });
+  });
+
   it('appends the ref of an internal error and returns it apart', () => {
     const envelope = envelopeOf('internal_error', { id: '3f9a1c2e' });
 
@@ -127,7 +143,7 @@ describe('copyFor', () => {
   });
 
   describe('the retry of the envelope decides the ending of every action', () => {
-    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume', 'rename', 'close', 'load_handoff', 'save_handoff', 'save_project', 'reopen_manager', 'save_manager', 'load_worktrees', 'remove_worktree', 'save_project_hook'] as const;
+    const ACTIONS = ['generic', 'send', 'create_session', 'create_manager', 'resume', 'rename', 'close', 'load_handoff', 'save_handoff', 'save_project', 'reopen_manager', 'save_manager', 'load_worktrees', 'remove_worktree', 'save_project_hook', 'save_project_escalation', 'retry_escalation_handover'] as const;
     const RETRIES = ['never', 'later', 'after_refresh'] as const;
     const wordsOfEnvelope = (code: ErrorCode, retry: ErrorEnvelope['retry'], action: (typeof ACTIONS)[number]) => {
       const envelope = envelopeOf(code, { retry, ...(ERROR_CODES[code].kind === 'internal' && { id: '3f9a1c2e' }) });

@@ -62,14 +62,14 @@ const NUMBER_COLUMN_WIDTH_REM = 3;
     .header { height: 2rem; background: var(--sunk); font-size: .6875rem; color: var(--mut); font-weight: 500 }
     .row { min-height: 2.25rem; cursor: pointer; font-size: .75rem }
     .row.selected { background: var(--accent-bg) }
-    .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .row:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .cell { flex-grow: 1; flex-shrink: 1; flex-basis: 0%; min-width: 8rem; padding-right: .5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .cell-content { display: flex; align-items: center; gap: .375rem; min-width: 0 }
     of-table-cell { flex: 1; overflow: hidden; text-overflow: ellipsis }
     .number { flex: 0 0 3rem; min-width: 0; font-family: var(--mono); color: var(--mut) }
     .header .number { font-family: inherit }
     button { flex: none }
-    button:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
+    button:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
   `,
 })
 export class TableGridComponent {

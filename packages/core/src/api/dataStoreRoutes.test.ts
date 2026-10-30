@@ -317,6 +317,79 @@ describe('column edit REST routes', () => {
   });
 });
 
+describe('row revision over REST', () => {
+  const rowsPathOf = (storeId: string) => `/api/data-stores/${storeId}/rows`;
+  const patchRows = (storeId: string, updates: unknown[]) => call('PATCH', rowsPathOf(storeId), { projectId: 'p1', updates });
+  const listedRows = async (storeId: string) => (await json(await call('GET', `${rowsPathOf(storeId)}?projectId=p1`))).items as { id: string; rev: number; data: Record<string, unknown> }[];
+
+  it('lists each row with its revision, 1 for a new row', async () => {
+    const { store, name, qty } = seedStore();
+    await insertRows(store.id, { name, qty }, [['bolt', 1]]);
+
+    const [row] = await listedRows(store.id);
+
+    expect(row!.rev).toBe(1);
+  });
+
+  it('writes a patch that expects the current revision and answers the row with the next one', async () => {
+    const { store, name, qty } = seedStore();
+    const [row] = (await insertRows(store.id, { name, qty }, [['bolt', 1]])).items;
+
+    const response = await patchRows(store.id, [{ rowId: row!.id, patch: { [qty.id]: 2 }, expectedRev: 1 }]);
+
+    expect(response.status).toBe(200);
+    expect((await json(response)).items[0]).toMatchObject({ id: row!.id, rev: 2, data: { [qty.id]: 2 } });
+  });
+
+  it('keeps writing a patch that expects no revision, and raises the revision', async () => {
+    const { store, name, qty } = seedStore();
+    const [row] = (await insertRows(store.id, { name, qty }, [['bolt', 1]])).items;
+
+    const response = await patchRows(store.id, [{ rowId: row!.id, patch: { [qty.id]: 2 } }]);
+
+    expect(response.status).toBe(200);
+    expect((await listedRows(store.id))[0]!.rev).toBe(2);
+  });
+
+  it('refuses a stale revision with 409 stale_revision naming the row and its current revision, and writes nothing', async () => {
+    const { store, name, qty } = seedStore();
+    const [row] = (await insertRows(store.id, { name, qty }, [['bolt', 1]])).items;
+    await patchRows(store.id, [{ rowId: row!.id, patch: { [qty.id]: 2 } }]);
+
+    const response = await patchRows(store.id, [{ rowId: row!.id, patch: { [qty.id]: 99 }, expectedRev: 1 }]);
+
+    expect(response.status).toBe(409);
+    expect(await json(response)).toMatchObject({ error: 'stale_revision', retry: 'after_refresh', detail: { resource: 'data_store_row', rowId: row!.id, currentRev: 2 } });
+    expect((await listedRows(store.id))[0]).toMatchObject({ rev: 2, data: { [qty.id]: 2 } });
+  });
+
+  it('refuses the whole batch when one update is stale, naming the first stale row', async () => {
+    const { store, name, qty } = seedStore();
+    const [first, second, third] = (await insertRows(store.id, { name, qty }, [['a', 1], ['b', 1], ['c', 1]])).items;
+    await patchRows(store.id, [{ rowId: second!.id, patch: { [qty.id]: 2 } }, { rowId: third!.id, patch: { [qty.id]: 2 } }]);
+
+    const response = await patchRows(store.id, [
+      { rowId: first!.id, patch: { [qty.id]: 50 }, expectedRev: 1 },
+      { rowId: second!.id, patch: { [qty.id]: 50 }, expectedRev: 1 },
+      { rowId: third!.id, patch: { [qty.id]: 50 }, expectedRev: 1 },
+    ]);
+
+    expect(response.status).toBe(409);
+    expect((await json(response)).detail).toMatchObject({ rowId: second!.id, currentRev: 2 });
+    expect((await listedRows(store.id)).map((row) => row.data[qty.id])).toEqual([1, 2, 2]);
+  });
+
+  it('refuses an expectedRev that is not a positive integer as an invalid body', async () => {
+    const { store, name, qty } = seedStore();
+    const [row] = (await insertRows(store.id, { name, qty }, [['bolt', 1]])).items;
+
+    const response = await patchRows(store.id, [{ rowId: row!.id, patch: { [qty.id]: 2 }, expectedRev: 0 }]);
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({ error: 'invalid_body' });
+  });
+});
+
 describe('data store REST routes', () => {
   it('hides another project\'s store behind 404 on every :id route', async () => {
     const { store, name, qty } = seedStore();

@@ -5,6 +5,100 @@ use std::fmt;
 use std::io;
 use std::path::{Component, Path};
 
+/// Gives a closed enum its `ALL` list, its `as_str` names, the `NAMES` array the field registry matches against and its `Display`.
+/// The names and the variants are listed once, and the `as_str` match has no wildcard, so the registry cannot drift from the renderer.
+macro_rules! closed_enum_names {
+  ($type:ident { $($variant:ident => $name:literal),+ $(,)? }) => {
+    impl $type {
+      pub const ALL: [$type; [$($name),+].len()] = [$($type::$variant),+];
+      pub const NAMES: [&'static str; [$($name),+].len()] = [$($name),+];
+
+      pub const fn as_str(self) -> &'static str {
+        match self {
+          $($type::$variant => $name),+
+        }
+      }
+    }
+
+    impl fmt::Display for $type {
+      fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+      }
+    }
+  };
+}
+pub(super) use closed_enum_names;
+
+/// Fills `NAMES` of an enum that already lists its `ALL` variants and its `as_str` names.
+macro_rules! names_of_all {
+  ($type:ident, $count:literal) => {
+    impl $type {
+      pub const NAMES: [&'static str; $count] = {
+        let mut names = [""; $count];
+        let mut index = 0;
+        while index < $count {
+          names[index] = $type::ALL[index].as_str();
+          index += 1;
+        }
+        names
+      };
+    }
+  };
+}
+
+pub(super) mod sealed {
+  /// Names the types allowed to be log values; the module is unreachable outside `event_log`, so no other crate or module can implement `LogValue`.
+  pub trait Sealed {}
+}
+
+/// A value a log line can hold: a typed field of this vocabulary or a `Literal`. A `str` or a `String` is not one.
+pub trait LogValue: sealed::Sealed + fmt::Display {}
+
+impl<T: LogValue> sealed::Sealed for &T {}
+impl<T: LogValue> LogValue for &T {}
+
+macro_rules! log_values {
+  ($($type:ty),+ $(,)?) => {
+    $(
+      impl super::field::sealed::Sealed for $type {}
+      impl super::field::LogValue for $type {}
+    )+
+  };
+}
+pub(super) use log_values;
+
+/// A fixed word of the log vocabulary. Its field is private and `new` is visible inside `event_log` only, so the words are the consts of `event.rs`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Literal(&'static str);
+
+impl Literal {
+  pub(super) const fn new(text: &'static str) -> Self {
+    Self(text)
+  }
+
+  pub const fn text(self) -> &'static str {
+    self.0
+  }
+}
+
+impl fmt::Display for Literal {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter.write_str(self.0)
+  }
+}
+
+/// Returns `names` followed by `extra`; `N` is `names.len() + 1`.
+pub(super) const fn with_extra<const N: usize>(names: &[&'static str], extra: &'static str) -> [&'static str; N] {
+  assert!(names.len() + 1 == N);
+  let mut all = [extra; N];
+  let mut index = 0;
+  while index < names.len() {
+    all[index] = names[index];
+    index += 1;
+  }
+  all
+}
+
 /// Every event a log line can name.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EventName {
@@ -19,8 +113,6 @@ pub enum EventName {
   DaemonText,
   DaemonLine,
   PathRepaired,
-  IssueReportOpened,
-  BundleSaved,
   WriterDropped,
   WriterLost,
   WriterHeader,
@@ -30,7 +122,7 @@ pub enum EventName {
 }
 
 impl EventName {
-  pub const ALL: [EventName; 19] = [
+  pub const ALL: [EventName; 17] = [
     EventName::DaemonReused,
     EventName::DaemonSpawnFailed,
     EventName::DaemonStopRequested,
@@ -42,8 +134,6 @@ impl EventName {
     EventName::DaemonText,
     EventName::DaemonLine,
     EventName::PathRepaired,
-    EventName::IssueReportOpened,
-    EventName::BundleSaved,
     EventName::WriterDropped,
     EventName::WriterLost,
     EventName::WriterHeader,
@@ -52,7 +142,7 @@ impl EventName {
     EventName::RejectedRecord,
   ];
 
-  pub fn as_str(self) -> &'static str {
+  pub const fn as_str(self) -> &'static str {
     match self {
       EventName::DaemonReused => "daemon_reused",
       EventName::DaemonSpawnFailed => "daemon_spawn_failed",
@@ -65,8 +155,6 @@ impl EventName {
       EventName::DaemonText => "daemon_text",
       EventName::DaemonLine => "daemon_line",
       EventName::PathRepaired => "path_repaired",
-      EventName::IssueReportOpened => "issue_report_opened",
-      EventName::BundleSaved => "bundle_saved",
       EventName::WriterDropped => "writer_dropped",
       EventName::WriterLost => "writer_lost",
       EventName::WriterHeader => "writer_header",
@@ -76,6 +164,8 @@ impl EventName {
     }
   }
 }
+
+names_of_all!(EventName, 17);
 
 impl fmt::Display for EventName {
   fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -299,7 +389,6 @@ macro_rules! decimal_field {
 
 decimal_field!(Count(u64));
 decimal_field!(DurationMs(u64));
-decimal_field!(Bytes(u64));
 decimal_field!(Pid(u32));
 decimal_field!(ExitCode(i32));
 
@@ -322,17 +411,7 @@ pub enum DaemonPhase {
   Reused,
 }
 
-impl fmt::Display for DaemonPhase {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      DaemonPhase::Starting => "starting",
-      DaemonPhase::Slow => "slow",
-      DaemonPhase::Ready => "ready",
-      DaemonPhase::Failed => "failed",
-      DaemonPhase::Reused => "reused",
-    })
-  }
-}
+closed_enum_names!(DaemonPhase { Starting => "starting", Slow => "slow", Ready => "ready", Failed => "failed", Reused => "reused" });
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StopOutcome {
@@ -340,14 +419,7 @@ pub enum StopOutcome {
   KilledAfterGrace,
 }
 
-impl fmt::Display for StopOutcome {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      StopOutcome::ExitedOnSigterm => "exited_on_sigterm",
-      StopOutcome::KilledAfterGrace => "killed_after_grace",
-    })
-  }
-}
+closed_enum_names!(StopOutcome { ExitedOnSigterm => "exited_on_sigterm", KilledAfterGrace => "killed_after_grace" });
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PathSource {
@@ -355,14 +427,7 @@ pub enum PathSource {
   Fallback,
 }
 
-impl fmt::Display for PathSource {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      PathSource::Shell => "shell",
-      PathSource::Fallback => "fallback",
-    })
-  }
-}
+closed_enum_names!(PathSource { Shell => "shell", Fallback => "fallback" });
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Stream {
@@ -370,14 +435,7 @@ pub enum Stream {
   Err,
 }
 
-impl fmt::Display for Stream {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      Stream::Out => "out",
-      Stream::Err => "err",
-    })
-  }
-}
+closed_enum_names!(Stream { Out => "out", Err => "err" });
 
 /// The failure kinds the log names; `io::ErrorKind` is `non_exhaustive`, so anything unlisted is `Other`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -440,7 +498,7 @@ impl IoKind {
     IoKind::Other,
   ];
 
-  pub fn as_str(self) -> &'static str {
+  pub const fn as_str(self) -> &'static str {
     match self {
       IoKind::NotFound => "not_found",
       IoKind::PermissionDenied => "permission_denied",
@@ -509,6 +567,8 @@ impl IoKind {
     }
   }
 }
+
+names_of_all!(IoKind, 26);
 
 /// What the log keeps of an `io::Error`: its kind and its OS error number. The message is never read.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -583,11 +643,14 @@ const KNOWN_CODES: &[&str] = &[
   "docs_folder_not_writable", "docs_folder_already_used", "docs_root_invalid", "docs_root_forbidden", "docs_root_not_writable", "payload_too_large", "note_too_large", "row_cap", "row_guard_violation", "state_too_large", "daemon_shutting_down", "daemon_degraded",
   "delivery_failed", "message_held_for_review", "harness_exited", "claude_not_found", "git_unavailable", "internal_error", "launch_failed", "resume_timeout",
   "db_stuck", "proposal_not_found", "governance_queue_full", "law_not_found", "law_revision_conflict", "law_withdrawn",
-  "harness_binary_broken", "directory_not_in_project",
+  "harness_binary_broken", "directory_not_in_project", "question_unclassified", "escalation_open", "criteria_stale", "escalation_not_found",
   "gh_unavailable", "gh_not_authenticated", "gh_bad_output", "gh_timeout", "too_many_watched_prs",
 ];
 
 const OTHER_CODE: &str = "other";
+
+/// Every text a `KnownCode` renders: the table and `other`.
+pub(super) const CODE_VALUES: [&str; KNOWN_CODES.len() + 1] = with_extra(KNOWN_CODES, OTHER_CODE);
 
 /// A code from the closed table of errno names, SQLite results and shared error codes; every other text is `other`.
 /// The table, not a shape rule, decides: a token such as an `AKIA...` key has the shape of an errno name.
@@ -613,6 +676,9 @@ fn listed_or_other(list: &'static [&'static str], name: &str) -> &'static str {
 const KNOWN_ERROR_NAMES: &[&str] = &[
   "Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError", "AggregateError", "SqliteError", "AbortError", "TimeoutError",
 ];
+
+/// Every text a `KnownErrorName` renders: the list and `other`.
+pub(super) const ERROR_NAME_VALUES: [&str; KNOWN_ERROR_NAMES.len() + 1] = with_extra(KNOWN_ERROR_NAMES, OTHER_CODE);
 
 /// An `Error.name` from the closed list of JavaScript built-ins and the database driver; every other name is `other`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -656,7 +722,7 @@ impl fmt::Display for DaemonMessage {
   }
 }
 
-const MAX_FRAMES: usize = 8;
+pub(super) const MAX_FRAMES: usize = 8;
 const MAX_FRAMES_RENDERED_BYTES: usize = 64;
 const FRAME_SEPARATOR_BYTES: usize = 1;
 
@@ -745,18 +811,18 @@ impl PathClass {
   }
 }
 
-impl fmt::Display for PathClass {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      PathClass::OpenfleetHome => "openfleet_home",
-      PathClass::LogsDir => "logs_dir",
-      PathClass::AdminToken => "admin_token",
-      PathClass::DaemonBundle => "daemon_bundle",
-      PathClass::UserHome => "user_home",
-      PathClass::Other => "other",
-    })
-  }
-}
+closed_enum_names!(PathClass {
+  OpenfleetHome => "openfleet_home",
+  LogsDir => "logs_dir",
+  AdminToken => "admin_token",
+  DaemonBundle => "daemon_bundle",
+  UserHome => "user_home",
+  Other => "other",
+});
+
+pub(super) const SMALLEST_LENGTH_BUCKET: usize = 16;
+/// The largest bucket a length renders as: 2^26 (64 MiB), the last power of two within the 8 digits a log value allows.
+pub(super) const LARGEST_LENGTH_BUCKET: usize = 1 << 26;
 
 /// Free text reduced to its byte length and, when the install has a salt, a 4-byte keyed tag.
 /// The source text is dropped inside `of`: the value holds no text, so no `Debug` or `Display` can print it.
@@ -770,6 +836,12 @@ impl Opaque {
   pub fn of(text: &[u8], salt: Option<&Salt>) -> Self {
     Self { length: text.len(), tag: salt.map(|salt| Hash8::of(salt, text)) }
   }
+
+  /// Like `of`, but the length is the upper bound of its power-of-two bucket (16 at least, 2^26 at most): a token's exact length fingerprints its provider.
+  pub fn bucketed(text: &[u8], salt: Option<&Salt>) -> Self {
+    let bucket_upper_bound = text.len().clamp(SMALLEST_LENGTH_BUCKET, LARGEST_LENGTH_BUCKET).next_power_of_two();
+    Self { length: bucket_upper_bound, ..Self::of(text, salt) }
+  }
 }
 
 impl fmt::Display for Opaque {
@@ -781,10 +853,17 @@ impl fmt::Display for Opaque {
   }
 }
 
+log_values!(
+  Literal, EventName, Ts, ShortId, SessionId, Count, DurationMs, Pid, ExitCode, Bool, DaemonPhase, StopOutcome, PathSource, Stream, PathClass, Opaque,
+  KnownCode, KnownErrorName, DaemonMessage, StackFrames,
+);
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::event_log::event::DesktopEvent;
   use crate::event_log::salt::SALT_LEN;
+  use crate::event_log::synthetic_tokens::{anthropic_key, aws_key_id, aws_session_key_id, github_token, openai_key};
   use crate::linear_growth::{assert_linear_growth, cpu_time_to_run_on_repeated, LinearGrowthBudget};
   use std::path::PathBuf;
 
@@ -825,8 +904,6 @@ mod tests {
         | EventName::DaemonText
         | EventName::DaemonLine
         | EventName::PathRepaired
-        | EventName::IssueReportOpened
-        | EventName::BundleSaved
         | EventName::WriterDropped
         | EventName::WriterLost
         | EventName::WriterHeader
@@ -852,8 +929,9 @@ mod tests {
 
     #[test]
     fn rejects_other_spellings() {
-      for text in ["", "INFO", "Info", "warning", "info ", " info", "fatal", "info\n", "ghp_0123456789abcdefghijklmnopqrstuvwxyz"] {
-        assert_eq!(Level::parse(text), None, "{text:?}");
+      let spellings = ["", "INFO", "Info", "warning", "info ", " info", "fatal", "info\n"].map(str::to_string);
+      for text in spellings.into_iter().chain([github_token()]) {
+        assert_eq!(Level::parse(&text), None, "{text:?}");
       }
     }
 
@@ -940,11 +1018,11 @@ mod tests {
         "2026-10-04T12:34:56ZZ",
         "+026-10-04T12:34:56Z",
         "2026-10-04T12:34:56Z\n",
-        "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
         "２０２６-10-04T12:34:56Z",
       ] {
         assert_eq!(Ts::parse(text), None, "{text:?}");
       }
+      assert_eq!(Ts::parse(&github_token()), None);
     }
   }
 
@@ -1009,7 +1087,6 @@ mod tests {
     fn render_their_extremes_in_decimal() {
       assert_eq!(Count(u64::MAX).to_string(), "18446744073709551615");
       assert_eq!(DurationMs(0).to_string(), "0");
-      assert_eq!(Bytes(5 * 1024 * 1024).to_string(), "5242880");
       assert_eq!(Pid(u32::MAX).to_string(), "4294967295");
       assert_eq!(ExitCode(i32::MIN).to_string(), "-2147483648");
       assert_eq!(ExitCode(i32::MAX).to_string(), "2147483647");
@@ -1076,7 +1153,8 @@ mod tests {
 
     #[test]
     fn never_reads_the_message() {
-      let secret_message = "ghp_0123456789abcdefghijklmnopqrstuvwxyz Bearer abcdefghijklmnopqrstuvwxyz";
+      let secret = github_token();
+      let secret_message = format!("{secret} Bearer abcdefghijklmnopqrstuvwxyz");
       let error = io::Error::new(io::ErrorKind::PermissionDenied, secret_message);
       assert!(error.to_string().contains("ghp_"), "the premise: the message holds the secret");
 
@@ -1085,7 +1163,7 @@ mod tests {
       let rendered = format!("{failure} {failure:?} {failure:#?}");
       assert!(!rendered.contains("ghp_"), "{rendered}");
       assert!(!rendered.contains("Bearer"), "{rendered}");
-      assert!(!rendered.contains("0123456789"), "{rendered}");
+      assert!(!rendered.contains(&secret["ghp_".len()..]), "{rendered}");
       assert_eq!(failure.to_string(), "kind=permission_denied errno=none");
     }
 
@@ -1131,23 +1209,23 @@ mod tests {
 
     impl io::Read for FailingReader {
       fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-        Err(io::Error::other("ghp_0123456789abcdefghijklmnopqrstuvwxyz"))
+        Err(io::Error::other(github_token()))
       }
     }
 
     #[test]
     fn never_reads_the_message() {
-      let secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+      let secret = github_token();
       let data_error = serde_json::from_str::<u32>(&format!("\"{secret}\"")).unwrap_err();
       let io_error = serde_json::from_reader::<_, serde_json::Value>(FailingReader).unwrap_err();
-      assert!(data_error.to_string().contains(secret), "the premise: a data error message quotes the value");
+      assert!(data_error.to_string().contains(&secret), "the premise: a data error message quotes the value");
 
       for error in [data_error, io_error] {
         let failure = JsonFailure::of(&error);
 
         let rendered = format!("{failure} {failure:?} {failure:#?}");
         assert!(!rendered.contains("ghp_"), "{rendered}");
-        assert!(!rendered.contains("0123456789"), "{rendered}");
+        assert!(!rendered.contains(&secret["ghp_".len()..]), "{rendered}");
       }
     }
   }
@@ -1171,8 +1249,9 @@ mod tests {
 
     #[test]
     fn rejects_a_cloud_key_that_has_the_shape_of_an_errno_name() {
-      for secret_looking in ["AKIAIOSFODNN7EXAMPLE", "ASIAIOSFODNN7EXAMPLE", "E0123456789ABCDEFGH", "SQLITE_0123456789ABCDEF"] {
-        assert_eq!(KnownCode::from_name(secret_looking).to_string(), "other", "{secret_looking}");
+      let secret_lookings = [aws_key_id(), aws_session_key_id(), "E0123456789ABCDEFGH".to_string(), "SQLITE_0123456789ABCDEF".to_string()];
+      for secret_looking in secret_lookings {
+        assert_eq!(KnownCode::from_name(&secret_looking).to_string(), "other", "{secret_looking}");
       }
     }
 
@@ -1268,13 +1347,15 @@ mod tests {
   mod opaque {
     use super::*;
 
-    const SECRET_LOOKING_TEXTS: [&str; 5] = [
-      "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB",
-      "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF",
-      "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n-----END PRIVATE KEY-----",
-      "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789",
-      "AKIAIOSFODNN7EXAMPLE",
-    ];
+    fn secret_looking_texts() -> [String; 5] {
+      [
+        format!("{}AB", github_token()),
+        format!("{}ABCDEF", openai_key()),
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n-----END PRIVATE KEY-----".to_string(),
+        "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789".to_string(),
+        aws_key_id(),
+      ]
+    }
 
     fn every_window_of(text: &str, width: usize) -> Vec<String> {
       let characters: Vec<char> = text.chars().collect();
@@ -1293,6 +1374,49 @@ mod tests {
     #[test]
     fn renders_the_length_alone_without_a_salt() {
       assert_eq!(Opaque::of(b"disk full", None).to_string(), "[text:9]");
+    }
+
+    #[test]
+    fn a_bucketed_text_renders_the_upper_bound_of_its_power_of_two_bucket() {
+      let lengths_and_buckets = [(0, 16), (1, 16), (16, 16), (17, 32), (36, 64), (40, 64), (64, 64), (65, 128), (70_000, 131_072)];
+
+      for (length, bucket) in lengths_and_buckets {
+        assert_eq!(Opaque::bucketed(&vec![b'a'; length], None).to_string(), format!("[text:{bucket}]"), "{length}");
+      }
+    }
+
+    #[test]
+    fn a_bucketed_text_past_the_largest_bucket_renders_the_largest_bucket() {
+      let past_the_largest_bucket = vec![b'a'; LARGEST_LENGTH_BUCKET + 1];
+
+      assert_eq!(Opaque::bucketed(&past_the_largest_bucket, None).to_string(), "[text:67108864]");
+      assert_eq!(Opaque::bucketed(&vec![b'a'; LARGEST_LENGTH_BUCKET], None).to_string(), "[text:67108864]");
+    }
+
+    #[test]
+    fn a_bucketed_text_past_the_largest_bucket_is_accepted_by_the_grammar() {
+      let past_the_largest_bucket = vec![b'a'; LARGEST_LENGTH_BUCKET + 1];
+      let reason = Opaque::bucketed(&past_the_largest_bucket, Some(&salt_of(1)));
+
+      let line = DesktopEvent::SidecarFailed { reason }.render(Ts::from_unix_seconds(0).unwrap());
+
+      assert!(!line.is_rejection(), "{line}");
+    }
+
+    #[test]
+    fn two_token_lengths_of_one_bucket_render_the_same_length_field() {
+      let salt = salt_of(1);
+      let length_field_of = |text: &str| Opaque::bucketed(text.as_bytes(), Some(&salt)).to_string().split(':').nth(1).map(str::to_string);
+
+      assert_eq!(length_field_of(&github_token()), length_field_of(&anthropic_key()));
+      assert_ne!(github_token().len(), anthropic_key().len());
+    }
+
+    #[test]
+    fn a_bucketed_text_keeps_the_tag_of_the_whole_text() {
+      let salt = salt_of(1);
+
+      assert_eq!(Opaque::bucketed(b"disk full", Some(&salt)).to_string(), format!("[text:16:{}]", Hash8::of(&salt, b"disk full")));
     }
 
     #[test]
@@ -1339,12 +1463,12 @@ mod tests {
     #[test]
     fn never_exposes_the_source_in_any_rendering() {
       let salt = salt_of(1);
-      for secret in SECRET_LOOKING_TEXTS {
+      for secret in secret_looking_texts() {
         for opaque in [Opaque::of(secret.as_bytes(), Some(&salt)), Opaque::of(secret.as_bytes(), None)] {
           let renderings = [format!("{opaque}"), format!("{opaque:?}"), format!("{opaque:#?}"), format!("{:?}", Some(opaque)), format!("{:?}", vec![opaque])];
 
           for rendering in &renderings {
-            for window in every_window_of(secret, 6) {
+            for window in every_window_of(&secret, 6) {
               assert!(!rendering.contains(&window), "{window:?} leaked into {rendering}");
             }
           }

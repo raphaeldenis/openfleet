@@ -22,6 +22,9 @@ import { editedCellValue } from './table-cell-editor-values';
           @if (clearsValue()) { <p role="status">The value will be cleared.</p> }
           <p id="cell-editor-error" role="alert">{{ validationError() || error() }}</p>
           <div class="actions">
+            @if (canReload()) {
+              <button type="button" class="of-btn of-btn--secondary" [disabled]="saving()" (click)="reloadRequested.emit()">Reload row</button>
+            }
             <button type="button" class="of-btn of-btn--secondary" [disabled]="saving()" (click)="clearValue()">Clear value</button>
             <button type="button" class="of-btn of-btn--secondary" [disabled]="saving()" (click)="cancelled.emit()">Cancel</button>
             <button type="submit" class="of-btn of-btn--primary" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Save' }}</button>
@@ -50,8 +53,10 @@ export class TableCellEditorComponent {
   readonly rowTitle = input.required<string>();
   readonly saving = input(false);
   readonly error = input<string | null>(null);
+  readonly canReload = input(false);
   readonly submitted = output<unknown>();
   readonly cancelled = output<void>();
+  readonly reloadRequested = output<void>();
   private readonly dialog = viewChild.required<ElementRef<HTMLElement>>('dialog');
   protected readonly draft = signal('');
   protected readonly clearsValue = signal(false);

@@ -7,6 +7,7 @@
 
 use super::salt::SALT_LEN;
 use super::field::{SessionId, ShortId};
+use super::synthetic_tokens::{aws_key_id, aws_session_key_id, github_token};
 use super::{validate, DaemonLineAssembler, DesktopEvent, EventName, KnownPaths, PathClass, Salt, Stream, Ts};
 use crate::log_file::{DesktopLog, RotatingLog, KEPT_FILES, MAX_LOG_BYTES};
 use serde_json::{json, Value};
@@ -35,10 +36,10 @@ const BOUNDARY_SECRET: &str = "SyntheticBoundarySecret0123456789";
 // ---- the corpus ----
 
 #[derive(Clone)]
-struct HostileItem {
-  name: String,
-  text: String,
-  secret: String,
+pub(crate) struct HostileItem {
+  pub(crate) name: String,
+  pub(crate) text: String,
+  pub(crate) secret: String,
 }
 
 impl HostileItem {
@@ -60,7 +61,7 @@ fn the_twenty_nine_provider_credentials() -> Vec<HostileItem> {
   let mut credentials = vec![after("sk-", alphanumeric(30))];
   credentials.extend(["ghp_", "gho_", "ghu_", "ghs_", "ghr_"].map(|prefix| after(prefix, alphanumeric(36))));
   credentials.push(after("github_pat_", "aB3_".repeat(15)));
-  credentials.extend(["AKIAIOSFODNN7EXAMPLE", "ASIAIOSFODNN7EXAMPLE", "eyJabcdef.eyJabcdef.abcdef"].map(str::to_string));
+  credentials.extend([aws_key_id(), aws_session_key_id(), "eyJabcdef.eyJabcdef.abcdef".to_string()]);
   credentials.extend(["xoxb-", "xoxp-", "xoxc-", "xoxd-", "xoxe-", "xoxa-", "xoxr-", "xoxs-", "xapp-", "xoxe.xoxp-"].map(|prefix| after(prefix, alphanumeric(30))));
   credentials.push(after("AIza", "Ab3_-".repeat(8)));
   credentials.push(after("npm_", alphanumeric(36)));
@@ -536,7 +537,7 @@ fn five_mib_line_scenarios() -> Vec<Scenario> {
     .collect()
 }
 
-fn all_hostile_items() -> Vec<HostileItem> {
+pub(crate) fn all_hostile_items() -> Vec<HostileItem> {
   the_twenty_nine_provider_credentials().into_iter()
     .chain(credential_schemes())
     .chain(codex_vectors())
@@ -697,7 +698,7 @@ impl Sink for ProjectionSink {
   fn emitted_lines(&self, delivery: &Delivery) -> Vec<String> {
     match delivery {
       Delivery::DesktopNotice { kind, text } => {
-        let opaque = super::Opaque::of(text.as_bytes(), self.salt.as_ref());
+        let opaque = super::Opaque::bucketed(text.as_bytes(), self.salt.as_ref());
         vec![Self::line_of(&notice_event(*kind, text, opaque))]
       }
       Delivery::DaemonPipe { stream, chunks } => {
@@ -791,7 +792,7 @@ fn record_count_of(delivery: &Delivery) -> usize {
 
 // ---- the property ----
 
-fn leaked_form_in(lines: &[String], secret: &str) -> Option<String> {
+pub(crate) fn leaked_form_in(lines: &[String], secret: &str) -> Option<String> {
   let folded_lines: Vec<String> = lines.iter().map(|line| line.to_lowercase()).collect();
   let encoded_leak = forbidden_forms_of(secret).into_iter().find(|form| folded_lines.iter().any(|line| line.contains(form.as_str())));
   if encoded_leak.is_some() { return encoded_leak; }
@@ -1125,9 +1126,122 @@ mod tests {
 
     #[test]
     fn passes_a_line_that_only_holds_the_length_and_tag() {
-      let lines = vec!["2026-10-04T12:00:00Z info daemon_line msg=[text:24:0a1b2c3d] extra_fields=0".to_string()];
+      let lines = vec!["2026-10-04T12:00:00Z info daemon_line msg=[text:32:0a1b2c3d] extra_fields=0".to_string()];
 
       assert_eq!(leaked_form_in(&lines, "SyntheticSecretValue0123"), None);
+    }
+  }
+
+  mod the_diagnostics_ring_buffer {
+    use super::*;
+    use crate::event_log::project_daemon_records;
+
+    const RECORDS_PER_ITEM: usize = 8;
+
+    /// A ring buffer with the item in every place a daemon record can carry free text: message, detail, error message, stack, cause, an extra key, an extra value and a line that is not JSON.
+    fn records_carrying(text: &str) -> Vec<Value> {
+      let error_record = |error: Value| json!({ "level": "error", "msg": "ws: write failed", "err": error });
+      vec![
+        json!({ "level": "info", "msg": text }),
+        json!({ "level": "info", "msg": "ws: write failed", "detail": text }),
+        error_record(json!({ "name": "Error", "message": text })),
+        error_record(json!({ "name": "Error", "message": "m", "stack": format!("Error: {text}\n    at run (/app/daemon.mjs:1:1)") })),
+        error_record(json!({ "name": "Error", "message": "m", "cause": { "message": text } })),
+        json!({ "level": "info", "msg": "ws: write failed", text: "x" }),
+        json!({ "level": "info", "msg": "ws: write failed", "step": text }),
+        Value::String(text.to_string()),
+      ]
+    }
+
+    #[test]
+    fn keeps_every_corpus_item_out_of_the_zipped_daemon_document() {
+      for salt in [Some(Salt::from_bytes([7; SALT_LEN])), None] {
+        for item in all_hostile_items() {
+          let projected = project_daemon_records(&records_carrying(&item.text), salt.as_ref(), fixed_now());
+          let zipped_text = serde_json::to_string(&projected).unwrap();
+
+          assert_eq!(projected.len(), RECORDS_PER_ITEM, "{}", item.name);
+          assert_eq!(leaked_form_in(&[zipped_text], &item.secret), None, "{}", item.name);
+        }
+      }
+    }
+  }
+
+  mod the_typed_text_constructors {
+    use super::*;
+    use crate::daemon_status_line::StatusLine;
+    use crate::daemon_version::DaemonVersion;
+    use crate::event_log::synthetic_tokens::{token, TokenShape};
+    use crate::event_log::{fields_of, project_daemon_records, DaemonTextClass, Opaque, SpawnFailure};
+
+    const RANDOM_STRING_COUNT: usize = 10_000;
+    const TOKEN_SHAPES: [TokenShape; 11] = [
+      TokenShape::Gitlab,
+      TokenShape::Github,
+      TokenShape::GithubFineGrained,
+      TokenShape::OpenAi,
+      TokenShape::Anthropic,
+      TokenShape::Aws,
+      TokenShape::AwsSession,
+      TokenShape::SlackBot,
+      TokenShape::SlackUser,
+      TokenShape::SlackRefresh,
+      TokenShape::Jwt,
+    ];
+
+    fn random_text(random: &mut Xorshift64Star) -> String {
+      let length = WINDOW_BYTES + random.below(300);
+      let bytes: Vec<u8> = (0..length).map(|_| random.next() as u8).collect();
+      String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// Everything the desktop prints about `text` through the constructors that accept free text.
+    fn everything_printed_about(text: &str, salt: Option<&Salt>) -> String {
+      let bucketed = Opaque::bucketed(text.as_bytes(), salt);
+      let exact_length = Opaque::of(text.as_bytes(), salt);
+      let events = [
+        DesktopEvent::SidecarFailed { reason: bucketed },
+        DesktopEvent::DaemonText { stream: Stream::Err, class: DaemonTextClass::Other, text: exact_length },
+        DesktopEvent::DaemonSpawnFailed { failure: SpawnFailure::Unclassified(bucketed) },
+      ];
+      let ring_buffer = [json!({ "msg": text, "err": { "message": text } }), Value::String(text.to_string())];
+      let mut printed: Vec<String> = events.iter().map(|event| event.render(fixed_now()).to_string()).collect();
+      printed.push(serde_json::to_string(&project_daemon_records(&ring_buffer, salt, fixed_now())).unwrap());
+      printed.push(StatusLine::of_stderr_line(text, bucketed).render());
+      printed.push(DaemonVersion::parse(text).as_str().to_string());
+      printed.join("\n")
+    }
+
+    #[test]
+    fn no_constructor_that_accepts_text_prints_a_twelve_byte_window_of_it() {
+      let mut random = Xorshift64Star(FIXED_SEED);
+      let salt = Salt::from_bytes([7; SALT_LEN]);
+
+      for _ in 0..RANDOM_STRING_COUNT {
+        let text = random_text(&mut random);
+        let printed = everything_printed_about(&text, Some(&salt));
+
+        let printed_windows: HashSet<&[u8]> = printed.as_bytes().windows(WINDOW_BYTES).collect();
+        let leaks_a_window = text.as_bytes().windows(WINDOW_BYTES).any(|window| printed_windows.contains(window));
+        assert!(!leaks_a_window, "{text:?} -> {printed}");
+      }
+    }
+
+    /// The token cut to the longest value the key allows, so only the shape of the value can reject it, never its length.
+    #[test]
+    fn no_key_of_any_event_accepts_a_token_shaped_value() {
+      const BODY_BYTES_PAST_THE_LONGEST_VALUE: usize = 64;
+      for event in EventName::ALL {
+        for field in fields_of(event) {
+          for (seed, shape) in TOKEN_SHAPES.into_iter().enumerate() {
+            let full_token = token(shape, BODY_BYTES_PAST_THE_LONGEST_VALUE, seed as u64);
+            let value = &full_token[..usize::from(field.max_bytes)];
+            let line = format!("{NOW} info {event} {}={value}", field.key);
+
+            assert!(validate(event, &line).is_err(), "{event}.{} accepted a {shape:?} token", field.key);
+          }
+        }
+      }
     }
   }
 
@@ -1199,7 +1313,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "leaks into")]
+    #[should_panic(expected = "left: Err(ValueShapeMismatch)")]
     fn turns_red_when_the_uuid_is_also_copied_into_another_field() {
       let uuid = random_uuid();
       let scenario = scenario_of(&uuid, FreeTextKind::SessionId, Placement::SoleValue);
@@ -1219,13 +1333,31 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "leaks into")]
+    #[should_panic(expected = "left: Err(ValueShapeMismatch)")]
     fn turns_red_when_the_exception_is_widened_to_the_id_kind() {
       let uuid = random_uuid();
       let scenario = scenario_of(&uuid, FreeTextKind::Id, Placement::SoleValue);
       let sink = FixedLinesSink(vec![line_with(&format!("id={}", uuid.secret))]);
 
       assert_allowlist_property(&sink, [scenario]);
+    }
+
+    #[test]
+    fn the_leak_detector_alone_sees_the_uuid_copied_into_another_field() {
+      let uuid = random_uuid();
+      let session_field = format!("session={}", uuid.secret);
+      let line = line_with(&format!("{session_field} msg={}", uuid.secret));
+      let line_without_the_typed_id = line.replacen(&session_field, "", 1);
+
+      assert!(leaked_form_in(&[line_without_the_typed_id], &uuid.secret).is_some());
+    }
+
+    #[test]
+    fn the_leak_detector_alone_sees_the_uuid_widened_to_the_id_field() {
+      let uuid = random_uuid();
+      let line = line_with(&format!("id={}", uuid.secret));
+
+      assert!(leaked_form_in(&[line], &uuid.secret).is_some());
     }
 
     #[test]
@@ -1299,14 +1431,14 @@ mod tests {
 
     #[test]
     fn counts_a_secret_split_across_two_chunks_as_two_text_records() {
-      let secret = "ghp_aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3";
+      let secret = github_token();
       let (head, tail) = secret.split_at(secret.len() / 2);
       let chunks = vec![format!("note {head}").into_bytes(), format!("{tail}\n").into_bytes()];
 
       let lines = ProjectionSink::with_salt().emitted_lines(&Delivery::DaemonPipe { stream: Stream::Err, chunks });
 
       assert_eq!(lines.len(), 1);
-      assert_eq!(leaked_form_in(&lines, secret), None);
+      assert_eq!(leaked_form_in(&lines, &secret), None);
     }
   }
 
@@ -1387,7 +1519,7 @@ mod tests {
 
     #[test]
     fn stores_a_secret_split_across_two_chunks_as_one_text_record() {
-      let secret = "ghp_aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3";
+      let secret = github_token();
       let (head, tail) = secret.split_at(secret.len() / 2);
       let chunks = vec![format!("note {head}").into_bytes(), format!("{tail}\n").into_bytes()];
 
@@ -1395,7 +1527,7 @@ mod tests {
 
       assert_eq!(lines.len(), 2);
       assert!(lines[0].contains(" daemon_text stream=err "), "{}", lines[0]);
-      assert_eq!(leaked_form_in(&lines, secret), None);
+      assert_eq!(leaked_form_in(&lines, &secret), None);
     }
   }
 

@@ -61,6 +61,12 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '052_watched_prs': 'be1c88b41db630a8942816b29918efb54af3b50cc3ea295eaa169e7c4d25ed7a',
   '053_review_finding_repro': 'dabe237da16a91ef4c066e7ffe3d8bec12b6bf9f6180f97380321aa8697b054a',
   '054_project_shared_repo': '1da43bdd4f231484ad9e09ff237691988e9b989458bbda00aecc3da6ab8f98e1',
+  '055_ds_row_rev': '47692d825de1da8139c9a7401e6f8094fb607ed9ac7b17e433c5468d9cca15cb',
+  '056_escalation_ladder': '2f78ddb284ac2184bea04b7312cfd7e28a225c81b9acddd9cc1e92620604578f',
+  '057_escalation_handover_refusal': '3a7d338d21004767eb0a596e829ff2ff87633c9b7f4a4bfbc26ccdce1b55d761',
+  '058_session_attended': 'c037613f2fd78396fc266f9c6b5734d4a6f2d37f4fbe26cdb25df8ad59617b0b',
+  '059_session_read_directories': '666f42093fff20f2f18ad955a5745d03c94195ff0dcf79bb3872a3021f495585',
+  '060_plan_question_reopens': '158a800f4b0cf00775246257463bfe42381d7b43bb8f8c6147f8fdcc0ad45762',
 };
 
 const migrationVersionsOnDisk = () =>

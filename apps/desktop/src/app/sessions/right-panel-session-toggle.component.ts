@@ -15,7 +15,7 @@ import { RIGHT_PANEL_HIDE_TITLE, RIGHT_PANEL_SHOW_TITLE, RightPanelState } from 
     .toggle { width: 1.75rem; height: 1.75rem; flex: none; border: 1px solid rgba(255, 255, 255, .18); border-radius: .375rem; background: transparent; color: var(--term-fg); font-size: .875rem; cursor: pointer; }
     .toggle[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); background: color-mix(in oklch, var(--accent) 18%, transparent); }
     .toggle:hover { background: rgba(255, 255, 255, .08); }
-    .toggle:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--accent); }
+    .toggle:focus-visible { outline: 0; box-shadow: 0 0 0 .125rem var(--accent); }
   `,
 })
 export class RightPanelSessionToggleComponent {

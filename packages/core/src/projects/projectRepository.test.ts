@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { EscalationPolicySchema } from '@openfleet/shared';
 import { openDatabase } from '../db/database.js';
 import { ProjectRepository } from './projectRepository.js';
 
@@ -41,6 +42,46 @@ describe('ProjectRepository', () => {
     repository.update('p1', { docsFolderPath: '/docs/b' });
 
     expect(repository.get('p1')).toEqual({ id: 'p1', name: 'Renamed', docsFolderPath: '/docs/b', createdAt: 't0' });
+  });
+
+  describe('the escalation policy', () => {
+    const policy = EscalationPolicySchema.parse({ askUserGate: 'enforce', maxArbiterRunsPerTicket: 5 });
+
+    it('is absent until a policy is set', () => {
+      const repository = new ProjectRepository(openDatabase(':memory:'));
+      repository.insert({ id: 'p1', name: 'OpenFleet', docsFolderPath: null, createdAt: 't0' });
+
+      expect(repository.get('p1')).not.toHaveProperty('escalation');
+    });
+
+    it('is stored whole and read back, and survives an update of another field', () => {
+      const repository = new ProjectRepository(openDatabase(':memory:'));
+      repository.insert({ id: 'p1', name: 'OpenFleet', docsFolderPath: null, createdAt: 't0' });
+
+      repository.update('p1', { escalation: policy });
+      repository.update('p1', { name: 'Renamed' });
+
+      expect(repository.get('p1')!.escalation).toEqual(policy);
+    });
+
+    it('is cleared by null', () => {
+      const repository = new ProjectRepository(openDatabase(':memory:'));
+      repository.insert({ id: 'p1', name: 'OpenFleet', docsFolderPath: null, createdAt: 't0' });
+      repository.update('p1', { escalation: policy });
+
+      repository.update('p1', { escalation: null });
+
+      expect(repository.get('p1')).not.toHaveProperty('escalation');
+    });
+
+    it('reads a stored policy that no longer passes the schema as absent, so the defaults apply', () => {
+      const db = openDatabase(':memory:');
+      const repository = new ProjectRepository(db);
+      repository.insert({ id: 'p1', name: 'OpenFleet', docsFolderPath: null, createdAt: 't0' });
+      db.prepare("UPDATE projects SET escalation_policy_json = '{\"humanClasses\":[\"spend\"]}' WHERE id = 'p1'").run();
+
+      expect(repository.get('p1')).not.toHaveProperty('escalation');
+    });
   });
 
   it('deletes a project', () => {

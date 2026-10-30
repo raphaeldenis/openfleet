@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { effortRefusalOf, HOOK_EVENT_NAMES, isValidModelId } from '@openfleet/shared';
 import type { HarnessLaunch } from '../harness.js';
 import type { TokenFilePaths } from './tokenFiles.js';
@@ -52,6 +53,11 @@ export function buildClaudeLaunchConfig(launch: HarnessLaunch, tokenFilePaths: T
   if (launch.model) args.push('--model', launch.model);
   if (launch.effort) args.push('--effort', launch.effort);
   if (launch.permissionMode) args.push('--permission-mode', launch.permissionMode);
+  // The `=` form keeps a path from ever being read as another flag; an absolute path never starts with '-'.
+  for (const readDirectory of launch.readDirectories ?? []) {
+    if (!isAbsolute(readDirectory)) throw new Error(`refusing to launch with a read directory that is not an absolute path: "${readDirectory}"`);
+    args.push(`--add-dir=${readDirectory}`);
+  }
   // AUD-28: a project's own .claude/settings.json can define an auto-approving PermissionRequest hook that
   // overrides OpenFleet's own deny — `--setting-sources user` drops project/local/managed settings from the
   // CLI's own merge, so only OpenFleet's `--settings` file below and the user's own ~/.claude/settings.json apply.

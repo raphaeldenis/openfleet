@@ -10,6 +10,7 @@ import { loadConfig, type Config } from './config.js';
 import { startDaemon, type Daemon, type DaemonOptions } from './daemon.js';
 import { defaultCommandPolicySettings } from './policy/commandPolicySettings.js';
 import { openDatabase } from './db/database.js';
+import { ArbiterRunner } from './escalation/arbiterRunner.js';
 import { makeRepo } from './git/testRepo.js';
 import { ManagerRepository } from './managers/managerRepository.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
@@ -481,6 +482,17 @@ describe('daemon shutdown', () => {
     const firstCallOrderOf = (spy: { mock: { invocationCallOrder: number[] } }) => spy.mock.invocationCallOrder[0]!;
     expect(firstCallOrderOf(stop)).toBeLessThan(firstCallOrderOf(closeAll));
     expect(firstCallOrderOf(closeAll)).toBeLessThan(firstCallOrderOf(closeServer));
+  });
+
+  it('stops the arbiter runner before it closes the sessions', async () => {
+    await bootDaemon();
+    const stopArbiters = vi.spyOn(ArbiterRunner.prototype, 'stop');
+    const closeAll = vi.spyOn(SessionService.prototype, 'closeAll');
+
+    await daemon!.close();
+
+    expect(stopArbiters).toHaveBeenCalledTimes(1);
+    expect(stopArbiters.mock.invocationCallOrder[0]!).toBeLessThan(closeAll.mock.invocationCallOrder[0]!);
   });
 
   it('wakes no manager for the children that close with it', async () => {

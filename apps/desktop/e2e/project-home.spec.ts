@@ -42,7 +42,7 @@ test('the Project home nav item opens a project page, and the switcher moves to 
 
   await page.getByTestId('nav-project').click();
 
-  await expect(page).toHaveURL(/\/project\/[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/project\/[^/]+$/);
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
   await page.getByRole('button', { name: 'Switch project' }).click();

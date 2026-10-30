@@ -1,4 +1,4 @@
-import type { Project } from '@openfleet/shared';
+import { DEFAULT_ESCALATION_POLICY, type Project } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, FleetApiService } from './fleet-api.service';
 
@@ -51,6 +51,19 @@ describe('FleetApiService project routes', () => {
       await expect(api.createProject({ name: 'Fleet', docsFolderPath: '/work/fleet-docs' })).resolves.toEqual(warned);
     });
 
+    it('keeps the escalation policy of the project', async () => {
+      const withPolicy: Project = { ...FLEET, escalation: { ...DEFAULT_ESCALATION_POLICY, humanClasses: ['contract', 'security', 'spend'] } };
+      answerWith(withPolicy, 201);
+
+      await expect(api.createProject({ name: 'Fleet' })).resolves.toEqual(withPolicy);
+    });
+
+    it('drops an escalation policy it cannot read instead of rejecting the project', async () => {
+      answerWith({ ...FLEET, escalation: { humanClasses: ['banana'] } }, 201);
+
+      await expect(api.createProject({ name: 'Fleet' })).resolves.toEqual(FLEET);
+    });
+
     it('accepts a project without a docs folder', async () => {
       const withoutFolder: Project = { ...FLEET, docsFolderPath: null };
       answerWith(withoutFolder, 201);
@@ -99,6 +112,27 @@ describe('FleetApiService project routes', () => {
       answerWith({ ok: true });
 
       await expect(api.updateProject(FLEET.id, { name: 'Fleet' })).rejects.toBeInstanceOf(ApiError);
+    });
+  });
+
+  describe('answerEscalation', () => {
+    const answers = [{ question_id: 'q1', answer: 'Yes' }, { question_id: 'q2', answer: 'No' }];
+
+    it('posts one answer per question to the escalation and returns the resolved escalation', async () => {
+      const resolved = { id: 'e/1', status: 'answered' };
+      answerWith(resolved);
+
+      const result = await api.answerEscalation('e/1', { answers });
+
+      expect(result).toEqual(resolved);
+      expect(sentRequest()).toMatchObject({ method: 'POST', body: { answers } });
+      expect(sentRequest().url).toMatch(/\/api\/escalations\/e%2F1\/answer$/);
+    });
+
+    it('rejects with the typed error of the daemon when the escalation was already answered', async () => {
+      answerWith({ error: 'already_resolved' }, 409);
+
+      await expect(api.answerEscalation('e1', { answers })).rejects.toMatchObject({ status: 409, code: 'already_resolved' });
     });
   });
 });

@@ -43,10 +43,10 @@ test('a switched-off category stays off after the app is reloaded', async ({ pag
 });
 
 for (const theme of ['light', 'dark'] as const) {
-  test(`Settings → General in the ${theme} theme`, async ({ page }) => {
+  test(`Settings → General in the ${theme} theme`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1280, height: 1200 });
     await openGeneralSettings(page, theme);
 
-    await page.screenshot({ path: `../../settings-general-${theme}.png`, fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`settings-general-${theme}.png`), fullPage: true });
   });
 }

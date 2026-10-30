@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { NoteSummary, Session } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { syntheticBody, tokenPrefixOf } from '../syntheticTokens.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -32,7 +33,7 @@ const CLOCK = '2026-10-04T10:00:00.000Z';
 const CRASH_EXIT_CODE = 1;
 const GIT_CALL_DURATION_MS = 1_500;
 const CLOSE_HANDOFF_GIT_BUDGET_MS = 4_000;
-const SECRET_CANARY = 'sk-ant-api03-CANARYHF07AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+const SECRET_CANARY = `${tokenPrefixOf('anthropic')}CANARYHF07${syntheticBody({ length: 40, seed: 7 })}`;
 const isRoot = process.getuid?.() === 0;
 
 type GitCall = { operation: 'status' | 'diff'; timeoutMs: number | undefined };

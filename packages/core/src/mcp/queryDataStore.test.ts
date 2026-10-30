@@ -127,7 +127,7 @@ describe('query_data_store select cells', () => {
 
     const { json } = await kit.call('query_data_store', { store: storeId, format: 'columnar', columns: ['status'] });
 
-    expect(json.rows.map((row: unknown[]) => row.at(-1))).toEqual(['todo', 'Done', 'Doing', null]);
+    expect(json.rows.map((row: unknown[]) => row[2])).toEqual(['todo', 'Done', 'Doing', null]);
   });
 
   it('keeps the raw value of a select cell whose option no longer exists', async () => {

@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, output, signal, untracked, viewChild } from '@angular/core';
 import { environment } from '../../environments/environment';
-import { DaemonStatusService } from '../core/daemon-status.service';
+import { DaemonStatusService, type LastLineKind } from '../core/daemon-status.service';
 import { FleetApiService } from '../core/fleet-api.service';
 import { SupportActions } from '../core/support-actions';
 import { VersionsService } from '../core/versions.service';
@@ -21,6 +21,8 @@ const MANUAL_CARD_TITLE_AFTER_FAILURE = 'Start it yourself';
 const COPIED_ANNOUNCEMENT = 'Command copied';
 const REVEAL_FAILURE_MESSAGE = 'Couldn’t open the logs folder';
 const COPY_FAILURE_MESSAGE = 'Couldn’t copy — select the command and copy it by hand';
+/** A fallback PATH alone proves nothing: the hint is for an exit or an error the desktop cannot name, never for a catalogued refusal. */
+const FAILURES_A_MISSING_PATH_CAN_CAUSE: readonly LastLineKind[] = ['unrecognised', 'exited'];
 
 @Component({
   selector: 'of-daemon-step',
@@ -94,11 +96,11 @@ const COPY_FAILURE_MESSAGE = 'Couldn’t copy — select the command and copy it
     .fine-print { font-size: .6875rem; color: var(--mut) }
     .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap }
     h2 { margin: 0; font-size: .875rem; font-weight: 500 }
-    h2:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem }
+    h2:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
     .ready-mark { color: var(--fg); font-weight: 600 }
     .hint-strong { font-size: .75rem; color: var(--fg) }
     .last-line { margin: 0; max-height: 7.5rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text }
-    .last-line:focus-visible { outline: 2px solid var(--accent); outline-offset: .125rem }
+    .last-line:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
     .spinner { flex: none; width: .75rem; height: .75rem; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: of-daemon-spin 1s linear infinite }
     @keyframes of-daemon-spin { to { transform: rotate(360deg) } }
     @media (prefers-reduced-motion: reduce) { .spinner { animation: none } }
@@ -151,12 +153,12 @@ export class DaemonStepComponent {
     if (this.isUnknown()) return UNKNOWN_STATE_COPY;
     return this.lastLine() ? FAILED_WITH_LAST_LINE_COPY : FAILED_WITHOUT_LAST_LINE_COPY;
   });
-  // The PATH hint appears only when the failure itself names claude; a fallback PATH alone proves nothing.
   protected readonly showsPathHint = computed(() => {
     const status = this.observedStatus();
     const isFallbackPath = status?.pathSource === 'fallback';
-    const failureNamesClaude = /claude/i.test(status?.lastLine ?? '');
-    return isFallbackPath && failureNamesClaude;
+    const lastLineKind = status?.lastLineKind;
+    const isFailureTheDesktopCannotName = lastLineKind !== undefined && FAILURES_A_MISSING_PATH_CAN_CAUSE.includes(lastLineKind);
+    return isFallbackPath && isFailureTheDesktopCannotName;
   });
 
   constructor() {

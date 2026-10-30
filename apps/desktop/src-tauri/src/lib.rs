@@ -3,6 +3,8 @@
 mod admin_token;
 mod app_exit;
 mod daemon;
+mod daemon_status_line;
+mod daemon_version;
 mod diagnostics_bundle;
 mod event_log;
 mod issue_report;
@@ -12,10 +14,8 @@ mod log_file;
 mod notifications;
 mod panic_hook;
 mod path_repair;
-mod redaction;
-mod status_line;
 
-pub use event_log::SanitizedLine;
+pub use event_log::{EventName, Level, LineBuilder, LogValue, Pid, SanitizedLine, Ts};
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -159,7 +159,7 @@ pub fn run() {
         let _ = window.hide();
       }
     })
-    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, open_external_url, read_desktop_log, save_diagnostics_bundle, reveal_diagnostics_bundle, show_native_notification, set_dock_badge])
+    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, open_external_url, read_desktop_log, diagnostics_bundle::project_daemon_records, save_diagnostics_bundle, reveal_diagnostics_bundle, show_native_notification, set_dock_badge])
     .setup(|app| {
       #[cfg(target_os = "macos")]
       focus_window_and_send_route_on_banner_click(app.handle().clone());

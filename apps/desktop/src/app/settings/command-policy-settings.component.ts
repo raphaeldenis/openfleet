@@ -191,7 +191,7 @@ const DEGRADED_ISSUE_CODE = 'hook_fail_open';
     .modes { display: flex; gap: .25rem; }
     .mode { display: inline-flex; align-items: center; gap: .375rem; height: 1.75rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); font-size: .75rem; cursor: pointer; }
     .mode[data-selected='1'] { border-color: var(--accent); background: var(--accent-bg); }
-    .mode:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: .125rem; }
+    .mode:has(input:focus-visible) { outline: .125rem solid var(--accent); outline-offset: .125rem; }
     .mode input { margin: 0; accent-color: var(--accent); }
     .mode input:focus-visible { outline: none; }
     .switch[aria-checked='true'] { border-color: var(--accent); background: var(--accent-bg); }

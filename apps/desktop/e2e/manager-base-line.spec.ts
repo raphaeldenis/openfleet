@@ -23,14 +23,14 @@ test('a manager that never read the base shows the current version as not read, 
 });
 
 for (const theme of ['light', 'dark'] as const) {
-  test(`design QA: the base line of the manager profile, read and not read, in the ${theme} theme`, async ({ page, request }) => {
+  test(`design QA: the base line of the manager profile, read and not read, in the ${theme} theme`, async ({ page, request }, testInfo) => {
     await signInAsAdmin(page, { theme });
     const manager = await fakeSessions.create(request, { name: 'Lead', manager: { pulseSeconds: 3600, childrenCap: 2, mission: 'Ship the base' } });
     const { version, sha } = await (await request.get(`${api}/api/manager-base`, { headers: adminHeaders })).json();
 
     await openProfile(page, manager.id);
     await expect(baseFact(page)).toContainText('not read');
-    await page.screenshot({ path: `mt2-base-line-unread-${theme}.png`, fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`mt2-base-line-unread-${theme}.png`), fullPage: true });
 
     await interceptDaemonGet(page, `/api/managers/${manager.id}`, async (route) => {
       const real = await (await route.fetch()).json();
@@ -38,6 +38,6 @@ for (const theme of ['light', 'dark'] as const) {
     });
     await openProfile(page, manager.id);
     await expect(baseFact(page)).toContainText(`Base v${version}, read on`);
-    await page.screenshot({ path: `mt2-base-line-read-${theme}.png`, fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`mt2-base-line-read-${theme}.png`), fullPage: true });
   });
 }

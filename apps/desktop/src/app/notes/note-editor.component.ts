@@ -112,7 +112,7 @@ const NODES_PER_CHUNK = 2000;
       color: var(--fg); font: inherit; font-size: .75rem; cursor: pointer;
     }
     .history-toggle[aria-pressed='true'] { background: var(--active) }
-    .history-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .history-toggle:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .below-header { flex: 1; min-height: 0; display: flex }
     .scroller { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 2rem 3rem; display: flex; justify-content: center }
     .doc { width: 100%; max-width: 42rem; display: flex; flex-direction: column; gap: .875rem; font-size: .9375rem; line-height: 1.65; text-wrap: pretty; overflow-wrap: anywhere }

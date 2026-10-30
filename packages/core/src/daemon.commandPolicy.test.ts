@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { E2E_FLAG_ENV, E2E_FLAG_ON, type CommandPolicyDocument } from '@openfleet/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from './config.js';
+import { syntheticToken } from './syntheticTokens.js';
 import { startDaemon, type Daemon, type DaemonOptions } from './daemon.js';
 import { DEFAULT_COMMAND_POLICY } from './policy/defaultCommandPolicy.js';
 import { defaultCommandPolicySettings, type CommandPolicySettings } from './policy/commandPolicySettings.js';
@@ -138,7 +139,7 @@ describe('an unattended child asks for a command the policy refuses', () => {
   it('never stores more than 200 characters of the command, secrets masked', async () => {
     await bootDaemon({ settings: enforcing() });
     const child = await createChildOf((await createSession()).id);
-    const secret = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    const secret = syntheticToken({ shape: 'anthropic', bodyLength: 36 });
 
     await preToolUse(child.id, bash(`rm -rf ${'y'.repeat(400)} && echo ${secret}`));
 
@@ -298,13 +299,58 @@ describe('an unattended child receives a permission dialog it could never answer
     expect(journalRows().filter((row) => row.rule_id === 'unattended-ask-becomes-deny')).toEqual([]);
   });
 
-  it('never serves the ask refusal text of a child (message_parent) to a manager: a manager gets no ask refusal at all', async () => {
+  it('points a manager that has a parent to submit_plan_questions, not to the ask refusal of a child', async () => {
     await bootDaemon({ settings: enforcing() });
-    const lead = await createSession({ name: 'Lead', manager: { childrenCap: 1, mission: 'x' } });
+    const lead = await createSession({ name: 'Lead', manager: { childrenCap: 2, mission: 'x' } });
+    const subLead = await createSession({ name: 'SubLead', parentId: lead.id, manager: { childrenCap: 1, mission: 'y' } });
+
+    const answer = await preToolUse(subLead.id, { tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
+
+    expect(answer.hookSpecificOutput).toMatchObject({ permissionDecision: 'deny', permissionDecisionReason: expect.stringContaining('submit_plan_questions') });
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).not.toContain('no-human-questions-unattended');
+  });
+
+  it('refuses AskUserQuestion to a manager that has a parent and journals the attempt under the manager-ask-user-via-ladder rule', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const lead = await createSession({ name: 'Lead', manager: { childrenCap: 2, mission: 'x' } });
+    const subLead = await createSession({ name: 'SubLead', parentId: lead.id, manager: { childrenCap: 1, mission: 'y' } });
+
+    await preToolUse(subLead.id, { tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
+
+    await vi.waitFor(() => expect(journalRows()).toHaveLength(1));
+    expect(journalRows()[0]).toMatchObject({ session_id: subLead.id, rule_id: 'manager-ask-user-via-ladder', tool_name: 'AskUserQuestion', outcome: 'denied', role: 'manager' });
+  });
+
+  it('lets an attended manager ask the human with AskUserQuestion and journals the question as an observed escalation event', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const lead = await createSession({ name: 'Lead', attended: true, manager: { childrenCap: 1, mission: 'x' } });
 
     const answer = await preToolUse(lead.id, { tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
 
     expect(answer).toEqual({});
+    await vi.waitFor(() => expect(journalRows()).toHaveLength(1));
+    expect(journalRows()[0]).toMatchObject({ session_id: lead.id, rule_id: 'root-manager-ask-user', tool_name: 'AskUserQuestion', outcome: 'observed', role: 'manager' });
+  });
+
+  it('still lets an attended session that is not a manager ask the human', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const human = await createSession({ name: 'Solo' });
+
+    const answer = await preToolUse(human.id, { tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
+
+    expect(answer).toEqual({});
+    expect(journalRows()).toEqual([]);
+  });
+
+  it('keeps the unattended refusal of a child that is not a manager unchanged', async () => {
+    await bootDaemon({ settings: enforcing() });
+    const lead = await createSession({ name: 'Lead', manager: { childrenCap: 1, mission: 'x' } });
+    const worker = await createChildOf(lead.id);
+
+    const answer = await preToolUse(worker.id, { tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
+
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('no-human-questions-unattended');
+    expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('message_parent');
   });
 
   it('does not send a manager without a parent to message_parent when the policy refuses a tool call', async () => {

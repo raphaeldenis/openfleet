@@ -14,6 +14,7 @@ const row = (id: string, title: string, owner?: string): DsRow => ({
   id,
   storeId: 's1',
   data: { 'c-title': title, ...(owner ? { 'c-owner': owner } : {}) },
+  rev: 1,
   createdAt: '2026-09-29T10:00:00.000Z',
   updatedAt: '2026-09-29T10:00:00.000Z',
 });

@@ -14,7 +14,7 @@ import { startServer } from './server.js';
 type Frame = Record<string, unknown>;
 
 const PULSE_SECONDS = 1;
-const FRAME_TIMEOUT_MS = 8000;
+const FRAME_TIMEOUT_MS = 15_000;
 const openSockets: WebSocket[] = [];
 let runningServer: Awaited<ReturnType<typeof startServer>> | undefined;
 

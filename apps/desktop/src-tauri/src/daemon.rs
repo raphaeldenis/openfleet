@@ -1,13 +1,14 @@
-use crate::admin_token::{admin_token_path, admin_token_secrets, openfleet_home_dir};
+use crate::admin_token::{admin_token_path, openfleet_home_dir};
+use crate::daemon_status_line::StatusLine;
 use crate::event_log::{self, DesktopEvent, ExitCode, IoFailure, KnownPaths, Opaque, PathClass, Pid, SpawnFailure, Stream};
+use crate::daemon_version::DaemonVersion;
 use crate::log_file::{logs_dir, start_on_disk, DesktopLog};
 use crate::path_repair::{repair_path, run_login_shell, PathSource, RepairedPath, LOGIN_SHELL_TIMEOUT};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use crate::status_line::webview_safe_line;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
@@ -41,23 +42,30 @@ pub enum DaemonPhase {
 }
 
 /// What the webview learns about the daemon through the `daemon_status` command.
+/// Its `lastLine`, `lastLineKind` and `refusalReason` keys are rendered from the typed `status_line`, never from daemon text.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DaemonStatus {
   pub state: DaemonPhase,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub last_line: Option<String>,
+  #[serde(flatten)]
+  pub status_line: Option<StatusLine>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub path_source: Option<PathSource>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub daemon_version: Option<String>,
+  pub daemon_version: Option<DaemonVersion>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub started_seconds_ago: Option<u64>,
 }
 
 impl DaemonStatus {
   fn starting() -> Self {
-    Self { state: DaemonPhase::Starting, last_line: None, path_source: None, daemon_version: None, started_seconds_ago: None }
+    Self { state: DaemonPhase::Starting, status_line: None, path_source: None, daemon_version: None, started_seconds_ago: None }
+  }
+
+  /// The line the webview shows, rendered from the typed status line.
+  #[cfg(test)]
+  pub fn last_line(&self) -> Option<String> {
+    self.status_line.as_ref().map(StatusLine::render)
   }
 }
 
@@ -100,23 +108,23 @@ impl StopOutcome {
 /// What a daemon answers on `GET /health`.
 #[derive(Debug, PartialEq)]
 pub struct HealthAnswer {
-  pub version: Option<String>,
+  pub version: Option<DaemonVersion>,
 }
 
 /// Returns the last non-blank line of a chunk of daemon output.
-pub fn last_non_blank_line(chunk: &str) -> Option<String> {
-  chunk.lines().map(str::trim).rfind(|line| !line.is_empty()).map(str::to_string)
+fn last_non_blank_line(chunk: &str) -> Option<&str> {
+  chunk.lines().map(str::trim).rfind(|line| !line.is_empty())
 }
 
-fn last_boot_refusal_line(chunk: &str) -> Option<String> {
-  chunk.lines().map(str::trim).rfind(|line| line.starts_with(BOOT_REFUSAL_PREFIX)).map(str::to_string)
+fn last_boot_refusal_line(chunk: &str) -> Option<&str> {
+  chunk.lines().map(str::trim).rfind(|line| line.starts_with(BOOT_REFUSAL_PREFIX))
 }
 
-fn version_in_health_response(response: &str) -> Option<String> {
+fn version_in_health_response(response: &str) -> Option<DaemonVersion> {
   let (_, body) = response.split_once("\r\n\r\n")?;
   let json = body.get(body.find('{')?..=body.rfind('}')?)?;
   let health: serde_json::Value = serde_json::from_str(json).ok()?;
-  health.get("version")?.as_str().map(str::to_string)
+  health.get("version")?.as_str().map(DaemonVersion::parse)
 }
 
 /// Returns the daemon's answer when it replies `GET /health` with a 200 within `timeout`.
@@ -221,12 +229,11 @@ impl RunningChild {
 
 struct Inner {
   status: DaemonStatus,
-  last_stderr_line: Option<String>,
-  boot_refusal_line: Option<String>,
+  last_stderr_line: Option<StatusLine>,
+  boot_refusal: Option<StatusLine>,
   child: Option<RunningChild>,
   spawned_at: Option<Instant>,
   daemon_log: Option<DesktopLog>,
-  scrub_scope: ScrubScope,
 }
 
 impl Inner {
@@ -243,20 +250,6 @@ impl Inner {
   }
 }
 
-/// What `snapshot` needs to make the last line safe for the webview.
-#[derive(Default, Clone)]
-struct ScrubScope {
-  user_home: String,
-  admin_token_path: Option<PathBuf>,
-}
-
-impl ScrubScope {
-  fn safe_line(&self, raw_line: &str) -> String {
-    let secrets = self.admin_token_path.as_deref().map(admin_token_secrets).unwrap_or_default();
-    webview_safe_line(raw_line, &self.user_home, &secrets)
-  }
-}
-
 /// Tauri state: the daemon's status for the webview and the sidecar handle to stop on quit.
 pub struct DaemonState {
   inner: Mutex<Inner>,
@@ -264,11 +257,7 @@ pub struct DaemonState {
 
 impl DaemonState {
   pub fn new() -> Self {
-    Self { inner: Mutex::new(Inner { status: DaemonStatus::starting(), last_stderr_line: None, boot_refusal_line: None, child: None, spawned_at: None, daemon_log: None, scrub_scope: ScrubScope::default() }) }
-  }
-
-  fn record_scrub_scope(&self, scrub_scope: ScrubScope) {
-    self.inner.lock().unwrap().scrub_scope = scrub_scope;
+    Self { inner: Mutex::new(Inner { status: DaemonStatus::starting(), last_stderr_line: None, boot_refusal: None, child: None, spawned_at: None, daemon_log: None }) }
   }
 
   fn record_daemon_log(&self, daemon_log: DesktopLog) {
@@ -285,11 +274,11 @@ impl DaemonState {
     }
   }
 
-  /// Reduces a free text to its length and its tag; a length alone while no log runs.
+  /// Reduces a free text to the bucket of its length and its tag; a bucket alone while no log runs.
   fn opaque(&self, text: &[u8]) -> Opaque {
     match self.daemon_log() {
       Some(daemon_log) => daemon_log.opaque(text),
-      None => Opaque::of(text, None),
+      None => Opaque::bucketed(text, None),
     }
   }
 
@@ -300,17 +289,18 @@ impl DaemonState {
     }
   }
 
-  /// Returns the status as the webview sees it at `now`: its last line is masked, shortened, escaped and capped.
+  /// Returns the status as the webview sees it at `now`.
   pub fn snapshot(&self, now: Instant) -> DaemonStatus {
-    let (mut status, scrub_scope) = {
-      let inner = self.inner.lock().unwrap();
-      let mut status = inner.status.clone();
-      let is_booting = matches!(status.state, DaemonPhase::Starting | DaemonPhase::Slow);
-      status.started_seconds_ago = inner.spawned_at.filter(|_| is_booting).map(|spawned_at| now.saturating_duration_since(spawned_at).as_secs());
-      (status, inner.scrub_scope.clone())
-    };
-    status.last_line = status.last_line.map(|raw_line| scrub_scope.safe_line(&raw_line));
+    let inner = self.inner.lock().unwrap();
+    let mut status = inner.status.clone();
+    let is_booting = matches!(status.state, DaemonPhase::Starting | DaemonPhase::Slow);
+    status.started_seconds_ago = inner.spawned_at.filter(|_| is_booting).map(|spawned_at| now.saturating_duration_since(spawned_at).as_secs());
     status
+  }
+
+  /// Classifies one stderr line; its text is reduced to an opaque value before the call returns.
+  fn status_line_of(&self, stderr_line: &str) -> StatusLine {
+    StatusLine::of_stderr_line(stderr_line, self.opaque(stderr_line.as_bytes()))
   }
 
   fn phase(&self) -> DaemonPhase {
@@ -336,21 +326,21 @@ impl DaemonState {
     self.inner.lock().unwrap().child.take()
   }
 
-  fn on_reused(&self, daemon_version: Option<String>) {
+  fn on_reused(&self, daemon_version: Option<DaemonVersion>) {
     let mut inner = self.inner.lock().unwrap();
     inner.change_phase(DaemonPhase::Reused);
     inner.status.daemon_version = daemon_version;
   }
 
   /// A health answer makes a booting daemon Ready; a daemon already Failed stays Failed.
-  fn on_health_answered(&self, daemon_version: Option<String>) {
+  fn on_health_answered(&self, daemon_version: Option<DaemonVersion>) {
     let mut inner = self.inner.lock().unwrap();
     let is_booting = matches!(inner.status.state, DaemonPhase::Starting | DaemonPhase::Slow);
     if !is_booting {
       return;
     }
     inner.change_phase(DaemonPhase::Ready);
-    inner.status.last_line = None;
+    inner.status.status_line = None;
     inner.status.daemon_version = daemon_version;
   }
 
@@ -361,40 +351,42 @@ impl DaemonState {
     }
   }
 
-  fn on_start_failed(&self, reason: String) {
+  fn on_start_failed(&self, status_line: StatusLine) {
     let mut inner = self.inner.lock().unwrap();
     inner.change_phase(DaemonPhase::Failed);
-    inner.status.last_line = Some(reason);
+    inner.status.status_line = Some(status_line);
   }
 
-  fn on_gave_up_waiting(&self, reason: String) {
+  fn on_gave_up_waiting(&self, waited_seconds: u64) {
     if self.phase() == DaemonPhase::Slow {
-      self.on_start_failed(reason);
+      self.on_start_failed(StatusLine::NoAnswer { seconds: waited_seconds });
     }
   }
 
-  /// A plain stderr line is remembered for later; a boot-refusal line fails a booting daemon at once.
+  /// A plain stderr line is remembered for later; a boot refusal fails a booting daemon at once. Only typed status lines are kept, never the text.
   fn on_stderr(&self, chunk: &str) {
+    let last_stderr_line = last_non_blank_line(chunk).map(|line| self.status_line_of(line));
+    let boot_refusal = last_boot_refusal_line(chunk).map(|line| self.status_line_of(line));
     let mut inner = self.inner.lock().unwrap();
-    if let Some(line) = last_non_blank_line(chunk) {
-      inner.last_stderr_line = Some(line);
+    if last_stderr_line.is_some() {
+      inner.last_stderr_line = last_stderr_line;
     }
-    let Some(refusal_line) = last_boot_refusal_line(chunk) else { return };
-    inner.boot_refusal_line = Some(refusal_line.clone());
+    let Some(boot_refusal) = boot_refusal else { return };
+    inner.boot_refusal = Some(boot_refusal);
     let is_booting = matches!(inner.status.state, DaemonPhase::Starting | DaemonPhase::Slow);
     if is_booting {
       inner.change_phase(DaemonPhase::Failed);
-      inner.status.last_line = Some(refusal_line);
+      inner.status.status_line = Some(boot_refusal);
     }
   }
 
-  /// The process is gone: forgets the child (so nothing signals a reaped pid) and fails with the refusal line or the last output line.
+  /// The process is gone: forgets the child (so nothing signals a reaped pid) and fails with the refusal, the last stderr line or the exit code.
   fn on_terminated(&self, exit_code: Option<i32>) {
     let mut inner = self.inner.lock().unwrap();
     inner.child = None;
-    let reason = inner.boot_refusal_line.clone().or_else(|| inner.last_stderr_line.clone()).unwrap_or_else(|| format!("the daemon exited with code {exit_code:?}"));
+    let status_line = inner.boot_refusal.or(inner.last_stderr_line).unwrap_or(StatusLine::Exited(exit_code.map(ExitCode)));
     inner.change_phase(DaemonPhase::Failed);
-    inner.status.last_line = Some(reason);
+    inner.status.status_line = Some(status_line);
   }
 }
 
@@ -446,7 +438,6 @@ pub fn stop_daemon(state: &DaemonState, signals: &impl Signals, grace: Duration)
 
 fn boot(app: &AppHandle) {
   let state = app.state::<DaemonState>();
-  state.record_scrub_scope(scrub_scope_of(app));
   if let Ok(user_home) = app.path().home_dir() {
     let daemon_log = start_daemon_log(&user_home);
     crate::panic_hook::attach_log(daemon_log.clone());
@@ -463,25 +454,10 @@ fn boot(app: &AppHandle) {
     Ok(()) => wait_for_ready(&state, HEALTH_ADDRESS, READY_TIMEOUT, SLOW_START_EXTRA_BUDGET),
     Err(failure) => {
       state.record_event(DesktopEvent::DaemonSpawnFailed { failure });
-      state.on_start_failed(reason_for_the_webview(&failure));
+      state.on_start_failed(StatusLine::SpawnFailed(failure));
       state.mark_output_ended();
     }
   }
-}
-
-/// Describes a failed spawn to the user in the terms the log keeps: typed causes, never the text of an error.
-fn reason_for_the_webview(failure: &SpawnFailure) -> String {
-  match failure {
-    SpawnFailure::BundleNotFound(_) => "daemon bundle not found (run: pnpm --filter @openfleet/core bundle)".to_string(),
-    SpawnFailure::Io(io_failure) => format!("could not start the daemon: {io_failure}"),
-    SpawnFailure::Unclassified(opaque) => format!("could not start the daemon: {opaque}"),
-  }
-}
-
-fn scrub_scope_of(app: &AppHandle) -> ScrubScope {
-  let Ok(user_home) = app.path().home_dir() else { return ScrubScope::default() };
-  let token_path = admin_token_path(std::env::var("OPENFLEET_HOME").ok(), &user_home);
-  ScrubScope { user_home: user_home.to_string_lossy().to_string(), admin_token_path: Some(token_path) }
 }
 
 /// Polls `/health` for `ready_timeout`, then keeps polling for `extra_budget` in the Slow state; Failed only comes from the process side.
@@ -496,8 +472,7 @@ fn wait_for_ready(state: &DaemonState, address: &str, ready_timeout: Duration, e
     state.on_health_answered(answer.version);
     return;
   }
-  let total_seconds = (ready_timeout + extra_budget).as_secs();
-  state.on_gave_up_waiting(format!("the daemon did not answer on {address} within {total_seconds}s"));
+  state.on_gave_up_waiting((ready_timeout + extra_budget).as_secs());
 }
 
 /// Returns the sidecar's environment: the parent's without OPENFLEET_PORT (the probe and the CSP are fixed on 7331), with the repaired PATH and the stdin-EOF shutdown switch.
@@ -597,6 +572,9 @@ async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Re
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::daemon_status_line::RefusalReason;
+  use crate::event_log::synthetic_tokens::github_token;
+  use std::path::PathBuf;
   use crate::log_file::RotatingLog;
   use std::cell::RefCell;
   use std::io::{BufRead, BufReader};
@@ -694,11 +672,20 @@ mod tests {
 
   #[test]
   fn serializes_a_failed_status_with_camel_case_keys() {
-    let status = DaemonStatus { last_line: Some("boom".into()), path_source: Some(PathSource::Fallback), state: DaemonPhase::Failed, ..DaemonStatus::starting() };
+    let status = DaemonStatus { status_line: Some(StatusLine::Exited(Some(ExitCode(1)))), path_source: Some(PathSource::Fallback), state: DaemonPhase::Failed, ..DaemonStatus::starting() };
 
     let json = serde_json::to_string(&status).unwrap();
 
-    assert_eq!(json, r#"{"state":"failed","lastLine":"boom","pathSource":"fallback"}"#);
+    assert_eq!(json, r#"{"state":"failed","lastLine":"the daemon exited with code 1","lastLineKind":"exited","pathSource":"fallback"}"#);
+  }
+
+  #[test]
+  fn serializes_the_reason_of_a_catalogued_refusal() {
+    let status = DaemonStatus { status_line: Some(StatusLine::BootRefusal(RefusalReason::PortInUse)), state: DaemonPhase::Failed, ..DaemonStatus::starting() };
+
+    let json = serde_json::to_string(&status).unwrap();
+
+    assert_eq!(json, format!(r#"{{"state":"failed","lastLine":"{PORT_IN_USE_COPY}","lastLineKind":"boot_refusal","refusalReason":"port_in_use"}}"#));
   }
 
   #[test]
@@ -708,7 +695,7 @@ mod tests {
 
   #[test]
   fn serializes_the_reused_and_slow_states() {
-    let reused = DaemonStatus { state: DaemonPhase::Reused, daemon_version: Some("1.2.3".into()), ..DaemonStatus::starting() };
+    let reused = DaemonStatus { state: DaemonPhase::Reused, daemon_version: Some(DaemonVersion::parse("1.2.3")), ..DaemonStatus::starting() };
     let slow = DaemonStatus { state: DaemonPhase::Slow, started_seconds_ago: Some(20), path_source: Some(PathSource::Fallback), ..DaemonStatus::starting() };
 
     assert_eq!(serde_json::to_string(&reused).unwrap(), r#"{"state":"reused","daemonVersion":"1.2.3"}"#);
@@ -717,7 +704,7 @@ mod tests {
 
   #[test]
   fn keeps_the_last_non_blank_line_of_a_chunk() {
-    assert_eq!(last_non_blank_line("first\nopenfleet: refusing to start\n\n  \n"), Some("openfleet: refusing to start".to_string()));
+    assert_eq!(last_non_blank_line("first\nopenfleet: refusing to start\n\n  \n"), Some("openfleet: refusing to start"));
     assert_eq!(last_non_blank_line("\n \n"), None);
     assert_eq!(last_non_blank_line(""), None);
   }
@@ -733,7 +720,7 @@ mod tests {
   fn probe_reads_the_daemon_version_from_the_health_body() {
     let address = serve_once("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"ok\":true,\"version\":\"0.4.2\"}");
 
-    assert_eq!(probe_health(&address, PROBE_TIMEOUT), Some(HealthAnswer { version: Some("0.4.2".to_string()) }));
+    assert_eq!(probe_health(&address, PROBE_TIMEOUT), Some(HealthAnswer { version: Some(DaemonVersion::parse("0.4.2")) }));
   }
 
   #[test]
@@ -741,6 +728,32 @@ mod tests {
     let address = serve_once("HTTP/1.1 200 OK\r\n\r\nnot json");
 
     assert_eq!(probe_health(&address, PROBE_TIMEOUT), Some(HealthAnswer { version: None }));
+  }
+
+  #[test]
+  fn a_hostile_health_version_never_reaches_the_issue_url() {
+    let token_shaped_value = github_token();
+    let hostile_versions = [token_shaped_value.clone(), format!("1.2.3-{token_shaped_value}"), format!("0.2.0 {token_shaped_value}")];
+
+    for hostile_version in hostile_versions {
+      let response: &'static str = Box::leak(format!("HTTP/1.1 200 OK\r\n\r\n{{\"version\":\"{hostile_version}\"}}").into_boxed_str());
+      let address = serve_once(response);
+      let answer = probe_health(&address, PROBE_TIMEOUT).unwrap();
+      let report = crate::issue_report::IssueReport {
+        app_version: "0.2.0".to_string(),
+        daemon_version: answer.version,
+        daemon_state: "ready".to_string(),
+        macos_version: "15.4".to_string(),
+        arch: "aarch64".to_string(),
+        log_lines: vec![],
+        user_home: "/Users/jdoe".to_string(),
+      };
+
+      let url = crate::issue_report::issue_url(&report);
+
+      assert!(!url.contains(&token_shaped_value), "the hostile version reached the URL: {hostile_version}");
+      assert!(url.contains("Daemon%20version%3A%20unrecognised"), "{url}");
+    }
   }
 
   #[test]
@@ -1034,7 +1047,7 @@ mod tests {
   #[test]
   fn stop_sends_no_signal_when_the_daemon_was_reused() {
     let state = DaemonState::new();
-    state.on_reused(Some("1.0.0".into()));
+    state.on_reused(Some(DaemonVersion::parse("1.0.0")));
     let signals = RecordingSignals::default();
 
     assert_eq!(stop_daemon(&state, &signals, Duration::from_secs(5)), None);
@@ -1051,31 +1064,63 @@ mod tests {
     assert!(state.is_awaiting_health());
   }
 
+  const PORT_IN_USE_REFUSAL: &str = "openfleet: refusing to boot: port 7331 is already in use (stop the other process or set OPENFLEET_PORT)";
+  const PORT_IN_USE_COPY: &str = "the daemon refused to boot: its port is already in use: stop the other process, then check again";
+  const UNLISTED_REFUSAL_COPY_START: &str = "the daemon refused to boot: for an unlisted reason ([text:";
+  const SAVE_A_BUNDLE: &str = "Settings → Diagnostics → Export diagnostics bundle";
+
   #[test]
-  fn a_boot_refusal_line_fails_the_daemon_with_that_line() {
+  fn a_boot_refusal_line_fails_the_daemon_with_its_catalogued_reason() {
     let state = state_with_a_spawned_child();
 
-    state.on_stderr("warn first\nopenfleet: refusing to boot: port 7331 is already in use\ntrailing noise\n");
+    state.on_stderr(&format!("warn first\n{PORT_IN_USE_REFUSAL}\ntrailing noise\n"));
 
     let status = state.snapshot(Instant::now());
     assert_eq!(status.state, DaemonPhase::Failed);
-    assert_eq!(status.last_line.as_deref(), Some("openfleet: refusing to boot: port 7331 is already in use"));
+    assert_eq!(status.last_line().as_deref(), Some(PORT_IN_USE_COPY));
     assert!(!state.is_awaiting_health());
   }
 
   #[test]
-  fn a_termination_reports_the_refusal_line_over_a_later_stderr_line() {
+  fn a_termination_reports_the_refusal_over_a_later_stderr_line() {
     let state = state_with_a_spawned_child();
     state.on_stderr("openfleet: refusing to boot: schema is newer\n");
     state.on_stderr("some cleanup message\n");
 
     state.on_terminated(Some(1));
 
-    assert_eq!(state.snapshot(Instant::now()).last_line.as_deref(), Some("openfleet: refusing to boot: schema is newer"));
+    let last_line = state.snapshot(Instant::now()).last_line().unwrap();
+    assert!(last_line.starts_with(UNLISTED_REFUSAL_COPY_START), "{last_line}");
+    assert!(!last_line.contains("schema"), "{last_line}");
+  }
+
+  const PAST_THE_LARGEST_LENGTH_BUCKET: usize = (1 << 26) + 1;
+
+  #[test]
+  fn a_stderr_line_past_the_largest_bucket_shows_a_bucket_inside_the_grammar() {
+    let state = state_with_a_spawned_child();
+    state.on_stderr(&"a".repeat(PAST_THE_LARGEST_LENGTH_BUCKET));
+
+    state.on_terminated(Some(1));
+
+    let status = state.snapshot(Instant::now());
+    assert_eq!(status.last_line(), Some(format!("the daemon wrote an unrecognised error ([text:67108864]); {SAVE_A_BUNDLE}")));
   }
 
   #[test]
-  fn a_termination_reports_the_last_stderr_line_once_the_process_has_exited() {
+  fn a_spawn_failure_text_past_the_largest_bucket_is_logged_as_a_spawn_failure() {
+    let (state, daemon_log, fs) = state_writing_to_a_log();
+    let failure = SpawnFailure::Unclassified(state.opaque(&vec![b'a'; PAST_THE_LARGEST_LENGTH_BUCKET]));
+
+    state.record_event(DesktopEvent::DaemonSpawnFailed { failure });
+
+    let lines = stored_lines(&daemon_log, &fs);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("daemon_spawn_failed") && lines[0].ends_with("text=[text:67108864]"), "{lines:?}");
+  }
+
+  #[test]
+  fn a_termination_reports_the_last_stderr_line_as_an_unrecognised_error() {
     let state = state_with_a_spawned_child();
     state.on_stderr("Error: boom\n");
 
@@ -1083,7 +1128,17 @@ mod tests {
 
     let status = state.snapshot(Instant::now());
     assert_eq!(status.state, DaemonPhase::Failed);
-    assert_eq!(status.last_line.as_deref(), Some("Error: boom"));
+    assert_eq!(status.last_line(), Some(format!("the daemon wrote an unrecognised error ([text:16]); {SAVE_A_BUNDLE}")));
+  }
+
+  #[test]
+  fn a_termination_after_a_node_fatal_marker_says_so_without_the_marker_text() {
+    let state = state_with_a_spawned_child();
+    state.on_stderr("FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n");
+
+    state.on_terminated(Some(134));
+
+    assert_eq!(state.snapshot(Instant::now()).last_line(), Some(format!("the daemon stopped on a fatal Node.js error; {SAVE_A_BUNDLE}")));
   }
 
   #[test]
@@ -1092,7 +1147,162 @@ mod tests {
 
     state.on_terminated(Some(3));
 
-    assert_eq!(state.snapshot(Instant::now()).last_line.as_deref(), Some("the daemon exited with code Some(3)"));
+    assert_eq!(state.snapshot(Instant::now()).last_line().as_deref(), Some("the daemon exited with code 3"));
+  }
+
+  #[test]
+  fn a_termination_by_a_signal_says_so() {
+    let state = state_with_a_spawned_child();
+
+    state.on_terminated(None);
+
+    assert_eq!(state.snapshot(Instant::now()).last_line().as_deref(), Some("the daemon was stopped by a signal"));
+  }
+
+  // ---- S1: no daemon text reaches the status line ----
+
+  const LEAK_WINDOW_BYTES: usize = 12;
+
+  fn leaks_a_window_of(shown: &str, secret: &str) -> bool {
+    let secret = secret.as_bytes();
+    let window_bytes = LEAK_WINDOW_BYTES.min(secret.len());
+    secret.windows(window_bytes).any(|window| shown.as_bytes().windows(window_bytes).any(|shown_window| shown_window == window))
+  }
+
+  fn hostile_secrets() -> Vec<String> {
+    use crate::event_log::synthetic_tokens::{aws_key_id, body, jwt, openai_key, token, TokenShape};
+    let free_text_secret = body(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", 32, 9);
+    vec![github_token(), aws_key_id(), openai_key(), jwt(20, 5), token(TokenShape::SlackBot, 24, 3), free_text_secret]
+  }
+
+  fn hostile_stderr_lines(secret: &str) -> Vec<String> {
+    vec![
+      secret.to_string(),
+      format!("{secret} failed to start"),
+      format!("Error: token: {secret}"),
+      format!("{}{secret}", "x".repeat(199)),
+      format!("openfleet: refusing to boot: {secret}"),
+      format!("openfleet: refusing to boot: {secret} (stop the other process or set OPENFLEET_PORT)"),
+      format!("FATAL ERROR: {secret}"),
+    ]
+  }
+
+  #[test]
+  fn a_token_shaped_daemon_line_never_reaches_the_status_line_or_its_json() {
+    for secret in hostile_secrets() {
+      for hostile_line in hostile_stderr_lines(&secret) {
+        let state = state_with_a_spawned_child();
+
+        state.on_stderr(&format!("{hostile_line}\n"));
+        state.on_terminated(Some(1));
+
+        let status = state.snapshot(Instant::now());
+        let shown = status.last_line().unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(!leaks_a_window_of(&shown, &secret), "{hostile_line:?} showed {shown:?}");
+        assert!(!leaks_a_window_of(&json, &secret), "{hostile_line:?} serialised {json:?}");
+      }
+    }
+  }
+
+  const STATUS_LINE_COPY_STARTS: [&str; 3] = ["the daemon refused to boot: ", "the daemon stopped on a fatal Node.js error", "the daemon wrote an unrecognised error ([text:"];
+
+  /// The item as the whole line, before text, after text, after 199 characters and after the boot refusal prefix.
+  fn stderr_lines_around(text: &str) -> Vec<String> {
+    vec![
+      text.to_string(),
+      format!("{text} failed to start"),
+      format!("Error: {text}"),
+      format!("{}{text}", "x".repeat(199)),
+      format!("openfleet: refusing to boot: {text}"),
+    ]
+  }
+
+  #[test]
+  fn no_corpus_item_reaches_the_status_line_wherever_it_sits_in_a_stderr_line() {
+    use crate::event_log::hostile_corpus::{all_hostile_items, leaked_form_in};
+    for item in all_hostile_items() {
+      for hostile_line in stderr_lines_around(&item.text) {
+        let state = state_with_a_spawned_child();
+
+        state.on_stderr(&format!("{hostile_line}\n"));
+        state.on_terminated(Some(1));
+
+        let status = state.snapshot(Instant::now());
+        let shown = status.last_line().unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        let shows_only_fixed_copy = STATUS_LINE_COPY_STARTS.iter().any(|copy_start| shown.starts_with(copy_start));
+        assert_eq!(leaked_form_in(&[shown.clone(), json], &item.secret), None, "{}", item.name);
+        assert!(shows_only_fixed_copy, "{}: {shown}", item.name);
+      }
+    }
+  }
+
+  fn health_answer_reporting(version: &str) -> String {
+    format!("HTTP/1.1 200 OK\r\n\r\n{}", serde_json::json!({ "status": "ok", "version": version }))
+  }
+
+  fn issue_report_of(daemon_version: DaemonVersion) -> crate::issue_report::IssueReport {
+    crate::issue_report::IssueReport {
+      app_version: "0.2.0".to_string(),
+      daemon_version: Some(daemon_version),
+      daemon_state: "ready".to_string(),
+      macos_version: "15.4".to_string(),
+      arch: "aarch64".to_string(),
+      log_lines: vec![],
+      user_home: "/Users/jdoe".to_string(),
+    }
+  }
+
+  /// The accepted residual: a pre-release of at most 24 lowercase alphanumerics (and so a short build number or sha) is a valid version.
+  fn is_a_valid_version_part(text: &str) -> bool {
+    let is_lowercase_alphanumeric_or_dot = |byte: u8| byte.is_ascii_digit() || byte.is_ascii_lowercase() || byte == b'.';
+    (1..=24).contains(&text.len()) && text.bytes().all(is_lowercase_alphanumeric_or_dot)
+  }
+
+  #[test]
+  fn no_corpus_item_reaches_the_daemon_version_or_the_issue_url_beyond_the_accepted_residual() {
+    use crate::event_log::hostile_corpus::{all_hostile_items, leaked_form_in};
+    for item in all_hostile_items() {
+      let reported_versions = [item.text.clone(), format!("1.2.3+{}", item.text), format!("1.2.3-{}", item.text), format!("dev-{}", item.text)];
+      for reported in reported_versions {
+        let version = version_in_health_response(&health_answer_reporting(&reported)).expect("a version");
+
+        let url = crate::issue_report::issue_url(&issue_report_of(version.clone()));
+
+        let is_recognised = version.as_str() != "unrecognised";
+        if is_recognised {
+          assert!(is_a_valid_version_part(&item.text), "{} was recognised as {}", item.name, version.as_str());
+          continue;
+        }
+        assert_eq!(leaked_form_in(&[url], &item.secret), None, "{}", item.name);
+      }
+    }
+  }
+
+  #[test]
+  fn a_real_semver_survives_the_health_answer_and_the_issue_url() {
+    for reported in ["0.4.2", "1.2.3-rc.1", "0.4.2+abc1234.7", "dev", "dev-0123abcd"] {
+      let version = version_in_health_response(&health_answer_reporting(reported)).expect("a version");
+
+      assert_eq!(version.as_str(), reported);
+      assert!(crate::issue_report::issue_url(&issue_report_of(version)).contains(&reported.replace('+', "%2B")), "{reported}");
+    }
+  }
+
+  #[test]
+  fn a_token_shaped_daemon_line_never_reaches_desktop_log_through_the_status() {
+    for secret in hostile_secrets() {
+      let (state, daemon_log, fs) = state_writing_to_a_log();
+      for hostile_line in hostile_stderr_lines(&secret) {
+        daemon_log.ingest_daemon_chunk(Stream::Err, format!("{hostile_line}\n").as_bytes());
+        state.on_stderr(&format!("{hostile_line}\n"));
+      }
+      state.on_terminated(Some(1));
+
+      let lines = stored_lines(&daemon_log, &fs).join("\n");
+      assert!(!leaks_a_window_of(&lines, &secret), "{lines}");
+    }
   }
 
   #[test]
@@ -1118,12 +1328,12 @@ mod tests {
     state.on_slow();
     assert_eq!(state.phase(), DaemonPhase::Slow);
 
-    state.on_health_answered(Some("0.4.2".into()));
+    state.on_health_answered(Some(DaemonVersion::parse("0.4.2")));
 
     let status = state.snapshot(Instant::now());
     assert_eq!(status.state, DaemonPhase::Ready);
-    assert_eq!(status.daemon_version.as_deref(), Some("0.4.2"));
-    assert_eq!(status.last_line, None);
+    assert_eq!(status.daemon_version.as_ref().map(DaemonVersion::as_str), Some("0.4.2"));
+    assert_eq!(status.status_line, None);
   }
 
   #[test]
@@ -1170,38 +1380,38 @@ mod tests {
   }
 
   #[test]
-  fn the_snapshot_masks_shortens_and_caps_the_last_line_while_the_stored_line_stays_raw() {
-    let state = DaemonState::new();
-    state.record_scrub_scope(ScrubScope { user_home: "/Users/jdoe".into(), admin_token_path: None });
-    let raw_line = format!("crash in /Users/jdoe/app Authorization: Bearer abcdefghijklmnop1234567890 {}", "z".repeat(400));
+  fn the_state_keeps_no_text_of_a_stderr_line() {
+    let state = state_with_a_spawned_child();
+    let raw_line = format!("crash in /Users/jdoe/app Authorization: Bearer {}", github_token());
 
-    state.on_start_failed(raw_line.clone());
-    let last_line = state.snapshot(Instant::now()).last_line.unwrap();
+    state.on_stderr(&format!("{raw_line}\n"));
+    state.on_stderr(&format!("openfleet: refusing to boot: {raw_line}\n"));
 
-    assert!(last_line.starts_with("crash in ~/app "), "{last_line}");
-    assert!(!last_line.contains("abcdefghijklmnop1234567890"), "{last_line}");
-    assert_eq!(last_line.chars().count(), crate::status_line::MAX_STATUS_LINE_CHARS);
-    assert_eq!(state.inner.lock().unwrap().status.last_line, Some(raw_line));
+    let inner = state.inner.lock().unwrap();
+    let kept = format!("{:?} {:?} {:?}", inner.last_stderr_line, inner.boot_refusal, inner.status);
+    assert!(!kept.contains("jdoe") && !leaks_a_window_of(&kept, &github_token()), "{kept}");
   }
 
   #[test]
-  fn the_snapshot_escapes_bidi_controls_in_a_boot_refusal() {
+  fn a_boot_refusal_with_bidi_controls_shows_none_of_its_text() {
     let state = DaemonState::new();
 
     state.on_stderr("openfleet: refusing to boot: \u{202E}evil\n");
 
-    assert_eq!(state.snapshot(Instant::now()).last_line.as_deref(), Some("openfleet: refusing to boot: \\u{202e}evil"));
+    let last_line = state.snapshot(Instant::now()).last_line().unwrap();
+    assert!(last_line.starts_with(UNLISTED_REFUSAL_COPY_START), "{last_line}");
+    assert!(!last_line.contains('\u{202E}') && !last_line.contains("evil"), "{last_line}");
   }
 
   #[test]
   fn a_reused_daemon_exposes_its_version() {
     let state = DaemonState::new();
 
-    state.on_reused(Some("9.9.9".into()));
+    state.on_reused(Some(DaemonVersion::parse("9.9.9")));
 
     let status = state.snapshot(Instant::now());
     assert_eq!(status.state, DaemonPhase::Reused);
-    assert_eq!(status.daemon_version.as_deref(), Some("9.9.9"));
+    assert_eq!(status.daemon_version.as_ref().map(DaemonVersion::as_str), Some("9.9.9"));
   }
 
   #[test]
@@ -1233,7 +1443,7 @@ mod tests {
 
     let status = state.snapshot(Instant::now());
     assert_eq!(status.state, DaemonPhase::Ready);
-    assert_eq!(status.daemon_version.as_deref(), Some("7.7.7"));
+    assert_eq!(status.daemon_version.as_ref().map(DaemonVersion::as_str), Some("7.7.7"));
     assert!(observed_slow.load(std::sync::atomic::Ordering::SeqCst));
   }
 
@@ -1246,7 +1456,7 @@ mod tests {
 
     let status = state.snapshot(Instant::now());
     assert_eq!(status.state, DaemonPhase::Failed);
-    assert!(status.last_line.unwrap().starts_with("the daemon did not answer on"));
+    assert_eq!(status.last_line().as_deref(), Some("the daemon did not answer within 0s"));
   }
 
   #[test]
@@ -1333,8 +1543,8 @@ mod tests {
   fn staying_in_a_phase_logs_nothing() {
     let (state, daemon_log, fs) = state_writing_to_a_log();
 
-    state.on_start_failed("first".to_string());
-    state.on_start_failed("second".to_string());
+    state.on_start_failed(StatusLine::Exited(Some(ExitCode(1))));
+    state.on_start_failed(StatusLine::Exited(Some(ExitCode(2))));
     state.on_slow();
 
     assert_eq!(stored_lines(&daemon_log, &fs), vec![phase_change("info", "starting", "failed")]);
@@ -1344,7 +1554,7 @@ mod tests {
   fn a_reused_daemon_logs_the_move_to_reused() {
     let (state, daemon_log, fs) = state_writing_to_a_log();
 
-    state.on_reused(Some("1.0.0".to_string()));
+    state.on_reused(Some(DaemonVersion::parse("1.0.0")));
 
     assert_eq!(stored_lines(&daemon_log, &fs), vec![phase_change("info", "starting", "reused")]);
   }
@@ -1363,8 +1573,9 @@ mod tests {
   fn the_status_text_and_the_version_reach_no_line() {
     let (state, daemon_log, fs) = state_writing_to_a_log();
 
-    state.on_start_failed("Authorization: Bearer ghp_0123456789abcdefghijklmnopqrstuvwxyz".to_string());
-    state.on_reused(Some("ghp_0123456789abcdefghijklmnopqrstuvwxyz".to_string()));
+    state.on_stderr(&format!("Authorization: Bearer {}\n", github_token()));
+    state.on_terminated(Some(1));
+    state.on_reused(Some(DaemonVersion::parse(&github_token())));
 
     let lines = stored_lines(&daemon_log, &fs).join("\n");
     assert!(!lines.contains("ghp_") && !lines.contains("Bearer"), "{lines}");
@@ -1418,7 +1629,7 @@ mod tests {
 
   #[test]
   fn a_missing_bundle_is_told_to_the_user_without_its_path() {
-    let reason = reason_for_the_webview(&SpawnFailure::BundleNotFound(PathClass::DaemonBundle));
+    let reason = StatusLine::SpawnFailed(SpawnFailure::BundleNotFound(PathClass::DaemonBundle)).render();
 
     assert_eq!(reason, "daemon bundle not found (run: pnpm --filter @openfleet/core bundle)");
   }
@@ -1427,19 +1638,19 @@ mod tests {
   fn an_io_failure_is_told_by_its_kind_and_os_error_number_only() {
     let failure = SpawnFailure::Io(IoFailure::of(&io::Error::new(io::ErrorKind::PermissionDenied, "open /Users/jdoe/secret-path failed")));
 
-    let reason = reason_for_the_webview(&failure);
+    let reason = StatusLine::SpawnFailed(failure).render();
 
     assert_eq!(reason, "could not start the daemon: kind=permission_denied errno=none");
   }
 
   #[test]
-  fn an_error_of_another_kind_is_told_by_its_length_and_tag() {
+  fn an_error_of_another_kind_is_told_by_its_length_bucket_and_tag() {
     let state = DaemonState::new();
-    let error = tauri_plugin_shell::Error::UnknownProgramName("/Users/jdoe/ghp_0123456789abcdefghijklmnopqrstuvwxyz".to_string());
+    let error = tauri_plugin_shell::Error::UnknownProgramName(format!("/Users/jdoe/{}", github_token()));
 
     let failure = spawn_failure_of_shell(&state, &error);
 
-    assert_eq!(reason_for_the_webview(&failure), format!("could not start the daemon: [text:{}]", error.to_string().len()));
+    assert_eq!(StatusLine::SpawnFailed(failure).render(), format!("could not start the daemon: [text:{}]", error.to_string().len().next_power_of_two()));
   }
 
   #[test]

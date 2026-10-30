@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { findPermissiveSettingsWarning } from '../harness/claudeCli/permissiveSettings.js';
 import { FakeHandle, FakeHarness } from '../harness/fakeHarness.js';
@@ -24,6 +24,9 @@ function setup() {
   return { db, harness, bus, events, service };
 }
 const hook = (session_id: string, event: object) => ({ kind: 'hook' as const, event: { session_id, ...event } as never });
+const loggedLines = (consoleSpy: MockInstance): string[] => consoleSpy.mock.calls.map(([line]) => String(line));
+const hasLoggedLineWith = (consoleSpy: MockInstance, ...fragments: string[]): boolean =>
+  loggedLines(consoleSpy).some((line) => fragments.every((fragment) => line.includes(fragment)));
 
 // A handful of tests below opt into fake timers to advance past SUBMIT_KEYSTROKE_DELAY_MS; reset to real
 // timers after every test so that doesn't leak into a test that didn't ask for it.
@@ -718,7 +721,7 @@ describe('SessionService resume', () => {
     setClosedSpy.mockRestore();
 
     expect(restartHarness.handles[0]!.killed).toBe(true);
-    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(hasLoggedLineWith(consoleErrorSpy, badSession.id, 'setClosed boom')).toBe(true);
     expect(restarted.get(goodSession.id)!.state).toBe('starting');
     consoleErrorSpy.mockRestore();
   });
@@ -1413,7 +1416,7 @@ describe('SessionService relaunch against the delivery machine', () => {
     expect(service.byMcpToken(oldTokens.mcpToken)).toBeUndefined();
   });
 
-  it('closes the session with a clear exit code when killing the old process throws, logging once', async () => {
+  it('closes the session with a clear exit code when killing the old process throws, and reports the failure', async () => {
     vi.useFakeTimers();
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { service, harness, session } = await idleSession();
@@ -1424,7 +1427,7 @@ describe('SessionService relaunch against the delivery machine', () => {
 
     expect(service.get(session.id)!.state).toBe('closed');
     expect(service.get(session.id)!.exitCode).toBeUndefined();
-    expect(errors).toHaveBeenCalledTimes(1);
+    expect(hasLoggedLineWith(errors, session.id, 'EPERM')).toBe(true);
   });
 
   it('never kills the exited old process again when the resume fails before registering its new handle', async () => {
@@ -1517,7 +1520,8 @@ describe('SessionService relaunch against the delivery machine', () => {
     expect(service.get(session.id)!.state).toBe('closed');
     expect(service.get(session.id)!.exitCode).toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
-    expect(errors).toHaveBeenCalledTimes(2); // the resume failure, then the kill failure: once each
+    expect(hasLoggedLineWith(errors, session.id, 'db locked')).toBe(true); // the resume failure is reported
+    expect(hasLoggedLineWith(errors, session.id, 'EPERM')).toBe(true); // and so is the kill failure that followed
     await expect(service.close(session.id)).resolves.toBeUndefined();
   });
 });
@@ -2476,8 +2480,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(handle.written).toEqual(['do X']); // the '\r' write threw and never landed
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(0);
     expect(service.hasQueuedMessage(session.id, 'do X')).toBe(true);
-    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
-    expect(String(consoleErrorSpy.mock.calls[0]![0])).toContain(session.id);
+    expect(hasLoggedLineWith(consoleErrorSpy, session.id, 'pty write failed')).toBe(true);
 
     await vi.advanceTimersByTimeAsync(DELIVERY_RETRY_MS); // the retry submits the body already typed, without retyping it
     expect(handle.written).toEqual(['do X', '\r']);
@@ -2507,7 +2510,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
 
     expect(submitAttempts).toBe(1 + MAX_DELIVERY_RETRIES);
     expect(vi.getTimerCount()).toBe(1); // parked: only the long parked retry remains
-    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(hasLoggedLineWith(consoleErrorSpy, session.id, 'pty write failed')).toBe(true);
     expect(service.hasQueuedMessage(session.id, 'do X')).toBe(true);
 
     isPtyBroken = false;
@@ -2538,11 +2541,13 @@ describe('SessionService submit-keystroke hostile cases', () => {
     await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS + DELIVERY_RETRY_MS * MAX_DELIVERY_RETRIES);
     expect(submitAttempts).toBe(1 + MAX_DELIVERY_RETRIES);
     expect(vi.getTimerCount()).toBe(1);
+    const errorLogsWhenParked = loggedLines(consoleErrorSpy).length;
+    expect(hasLoggedLineWith(consoleErrorSpy, session.id, 'pty write failed')).toBe(true);
 
     await vi.advanceTimersByTimeAsync(PARKED_RETRY_MS);
     expect(submitAttempts).toBe(2 + MAX_DELIVERY_RETRIES);
     expect(vi.getTimerCount()).toBe(1);
-    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(loggedLines(consoleErrorSpy)).toHaveLength(errorLogsWhenParked);
 
     isPtyBroken = false;
     await vi.advanceTimersByTimeAsync(PARKED_RETRY_MS);
@@ -2562,7 +2567,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
 
     service.sendMessage({ sessionId: session.id, body: 'do X' });
     await vi.advanceTimersByTimeAsync(SUBMIT_KEYSTROKE_DELAY_MS);
-    const listenerFailureLogs = consoleErrorSpy.mock.calls.length;
+    const listenerFailureReported = hasLoggedLineWith(consoleErrorSpy, session.id, 'socket closing');
     consoleErrorSpy.mockRestore();
     const secondSend = service.sendMessage({ sessionId: session.id, body: 'do Y' });
     const timersWhileSubmitted = vi.getTimerCount();
@@ -2573,7 +2578,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(harness.handles[0]!.written).toEqual(['do X', '\r', 'do Y']);
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
     expect(service.hasQueuedMessage(session.id, 'do X')).toBe(false);
-    expect(listenerFailureLogs).toBe(1);
+    expect(listenerFailureReported).toBe(true);
   });
 
   it('never retypes a submitted message whose delivery record fails once: the record is retried, then the queue flows on', async () => {
@@ -2622,7 +2627,10 @@ describe('SessionService submit-keystroke hostile cases', () => {
     expect(harness.handles[0]!.written).toEqual(['do X', '\r']);
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(1); // parked, not stuck
-    expect(consoleErrorSpy).toHaveBeenCalledTimes(2); // the failed record, then one failure streak
+    expect(hasLoggedLineWith(consoleErrorSpy, session.id, 'SQLITE_BUSY')).toBe(true);
+    const errorLogsWhenParked = loggedLines(consoleErrorSpy).length;
+    await vi.advanceTimersByTimeAsync(PARKED_RETRY_MS * 2);
+    expect(loggedLines(consoleErrorSpy)).toHaveLength(errorLogsWhenParked); // a failure streak does not flood the log
 
     markDeliveredSpy.mockRestore();
     await vi.advanceTimersByTimeAsync(PARKED_RETRY_MS + SUBMIT_KEYSTROKE_DELAY_MS);
@@ -2649,7 +2657,7 @@ describe('SessionService submit-keystroke hostile cases', () => {
     const result = service.sendMessage({ sessionId: session.id, body: 'do X' });
 
     expect(result.status).toBe('queued');
-    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(hasLoggedLineWith(consoleErrorSpy, session.id, 'pty write failed')).toBe(true);
     await vi.advanceTimersByTimeAsync(DELIVERY_RETRY_MS + SUBMIT_KEYSTROKE_DELAY_MS);
     expect(handle.written).toEqual(['do X', '\r']);
     expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);

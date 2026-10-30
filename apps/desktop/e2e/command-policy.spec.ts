@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { adminHeaders, api, signInAsAdmin } from './support/daemon';
 
 const POLICY_STATUS = 'policy-save-status';
@@ -107,15 +107,27 @@ test('quick arrow presses end on the focused mode, on the screen and in the daem
   }).toPass({ timeout: 10_000 });
 });
 
+/** Resolves with the top of the element once two consecutive measurements agree, so a layout still settling is not measured. */
+async function settledTopOf(element: Locator): Promise<number | undefined> {
+  let previousTop: number | undefined;
+  await expect.poll(async () => {
+    const top = (await element.boundingBox())?.y;
+    const hasSettled = top !== undefined && top === previousTop;
+    previousTop = top;
+    return hasSettled;
+  }).toBe(true);
+  return previousTop;
+}
+
 test('a save does not move the rest of the screen', async ({ page }) => {
   await openCommandPolicy(page);
   const healthBanner = page.getByTestId('policy-degraded');
-  const topBefore = (await healthBanner.boundingBox())?.y;
+  const topBefore = await settledTopOf(healthBanner);
 
   await modeRadio(page, 'Enforce').check();
   await expect(page.getByTestId(POLICY_STATUS)).toContainText('Saved: mode enforce');
 
-  expect((await healthBanner.boundingBox())?.y).toBe(topBefore);
+  expect(await settledTopOf(healthBanner)).toBe(topBefore);
 });
 
 test('the ask switch states what turning it off means and gives the dialogs back', async ({ page }) => {

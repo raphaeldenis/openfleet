@@ -16,6 +16,8 @@ const SLOW_COPY = 'First launch can take up to a minute — macOS checks the app
 const FAILED_HEADING = 'The daemon could not start';
 const PROJECT_STEP_HEADING = 'Define the project';
 const MANUAL_CARD_COMMAND = 'pnpm dev:core';
+const UNRECOGNISED_LINE = 'the daemon wrote an unrecognised error ([text:25]); Settings → Diagnostics → Export diagnostics bundle';
+const PORT_IN_USE_LINE = 'the daemon refused to boot: its port is already in use: stop the other process, then check again';
 
 function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: () => Promise.resolve(body) } as unknown as Response;
@@ -146,12 +148,12 @@ describe('OnboardingComponent daemon step under Tauri', () => {
   });
 
   it('user sees the last line of a failed daemon, the manual command and a way to check again', async () => {
-    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'error: port 7331 is already in use', pathSource: 'shell' });
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: PORT_IN_USE_LINE, lastLineKind: 'boot_refusal', refusalReason: 'port_in_use', pathSource: 'shell' });
 
     const { container } = await renderAfterFirstStatusRead(port);
 
     expect(screen.getByRole('heading', { name: FAILED_HEADING })).toHaveFocus();
-    expect(screen.getByTestId('daemon-last-line')).toHaveTextContent('error: port 7331 is already in use');
+    expect(screen.getByTestId('daemon-last-line')).toHaveTextContent(PORT_IN_USE_LINE);
     expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
     expect(container).toHaveTextContent(MANUAL_CARD_COMMAND);
     expect(container).not.toHaveTextContent('may not be on the daemon PATH');
@@ -226,8 +228,11 @@ describe('OnboardingComponent daemon step under Tauri', () => {
     expect(screen.getByTestId('daemon-check-result')).toHaveTextContent('Couldn’t open the logs folder');
   });
 
-  it('user is told claude may be missing from the PATH only when the fallback PATH was used and the last line names claude', async () => {
-    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'claude: command not found', pathSource: 'fallback' });
+  it.each([
+    ['an unrecognised error', { lastLine: UNRECOGNISED_LINE, lastLineKind: 'unrecognised' }],
+    ['an exit', { lastLine: 'the daemon exited with code 127', lastLineKind: 'exited' }],
+  ] as const)('user is told claude may be missing from the PATH when the fallback PATH was used and the daemon stopped on %s', async (_cause, failure) => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed', pathSource: 'fallback', ...failure });
 
     const { container } = await renderAfterFirstStatusRead(port);
 
@@ -235,12 +240,28 @@ describe('OnboardingComponent daemon step under Tauri', () => {
     expect(container).toHaveTextContent('The built-in fallback PATH was used instead');
   });
 
-  it('user is not told about the PATH when the fallback PATH was used but the failure is something else', async () => {
-    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'error: port 7331 is already in use', pathSource: 'fallback' });
+  it('user is not told about the PATH when the fallback PATH was used but the daemon names its refusal', async () => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: PORT_IN_USE_LINE, lastLineKind: 'boot_refusal', refusalReason: 'port_in_use', pathSource: 'fallback' });
 
     const { container } = await renderAfterFirstStatusRead(port);
 
     expect(container).not.toHaveTextContent('PATH');
+  });
+
+  it('user is not told about the PATH from text that merely names claude', async () => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: 'claude: command not found', lastLineKind: 'boot_refusal', refusalReason: 'unlisted', pathSource: 'fallback' });
+
+    const { container } = await renderAfterFirstStatusRead(port);
+
+    expect(container).not.toHaveTextContent('may not be on the daemon PATH');
+  });
+
+  it('user is not told about the PATH when the shell PATH was used, whatever the failure', async () => {
+    const { port } = fakeDaemonStatusPort({ state: 'failed', lastLine: UNRECOGNISED_LINE, lastLineKind: 'unrecognised', pathSource: 'shell' });
+
+    const { container } = await renderAfterFirstStatusRead(port);
+
+    expect(container).not.toHaveTextContent('may not be on the daemon PATH');
   });
 
   it('user pressing Check again reads the status again and sees the daemon ready', async () => {

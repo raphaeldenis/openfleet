@@ -134,7 +134,7 @@ const NO_MODEL_LABEL = 'default';
     }
     .rung[aria-selected='true'] { background: var(--hover); }
     .rung:hover { background: var(--hover); }
-    .rung:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .rung:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem; }
     .rung-name { flex: 0 0 3.5rem; min-width: 0; overflow-wrap: anywhere; }
     .mapped-id { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: .6875rem; font-weight: 400; color: var(--mut); }
     .mapping-note { margin: .25rem .5rem; font-size: .6875rem; color: var(--mut); }

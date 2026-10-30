@@ -1,4 +1,4 @@
-import type { GovernanceProposalView, LawView, ManagerView, Session } from '@openfleet/shared';
+import type { EscalationView, GovernanceProposalView, LawView, ManagerView, Session, WorkingState } from '@openfleet/shared';
 import { vi } from 'vitest';
 import { FleetEventsService } from '../core/fleet-events.service';
 
@@ -35,6 +35,8 @@ export interface DaemonSnapshot {
   readonly sessions?: readonly Session[];
   readonly managers?: readonly ManagerView[];
   readonly proposals?: readonly GovernanceProposalView[];
+  readonly escalations?: readonly EscalationView[];
+  readonly workingStates?: readonly WorkingState[];
   readonly queuedCounts?: Readonly<Record<string, number>>;
 }
 
@@ -45,8 +47,8 @@ export async function connectToScriptedDaemon(initial: DaemonSnapshot = {}) {
   const events = new FleetEventsService();
   await events.connect();
   const dispatch = (event: unknown) => FakeWebSocket.current!.dispatchMessage(event);
-  const sendSnapshot = ({ sessions = [], managers = [], proposals = [], queuedCounts }: DaemonSnapshot) =>
-    dispatch({ type: 'snapshot', sessions, approvals: [], managers, proposals, queuedCounts });
+  const sendSnapshot = ({ sessions = [], managers = [], proposals = [], escalations = [], workingStates, queuedCounts }: DaemonSnapshot) =>
+    dispatch({ type: 'snapshot', sessions, approvals: [], managers, proposals, escalations, workingStates, queuedCounts });
   FakeWebSocket.current!.open();
   sendSnapshot(initial);
   return {
@@ -57,6 +59,9 @@ export async function connectToScriptedDaemon(initial: DaemonSnapshot = {}) {
     events,
     sendSnapshot,
     proposeOnDaemon: (proposal: GovernanceProposalView) => dispatch({ type: 'governance.proposed', proposal }),
+    raiseEscalationOnDaemon: (escalation: EscalationView) => dispatch({ type: 'escalation.raised', escalation }),
+    resolveEscalationOnDaemon: (escalation: EscalationView) =>
+      dispatch({ type: 'escalation.resolved', escalation: { ...escalation, status: 'answered', resolvedAt: new Date().toISOString() } }),
     queueChangedOnDaemon: (managerId: string, queuedCount: number) => dispatch({ type: 'governance.queue_changed', managerId, queuedCount }),
     lawEventOnDaemon: (type: 'law.created' | 'law.updated' | 'law.withdrawn', law: LawView) => dispatch({ type, law }),
     resolveOnDaemon: (proposal: GovernanceProposalView, status: 'approved' | 'denied' | 'withdrawn' = 'approved') =>

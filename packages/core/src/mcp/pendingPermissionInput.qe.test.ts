@@ -79,11 +79,28 @@ const pendingPermissionSeenByManager = async (client: Client) => {
   return statusText;
 };
 
+const UNATTENDED_SILENT_BLOCK_SECONDS = 3;
+let armedSilentBlockTimers: { callback: () => void; delayMs: number }[];
+
+/** Holds every silent block timer instead of running it, so the test raises the block once the approval is pending. */
+const holdSilentBlockTimer = (callback: () => void, delayMs: number) => {
+  const timer = { callback, delayMs };
+  armedSilentBlockTimers.push(timer);
+  return () => { armedSilentBlockTimers = armedSilentBlockTimers.filter((armed) => armed !== timer); };
+};
+
+const raiseUnattendedSilentBlock = () => {
+  const unattendedTimers = armedSilentBlockTimers.filter(({ delayMs }) => delayMs === UNATTENDED_SILENT_BLOCK_SECONDS * 1000);
+  expect(unattendedTimers).toHaveLength(1);
+  unattendedTimers[0]!.callback();
+};
+
 beforeEach(async () => {
+  armedSilentBlockTimers = [];
   const home = tempDirs.make('of-qe-pending01-');
-  writeFileSync(join(home, 'config.json'), JSON.stringify({ permissions: { unattendedSilentBlockSeconds: 3 } }));
+  writeFileSync(join(home, 'config.json'), JSON.stringify({ permissions: { unattendedSilentBlockSeconds: UNATTENDED_SILENT_BLOCK_SECONDS } }));
   config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', [E2E_FLAG_ENV]: E2E_FLAG_ON });
-  daemon = await startDaemon(config);
+  daemon = await startDaemon(config, { silentBlocks: { schedule: holdSilentBlockTimer } });
 });
 afterEach(async () => { await daemon.close(); tempDirs.removeAll(); });
 
@@ -114,7 +131,8 @@ describe('QE — the pending permission a manager reads carries a masked, capped
 
     const argusStatus = await pendingPermissionSeenByManager(client);
     const sessionStatus = rawText(await client.callTool({ name: 'get_session_status', arguments: { session_id: childId } }));
-    const queued = await eventually(() => messagesQueuedFor(managerId), (bodies) => bodies.length > 0);
+    raiseUnattendedSilentBlock();
+    const queued = messagesQueuedFor(managerId);
 
     const everythingTheManagerReads = JSON.stringify({ argusStatus, sessionStatus, queued });
     for (const secret of secrets) expect(everythingTheManagerReads).not.toContain(secret);
@@ -129,12 +147,29 @@ describe('QE — the pending permission a manager reads carries a masked, capped
 
     const argusStatus = await pendingPermissionSeenByManager(client);
     const sessionStatus = rawText(await client.callTool({ name: 'get_session_status', arguments: { session_id: childId } }));
-    const queued = await eventually(() => messagesQueuedFor(managerId), (bodies) => bodies.length > 0);
+    raiseUnattendedSilentBlock();
+    const queued = messagesQueuedFor(managerId);
 
     const everythingTheManagerReads = JSON.stringify({ argusStatus, sessionStatus, queued });
     expect(everythingTheManagerReads).not.toContain('hunter2');
     expect(JSON.parse(argusStatus).children[0].pendingPermission.input).toContain('***');
     expect(queued[0]).toContain('It waits on mcp__x__login:');
+  });
+
+  it('sends the generic silent-block message, with no tool and no secret, when the block is raised before the approval is pending', async () => {
+    const { client, managerId, handle } = await managerWithChild();
+    await fetch(handle.hookUrl!, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'c', hook_event_name: 'Notification', notification_type: 'permission_prompt' }) });
+    expect((await putUnattendedPolicy(false)).status).toBe(200);
+
+    raiseUnattendedSilentBlock();
+    void handle.requestPermission({ sessionId: 'c', toolName: 'Bash', toolInput: { command: 'deploy --user bob --password hunter2' } });
+    await pendingPermissionSeenByManager(client);
+    const queued = messagesQueuedFor(managerId);
+
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatch(/^\[OpenFleet\] Worker \([^)]+\) has waited more than 3 seconds on a permission prompt nobody can answer\. Look at it, or close and relaunch it\.$/);
+    expect(queued[0]).not.toContain('It waits on');
+    expect(queued[0]).not.toContain('hunter2');
   });
 
   it('caps a 5000-character input at the limit with the truncation marker, in both statuses', async () => {

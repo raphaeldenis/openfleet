@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, sy
 import { join } from 'node:path';
 import { E2E_FLAG_ENV, E2E_FLAG_ON, type HandoffPreview, type Project, type Session } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { syntheticBody, tokenPrefixOf } from '../syntheticTokens.js';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
 import type { FakeHarness } from '../harness/fakeHarness.js';
@@ -12,7 +13,7 @@ import { createTempDirTracker } from '../tempDirTracker.js';
  * nothing mocked. Each test walks one path a user walks through the app: preview, save, close, start from a handoff.
  */
 const tempDirs = createTempDirTracker();
-const SECRET_CANARY = 'sk-ant-api03-CANARYHF11AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+const SECRET_CANARY = `${tokenPrefixOf('anthropic')}CANARYHF11${syntheticBody({ length: 40, seed: 11 })}`;
 const HANDOFF_PATH_PATTERN = /^handoffs\/\d{4}-\d{2}-\d{2}-gimli(-\d+)?\.md$/;
 const isRoot = process.getuid?.() === 0;
 

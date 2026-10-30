@@ -2,7 +2,7 @@ import { inputBinding, signal } from '@angular/core';
 import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Session, WorkingState } from '@openfleet/shared';
+import type { EscalationView, Session, WorkingState } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { StatePanelComponent } from './state-panel.component';
@@ -241,6 +241,24 @@ describe('StatePanelComponent', () => {
 
       expect(body()).not.toBeNull();
       expect(screen.getByTestId('state-section-plan')).toHaveTextContent('a');
+    });
+  });
+
+  describe('the [esc:<id>] line the daemon leaves in the questions for the human', () => {
+    const openEscalation = (id: string): EscalationView => ({ id, managerId: 's1', ticket: 'CCM-1', status: 'pending', body: 'Escalation', createdAt: NOW_ISO, questions: [] });
+    const questionsSection = () => screen.getByTestId('state-section-questionsForHuman');
+
+    it('user does not see it while the escalation card is open, and still sees the other questions', async () => {
+      await renderPanel({ states: [stateOf({ questionsForHuman: ['[esc:e1] Escalation e1 on CCM-1', 'A free question'] })], escalations: [openEscalation('e1')] });
+
+      expect(questionsSection()).toHaveTextContent('A free question');
+      expect(questionsSection()).not.toHaveTextContent('[esc:e1]');
+    });
+
+    it('user still sees it when no escalation is open for it', async () => {
+      await renderPanel({ states: [stateOf({ questionsForHuman: ['[esc:e1] Escalation e1 on CCM-1'] })], escalations: [openEscalation('other')] });
+
+      expect(questionsSection()).toHaveTextContent('[esc:e1]');
     });
   });
 
