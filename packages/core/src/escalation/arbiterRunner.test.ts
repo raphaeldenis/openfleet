@@ -16,7 +16,18 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
   const scheduled: Scheduled[] = [];
   const closeCalls: string[] = [];
   const created: FakeSession[] = [];
-  const state = { closesToFail: 0, closeDuringCreate: false };
+  let releaseCreate: (() => void) | undefined;
+  const state = {
+    closesToFail: 0,
+    closeDuringCreate: false,
+    /** Makes the next create() wait until the returned function is called. */
+    holdCreate: () => {
+      const held = new Promise<void>((resolve) => { releaseCreate = resolve; });
+      createGate = held;
+      return () => releaseCreate?.();
+    },
+  };
+  let createGate: Promise<void> | undefined;
   const emitClosed = (sessionId: string) => listeners.forEach((listener) => listener({ type: 'session.closed', sessionId, reason: 'harness_exit' } as ServerEvent));
 
   sessionsById.set(MANAGER_ID, { id: MANAGER_ID, name: 'Manager', role: 'manager', parentId: '', state: 'running', directory: '/work', harness: 'fake' });
@@ -24,6 +35,7 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
   const deps = {
     sessions: {
       create: async (spec: Record<string, unknown>) => {
+        await createGate;
         const session: FakeSession = { id: `arbiter-${created.length + 1}`, name: spec.name as string, role: spec.role as string, parentId: spec.parentId as string, state: 'running', directory: spec.directory as string, harness: 'fake' };
         sessionsById.set(session.id, session);
         created.push(session);
@@ -113,6 +125,43 @@ describe('ArbiterRunner — no arbiter session stays live without a run', () => 
     await settle();
 
     expect(closeCalls).toEqual([arbiterId]);
+  });
+
+  it('cancels the expiry timer of a live arbiter when the runner is stopped', async () => {
+    const { runner, scheduled, created } = aRunner();
+    await runner.launch(BATCH_ID);
+
+    runner.stop();
+
+    expect(scheduled.map(({ cancelled }) => cancelled)).toEqual([true]);
+    expect(runner.batchOf(created[0]!.id)).toBeUndefined();
+  });
+
+  it('closes an arbiter whose creation resolves after stop(), arms no expiry timer and launches nothing else', async () => {
+    const { runner, state, created, closeCalls, scheduled, escalateBatchToHuman } = aRunner();
+    const releaseCreate = state.holdCreate();
+
+    const outcome = runner.launch(BATCH_ID);
+    runner.stop();
+    releaseCreate();
+    await outcome;
+    await settle();
+
+    expect(closeCalls).toEqual([created[0]!.id]);
+    expect(scheduled).toEqual([]);
+    expect(created).toHaveLength(1);
+    expect(escalateBatchToHuman).not.toHaveBeenCalled();
+  });
+
+  it('tracks no arbiter after stop(), whatever calls track', () => {
+    const { runner, addLiveArbiter, scheduled } = aRunner();
+    addLiveArbiter('resumed-1');
+    runner.stop();
+
+    runner.recover();
+
+    expect(scheduled).toEqual([]);
+    expect(runner.batchOf('resumed-1')).toBeUndefined();
   });
 
   it('treats an arbiter that closes while it is being created as a lost arbiter, then hands the batch to the human on the second loss', async () => {
