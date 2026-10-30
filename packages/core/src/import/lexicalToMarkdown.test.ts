@@ -475,8 +475,8 @@ describe('convertLexicalToMarkdown', () => {
       ['an opening bracket', 'https://a.test/[x'],
       ['a backtick', 'https://a.test/`x'],
       ['a double quote', 'https://a.test/"x'],
-      ['a bidirectional control', 'https://a.test/‮x'],
-      ['a zero-width space', 'https://a.test/​x'],
+      ['a bidirectional control', `https://a.test/${String.fromCodePoint(0x202e)}x`],
+      ['a zero-width space', `https://a.test/${String.fromCodePoint(0x200b)}x`],
       ['a control character', 'https://a.test/\u0007x'],
       ['an uppercase javascript scheme', 'JAVASCRIPT:void0'],
       ['a 64 KiB length', `https://a.test/${'a'.repeat(64 * 1024)}`],
@@ -505,6 +505,55 @@ describe('convertLexicalToMarkdown', () => {
       const result = convertLexicalToMarkdown(documentOf(paragraph(link('link', 'https://example.test', text('a'), { type: 'linebreak' }, text('b')))));
 
       expect(result.unconvertedTypes).toEqual(['link']);
+    });
+
+    it.each([
+      ['a trailing backslash', 'C:\\'],
+      ['a lone backtick', 'a`b'],
+      ['an escaped bracket that leaves another one open', '[a\\]'],
+      ['a text imitating a marker with an inner bracket', '[non converti: a[b]'],
+    ])('keeps the marker and the text of a link whose text has %s', (_reason, linkText) => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph(link('link', 'https://example.test', text(linkText)))));
+
+      expect(result.unconvertedTypes).toEqual(['link']);
+      expect(result.markdown).toBe(`[non converti: link]${linkText}`);
+    });
+
+    it.each([
+      ['an even run of backslashes', 'C:\\\\', '[C:\\\\](https://example.test)'],
+      ['a balanced pair of backticks', 'a`b`c', '[a`b`c](https://example.test)'],
+      ['balanced brackets', 'a[b]c', '[a[b]c](https://example.test)'],
+      ['escaped brackets', 'a\\[b', '[a\\[b](https://example.test)'],
+    ])('converts a link whose text has %s', (_reason, linkText, expectedMarkdown) => {
+      expect(markdownOf(paragraph(link('link', 'https://example.test', text(linkText))))).toBe(expectedMarkdown);
+    });
+
+    it('converts a link whose text is formatted as code', () => {
+      expect(markdownOf(paragraph(link('link', 'https://example.test', text('x', FORMAT.code))))).toBe('[`x`](https://example.test)');
+    });
+
+    it('keeps the brackets of a node type out of its marker', () => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph({ type: 'a[b]c\nd' } as Node)));
+
+      expect(result.markdown).toBe('[non converti: a(b)c d]');
+    });
+
+    it('keeps a safe link whose text holds the marker of a node type with brackets', () => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph(link('link', 'https://example.test', { type: 'a[b' } as Node))));
+
+      expect(result.markdown).toBe('[[non converti: a(b]](https://example.test)');
+    });
+
+    it('leaves an already escaped exclamation mark before a link as it is', () => {
+      const markdown = markdownOf(paragraph(text('Hi\\!'), link('link', 'https://example.test/x.png', text('texte'))));
+
+      expect(markdown).toBe('Hi\\![texte](https://example.test/x.png)');
+    });
+
+    it('escapes a bare exclamation mark that follows an escaped backslash before a link', () => {
+      const markdown = markdownOf(paragraph(text('Hi\\\\!'), link('link', 'https://example.test/x.png', text('texte'))));
+
+      expect(markdown).toBe('Hi\\\\\\![texte](https://example.test/x.png)');
     });
   });
 
@@ -563,6 +612,26 @@ describe('convertLexicalToMarkdown', () => {
       for (let level = 0; level < NESTING_DEPTH; level++) node = wrap(node);
       return node;
     };
+
+    const nestUnknownBlocks = (levels: number): Node => {
+      let node: Node = text('core');
+      for (let level = 0; level < levels; level++) node = { type: 'callout', children: [node] };
+      return node;
+    };
+
+    it('renders the text of a node at the 100th level', () => {
+      const result = convertLexicalToMarkdown(documentOf(nestUnknownBlocks(99)));
+
+      expect(result.unconvertedTypes).toEqual(['callout']);
+      expect(result.markdown).toContain('core');
+    });
+
+    it('cuts the node below the 100th level with the nesting marker', () => {
+      const result = convertLexicalToMarkdown(documentOf(nestUnknownBlocks(100)));
+
+      expect(result.unconvertedTypes).toEqual(['callout', 'nesting-too-deep']);
+      expect(result.markdown).not.toContain('core');
+    });
 
     it.each([
       ['unknown blocks', (inner: Node): Node => ({ type: 'callout', children: [inner] })],

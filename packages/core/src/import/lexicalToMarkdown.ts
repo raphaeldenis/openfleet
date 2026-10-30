@@ -43,7 +43,10 @@ const MAX_NESTING_DEPTH = 100;
 const NESTING_TOO_DEEP_LABEL = 'nesting-too-deep';
 const NO_TYPE_LABEL = '(sans type)';
 
-const typeLabelOf = (node: LexicalNode): string => {
+/** The type label as it reads inside a marker: one line, its backslashes turned into slashes and its brackets into parentheses so the marker keeps its own brackets paired. */
+const markerTextOf = (typeLabel: string): string => typeLabel.replace(/\s+/g, ' ').replace(/\\/g, '/').replace(/\[/g, '(').replace(/\]/g, ')');
+
+const typeLabelOf =(node: LexicalNode): string => {
   const type: unknown = node.type;
   if (typeof type === 'string' && type !== '') return type;
   if (typeof type === 'number' || typeof type === 'boolean') return String(type);
@@ -64,7 +67,7 @@ export function convertLexicalToMarkdown(input: string | object): LexicalConvers
 
   const renderUnconverted = (typeLabel: string): string => {
     unconvertedTypes.add(typeLabel);
-    return `[non converti: ${typeLabel}]`;
+    return `[non converti: ${markerTextOf(typeLabel)}]`;
   };
 
   const renderUnknownNode = (node: LexicalNode): string => {

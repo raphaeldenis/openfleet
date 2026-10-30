@@ -15,7 +15,7 @@ export const joinInlinePieces = (pieces: InlinePiece[]): string => {
 
   for (const { markdown, isMentionReference } of pieces) {
     if (markdown === '') continue;
-    const wouldFormImage = markdown.startsWith('[') &&endsWithUnescapedBang(joined);
+    const wouldFormImage = markdown.startsWith('[') && endsWithUnescapedBang(joined);
     if (wouldFormImage) joined = `${joined.slice(0, -1)}\\!`;
     const gluesToPrecedingWord = isMentionReference && endsWithWordCharacter(joined);
     const gluesToPrecedingMention = previousWasMentionReference && startsWithMentionIdCharacter(markdown);

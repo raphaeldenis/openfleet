@@ -218,7 +218,6 @@ function importedReferenceList(input: { value: unknown; knownIds: Set<string> })
 const SORT_FIELDS = ['sortColumnID', 'sortDescending', 'sortMode'];
 const isNotSortField = (key: string) => !SORT_FIELDS.includes(key);
 
-/** Maps the sort column and direction to orderBy; sortMode has no known meaning in Scape, so it is always listed with its raw value. */
 function neutralLabelOfRawValue(value: unknown): string {
   if (typeof value === 'string') return inlineMarkdownText(value);
   if (Array.isArray(value)) return '(array)';
@@ -228,6 +227,7 @@ function neutralLabelOfRawValue(value: unknown): string {
 
 const isNullOrEmpty = (value: unknown) => value === null || value === undefined || value === '';
 
+/** Maps the sort column and direction to orderBy; sortMode has no known meaning in Scape, so it is always listed with its raw value. */
 function mapSort(source: Record<string, unknown>, columnIds: Set<string>): { orderBy?: OrderTerm[]; droppedFields: string[] } {
   const droppedFields: string[] = [];
   if (Object.hasOwn(source, 'sortMode')) droppedFields.push(`sortMode = ${neutralLabelOfRawValue(source.sortMode)}`);
