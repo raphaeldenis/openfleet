@@ -3,9 +3,7 @@ import { DEFAULT_POST_CREATE_HOOK_TIMEOUT_SECONDS, type WorktreeWarning } from '
 import type { ProjectRecord } from '../projects/projectRepository.js';
 import { provideHooksDirectory } from './hooksPathProvision.js';
 import { provideOverlay } from './overlayProvision.js';
-import { runPostCreateHook } from './postCreateHook.js';
-import { runWorktreeSetupScript } from './worktreeSetupScript.js';
-import { createWorktree } from './worktrees.js';
+import { runPostCreateHook } from './postCreateHook.js';import { createWorktree } from './worktrees.js';
 
 export interface PostCreateHook {
   script: string;
@@ -39,19 +37,17 @@ export interface CreatedWorktree {
 }
 
 /**
- * Creates the worktree, gives it the repository's git hooks directory, links the overlay of a shared repository, runs the repository's
- * `scripts/worktree-setup.sh` in it, then runs the project's post-create hook.
- * A missing hooks directory, a missing overlay, a failing setup script or a failing hook is reported as a warning and never fails the creation: the worktree exists whatever happened after.
- * A worktree that could not be created runs no script.
+ * Creates the worktree, gives it the repository's git hooks directory, links the overlay of a shared repository, then runs the project's post-create hook in it.
+ * A missing hooks directory, a missing overlay or a failing hook is reported as a warning and never fails the creation: the worktree exists whatever happened after.
+ * A worktree that could not be created runs no hook. The only script that runs is the one the project configures; nothing found in the repository is executed.
  */
-export async function createWorktreeWithHook(input: { repoPath: string; branchName: string; baseRef?: string; worktreesRoot: string; env?: NodeJS.ProcessEnv; hook?: PostCreateHook; overlay?: Overlay; setupTimeoutMs?: number }): Promise<CreatedWorktree> {
+export async function createWorktreeWithHook(input: { repoPath: string; branchName: string; baseRef?: string; worktreesRoot: string; env?: NodeJS.ProcessEnv; hook?: PostCreateHook; overlay?: Overlay }): Promise<CreatedWorktree> {
   const { path, branch } = await createWorktree(input);
   const hooksWarning = await provideHooksDirectory({ repoPath: input.repoPath, worktreePath: path, env: input.env });
   const overlayWarning = input.overlay && await provideOverlay({ overlayDirectory: input.overlay.directory, worktreePath: path, env: input.env });
-  const setupWarning = await runWorktreeSetupScript({ repoPath: input.repoPath, worktreePath: path, branch, timeoutMs: input.setupTimeoutMs });
   const hookWarning = input.hook && await runPostCreateHook({
     script: input.hook.script, worktreePath: path, branch, repoPath: input.repoPath, projectId: input.hook.projectId, timeoutMs: input.hook.timeoutSeconds * MILLISECONDS_PER_SECOND,
   });
-  const warnings = [hooksWarning, overlayWarning, setupWarning, hookWarning].filter((warning): warning is WorktreeWarning => Boolean(warning));
+  const warnings = [hooksWarning, overlayWarning, hookWarning].filter((warning): warning is WorktreeWarning => Boolean(warning));
   return warnings.length > 0 ? { path, branch, warnings } : { path, branch };
 }

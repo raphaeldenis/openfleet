@@ -33,11 +33,13 @@ export function basicEnvironment(parentEnv: NodeJS.ProcessEnv): NodeJS.ProcessEn
   return Object.fromEntries(forwarded);
 }
 
-/** The reason a regular file cannot be started safely, or undefined when it can: an executable file writable by its owner only. */
+/** The reason a regular file cannot be started safely, or undefined when it can: an executable file owned by the daemon's user and writable by its owner only. */
 export function unstartableReasonOf(script: string): ScriptStartFailureReason | undefined {
   try {
     const stats = statSync(realpathSync(script));
     if (!stats.isFile()) return 'not_found';
+    const isOwnedByAnotherUser = process.getuid !== undefined && stats.uid !== process.getuid();
+    if (isOwnedByAnotherUser) return 'unsafe_permissions';
     const isWritableByGroupOrOthers = (stats.mode & GROUP_OR_OTHERS_CAN_WRITE) !== 0;
     if (isWritableByGroupOrOthers) return 'unsafe_permissions';
     accessSync(script, constants.X_OK);

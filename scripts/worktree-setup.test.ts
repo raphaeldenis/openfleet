@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -31,7 +31,7 @@ beforeEach(() => {
   writeFileSync(join(fakeBin, 'pnpm'), PNPM_DOUBLE);
   chmodSync(join(fakeBin, 'pnpm'), 0o755);
 });
-afterEach(() => renameSync(sandbox, `${sandbox}-done`));
+afterEach(() => rmSync(sandbox, { recursive: true, force: true }));
 
 const runSetup = (extraEnv: Record<string, string> = {}, path = `${fakeBin}:${SYSTEM_PATH_WITHOUT_PNPM}`) =>
   spawnSync('sh', [setupScript], { cwd: worktree, env: { PATH: path, CALL_LOG: callLog, ...extraEnv }, encoding: 'utf8' });

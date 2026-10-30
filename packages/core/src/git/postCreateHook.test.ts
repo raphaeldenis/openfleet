@@ -154,6 +154,22 @@ describe('runPostCreateHook', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  it('refuses a script that the daemon user does not own, without running it', async () => {
+    const marker = join(tempDirs.make('of-hook-out-'), 'ran.txt');
+    const script = aScript(`touch "${marker}"`);
+    const ownerUid = process.getuid!();
+    const daemonUidSpy = vi.spyOn(process, 'getuid').mockReturnValue(ownerUid + 1);
+
+    try {
+      const warning = await runPostCreateHook(hookInput(script));
+
+      expect(warning).toMatchObject({ type: 'post_create_hook_failed', reason: 'unsafe_permissions' });
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      daemonUidSpy.mockRestore();
+    }
+  });
+
   it('masks credentials in the captured output', async () => {
     const script = aScript('echo "password: hunter2-secret-value" >&2\nexit 1');
 

@@ -21,20 +21,8 @@ export interface OverlayUnavailableWarning {
   type: 'overlay_unavailable';
 }
 
-export const WORKTREE_SETUP_FAILURE_REASONS = ['timeout', 'exit_nonzero', 'not_executable', 'unsafe_permissions', 'not_found', 'outside_repository', 'spawn_failed'] as const;
-export type WorktreeSetupFailureReason = (typeof WORKTREE_SETUP_FAILURE_REASONS)[number];
-
-/** The repository's `scripts/worktree-setup.sh` ran in the new worktree and did not succeed; a repository without that script never produces this warning. */
-export interface WorktreeSetupWarning {
-  type: 'worktree_setup_failed';
-  reason: WorktreeSetupFailureReason;
-  exitCode?: number;
-  /** The redacted last 16 KiB of the script's stdout and stderr. */
-  outputTail?: string;
-}
-
 /** What went wrong after a worktree was created; the worktree itself exists whatever the warning says. */
-export type WorktreeWarning = PostCreateHookWarning | HooksPathMissingWarning | OverlayUnavailableWarning | WorktreeSetupWarning;
+export type WorktreeWarning = PostCreateHookWarning | HooksPathMissingWarning | OverlayUnavailableWarning;
 
 /** Why a worktree cannot be removed; `in_use` is answered as `directory_in_use`, every other reason as `constraint_violation` with `detail.reason`. */
 export const WORKTREE_REFUSAL_REASONS = ['main', 'detached', 'locked', 'dirty', 'in_use', 'outside_root', 'submodules', 'status_failed', 'missing', 'removal_refused'] as const;

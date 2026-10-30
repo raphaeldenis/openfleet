@@ -1,6 +1,8 @@
 #!/bin/sh
-# Runs in a fresh OpenFleet worktree (working directory = the worktree): installs the
-# dependencies and generates .husky/_, so the first git push runs the pre-push gate.
+# Post-create hook of a project that works on this repository (set by a human, see docs/worktrees.md).
+# Runs in a fresh worktree (working directory = the worktree) and generates .husky/_ so the first
+# git push runs the pre-push gate. `pnpm install` runs the dependencies' postinstall scripts, and
+# `pnpm exec husky` writes core.hooksPath into the git config shared by every worktree.
 set -eu
 
 if ! command -v pnpm >/dev/null 2>&1; then
