@@ -55,6 +55,17 @@ describe('PlanQuestionSchema', () => {
   it('refuses a field it does not know', () => {
     expect(PlanQuestionSchema.safeParse({ ...minimalQuestion, priority: 'high' }).success).toBe(false);
   });
+
+  it('accepts reopens, the id of the question whose arbiter decision the manager contests', () => {
+    expect(PlanQuestionSchema.safeParse({ ...minimalQuestion, reopens: 'q0' }).success).toBe(true);
+  });
+
+  it.each([
+    ['an empty reopens', ''],
+    ['a reopens above 20 characters', 'q'.repeat(21)],
+  ])('refuses %s', (_label, reopens) => {
+    expect(PlanQuestionSchema.safeParse({ ...minimalQuestion, reopens }).success).toBe(false);
+  });
 });
 
 describe('ArbiterOpinionSchema', () => {

@@ -30,7 +30,10 @@ const MAX_DECISION_CHARS = 600;
 const MAX_CRITERIA_REASONS = 5;
 const MAX_CRITERIA_REASON_CHARS = 300;
 
-/** `class` stays a free string: a value outside the vocabulary is read as unknown and goes to a human, it is not a malformed request. */
+/**
+ * `class` stays a free string: a value outside the vocabulary is read as unknown and goes to a human, it is not a malformed request.
+ * `reopens` names the question whose arbiter decision the manager contests; the daemon checks it against the stored decisions.
+ */
 export const PlanQuestionSchema = z.strictObject({
   id: z.string().min(1).max(MAX_QUESTION_ID_CHARS),
   text: z.string().min(1).max(MAX_QUESTION_TEXT_CHARS),
@@ -39,6 +42,7 @@ export const PlanQuestionSchema = z.strictObject({
   recommendation: z.string().min(1).max(MAX_QUESTION_TEXT_CHARS).optional(),
   paths: z.array(z.string().min(1).max(MAX_QUESTION_PATH_CHARS)).max(MAX_QUESTION_PATHS).optional(),
   resolution: ReproClaimSchema.optional(),
+  reopens: z.string().min(1).max(MAX_QUESTION_ID_CHARS).optional(),
 });
 export type PlanQuestion = z.infer<typeof PlanQuestionSchema>;
 
