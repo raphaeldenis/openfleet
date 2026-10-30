@@ -1,10 +1,13 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { runImportCli } from './importCli.js';
 import { claudeMemoryFolderOf } from './scape/claudeProjectDirectory.js';
 import { anArgus, LEAD_ARGUS_ID, writeArguses } from './scape/scapeArguses.testkit.js';
 import { buildScapeFixture, type ScapeFixture } from './scape/scapeFixture.testkit.js';
+
+const sha256Of = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
 
 describe('runImportCli', () => {
   let fixture: ScapeFixture;
@@ -33,6 +36,38 @@ describe('runImportCli', () => {
     expect(result.exitCode).toBe(0);
     expect(result.output).toContain('| notes | 5 | 5 | 0 | 0 | 0 | 0 |');
     expect(existsSync(home)).toBe(false);
+  });
+
+  describe('--json', () => {
+    it('is a dry run: it prints the report as JSON and writes nothing', () => {
+      const result = runImportCli(argv('--json'), { homeDirectory, env: {} });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.output)).toMatchObject({ dryRun: true });
+      expect(existsSync(home)).toBe(false);
+    });
+
+    it('leaves an existing database, the managers folder and the report untouched', () => {
+      writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
+      runImportCli(argv(), { homeDirectory, env: {} });
+      const databaseHashBefore = sha256Of(join(home, 'openfleet.db'));
+      const reportBefore = readFileSync(join(home, 'import-report.md'), 'utf8');
+      const managersFoldersBefore = readdirSync(join(home, 'managers'));
+
+      runImportCli(argv('--json', '--allow-reimport'), { homeDirectory, env: {} });
+
+      expect(sha256Of(join(home, 'openfleet.db'))).toBe(databaseHashBefore);
+      expect(readFileSync(join(home, 'import-report.md'), 'utf8')).toBe(reportBefore);
+      expect(readdirSync(join(home, 'managers'))).toEqual(managersFoldersBefore);
+    });
+  });
+
+  it('writes nothing into --report-dir on --dry-run', () => {
+    const reportDirectory = join(fixture.workDir, 'reports');
+
+    runImportCli(argv('--dry-run', '--report-dir', reportDirectory), { homeDirectory, env: {} });
+
+    expect(existsSync(reportDirectory)).toBe(false);
   });
 
   it('takes the home from OPENFLEET_HOME when --home is absent', () => {
