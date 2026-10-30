@@ -100,6 +100,34 @@ describe('importScape: managers', () => {
       expect(report.counts.managers.notConverted).toBe(0);
     });
 
+    it('does not repeat the defaulted-model line on an unchanged re-import', () => {
+      writeArguses(fixture, [anArgus({ model: undefined })]);
+      run();
+
+      const secondReport = run({ refuseReimport: false });
+
+      expect(secondReport.managerFindings).toEqual([]);
+    });
+
+    it('does not report a defaulted model for a manager left as it is because OpenFleet edited it', () => {
+      writeArguses(fixture, [anArgus({ model: undefined })]);
+      run();
+      openTarget().prepare('UPDATE managers SET mission_text = ? WHERE session_id = ?').run('edited in OpenFleet', LEAD_ARGUS_ID);
+
+      const secondReport = run({ refuseReimport: false });
+
+      expect(secondReport.counts.managers.conflict).toBe(1);
+      expect(secondReport.managerFindings).toEqual([]);
+    });
+
+    it('writes a model id holding a line break as one line of the report', () => {
+      writeArguses(fixture, [anArgus({ name: 'Alpha', model: 'bad\n## Injected' })]);
+
+      const report = run();
+
+      expect(report.managerFindings).toEqual(['Alpha — model not converted: "bad \\#\\# Injected" is no known alias']);
+    });
+
     it('keeps an exact model id with no alias unstored and names the manager and the id in the report', () => {
       writeArguses(fixture, [anArgus({ name: 'Alpha', model: 'unknown-model' })]);
 

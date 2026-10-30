@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { loadManagerBase } from '../../managers/managerBase.js';
-import { emptyReport, hasChanges, renderImportReport, type ImportReport } from './importReport.js';
+import { addManagerFinding, emptyReport, hasChanges, inlineMarkdownText, renderImportReport, type ImportReport } from './importReport.js';
 import { reportManagerMission, type ManagerMissionReport } from './managerMissionReport.js';
 import { prepareManagerFolders, type PreparedManagerFolders } from './managerFolders.js';
 import { ScapeImportError } from './scapeImportError.js';
@@ -75,8 +75,28 @@ function assertNoProjectImportedYet(db: DatabaseSync, plan: ImportPlan): void {
 
 const MANAGER_OUTCOMES_NEEDING_A_FOLDER: UpsertOutcome[] = ['written', 'updated', 'alreadyPresent'];
 
-function foldersOfManagersKept(plan: ImportPlan, outcomes: Map<string, UpsertOutcome>): string[] {
-  return plan.managers.filter((manager) => MANAGER_OUTCOMES_NEEDING_A_FOLDER.includes(outcomes.get(manager.id)!)).map((manager) => manager.session.directory);
+const storedDirectoryOf = (db: DatabaseSync, managerId: string): string | undefined =>
+  (db.prepare('SELECT directory FROM sessions WHERE id = ?').get(managerId) as { directory: string } | undefined)?.directory;
+
+interface ManagerFolderChoice { managerName: string; directory: string; plannedDirectory: string }
+
+/** The folder of each manager kept: the one already stored for a manager already present, else the planned one. */
+function folderChoicesOfManagersKept(input: { plan: ImportPlan; outcomes: Map<string, UpsertOutcome>; db: DatabaseSync }): ManagerFolderChoice[] {
+  const managersKept = input.plan.managers.filter((manager) => MANAGER_OUTCOMES_NEEDING_A_FOLDER.includes(input.outcomes.get(manager.id)!));
+  return managersKept.map((manager) => ({
+    managerName: manager.session.name,
+    directory: storedDirectoryOf(input.db, manager.id) ?? manager.session.directory,
+    plannedDirectory: manager.session.directory,
+  }));
+}
+
+/** A stored folder moved out of the managers root by hand is not the import's to prepare. */
+const isDirectChildOf = (managersRoot: string) => (directory: string): boolean => dirname(resolve(directory)) === resolve(managersRoot);
+
+function reportFoldersKeptUnderAnotherName(report: ImportReport, choices: ManagerFolderChoice[]): void {
+  for (const choice of choices.filter(({ directory, plannedDirectory }) => directory !== plannedDirectory)) {
+    addManagerFinding(report, { managerName: choice.managerName, text: `folder kept as ${inlineMarkdownText(basename(choice.directory))}, its name now maps to ${inlineMarkdownText(basename(choice.plannedDirectory))}` });
+  }
 }
 
 function managerMissionsOf(plan: ImportPlan): ManagerMissionReport[] {
@@ -95,8 +115,10 @@ function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportRep
   };
   let preparedFolders: PreparedManagerFolders | undefined;
   const prepareFoldersBeforeCommit = (managerOutcomes: Map<string, UpsertOutcome>) => {
+    const folderChoices = folderChoicesOfManagersKept({ plan, outcomes: managerOutcomes, db: target!.db });
+    reportFoldersKeptUnderAnotherName(report, folderChoices);
     if (dryRun) return;
-    preparedFolders = prepareManagerFolders({ managersRoot: managersRootOf(options), directories: foldersOfManagersKept(plan, managerOutcomes), forbiddenRoot: options.scapeDir });
+    preparedFolders = prepareManagerFolders({ managersRoot: managersRootOf(options), directories: folderChoices.map((choice) => choice.directory).filter(isDirectChildOf(managersRootOf(options))), forbiddenRoot: options.scapeDir });
     mustBackUpBeforeCommit();
   };
   const memoryFilesJournal = new MemoryFilesJournal();

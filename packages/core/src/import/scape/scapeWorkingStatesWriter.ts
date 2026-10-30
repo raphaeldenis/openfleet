@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { WORKING_STATE_SECTIONS, WorkingStateSectionsSchema, type WorkingStateSections } from '@openfleet/shared';
-import { countOutcome, type ImportReport } from './importReport.js';
+import { addManagerFinding, countOutcome, type ImportReport } from './importReport.js';
 import { ImportLedger } from './scapeLedger.js';
 import type { ImportPlan } from './scapePlan.js';
 import type { PlannedWorkingState } from './scapeWorkingStates.js';
@@ -51,7 +51,7 @@ export function writeWorkingStates(db: DatabaseSync, plan: ImportPlan, report: I
     const unconvertedReason = unconvertedReasonOf({ planned, isRefusedByTheWorkingState, isManagerOurs });
     if (unconvertedReason !== undefined) {
       counts.notConverted++;
-      report.managerFindings.push(`${planned.managerName} — working state ${unconvertedReason}`);
+      addManagerFinding(report, { managerName: planned.managerName, text: `working state ${unconvertedReason}` });
     }
     if (isRefusedByTheWorkingState) continue;
     if (!isManagerOurs) { counts.conflict++; continue; }

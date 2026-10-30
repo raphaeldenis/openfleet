@@ -27,7 +27,7 @@ describe('writeWorkingStates', () => {
   afterEach(() => db.close());
 
   const writeSections = (sections: WorkingStateSections) => {
-    const plan = { workingStates: [{ managerId: MANAGER_ID, sections, updatedAt: AT, mergedSectionCount: 0, isNotFullyConverted: false }] } as unknown as ImportPlan;
+    const plan = { workingStates: [{ managerId: MANAGER_ID, managerName: 'Writer', sections, updatedAt: AT, mergedSectionCount: 0, isNotFullyConverted: false }] } as unknown as ImportPlan;
     const report = emptyReport({ dryRun: false });
     writeWorkingStates(db, plan, report, new Map<string, UpsertOutcome>([[MANAGER_ID, 'written']]));
     return report;

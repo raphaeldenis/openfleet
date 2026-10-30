@@ -326,13 +326,46 @@ describe('importScape: working states of the managers', () => {
     });
   });
 
+  describe('the fallback on the former stem', () => {
+    const aSecondArgus = (name: string) => anArgus({ id: CAPTAIN_ARGUS_ID, name, noteId: OPENFLEET_NOTE_ID });
+
+    it('does not read the state file of another manager whose own name is the former stem', () => {
+      writeArguses(fixture, [anArgus({ name: 'Émile' }), aSecondArgus('Mile')]);
+      writeStateFile('mile.md');
+
+      run();
+
+      expect(stateRead(LEAD_ARGUS_ID)?.plan ?? []).toEqual([]);
+      expect(stateRead(CAPTAIN_ARGUS_ID)?.plan).toContain('ship the synthetic thing');
+    });
+
+    it('does not take a longer file name that merely starts with the former stem', () => {
+      writeArguses(fixture, [anArgus({ name: 'Été' })]);
+      writeStateFile('t-lead.md');
+
+      expect(run().counts.workingStates.expected).toBe(0);
+    });
+  });
+
   describe('the managers whose state is not converted, by name', () => {
+    it('writes a manager name holding a line break as one line of the report, with no injected heading', () => {
+      writeArguses(fixture, [anArgus({ name: 'Alpha\n## Injected' })]);
+      writeStateFile('alpha-injected.md', 'only words, no heading');
+
+      const report = run();
+
+      expect(report.managerFindings.length).toBeGreaterThan(0);
+      expect(report.managerFindings.every((finding) => !finding.includes('\n'))).toBe(true);
+      expect(renderImportReport(report)).not.toMatch(/^## Injected/m);
+    });
+
     it('names the manager whose state file is not fully converted', () => {
       writeStateFile('alpha.md', 'only words, no heading');
 
       const report = run();
 
       expect(report.managerFindings).toContain('Alpha — working state not fully converted');
+      expect(renderImportReport(report)).toContain('## Managers whose model or working state needs a look');
       expect(renderImportReport(report)).toContain('- Alpha — working state not fully converted');
     });
 

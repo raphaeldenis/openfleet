@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { ManagerSpecSchema, type HarnessId, type MentionKind } from '@openfleet/shared';
+import { inlineMarkdownText } from './importReport.js';
 import type { ScapeArgus } from './scapeArguses.js';
 import { ScapeImportError } from './scapeImportError.js';
 import { composeMission, type MissionToolReferences, type ResourceAvailability } from './scapeManagerMission.js';
@@ -24,6 +25,8 @@ export interface PlannedManager {
   manager: { pulseSeconds: number; childrenCap: number; missionText: string };
   isNotFullyConverted: boolean;
   modelFinding: string | undefined;
+  /** The Scape card named no model and the default alias is planned instead. */
+  isModelDefaulted: boolean;
   pendingPlaybookMentionCount: number;
   toolReferences: MissionToolReferences;
 }
@@ -43,16 +46,17 @@ export interface ModelMapping {
   isRecognized: boolean;
   /** What the report says about this model; none when the model maps to its alias unchanged. */
   finding: string | undefined;
+  isDefaulted: boolean;
 }
 
 /** An exact Claude model id becomes the alias of its family; no model becomes the default alias; a model that is no known alias is not stored and is reported with its id. */
 export function modelOf(scapeModel: string | undefined): ModelMapping {
   const namesNoModel = scapeModel === undefined || scapeModel === '';
-  if (namesNoModel) return { model: DEFAULT_MODEL_ALIAS, isRecognized: true, finding: `model defaulted to ${DEFAULT_MODEL_ALIAS} (Scape card had none)` };
+  if (namesNoModel) return { model: DEFAULT_MODEL_ALIAS, isRecognized: true, isDefaulted: true, finding: `model defaulted to ${DEFAULT_MODEL_ALIAS} (Scape card had none)` };
   const alias = CLAUDE_MODEL_ID_WITH_FAMILY.exec(scapeModel)?.[1] ?? scapeModel;
   const isKnownAlias = MODEL_ALIASES.has(alias);
-  if (isKnownAlias) return { model: alias, isRecognized: true, finding: undefined };
-  return { model: null, isRecognized: false, finding: `model not converted: "${scapeModel}" is no known alias` };
+  if (isKnownAlias) return { model: alias, isRecognized: true, isDefaulted: false, finding: undefined };
+  return { model: null, isRecognized: false, isDefaulted: false, finding: `model not converted: "${inlineMarkdownText(scapeModel)}" is no known alias` };
 }
 
 function harnessOf(argus: ScapeArgus): HarnessId {
@@ -118,7 +122,7 @@ export function planManagers(input: PlanManagersInput): ManagersPlan {
 
     const harness = harnessOf(argus);
     assertPulseAndCapWithinBounds(argus);
-    const { model, isRecognized: isModelRecognized, finding: modelFinding } = modelOf(argus.model);
+    const { model, isRecognized: isModelRecognized, isDefaulted: isModelDefaulted, finding: modelFinding } = modelOf(argus.model);
     const mission = composeMission({ noteBody: String(missionNote.body_md), governanceRequests: argus.governanceRequests, resourceGrants: argus.resourceGrants, availabilityOf });
     if (!isUsableMission(mission.text)) { skippedCount++; continue; }
 
@@ -128,6 +132,7 @@ export function planManagers(input: PlanManagersInput): ManagersPlan {
       manager: { pulseSeconds: argus.pulseInterval, childrenCap: argus.childrenCap, missionText: mission.text },
       isNotFullyConverted: mission.hasUnconvertedGrant || !isModelRecognized,
       modelFinding,
+      isModelDefaulted,
       pendingPlaybookMentionCount: mission.pendingPlaybookMentionCount,
       toolReferences: mission.toolReferences,
     });

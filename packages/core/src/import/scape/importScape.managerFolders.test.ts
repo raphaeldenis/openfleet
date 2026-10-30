@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -73,6 +73,35 @@ describe('importScape: manager folders', () => {
       run();
 
       expect(directoriesOf(LEAD_ARGUS_ID)).toEqual([join(managersRoot, folderName)]);
+    });
+
+    describe('a manager imported under the former, accent-blind folder name', () => {
+      const importThenRenameFolderToFormerName = () => {
+        writeArguses(fixture, [anArgus({ name: 'Mnémosyne' })]);
+        run();
+        const formerFolder = join(managersRoot, 'Mn-mosyne');
+        renameSync(join(managersRoot, 'Mnemosyne'), formerFolder);
+        const db = new DatabaseSync(join(home, 'openfleet.db'));
+        db.prepare('UPDATE sessions SET directory = ? WHERE id = ?').run(formerFolder, LEAD_ARGUS_ID);
+        db.close();
+      };
+
+      it('keeps its stored folder on re-import and creates no orphan folder', () => {
+        importThenRenameFolderToFormerName();
+
+        run({ refuseReimport: false });
+
+        expect(readdirSync(managersRoot)).toEqual(['Mn-mosyne']);
+        expect(directoriesOf(LEAD_ARGUS_ID)).toEqual([join(managersRoot, 'Mn-mosyne')]);
+      });
+
+      it('names the manager whose stored folder differs from the folder its name now maps to', () => {
+        importThenRenameFolderToFormerName();
+
+        const report = run({ refuseReimport: false });
+
+        expect(report.managerFindings).toEqual(['Mnémosyne — folder kept as Mn-mosyne, its name now maps to Mnemosyne']);
+      });
     });
 
     it('falls back to a safe single-component folder name when the name leaves nothing usable', () => {

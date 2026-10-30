@@ -27,8 +27,23 @@ const dashedStemOf = (text: string): string => text.toLowerCase().replace(NOT_A_
 /** The file name stem of a manager: its name unaccented, in lower case, with every run of other characters as one dash ("Lead (CCM)" is "lead-ccm", "Mnémosyne" is "mnemosyne"). */
 export const stateFileStemOf = (managerName: string): string => dashedStemOf(withoutAccents(managerName));
 
-/** The stem an accented letter used to leave behind: each accented letter was replaced by a dash ("Mnémosyne" was "mn-mosyne"). */
+/** The stem with each accented letter as a dash ("Mnémosyne" is "mn-mosyne"), as Scape state files may still be named. */
 const formerStateFileStemOf = (managerName: string): string => dashedStemOf(managerName);
+
+const exactStateFileNameOf = (stem: string, fileNames: string[]): string | undefined => {
+  const exactName = `${stem}${STATE_FILE_EXTENSION}`;
+  return stem !== '' && fileNames.includes(exactName) ? exactName : undefined;
+};
+
+/** The file named exactly after the former stem, unless the former stem is the current one or the current stem of another manager. */
+function formerStateFileNameOf(input: { managerName: string; fileNames: string[]; stemsOfAllManagers: string[] }): string | undefined {
+  const currentStem = stateFileStemOf(input.managerName);
+  const formerStem = formerStateFileStemOf(input.managerName);
+  const isFormerStemTheCurrentOne = formerStem === currentStem;
+  const isFormerStemAnotherManagersStem = input.stemsOfAllManagers.some((stem) => stem === formerStem);
+  if (isFormerStemTheCurrentOne || isFormerStemAnotherManagersStem) return undefined;
+  return exactStateFileNameOf(formerStem, input.fileNames);
+}
 
 function stateFileNamesIn(folder: string): string[] {
   try {
@@ -40,9 +55,8 @@ function stateFileNamesIn(folder: string): string[] {
 
 /** The file named exactly after the manager, else the only file whose name starts with the manager's followed by a dash; two candidates are no match. */
 function stateFileNameOf(stem: string, fileNames: string[]): string | undefined {
-  if (stem === '') return undefined;
-  const exactName = `${stem}${STATE_FILE_EXTENSION}`;
-  if (fileNames.includes(exactName)) return exactName;
+  const exactName = exactStateFileNameOf(stem, fileNames);
+  if (exactName !== undefined || stem === '') return exactName;
   const longerNames = fileNames.filter((fileName) => fileName.startsWith(`${stem}-`));
   return longerNames.length === 1 ? longerNames[0] : undefined;
 }
@@ -71,9 +85,10 @@ export function planWorkingStates(input: PlanWorkingStatesInput): PlannedWorking
   if (folder === undefined) return [];
 
   const fileNames = stateFileNamesIn(folder);
+  const stemsOfAllManagers = input.managers.map((manager) => stateFileStemOf(manager.session.name));
   const planned: PlannedWorkingState[] = [];
   for (const manager of input.managers) {
-    const fileName = stateFileNameOf(stateFileStemOf(manager.session.name), fileNames) ?? stateFileNameOf(formerStateFileStemOf(manager.session.name), fileNames);
+    const fileName = stateFileNameOf(stateFileStemOf(manager.session.name), fileNames) ?? formerStateFileNameOf({ managerName: manager.session.name, fileNames, stemsOfAllManagers });
     const file = fileName === undefined ? undefined : readStateFile(folder, fileName);
     if (file === undefined) continue;
     const parsed = parseWorkingStateFile(file.text);

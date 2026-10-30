@@ -53,7 +53,17 @@ export interface ImportReport extends SourceLosses {
   reportPath?: string;
 }
 
-export const emptyCounts = (): EntityCounts => ({ expected: 0, written: 0, updated: 0, alreadyPresent: 0, conflict: 0, deletedInOpenFleet: 0, removedInScape: 0, notConverted: 0 });
+const WHITESPACE_AND_CONTROL_RUN = /[\p{C}\s]+/gu;
+const MARKDOWN_SYNTAX_CHARACTER = /[\\`*_{}[\]<>#|]/g;
+
+/** Returns the text as one line of inert Markdown: line breaks and control characters become a space, syntax characters are escaped. */
+export const inlineMarkdownText = (text: string): string => text.replace(WHITESPACE_AND_CONTROL_RUN, ' ').trim().replace(MARKDOWN_SYNTAX_CHARACTER, '\\$&');
+
+export function addManagerFinding(report: ImportReport, finding: { managerName: string; text: string }): void {
+  report.managerFindings.push(`${inlineMarkdownText(finding.managerName)} — ${finding.text}`);
+}
+
+export const emptyCounts =(): EntityCounts => ({ expected: 0, written: 0, updated: 0, alreadyPresent: 0, conflict: 0, deletedInOpenFleet: 0, removedInScape: 0, notConverted: 0 });
 
 /** What a record write came to; a record deleted in OpenFleet is a conflict of its own kind. */
 export type RecordOutcome = 'written' | 'updated' | 'alreadyPresent' | 'conflict' | 'deletedInOpenFleet';
@@ -89,7 +99,7 @@ const bulletList = (items: string[]) => (items.length === 0 ? ['none'] : items.m
 const yesOrNo = (flag: boolean) => (flag ? 'yes' : 'no');
 
 function missionFindingsOf(mission: ManagerMissionReport): string[] {
-  const { name } = mission;
+  const name = inlineMarkdownText(mission.name);
   return [
     ...mission.numberedChildrenCaps.map((line) => `${name} — number of children: ${line}`),
     ...mission.exactModelIds.map((modelId) => `${name} — exact model id: ${modelId}`),
@@ -113,7 +123,7 @@ function lawsSection({ laws }: ImportReport): string[] {
 }
 
 function managerMissionsSection(missions: ManagerMissionReport[]): string[] {
-  const rows = missions.map((mission) => `| ${mission.name} | ${mission.bytes} | ${yesOrNo(mission.isLegacyMission)} |`);
+  const rows = missions.map((mission) => `| ${inlineMarkdownText(mission.name)} | ${mission.bytes} | ${yesOrNo(mission.isLegacyMission)} |`);
   return [
     '## Manager missions',
     'What each imported mission holds that the shared manager base owns. Nothing is rewritten: the missions are imported as they are.',
@@ -184,7 +194,7 @@ export function renderImportReport(report: ImportReport): string {
     ...bulletList(toolsWithoutEquivalent),
     '',
     ...managerMissionsSection(report.managerMissions),
-    '## Managers with a model or a working state not converted',
+    '## Managers whose model or working state needs a look',
     ...bulletList(report.managerFindings),
     '',
     ...lawsSection(report),
