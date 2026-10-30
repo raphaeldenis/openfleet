@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { DataStore, ManagerView, DsColumn, DsRow, DsRowHistoryEntry, DsView, Session, WorkingState } from '@openfleet/shared';
 
 /** A session as an agent needs it to act: identity, where it runs, lifecycle state and model, without the settings it supplied itself. */
@@ -77,5 +78,11 @@ export const savedView = (view: DsView) => ({ id: view.id, displayName: view.dis
 
 export const workingStateView = ({ sessionId: _sessionId, ...state }: WorkingState) => state;
 
-/** The manager record the caller reads about itself, without its own session id. */
-export const managerView = ({ sessionId: _sessionId, ...record }: ManagerView) => record;
+/** The size in UTF-8 bytes and the sha256 of a mission text, which identify the mission without carrying it. */
+export const missionDigestOf = (missionText: string) => ({
+  missionBytes: Buffer.byteLength(missionText, 'utf8'),
+  missionSha256: createHash('sha256').update(missionText, 'utf8').digest('hex'),
+});
+
+/** The manager record the caller reads about itself, without its own session id and without the body of its mission, which get_manager_mission returns. */
+export const managerView = ({ sessionId: _sessionId, missionText, ...record }: ManagerView) => ({ ...record, ...missionDigestOf(missionText) });
