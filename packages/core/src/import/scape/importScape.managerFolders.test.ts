@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { importScape } from './importScape.js';
@@ -112,6 +112,61 @@ describe('importScape: manager folders', () => {
         const report = run({ refuseReimport: false });
 
         expect(report.managerFindings).toEqual(['Mnémosyne — folder kept as Mn-mosyne, its name now maps to Mnemosyne']);
+      });
+    });
+
+    describe('a managers root given in another form', () => {
+      it('creates the folders and stores absolute directories when the managers root is relative', () => {
+        writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
+
+        const report = run({ managersRoot: relative(process.cwd(), managersRoot) });
+
+        expect(report.managerFindings).toEqual([]);
+        expect(readdirSync(managersRoot)).toEqual(['Alpha']);
+        expect(directoriesOf(LEAD_ARGUS_ID)).toEqual([join(managersRoot, 'Alpha')]);
+      });
+
+      it('does not judge a stored folder outside the managers root because the root is reached through a link', () => {
+        const realWork = join(fixture.workDir, 'real-work');
+        const linkedWork = join(fixture.workDir, 'linked-work');
+        mkdirSync(realWork);
+        symlinkSync(realWork, linkedWork, 'dir');
+        writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
+        run({ home: join(linkedWork, 'oh'), managersRoot: join(linkedWork, 'oh', 'managers') });
+
+        const report = run({ home: join(realWork, 'oh'), managersRoot: join(realWork, 'oh', 'managers'), refuseReimport: false });
+
+        expect(report.managerFindings).toEqual([]);
+        expect(readdirSync(join(realWork, 'oh', 'managers'))).toEqual(['Alpha']);
+      });
+    });
+
+    describe('a stored folder with a trailing slash', () => {
+      it('is the planned folder: no "kept under another name" line', () => {
+        writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
+        run();
+        const db = new DatabaseSync(join(home, 'openfleet.db'));
+        db.prepare('UPDATE sessions SET directory = ? WHERE id = ?').run(`${join(managersRoot, 'Alpha')}/`, LEAD_ARGUS_ID);
+        db.close();
+
+        const report = run({ refuseReimport: false });
+
+        expect(report.managerFindings).toEqual([]);
+      });
+    });
+
+    describe('a stored folder that is a symbolic link', () => {
+      it('is left as it is, named in the report, and the import goes on', () => {
+        writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
+        run();
+        const movedFolder = join(fixture.workDir, 'moved-alpha');
+        renameSync(join(managersRoot, 'Alpha'), movedFolder);
+        symlinkSync(movedFolder, join(managersRoot, 'Alpha'), 'dir');
+
+        const report = run({ refuseReimport: false });
+
+        expect(report.managerFindings).toEqual(['Alpha — stored folder is a symbolic link, left as it is']);
+        expect(readdirSync(managersRoot)).toEqual(['Alpha']);
       });
     });
 

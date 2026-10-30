@@ -80,7 +80,7 @@ function stateFolderOptionsOf(stateDirFlag: string | undefined, homeDirectory: s
 function homeFrom({ values }: ParsedFlags, environment: CliEnvironment): string {
   const home = values.home ?? environment.env.OPENFLEET_HOME;
   if (home === undefined || home === '') throw invalidArguments('--home <OPENFLEET_HOME> is required (or set OPENFLEET_HOME)');
-  return home;
+  return resolve(home);
 }
 
 function cleanLawsRequestFrom(flags: ParsedFlags, environment: CliEnvironment): CleanLawsRequest {

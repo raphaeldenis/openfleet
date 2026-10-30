@@ -35,18 +35,18 @@ const exactStateFileNameOf = (stem: string, fileNames: string[]): string | undef
   return stem !== '' && fileNames.includes(exactName) ? exactName : undefined;
 };
 
+interface StemsOfAllManagers { current: string[]; former: string[] }
+
 /**
  * The file named exactly after the former stem, unless the former stem is the current one, the current stem of another Scape manager
  * (imported or not), or the former stem of another Scape manager.
  */
-function formerStateFileNameOf(input: { managerName: string; fileNames: string[]; allManagerNames: string[] }): string | undefined {
+function formerStateFileNameOf(input: { managerName: string; fileNames: string[]; stemsOfAllManagers: StemsOfAllManagers }): string | undefined {
   const currentStem = stateFileStemOf(input.managerName);
   const formerStem = formerStateFileStemOf(input.managerName);
   const isFormerStemTheCurrentOne = formerStem === currentStem;
-  const currentStemsOfAllManagers = input.allManagerNames.map(stateFileStemOf);
-  const formerStemsOfAllManagers = input.allManagerNames.map(formerStateFileStemOf);
-  const isFormerStemAnotherManagersCurrentStem = currentStemsOfAllManagers.includes(formerStem);
-  const isFormerStemSharedByManagers = formerStemsOfAllManagers.filter((stem) => stem === formerStem).length > 1;
+  const isFormerStemAnotherManagersCurrentStem = input.stemsOfAllManagers.current.includes(formerStem);
+  const isFormerStemSharedByManagers = input.stemsOfAllManagers.former.filter((stem) => stem === formerStem).length > 1;
   if (isFormerStemTheCurrentOne || isFormerStemAnotherManagersCurrentStem || isFormerStemSharedByManagers) return undefined;
   return exactStateFileNameOf(formerStem, input.fileNames);
 }
@@ -93,9 +93,10 @@ export function planWorkingStates(input: PlanWorkingStatesInput): PlannedWorking
   if (folder === undefined) return [];
 
   const fileNames = stateFileNamesIn(folder);
+  const stemsOfAllManagers: StemsOfAllManagers = { current: input.allManagerNames.map(stateFileStemOf), former: input.allManagerNames.map(formerStateFileStemOf) };
   const planned: PlannedWorkingState[] = [];
   for (const manager of input.managers) {
-    const fileName = stateFileNameOf(stateFileStemOf(manager.session.name), fileNames) ?? formerStateFileNameOf({ managerName: manager.session.name, fileNames, allManagerNames: input.allManagerNames });
+    const fileName = stateFileNameOf(stateFileStemOf(manager.session.name), fileNames) ?? formerStateFileNameOf({ managerName: manager.session.name, fileNames, stemsOfAllManagers });
     const file = fileName === undefined ? undefined : readStateFile(folder, fileName);
     if (file === undefined) continue;
     const parsed = parseWorkingStateFile(file.text);

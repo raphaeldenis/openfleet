@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { runImportCli } from './importCli.js';
 import { claudeMemoryFolderOf } from './scape/claudeProjectDirectory.js';
@@ -8,6 +9,12 @@ import { anArgus, CAPTAIN_ARGUS_ID, LEAD_ARGUS_ID, writeArguses } from './scape/
 import { buildScapeFixture, OPENFLEET_NOTE_ID, type ScapeFixture } from './scape/scapeFixture.testkit.js';
 
 const JOURNAL_FILE_NAMES = ['openfleet.db', 'openfleet.db-wal'];
+
+function pointStoredDirectoriesAtTheCopy(input: { originalHome: string; copiedHome: string }): void {
+  const db = new DatabaseSync(join(input.copiedHome, 'openfleet.db'));
+  db.prepare('UPDATE sessions SET directory = replace(directory, ?, ?)').run(input.originalHome, input.copiedHome);
+  db.close();
+}
 
 /** A hash of the database file and of its write-ahead log when it has one. */
 function databaseFingerprintOf(home: string): string {
@@ -67,10 +74,12 @@ describe('runImportCli', () => {
       it('changes the database when the import is real (the witness that the new manager is a real write)', () => {
         const copiedHome = join(fixture.workDir, 'copied-home');
         cpSync(home, copiedHome, { recursive: true });
+        pointStoredDirectoriesAtTheCopy({ originalHome: home, copiedHome });
         const databaseBefore = databaseFingerprintOf(copiedHome);
 
         runImportCli(argvFor(copiedHome, '--allow-reimport'), environment());
 
+        expect(readFileSync(join(copiedHome, 'import-report.md'), 'utf8')).not.toContain('stored folder is outside managers/');
         expect(databaseFingerprintOf(copiedHome)).not.toBe(databaseBefore);
         expect(readdirSync(join(copiedHome, 'managers')).sort()).toEqual(['Alpha', 'Beta']);
       });
@@ -87,6 +96,19 @@ describe('runImportCli', () => {
         expect(JSON.parse(result.output)).toMatchObject({ dryRun: true, counts: { managers: { expected: 2, written: 1, alreadyPresent: 1 } } });
       });
     });
+  });
+
+  it('creates the manager folders and stores absolute directories when --home is a relative path', () => {
+    writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
+    const relativeHome = relative(process.cwd(), home);
+
+    runImportCli(['scape', '--home', relativeHome, '--scape-dir', fixture.scapeDir], { homeDirectory, env: {} });
+
+    const db = new DatabaseSync(join(home, 'openfleet.db'));
+    const stored = db.prepare('SELECT directory FROM sessions WHERE id = ?').get(LEAD_ARGUS_ID) as { directory: string };
+    db.close();
+    expect(readdirSync(join(home, 'managers'))).toEqual(['Alpha']);
+    expect(stored.directory).toBe(join(home, 'managers', 'Alpha'));
   });
 
   it('writes nothing into --report-dir on --dry-run', () => {
