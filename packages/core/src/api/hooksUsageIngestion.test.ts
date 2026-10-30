@@ -18,16 +18,19 @@ let hookToken: string;
 let sessionId: string;
 let degraded: ReturnType<typeof createDegradedRegistry>;
 
-async function startWith(usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>) {
+const NO_WINDOW_MS = 0;
+let bus: EventBus;
+
+async function startWith(usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>, { usageIngestionWindowMs = NO_WINDOW_MS }: { usageIngestionWindowMs?: number } = {}) {
   const db = openDatabase(':memory:');
-  const bus = new EventBus();
+  bus = new EventBus();
   const sessions = new SessionService({ db, bus, harnesses: [new FakeHarness()], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt' });
   const approvals = new ApprovalService({ db, bus });
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
   degraded = createDegradedRegistry();
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', degraded, usageIngestion });
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', degraded, usageIngestion, usageIngestionWindowMs });
   const session = await sessions.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
   sessionId = session.id;
   hookToken = (db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(session.id) as { hook_token: string }).hook_token;
@@ -95,6 +98,36 @@ describe('usage ingestion on the Stop hook', () => {
     }
 
     expect(degraded.list()).toEqual([]);
+  });
+
+  describe('throughput bound of one session', () => {
+    const WINDOW_MS = 300;
+    const pause = (durationMs: number) => new Promise((resolve) => setTimeout(resolve, durationMs));
+
+    it('runs one ingestion at once and one trailing ingestion at the end of the window for a burst of Stops', async () => {
+      const ingestAtStop = vi.fn();
+      await startWith({ ingestAtStop }, { usageIngestionWindowMs: WINDOW_MS });
+
+      for (let stop = 1; stop <= 5; stop += 1) await hook('Stop');
+      await expect.poll(() => ingestAtStop.mock.calls.length).toBe(1);
+      await expect.poll(() => ingestAtStop.mock.calls.length).toBe(2);
+      await pause(WINDOW_MS + 100);
+
+      expect(ingestAtStop.mock.calls.length).toBe(2);
+    });
+
+    it('drops the trailing ingestion of a session that closes inside the window', async () => {
+      const ingestAtStop = vi.fn();
+      await startWith({ ingestAtStop }, { usageIngestionWindowMs: WINDOW_MS });
+      await hook('Stop');
+      await expect.poll(() => ingestAtStop.mock.calls.length).toBe(1);
+      await hook('Stop');
+
+      bus.emit({ type: 'session.closed', sessionId });
+      await pause(WINDOW_MS + 100);
+
+      expect(ingestAtStop.mock.calls.length).toBe(1);
+    });
   });
 
   it('does nothing when the daemon was not given an ingestion', async () => {

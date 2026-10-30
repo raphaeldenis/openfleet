@@ -99,6 +99,8 @@ export interface ServerDeps {
   contextNotice?: ContextNotice;
   /** Present only when the operator enabled the usage ingestion. */
   usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>;
+  /** The length of the window in which a session's Stops cause one usage ingestion; defaults to one second. */
+  usageIngestionWindowMs?: number;
   // Without it the daemon reports no degraded state: /health says ok and the snapshot carries no daemonIssues.
   degraded?: DegradedRegistry;
   // Without it PreToolUse is answered {} and a PermissionRequest always opens an approval, as before the command policy.

@@ -3,6 +3,7 @@ import { narrowTodoHookCall, withoutTodoPayload, type TodoHookCall } from '../to
 import type { TodoTracker } from '../todos/todoTracker.js';
 import type { ContextNotice } from '../workingState/contextNotice.js';
 import type { SessionStartContext, SessionStartRequest } from '../workingState/sessionStartContext.js';
+import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { CommandPolicyHooks } from '../policy/ports.js';
 import { log } from '../logger.js';
@@ -10,7 +11,7 @@ import type { ManagerService } from '../managers/managerService.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { OncePerWindowPerKey } from '../usage/oncePerWindowPerKey.js';
-import { PerSessionCoalescer } from '../usage/perSessionCoalescer.js';
+import { PerSessionTrailingThrottle } from '../usage/perSessionTrailingThrottle.js';
 import type { TranscriptUsageIngestion } from '../usage/transcriptUsageIngestion.js';
 import { handoverReminder, type HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
@@ -18,6 +19,9 @@ import { json, type Handler } from './router.js';
 
 /** A session whose usage ingestion keeps failing adds one failure to the degraded count per window, not one per Stop. */
 const USAGE_FAILURE_COUNT_WINDOW_MS = 60_000;
+
+/** The Stops of a session cause at most one usage ingestion per window, which bounds the CPU a looping child can take. */
+const USAGE_INGESTION_WINDOW_MS = 1000;
 
 /** Runs `work`; a throw is logged, counted toward the degraded state, and answered as if the feature were absent (undefined). */
 function failingOpen<T>(degraded: DegradedRegistry | undefined, failure: string, work: () => T): T | undefined {
@@ -47,7 +51,7 @@ function trackTodosFailingOpen(todos: TodoTracker | undefined, sessionId: string
 /** A conversation that starts, restarts or resumes has the base and the mission note only if it reads them again; a manager that never read them is unaffected. */
 const SESSION_START_SOURCES_THAT_RESET_THE_BASE_AND_NOTE_READS = ['startup', 'compact', 'clear', 'resume'];
 
-export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead' | 'forgetNoteRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
+export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead' | 'forgetNoteRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>; usageIngestionWindowMs?: number; bus?: Pick<EventBus, 'subscribe'>; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
   const decideStopRefusalFailingOpen = (sessionId: string, stopHookActive: boolean): StopHookOutput | undefined =>
     failingOpen(deps.degraded, 'stop refusal check failed, letting the turn end', () => deps.stopRefusal?.decide({ sessionId, stopHookActive }));
 
@@ -76,9 +80,15 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
       if (startsFreshConversation) deps.contextNotice?.clearForNewConversation(sessionId);
     });
 
-  const stopIngestions = new PerSessionCoalescer();
+  const stopIngestions = new PerSessionTrailingThrottle({ windowMs: deps.usageIngestionWindowMs ?? USAGE_INGESTION_WINDOW_MS });
 
   const degradedCountsOfUsageFailures = new OncePerWindowPerKey(USAGE_FAILURE_COUNT_WINDOW_MS);
+
+  deps.bus?.subscribe((event) => {
+    if (event.type !== 'session.closed') return;
+    stopIngestions.forget(event.sessionId);
+    degradedCountsOfUsageFailures.forget(event.sessionId);
+  });
 
   const ingestUsageFailingOpen = (usageIngestion: Pick<TranscriptUsageIngestion, 'ingestAtStop'>, sessionId: string): void => {
     try {
