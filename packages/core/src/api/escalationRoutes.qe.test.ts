@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { type EscalationView } from '@openfleet/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../config.js';
 import { startDaemon } from '../daemon.js';
 import { openDatabase } from '../db/database.js';
@@ -271,6 +271,35 @@ describe('QE — the escalation routes on a booted daemon', () => {
         expect(laterId).not.toBe(answeredId);
         expect(escalationItemOf(booted.manager.id, answeredId)).toBeUndefined();
         expect(escalationItemOf(booted.manager.id, laterId)).toBeDefined();
+      });
+
+      it('removes only its own item when another id starts with the same characters', async () => {
+        const booted = await bootManager();
+        const escalationId = await submitAndReadEscalationId(booted, [contractQuestion('q1')]);
+        const itemOfLongerId = `[esc:${escalationId}0] Escalation on CCM-9: a human answer is needed, see the Inbox`;
+        await rewriteQuestionsForHuman(booted.manager, [...questionsForHumanOf(booted.manager.id), itemOfLongerId]);
+
+        await answerQ1(escalationId);
+
+        expect(questionsForHumanOf(booted.manager.id)).toEqual([itemOfLongerId]);
+      });
+
+      it('finishes the answer, tells the manager and warns when the item cannot be removed', async () => {
+        const booted = await bootManager();
+        const escalationId = await submitAndReadEscalationId(booted, [contractQuestion('q1')]);
+        const { framesOfType, nextFrameOfType } = await openSocket();
+        daemon.db.exec(`CREATE TRIGGER refuse_working_state_update BEFORE UPDATE ON session_working_states BEGIN SELECT RAISE(ABORT, 'working state is read-only'); END`);
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        const response = await answerQ1(escalationId);
+
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ id: escalationId, status: 'answered' });
+        await nextFrameOfType('escalation.resolved');
+        expect(framesOfType('escalation.resolved')).toHaveLength(1);
+        expect(queuedBodiesOf(booted.manager.id).some((body) => body.includes(`Escalation ${escalationId}`))).toBe(true);
+        expect(warn.mock.calls.some(([line]) => String(line).includes('could not be removed'))).toBe(true);
+        warn.mockRestore();
       });
 
       it('leaves the item of an escalation whose answer is refused', async () => {

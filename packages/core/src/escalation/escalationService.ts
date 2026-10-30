@@ -1,6 +1,7 @@
 import { EVIDENCE_MESSAGE, OpenFleetError, WORKING_STATE_MAX_ITEMS_PER_SECTION, type ArbiterOpinion, type EscalatingClass, type EscalationAnswerBody, type EscalationPolicy, type EscalationQuestionView, type EscalationStatus, type EscalationView, type PlanQuestion, type ReproClaim, type WorkingState, type WorkingStateSections } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
+import { log } from '../logger.js';
 import type { EventBus } from '../events/eventBus.js';
 import { BLANK_CLAIM_MESSAGE, hasBlankClaim, lacksExecutedEvidence, sanitizedReproClaim } from '../review/sanitizedReproClaim.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
@@ -320,7 +321,7 @@ export class EscalationService {
       repository.answerEscalationIfPending({ id: escalationId, resolvedAt: answeredAt });
     });
     const resolved = this.viewOf(escalationId);
-    this.removeItemFromQuestionsForHuman({ managerId: resolved.managerId, escalationId });
+    this.removeItemWithoutFailingTheAnswer({ managerId: resolved.managerId, escalationId });
     this.deps.bus?.emit({ type: 'escalation.resolved', escalation: resolved });
     this.deps.notifyAnswer?.(resolved);
     return resolved;
@@ -416,6 +417,15 @@ export class EscalationService {
     const id = this.deps.newId();
     this.deps.repository.insertEscalation({ id, managerId, ticket, body: '', createdAt: this.deps.clock() });
     return this.deps.repository.findEscalation(id)!;
+  }
+
+  /** The answer is already committed: a working state that refuses the removal is logged and the answer still finishes. */
+  private removeItemWithoutFailingTheAnswer({ managerId, escalationId }: { managerId: string; escalationId: string }): void {
+    try {
+      this.removeItemFromQuestionsForHuman({ managerId, escalationId });
+    } catch (error) {
+      log('warn', `escalation ${escalationId}: its item could not be removed from the questions_for_human of manager ${managerId}`, error);
+    }
   }
 
   /** Removes only the items of this escalation; the read and the write run in the same tick, so no edit of the manager falls between them. */
