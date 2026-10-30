@@ -8,7 +8,7 @@ An escalation belongs to one manager and one ticket. At most one escalation is `
 
 The manager finds one item `[esc:<id>] Escalation on <ticket>: …` in its `questions_for_human`. The item is written once and never edited.
 
-`submit_plan_questions` answers `{ batch_id, self, arbiter, human, warnings? }`. When the `questions_for_human` list is full (20 items), the answer is still ok: the batch is committed, the questions wait on the card with its `handoverRefusal`, and `warnings` holds `["list_refusal: <refusal> <hint>"]`. The call used to be refused `invalid_body`. A manager that reads the warning does not submit the questions again; a human answers the card or retries the listing (`retry-handover`). The manager base template (v5) does not yet mention `list_refusal`; the tool description does. A base v6 bump is tracked as ESCALATION-BASE-V6-LISTREFUSAL01.
+`submit_plan_questions` answers `{ batch_id, self, arbiter, human, warnings? }`. When the `questions_for_human` list is full (20 items), the answer is still ok: the batch is committed, the questions wait on the card with its `handoverRefusal`, and `warnings` holds `["list_refusal: <refusal> <hint>"]`. The call used to be refused `invalid_body`. A manager that reads the warning does not submit the questions again; a human answers the card or retries the listing (`retry-handover`). The manager base template (v6, §6) and the tool description both say so.
 
 `EscalationView` (`@openfleet/shared`):
 
