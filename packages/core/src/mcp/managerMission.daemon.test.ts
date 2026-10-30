@@ -12,6 +12,8 @@ import { createTempDirTracker } from '../tempDirTracker.js';
 
 const PROJECT_ID = randomUUID();
 const THIRTY_KB = 30 * 1024;
+const EIGHT_KB = 8 * 1024;
+const SAFE_ANSWER_BYTES = 24 * 1024;
 const STATUS_BUDGET_BYTES = 2 * 1024;
 
 const tempDirs = createTempDirTracker();
@@ -99,12 +101,86 @@ describe('get_argus_status never carries the body of the mission', () => {
 
 describe('get_manager_mission', () => {
   it('returns the whole mission of the calling manager with its size and sha256', async () => {
-    const mission = missionOfBytes(THIRTY_KB);
+    const mission = missionOfBytes(EIGHT_KB);
     const client = await mcpClientOf(await aManagerWithMission('Reader', mission));
 
     const answer = jsonOf(await callTool(client, 'get_manager_mission'));
 
-    expect(answer).toMatchObject({ missionText: mission, missionBytes: THIRTY_KB, missionSha256: sha256Of(mission) });
+    expect(answer).toMatchObject({ missionText: mission, missionBytes: EIGHT_KB, missionSha256: sha256Of(mission) });
+    expect(answer).not.toHaveProperty('complete');
+    expect(answer).not.toHaveProperty('mentionsIndex');
+  });
+
+  it('keeps every answer under the 24 KiB a get_note answer keeps, and pages a mission whose own text is larger', async () => {
+    const mission = missionOfBytes(THIRTY_KB);
+    const client = await mcpClientOf(await aManagerWithMission('Paged', mission));
+
+    const firstPage = jsonOf(await callTool(client, 'get_manager_mission'));
+
+    expect(sizeInBytes(JSON.stringify(firstPage))).toBeLessThanOrEqual(SAFE_ANSWER_BYTES);
+    expect(firstPage).toMatchObject({ truncated: true, complete: false, offset: 0, totalBytes: THIRTY_KB, missionBytes: THIRTY_KB, missionSha256: sha256Of(mission) });
+    expect(firstPage.nextAction).toBe(`get_manager_mission offset=${firstPage.nextOffset}`);
+  });
+
+  it('gives back the whole mission when its pages are read one after the other', async () => {
+    const mission = missionOfBytes(THIRTY_KB);
+    const client = await mcpClientOf(await aManagerWithMission('Reassembled', mission));
+
+    const pages: Json[] = [];
+    let nextOffset: number | undefined = 0;
+    while (nextOffset !== undefined) {
+      const page = jsonOf(await callTool(client, 'get_manager_mission', { offset: nextOffset }));
+      pages.push(page);
+      nextOffset = page.nextOffset as number | undefined;
+    }
+
+    expect(pages.length).toBeGreaterThan(1);
+    const reassembled = pages.map((page) => page.missionText).join('');
+    expect(sha256Of(reassembled)).toBe(sha256Of(mission));
+    expect(reassembled).toBe(mission);
+  });
+
+  it('answers under 24 KiB with an index of the mentions it does not expand when the mission and the notes it mentions together exceed it', async () => {
+    const bigNoteBody = `START-OF-BIG-NOTE\n${'n'.repeat(THIRTY_KB)}`;
+    const bigNoteId = await aNoteBody('Big', bigNoteBody);
+    const mission = `${missionOfBytes(EIGHT_KB)}\nFollow @note:${bigNoteId}`;
+    const client = await mcpClientOf(await aManagerWithMission('Overflowing', mission));
+
+    const answer = jsonOf(await callTool(client, 'get_manager_mission'));
+
+    expect(sizeInBytes(JSON.stringify(answer))).toBeLessThan(SAFE_ANSWER_BYTES);
+    expect(answer).toMatchObject({ missionText: mission, complete: false, missionBytes: sizeInBytes(mission), missionSha256: sha256Of(mission) });
+    expect(answer.mentionsIndex).toEqual([{ id: bigNoteId, type: 'note', bytes: sizeInBytes(bigNoteBody), readWith: `get_note note=${bigNoteId}` }]);
+    expect(textOf(await callTool(client, 'get_manager_mission'))).not.toContain('START-OF-BIG-NOTE');
+  });
+
+  it('lets the manager find the whole content of a mention it was not given by reading it with get_note', async () => {
+    const bigNoteBody = `START-OF-BIG-NOTE\n${'n'.repeat(THIRTY_KB)}`;
+    const bigNoteId = await aNoteBody('Big again', bigNoteBody);
+    const client = await mcpClientOf(await aManagerWithMission('Rereading', `${missionOfBytes(EIGHT_KB)}\nFollow @note:${bigNoteId}`));
+    const { mentionsIndex } = jsonOf(await callTool(client, 'get_manager_mission')) as { mentionsIndex: { id: string }[] };
+
+    let reread = '';
+    let nextOffset: number | undefined = 0;
+    while (nextOffset !== undefined) {
+      const page = jsonOf(await callTool(client, 'get_note', { note: mentionsIndex[0]!.id, offset: nextOffset }));
+      reread += page.bodyMd as string;
+      nextOffset = page.nextOffset as number | undefined;
+    }
+
+    expect(reread).toBe(bigNoteBody);
+  });
+
+  it('does not expand the mission note into the mission that mentions it', async () => {
+    const missionNoteId = await aNoteBody('Mission note', 'BODY-OF-THE-MISSION-NOTE');
+    const managerId = await aManagerWithMission('Self-mentioning', `Mission written in @note:${missionNoteId}`);
+    daemon.db.prepare('UPDATE managers SET mission_note_id = ? WHERE session_id = ?').run(missionNoteId, managerId);
+    const client = await mcpClientOf(managerId);
+
+    const { missionText } = jsonOf(await callTool(client, 'get_manager_mission')) as { missionText: string };
+
+    expect(missionText).not.toContain('BODY-OF-THE-MISSION-NOTE');
+    expect(missionText).toContain(`--- @note:${missionNoteId}: not expanded (already expanded) ---`);
   });
 
   it('accepts the id of the calling manager itself', async () => {

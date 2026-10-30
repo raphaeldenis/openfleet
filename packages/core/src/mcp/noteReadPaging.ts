@@ -24,29 +24,58 @@ export function readLimitBytes(requestedMaxBytes: number | undefined): number {
 export const mentionsIndexEntryOf = ({ id, kind, bytes, isResolved }: { id: string; kind: string; bytes: number; isResolved: boolean }): MentionsIndexEntry =>
   ({ id, type: kind, bytes, ...(isResolved ? { readWith: `get_note note=${id}` } : {}) });
 
+export type BodyField = 'bodyMd' | 'missionText';
+
 interface NoteReadFraming {
   header: object;
   bodyMd: string;
   mentionsIndex: MentionsIndexEntry[];
+  bodyField?: BodyField;
 }
 
 /** The body whole and the mentions as an index only: the mentions' content is read one `get_note` at a time. */
-export const bodyWithMentionsIndexView = ({ header, bodyMd, mentionsIndex }: NoteReadFraming) => ({
-  ...header, bodyMd, complete: false, mentionsIndex,
+export const bodyWithMentionsIndexView = ({ header, bodyMd, mentionsIndex, bodyField = 'bodyMd' }: NoteReadFraming) => ({
+  ...header, [bodyField]: bodyMd, complete: false, mentionsIndex,
   nextAction: 'the mentions are not expanded here: read each one with get_note note=<id> (mentionsIndex[].readWith)',
 });
 
 export interface BodyPageRequest extends NoteReadFraming {
-  noteId: string;
+  nextPageCall: (nextOffset: number) => string;
   offset: number;
   limitBytes: number;
+}
+
+export interface BoundedReadRequest {
+  readFullView: () => object;
+  readFraming: () => NoteReadFraming;
+  nextPageCall: (nextOffset: number) => string;
+  offset: number | undefined;
+  limitBytes: number;
+}
+
+/**
+ * Returns the whole read when it fits `limitBytes`; else the body with an index of its mentions when that fits; else one page of the body.
+ * A read that continues from an offset is always a page.
+ */
+export function boundedReadView({ readFullView, readFraming, nextPageCall, offset, limitBytes }: BoundedReadRequest): object {
+  const isReadingFromOffset = offset !== undefined && offset > 0;
+  if (!isReadingFromOffset) {
+    const fullView = readFullView();
+    if (serializedBytes(fullView) <= limitBytes) return fullView;
+  }
+
+  const framing = readFraming();
+  const bodyWithIndex = bodyWithMentionsIndexView(framing);
+  if (!isReadingFromOffset && serializedBytes(bodyWithIndex) <= limitBytes) return bodyWithIndex;
+
+  return bodyPageView({ nextPageCall, ...framing, offset: offset ?? 0, limitBytes });
 }
 
 /**
  * Returns the longest slice of the body, starting at `offset` (snapped down to a character start), whose whole response fits `limitBytes`.
  * `nextOffset` is exactly where the slice ends, so contiguous pages cover every byte of the body once.
  */
-export function bodyPageView({ noteId, header, bodyMd, mentionsIndex, offset, limitBytes }: BodyPageRequest) {
+export function bodyPageView({ nextPageCall, header, bodyMd, mentionsIndex, offset, limitBytes, bodyField = 'bodyMd' }: BodyPageRequest) {
   const bodyBytes = Buffer.from(bodyMd, 'utf8');
   const totalBytes = bodyBytes.length;
   const start = alignDownToCharacterStart(bodyBytes, Math.min(offset, totalBytes));
@@ -56,10 +85,10 @@ export function bodyPageView({ noteId, header, bodyMd, mentionsIndex, offset, li
     const hasMore = end < totalBytes;
     return {
       ...header,
-      bodyMd: bodyBytes.toString('utf8', start, end),
+      [bodyField]: bodyBytes.toString('utf8', start, end),
       offset: start, bytes: end - start, totalBytes,
       truncated: hasMore, complete: false,
-      ...(hasMore ? { nextOffset: end, nextAction: `get_note note=${noteId} offset=${end}` } : {}),
+      ...(hasMore ? { nextOffset: end, nextAction: nextPageCall(end) } : {}),
       ...(isFirstPage ? { mentionsIndex } : {}),
     };
   };

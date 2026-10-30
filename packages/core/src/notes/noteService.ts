@@ -276,8 +276,13 @@ export class NoteService {
   }
 
   /** A text that belongs to no note, followed by the blocks of the notes it mentions, as `getExpanded` does for a note body. */
-  expandText(text: string, { viewerProjectId }: GetExpandedOptions): string {
-    return this.expandMentions(text, this.mentionLookupFor(viewerProjectId));
+  expandText(text: string, { viewerProjectId, rootNoteId }: GetExpandedOptions & { rootNoteId?: string }): string {
+    return this.expandMentions(text, this.mentionLookupFor(viewerProjectId), { rootNoteId });
+  }
+
+  /** `getMentionIndex` for a text that belongs to no note. */
+  getTextMentionIndex(text: string, { viewerProjectId }: GetExpandedOptions): MentionIndexEntry[] {
+    return indexMentions(text, this.mentionLookupFor(viewerProjectId));
   }
 
   /** The blocks `getExpanded` appends after the body, without repeating the body. */

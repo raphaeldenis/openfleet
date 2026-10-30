@@ -21,7 +21,7 @@
     { "name": "get_argus_status", "inputSchemaHash": "7a014b717a77aac9" },
     { "name": "get_data_store", "inputSchemaHash": "cbde1cc4ad586e1c" },
     { "name": "get_manager_base", "inputSchemaHash": "18a49c93903a17a1" },
-    { "name": "get_manager_mission", "inputSchemaHash": "071146639671f36f" },
+    { "name": "get_manager_mission", "inputSchemaHash": "16debab900739aa3" },
     { "name": "get_note", "inputSchemaHash": "28a5ff1c5d119d37" },
     { "name": "get_note_version", "inputSchemaHash": "c003ec04cfe3f671" },
     { "name": "get_session_card", "inputSchemaHash": "3defb6dc09111f7c" },
