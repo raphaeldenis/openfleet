@@ -29,12 +29,25 @@ Right after creating the worktree, before the post-create hook, OpenFleet copies
 - In a project whose repository is shared (`docs/shared-repo.md`), the warning `{ "type": "overlay_unavailable" }` means the fleet overlay could not be linked as `.openfleet-overlay`: the overlay directory or the git exclude could not be written, or `.openfleet-overlay` already exists and does not point to the overlay.
 - Worktrees that OpenFleet did not create (Scape, `git worktree add`) are not covered: check with `test -f .husky/_/pre-push` or run `pnpm install` in them.
 
+## Setting up a fresh worktree (`scripts/worktree-setup.sh`)
+
+The OpenFleet repository ships `scripts/worktree-setup.sh`: it runs `pnpm install --frozen-lockfile` then `pnpm exec husky` and checks that `.husky/_/pre-push` exists, so the first push of a new worktree runs the pre-push gate. `pnpm install` runs the postinstall scripts of the dependencies, and `pnpm exec husky` writes `core.hooksPath` into the git config shared by all worktrees of the repository.
+
+**OpenFleet never runs it by itself.** A script found in a repository is not executed on worktree creation. A human wires it as the post-create hook of the OpenFleet project (see the next section): in the desktop app, the **Post-create hook** card of the Project home page, or `PATCH /api/projects/:id` with `postCreateHookScript` set to the absolute path of the script in a checkout you trust (for example `/Users/me/src/openfleet/scripts/worktree-setup.sh`), and optionally `postCreateHookTimeoutSeconds` (a `pnpm install` can need more than the default 60 s).
+
+Why it is not automatic:
+
+- A caller can name its own worktree as `repo_path` of `create_worktree`, and a session can write a file in that worktree. A script run from the repository would let a child session get code executed with the daemon's user and `HOME`. The project hook path comes from the admin configuration, never from a tool argument or the repository content.
+- A cloned repository could carry such a script and run it, without anyone's consent, at the first `POST /api/sessions`.
+
+Worktrees that OpenFleet did not create (Scape, `git worktree add`) never run any hook. For those, run `pnpm install --frozen-lockfile` and check `ls .husky/_` before the first push.
+
 ## Post-create hook
 
 A project can name one script that runs in every worktree created for one of its sessions.
 
 - Set it with `PATCH /api/projects/:id`: `postCreateHookScript` (absolute path) and `postCreateHookTimeoutSeconds` (1 to 600, default 60). `null` clears it; clearing the script clears its timeout.
-- The script is validated when saved and again before each run: absolute path, a regular file, executable by the daemon user, not writable by group or others. The path is stored in the project and is never taken from a tool argument.
+- The script is validated when saved and again before each run: absolute path, a regular file, executable by the daemon user, owned by the daemon user, not writable by group or others. The path is stored in the project and is never taken from a tool argument.
 - Which project's hook runs: the caller's own project for `create_worktree`, the `projectId` of the request for `POST /api/sessions`. No project, no hook.
 - The script runs as the daemon's user, with the new worktree as its working directory, no shell and no argument. It gets the daemon's basic environment (`PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_*`, `TMPDIR`, `SHELL`) and nothing else from the daemon, plus:
 
@@ -53,7 +66,7 @@ A project can name one script that runs in every worktree created for one of its
   { "path": "...", "branch": "task/x", "warnings": [{ "type": "post_create_hook_failed", "reason": "exit_nonzero", "exitCode": 3, "outputTail": "..." }] }
   ```
 
-  `reason` is `timeout`, `exit_nonzero`, `not_executable`, `not_found`, `unsafe_permissions` or `spawn_failed`. `outputTail` is the last 8 KB of the script's output with credentials masked. For `POST /api/sessions` the `warnings` are added to the response only; the stored session does not carry them.
+  `reason` is `timeout`, `exit_nonzero`, `not_executable`, `not_found`, `unsafe_permissions` (the script is not owned by the daemon user, or is writable by group or others) or `spawn_failed`. `outputTail` is the last 8 KB of the script's output with credentials masked. For `POST /api/sessions` the `warnings` are added to the response only; the stored session does not carry them.
 
 ## Listing
 
