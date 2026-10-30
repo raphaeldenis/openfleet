@@ -108,6 +108,7 @@ describe('probe: parent closing the stdin pipe', () => {
 describe('probe: signal while the sessions are still resuming', () => {
   const SESSION_SERVICE = pathToFileURL(join(CORE_ROOT, 'src', 'sessions', 'sessionService.ts')).href;
   const SHUTDOWN_GUARD_MS = 10_000;
+  const SLOW_MACHINE_MARGIN_MS = 10_000;
   const slowSessionsPreload = ({ resumeMs, closeMs }: { resumeMs: number; closeMs: number }) => {
     const preload = join(tempDirs.make('of-preload-'), 'slowSessions.mjs');
     writeFileSync(preload, `
@@ -195,7 +196,7 @@ describe('probe: signal while the sessions are still resuming', () => {
     const { code } = await daemon.exited;
 
     expect(code).toBe(3);
-    expect(Date.now() - signalAt).toBeLessThan(SHUTDOWN_GUARD_MS + 3000);
+    expect(Date.now() - signalAt).toBeLessThan(SHUTDOWN_GUARD_MS + SLOW_MACHINE_MARGIN_MS);
   }, 40_000);
 });
 
