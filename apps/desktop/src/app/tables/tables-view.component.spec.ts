@@ -11,7 +11,7 @@ const NOW = '2026-09-29T10:00:00.000Z';
 
 const store = (id: string, displayName: string): DataStore => ({ id, projectId: 'p1', displayName, createdAt: NOW, updatedAt: NOW });
 const page = <T>(items: T[], total = items.length) => ({ items, total, limit: 100, offset: 0 });
-const row = (id: string, data: Record<string, unknown>): DsRow => ({ id, storeId: 's1', data, createdAt: NOW, updatedAt: NOW });
+const row = (id: string, data: Record<string, unknown>, rev = 1): DsRow => ({ id, storeId: 's1', data, rev, createdAt: NOW, updatedAt: NOW });
 
 const columns: DsColumn[] = [
   { id: 'c-title', storeId: 's1', displayName: 'Title', columnType: 'text', options: null, sortOrder: 0 },
@@ -96,7 +96,7 @@ describe('rich cell editing', () => {
     await userEvent.clear(input);
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(api.updateRows).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { rich: '' } }] });
+    expect(api.updateRows).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { rich: '' }, expectedRev: 1 }] });
   });
 
   it('closes an editor when an earlier row insertion reloads the table and saves a fresh edit once', async () => {
@@ -121,7 +121,7 @@ describe('rich cell editing', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByTestId('grid-cell-r1-rich')).toHaveTextContent('Fresh');
-    expect(api.updateRows).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { rich: 'Fresh' } }] });
+    expect(api.updateRows).toHaveBeenCalledExactlyOnceWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { rich: 'Fresh' }, expectedRev: 1 }] });
   });
 
   it('edits kanban details and keeps automatic columns read-only', async () => {
@@ -169,6 +169,64 @@ describe('rich cell editing', () => {
     await vi.waitFor(() => expect(screen.getByRole('alert')).not.toBeEmptyDOMElement());
     expect(input).toHaveValue('Original draft');
     expect(screen.getByRole('dialog')).toBeVisible();
+  });
+
+  describe('when the row changed since the editor opened', () => {
+    const staleRow = (currentRev: number) => new ApiError(409, 'Stale', 'stale_revision', {
+      error: 'stale_revision', kind: 'conflict', retry: 'after_refresh', message: 'raw daemon message',
+      detail: { resource: 'data_store_row', rowId: 'r1', currentRev },
+    });
+    const typeDraftAndSave = async (draft: string) => {
+      await userEvent.click(await screen.findByRole('button', { name: 'Edit Details in row r1' }));
+      const input = screen.getByLabelText('Details');
+      await vi.waitFor(() => expect(input).toHaveValue('Original'));
+      await userEvent.type(input, draft);
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      return input;
+    };
+
+    it('shows the conflict as a row change, keeps the draft and offers to reload the row', async () => {
+      const api = fakeApi({ columns: [...columns, richColumn], rows: [richRow] });
+      api.updateRows.mockRejectedValueOnce(staleRow(3));
+      await renderView(api);
+
+      const input = await typeDraftAndSave(' draft');
+
+      expect(await screen.findByText('This row changed since you opened it — reload, then try again.')).toBeVisible();
+      expect(input).toHaveValue('Original draft');
+      expect(screen.getByRole('dialog')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Reload row' })).toBeVisible();
+    });
+
+    it('reloads the row, reopens the editor on its new value and saves against the new revision', async () => {
+      const theirRow = row('r1', { ...richRow.data, rich: 'Theirs' }, 3);
+      const api = fakeApi({ columns: [...columns, richColumn], rows: [richRow] });
+      api.queryDataStore.mockResolvedValueOnce(page([richRow])).mockResolvedValueOnce(page([theirRow]));
+      api.updateRows.mockRejectedValueOnce(staleRow(3));
+      api.updateRows.mockResolvedValueOnce({ items: [row('r1', { ...richRow.data, rich: 'Theirs + mine' }, 4)] });
+      await renderView(api);
+      await typeDraftAndSave(' draft');
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Reload row' }));
+
+      await vi.waitFor(() => expect(screen.getByLabelText('Details')).toHaveValue('Theirs'));
+      expect(screen.queryByRole('button', { name: 'Reload row' })).not.toBeInTheDocument();
+      await userEvent.type(screen.getByLabelText('Details'), ' + mine');
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(api.updateRows).toHaveBeenLastCalledWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { rich: 'Theirs + mine' }, expectedRev: 3 }] });
+    });
+
+    it('offers no reload for a refusal that is not a row conflict', async () => {
+      const api = fakeApi({ columns: [...columns, richColumn], rows: [richRow] });
+      api.updateRows.mockRejectedValueOnce(new ApiError(400, 'Refused', 'invalid_body'));
+      await renderView(api);
+
+      await typeDraftAndSave(' draft');
+
+      await vi.waitFor(() => expect(screen.getByRole('alert')).not.toBeEmptyDOMElement());
+      expect(screen.queryByRole('button', { name: 'Reload row' })).not.toBeInTheDocument();
+    });
   });
 
   it('ignores a pending save after the project scope changes', async () => {
@@ -227,7 +285,7 @@ describe('rich cell editing', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByTestId('grid-cell-r1-rich')).toHaveTextContent('Updated');
-    expect(api.updateRows).toHaveBeenLastCalledWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { rich: 'Updated' } }] });
+    expect(api.updateRows).toHaveBeenLastCalledWith({ projectId: 'p1', storeId: 's1', updates: [{ rowId: 'r1', patch: { rich: 'Updated' }, expectedRev: 1 }] });
     expect(await screen.findByRole('button', { name: 'Retry history' })).toBeVisible();
     api.listRowChanges.mockResolvedValueOnce({ items: [historyEntry({ actorKind: 'human', actorLabel: 'You', change: { rich: { from: 'Original', to: 'Updated' } } })], total: 1 });
     await userEvent.click(screen.getByRole('button', { name: 'Retry history' }));

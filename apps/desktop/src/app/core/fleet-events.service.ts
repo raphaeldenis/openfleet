@@ -9,6 +9,7 @@ import { isUserTyping } from './terminal-keystrokes';
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
 const MAX_BACKGROUND_FAILURES = 50;
+const MIN_JITTER_SHARE = 0.5;
 
 export interface BackgroundFailure {
   key: string;
@@ -28,6 +29,61 @@ function isBackgroundFailure({ error: envelope, scope }: { error: ErrorEnvelope;
 
 /** Names one prompt of one session: the same prompt keeps its key for as long as it stays undecided. */
 export const silentBlockKey = ({ sessionId, waitingSince }: SilentBlock): string => `${sessionId}@${waitingSince}`;
+
+function parseServerEvent(text: string): ServerEvent | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const isObjectFrame = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+    return isObjectFrame ? (parsed as ServerEvent) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The event types the service reads no payload field of: a frame of one of them is never dropped. */
+const EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD = ['session.attention', 'session.relaunching', 'message.queued', 'message.held', 'command.denied'] as const;
+
+export type PayloadCarryingEventType = Exclude<ServerEvent['type'], (typeof EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD)[number]>;
+
+const REQUIRED_PAYLOAD_FIELDS: Record<PayloadCarryingEventType, readonly string[]> = {
+  'snapshot': ['sessions', 'approvals'],
+  'session.todos': ['todos'],
+  'session.working_state': ['state'],
+  'session.created': ['session'],
+  'session.updated': ['session'],
+  'session.state': ['sessionId', 'state'],
+  'session.closed': ['sessionId'],
+  'session.output': ['sessionId', 'data'],
+  'session.replay': ['sessionId', 'data'],
+  'session.model_changed': ['sessionId', 'model'],
+  'session.permission_mode_changed': ['sessionId', 'mode'],
+  'session.reopened': ['sessionId'],
+  'message.delivered': ['messageId'],
+  'approval.created': ['approval'],
+  'approval.resolved': ['approval'],
+  'governance.proposed': ['proposal'],
+  'governance.resolved': ['proposal'],
+  'governance.queue_changed': ['managerId', 'queuedCount'],
+  'law.created': ['law'],
+  'law.updated': ['law'],
+  'law.withdrawn': ['law'],
+  'manager.created': ['manager'],
+  'manager.pulsed': ['manager'],
+  'manager.updated': ['manager'],
+  'error': ['error'],
+  'daemon.issues': ['issues'],
+  'permission.silent_blocks': ['blocks'],
+  'notification.trigger': ['category'],
+  'note.created': ['noteId'],
+  'note.updated': ['noteId'],
+  'note.deleted': ['noteId'],
+};
+
+function carriesItsRequiredPayload(event: ServerEvent): boolean {
+  const requiredFields = REQUIRED_PAYLOAD_FIELDS[event.type as PayloadCarryingEventType] ?? [];
+  const fields = event as unknown as Record<string, unknown>;
+  return requiredFields.every((field) => fields[field] != null);
+}
 
 function notificationTriggerOf({ type: _type, ...trigger }: Extract<ServerEvent, { type: 'notification.trigger' }>): NotificationTrigger {
   return trigger;
@@ -162,7 +218,15 @@ export class FleetEventsService {
       this.hasConnectedBefore = true;
       this.flushQueuedSends();
     });
-    socket.addEventListener('message', (m) => this.reduce(JSON.parse(String(m.data)) as ServerEvent));
+    socket.addEventListener('message', (m) => {
+      const event = parseServerEvent(String(m.data));
+      if (!event) return;
+      if (!carriesItsRequiredPayload(event)) {
+        console.warn(`Dropped a ${event.type} frame that lacks its payload`);
+        return;
+      }
+      this.reduce(event);
+    });
     socket.addEventListener('close', () => this.scheduleReconnect());
   }
 
@@ -185,7 +249,8 @@ export class FleetEventsService {
   private scheduleReconnect(): void {
     this.connected.set(false);
     this.attachedSinceOpenSessionIds.clear();
-    setTimeout(() => { void this.openSocket(); }, this.reconnectDelayMs);
+    const jitteredDelayMs = this.reconnectDelayMs * (MIN_JITTER_SHARE + (1 - MIN_JITTER_SHARE) * Math.random());
+    setTimeout(() => { void this.openSocket(); }, jitteredDelayMs);
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
   }
 

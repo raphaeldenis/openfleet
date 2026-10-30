@@ -159,7 +159,7 @@ describe('DataStoreRepository', () => {
 
       const row = repository.insertRow(store.id, { id: 'r1', data: { [status.id]: 'todo' }, actor: human, at: 't1' });
 
-      expect(row).toEqual({ id: 'r1', storeId: 's1', data: { [status.id]: 'todo' }, createdAt: 't1', updatedAt: 't1' });
+      expect(row).toEqual({ id: 'r1', storeId: 's1', data: { [status.id]: 'todo' }, rev: 1, createdAt: 't1', updatedAt: 't1' });
       expect(repository.listRows(store.id)).toEqual([row]);
       expect(repository.rowHistory(row.id, owningProject)).toEqual([
         expect.objectContaining({ rowId: 'r1', actorKind: 'human', actorLabel: 'You', change: { kind: 'create' }, createdAt: 't1' }),
@@ -219,7 +219,7 @@ describe('DataStoreRepository', () => {
 
       const [latest] = repository.rowHistory(row.id, owningProject);
       expect(latest).toMatchObject({ actorKind: 'agent', actorLabel: '⛏️ Gimli · T6', change: { [status.id]: { from: 'todo', to: 'done' } }, createdAt: 't2' });
-      expect(updated).toEqual({ id: 'r1', storeId: 's1', data: { [status.id]: 'done' }, createdAt: 't1', updatedAt: 't2' });
+      expect(updated).toEqual({ id: 'r1', storeId: 's1', data: { [status.id]: 'done' }, rev: 2, createdAt: 't1', updatedAt: 't2' });
       expect(repository.listRows(store.id)).toEqual([updated]);
     });
 

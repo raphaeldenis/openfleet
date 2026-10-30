@@ -1,0 +1,1 @@
+ALTER TABLE ds_rows DROP COLUMN rev;

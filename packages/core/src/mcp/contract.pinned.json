@@ -1,5 +1,5 @@
 {
-  "contractVersion": 13,
+  "contractVersion": 14,
   "tools": [
     { "name": "add_data_store_column", "inputSchemaHash": "968cbac3975a27b9" },
     { "name": "append_to_note", "inputSchemaHash": "e8b3f62130a1ad87" },
@@ -60,8 +60,8 @@
     { "name": "set_manager_profile", "inputSchemaHash": "eef2e69ca8f02e7c" },
     { "name": "unwatch_pr", "inputSchemaHash": "dcedbd8fad2b0fc9" },
     { "name": "update_data_store_column", "inputSchemaHash": "c3b4f8816e3709e7" },
-    { "name": "update_data_store_row", "inputSchemaHash": "61764808ad6acf19" },
-    { "name": "update_data_store_rows", "inputSchemaHash": "80fcf44f8711978e" },
+    { "name": "update_data_store_row", "inputSchemaHash": "fd9ff687e1d24b52" },
+    { "name": "update_data_store_rows", "inputSchemaHash": "ad58acd50c22a2de" },
     { "name": "update_data_store_view", "inputSchemaHash": "30a4abc7a1be9cca" },
     { "name": "update_note", "inputSchemaHash": "79e1c767d481e375" },
     { "name": "update_note_section", "inputSchemaHash": "b7f8632f3e734a7f" },

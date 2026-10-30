@@ -20,6 +20,8 @@ interface LastSeen {
   state: SessionState;
 }
 
+const KINDS_MOOT_ONCE_CLOSED: readonly RequestKind[] = ['model', 'permissionMode', 'close', 'interrupt'];
+
 export const requestKeyOf = ({ sessionId, kind }: SessionRequest) => `${sessionId}:${kind}`;
 
 /**
@@ -39,7 +41,6 @@ export class SessionRequestsService {
     const events = inject(FleetEventsService);
     effect(() => {
       const sessions = events.sessions();
-      this.errorsByKey();
       untracked(() => sessions.forEach((session) => this.dropErrorsThatNoLongerApplyTo(session)));
     });
   }
@@ -96,7 +97,17 @@ export class SessionRequestsService {
     this.keysInFlight.set(keys);
   }
 
+  private hasSessionMovedOnFrom(request: SessionRequest): boolean {
+    const lastSeen = this.lastSeenBySession.get(request.sessionId);
+    if (lastSeen === undefined) return false;
+    const isClosed = lastSeen.state === 'closed';
+    if (request.kind === 'resume') return !isClosed;
+    return isClosed && KINDS_MOOT_ONCE_CLOSED.includes(request.kind);
+  }
+
   private setError(request: SessionRequest, error: string | null): void {
+    const isFailureOfAnOutdatedState = error !== null && this.hasSessionMovedOnFrom(request);
+    if (isFailureOfAnOutdatedState) return;
     const errors = new Map(this.errorsByKey());
     const key = requestKeyOf(request);
     const isAlreadyClear = error === null && !errors.has(key);

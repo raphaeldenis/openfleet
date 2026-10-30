@@ -16,6 +16,7 @@ const row = (id: string, data: Record<string, unknown>): DsRow => ({
   id,
   storeId: 's1',
   data,
+  rev: 1,
   createdAt: '2026-09-29T10:00:00.000Z',
   updatedAt: '2026-09-29T10:00:00.000Z',
 });

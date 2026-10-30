@@ -13,7 +13,7 @@ const statusColumn: DsColumn = {
 const productionShapedColumns = ['id', 'step', 'next_action', 'child', 'journal', 'description', 'category'].map(textColumn);
 const columns: DsColumn[] = [statusColumn, ...productionShapedColumns];
 
-const rowOf = (data: Record<string, unknown>, updatedAt: string): DsRow => ({ id: `row-${String(data['col-id'])}`, storeId: 's1', data, createdAt: hoursAgo(100), updatedAt });
+const rowOf = (data: Record<string, unknown>, updatedAt: string): DsRow => ({ id: `row-${String(data['col-id'])}`, storeId: 's1', data, rev: 1, createdAt: hoursAgo(100), updatedAt });
 const inProgressRow = (id: string, updatedAt: string, extra: Record<string, unknown> = {}) => rowOf({ 'col-id': id, 'col-status': 'opt-doing', ...extra }, updatedAt);
 
 const labelsOf = (rows: DsRow[], cols: DsColumn[] = columns) => staleInProgressRowLabelsOf({ columns: cols, rows, now: NOW });

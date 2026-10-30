@@ -165,8 +165,8 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
     const mentionsOnlyNote = await root.callTool({ name: 'get_note', arguments: { note: source.id, mentions_only: true } });
 
     const bytes = (result: unknown) => Buffer.byteLength(rawText(result), 'utf8');
-    expect(bytes(defaultResult)).toBe(35079);
-    expect(bytes(columnarResult)).toBe(11037);
+    expect(bytes(defaultResult)).toBe(35479);
+    expect(bytes(columnarResult)).toBe(11149);
     expect(parsed(columnarResult).count).toBe(50);
     expect(bytes(columnarResult)).toBeLessThan(bytes(defaultResult) / 2);
     expect(parsed(mentionsOnlyNote).mentionBlocks).toHaveLength(1);
@@ -203,7 +203,7 @@ describe('QE — a booted daemon serves compact MCP results on the real route', 
     const rows = (await (await adminApi(`/api/data-stores/${store.id}/rows?projectId=p1`)).json()) as { items: object[] };
     const changes = (await (await adminApi(`/api/data-stores/${store.id}/rows/${inserted.ids[0]}/changes?projectId=p1`)).json()) as { items: object[] };
 
-    expect(keysOf(rows.items[0]!)).toEqual(['createdAt', 'data', 'id', 'storeId', 'updatedAt']);
+    expect(keysOf(rows.items[0]!)).toEqual(['createdAt', 'data', 'id', 'rev', 'storeId', 'updatedAt']);
     expect(keysOf(changes.items[0]!)).toEqual(['actorKind', 'actorLabel', 'change', 'createdAt', 'id', 'rowId', 'seq']);
   });
 });
