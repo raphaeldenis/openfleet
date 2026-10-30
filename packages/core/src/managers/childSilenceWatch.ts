@@ -79,8 +79,16 @@ export class ChildSilenceWatch {
     const isManagerMessagingItsChild = sender.role === MANAGER_ROLE && recipient.parentId === sender.id;
     if (isManagerMessagingItsChild) return this.arm({ managerId: sender.id, childId: recipient.id });
     const isChildAnsweringItsManager = sender.parentId === recipient.id;
-    const isCheckOfThisManager = this.checksByChildId.get(sender.id)?.managerId === recipient.id;
-    if (isChildAnsweringItsManager && isCheckOfThisManager) this.cancelCheckOf(sender.id);
+    if (!isChildAnsweringItsManager) return;
+    const isCheckOfThisManager = this.checkManagerIdOf(sender.id) === recipient.id;
+    if (isCheckOfThisManager) this.cancelCheckOf(sender.id);
+  }
+
+  /** The manager of the check of a child, read from the stored row when a restore has not re-armed it yet. */
+  private checkManagerIdOf(childId: string): string | undefined {
+    const armedManagerId = this.checksByChildId.get(childId)?.managerId;
+    if (armedManagerId !== undefined) return armedManagerId;
+    return this.deps.checks.list().find((stored) => stored.childId === childId)?.managerId;
   }
 
   private isStillWatchable({ childId, managerId }: StoredSilenceCheck): boolean {
@@ -130,12 +138,14 @@ export class ChildSilenceWatch {
     const isManagerDisabled = managerRecord !== undefined && modeOf(managerRecord) === 'disabled';
     if (isManagerDisabled) return;
     const now = this.deps.clock();
-    const lastSignOfLifeAt = check.isRestoredAfterRestart ? check.messageSentAt : Date.parse(child.stateSince);
-    const hasChangedStateRecently = now - lastSignOfLifeAt < this.deps.delayMs;
+    const lastSignOfLifeAt = Date.parse(child.stateSince);
+    const hasChangedStateRecently = !check.isRestoredAfterRestart && now - lastSignOfLifeAt < this.deps.delayMs;
     if (hasChangedStateRecently) return;
     const silentMinutes = minutesBetween(check.messageSentAt, now);
-    const lastSignOfLifeMinutes = minutesBetween(lastSignOfLifeAt, now);
-    const body = `${SCHEDULED_EVENT_PREFIX} "${SILENCE_CHECK_TITLE}", due ${localDateTimeOf(new Date(now))}] ${child.name} (${child.id}) has not answered your message of ${silentMinutes} min ago; its last sign of life is ${lastSignOfLifeMinutes} min old (state ${child.state}). Look at it with get_session_card, or message it again. ${NOT_A_SCHEDULED_EVENT_NOTICE}`;
+    const signOfLifeSentence = check.isRestoredAfterRestart
+      ? 'its last known sign of life unknown after a restart'
+      : `its last sign of life is ${minutesBetween(lastSignOfLifeAt, now)} min old`;
+    const body = `${SCHEDULED_EVENT_PREFIX} "${SILENCE_CHECK_TITLE}", due ${localDateTimeOf(new Date(now))}] ${child.name} (${child.id}) has not answered your message of ${silentMinutes} min ago; ${signOfLifeSentence} (state ${child.state}). Look at it with get_session_card, or message it again. ${NOT_A_SCHEDULED_EVENT_NOTICE}`;
     try {
       this.deps.sessions.sendMessage({ sessionId: check.managerId, body });
     } catch (error) {
