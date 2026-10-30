@@ -125,7 +125,7 @@ function creationModeFrom(queryParams: ParamMap | undefined): CreationMode {
 
       @if (isManagerMode()) {
         <div class="of-section-title">Manager</div>
-        <of-manager-fields [isLocked]="pending()" [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" [(isMissionTouched)]="isMissionTouched" />
+        <of-manager-fields [isLocked]="pending()" [(pulseSeconds)]="pulseSeconds" [(childrenCap)]="childrenCap" [(mission)]="mission" [(isMissionTouched)]="isMissionTouched" [offersAttended]="true" [(isAttended)]="isAttended" />
       }
       </fieldset>
 
@@ -230,6 +230,7 @@ export class NewSessionFormComponent {
   protected readonly childrenCap = signal(2);
   protected readonly mission = signal('');
   protected readonly isMissionTouched = signal(false);
+  protected readonly isAttended = signal(false);
 
   protected readonly hasSubmitted = signal(false);
   private readonly serverFailure = signal<ServerFailure | undefined>(undefined);
@@ -250,7 +251,7 @@ export class NewSessionFormComponent {
     if (!this.isManagerMode()) return { kind: 'session' as const, fields: { ...sharedSpec, ...(seededPrompt ? { seededPrompt } : {}), ...(handoffFile ? { handoffFile } : {}) } };
     const pulseSeconds = this.pulseSeconds();
     const hasEditedPulseSeconds = typeof pulseSeconds === 'number';
-    const managerFields = { ...sharedSpec, ...(hasEditedPulseSeconds ? { pulseSeconds } : {}), childrenCap: this.childrenCap(), mission: this.mission().trim() };
+    const managerFields = { ...sharedSpec, ...(hasEditedPulseSeconds ? { pulseSeconds } : {}), childrenCap: this.childrenCap(), mission: this.mission().trim(), ...(this.isAttended() ? { attended: true } : {}) };
     return { kind: 'manager' as const, fields: managerFields };
   });
   private readonly formFingerprint = computed(() => JSON.stringify(this.spec()));
