@@ -5,7 +5,10 @@ import { FleetApiService } from '../core/fleet-api.service';
 import type { TokenUsage } from '../core/token-usage';
 import { ProjectTokenUsageComponent } from './project-token-usage.component';
 
-type Answer = TokenUsage | null | Error;
+const TODAY_TITLE =
+  'Tokens used by this project since 00:00 UTC. Shows n/a until usage ingestion is enabled (OPENFLEET_USAGE_INGESTION=1).';
+
+type Answer =TokenUsage | null | Error;
 
 async function renderFor({ answers }: { answers: Answer[] }) {
   const getProjectUsageToday = vi.fn<(projectId: string) => Promise<TokenUsage | null>>();
@@ -34,7 +37,24 @@ describe('ProjectTokenUsageComponent', () => {
     await renderFor({ answers: [{ inputTokens: 1, outputTokens: 1 }] });
 
     expect(await screen.findByText('Today (UTC)')).toBeInTheDocument();
-    expect(screen.getByTitle('Tokens used by this project since 00:00 UTC')).toBeInTheDocument();
+    expect(screen.getByTitle(TODAY_TITLE)).toBeInTheDocument();
+  });
+
+  it('keeps the same title, which explains n/a, while the value is n/a', async () => {
+    await renderFor({ answers: [null] });
+
+    expect(await screen.findByText('n/a')).toBeInTheDocument();
+    expect(screen.getByTitle(TODAY_TITLE)).toBeInTheDocument();
+  });
+
+  it('puts the title on the whole figure, not on the label alone', async () => {
+    await renderFor({ answers: [{ inputTokens: 12_300, outputTokens: 4_100 }] });
+
+    const figure = await screen.findByText('12.3k in / 4.1k out');
+
+    const titledContainer = screen.getByTitle(TODAY_TITLE);
+    expect(titledContainer).toContainElement(figure);
+    expect(titledContainer).toContainElement(screen.getByText('Today (UTC)'));
   });
 
   it('shows … while the first answer is awaited', async () => {
