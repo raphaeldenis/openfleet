@@ -94,7 +94,7 @@ beforeEach(async () => {
   const settings = defaultCommandPolicySettings();
   daemon = await startDaemon(config, { commandPolicy: { settings: { ...settings, unattended: { ...settings.unattended, askBecomesDeny: false } } } });
 });
-/** Closing the MCP clients before the daemon leaves no pooled keep-alive socket for a later daemon on a reused ephemeral port to meet. */
+/** Aborts the clients' in-flight streams before the daemon closes its sockets; it does not drain the global fetch keep-alive pool (adminApi still uses it). */
 const closeConnectedClients = async () => {
   const clientsToClose = connectedClients;
   connectedClients = [];
