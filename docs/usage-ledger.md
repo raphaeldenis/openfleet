@@ -47,4 +47,17 @@ Known limits of the storage:
 - **Precision above 2^53.** Token sums are stored and summed as JSON numbers. A single count is rejected past `Number.MAX_SAFE_INTEGER` (2^53 - 1), but a bucket total above it is approximate. The same holds for the costs, which are floating-point sums.
 - **Timestamps.** A line is read only when its timestamp is an ISO 8601 date-time with a `Z` or a numeric offset (`+02:00`); the UTC day comes from that instant. A timestamp without a zone, or in another format, is skipped and counted, since its day would depend on the machine's time zone.
 
-There is no ingestion route, no MCP tool, no UI, no automatic reading of any transcript file and no price table.
+There is no ingestion route, no MCP tool, no price table and no automatic reading of any transcript file, unless the operator enables usageIngestion: then only the token counts are read.
+
+## Ingestion (opt-in)
+
+`usageIngestion` is off by default. The operator turns it on by starting the daemon with `OPENFLEET_USAGE_INGESTION=1` (`DaemonOptions.usageIngestion` in code). Nothing is read otherwise, and the usage routes answer `null` ("n/a" in the desktop) until the ledger holds rows.
+
+When it is on, each `Stop` hook of a session launched by the daemon schedules `TranscriptUsageIngestion.ingestAtStop` after the hook is answered:
+
+- The file is `SessionService.trustedTranscriptFileOf(sessionId)`: the path the session's own hook reported, accepted only if it is an absolute `.jsonl` under the Claude projects directory, symlinks resolved, and named after the session's CLI id. No other path is opened.
+- The text goes to `UsageLedgerService.ingestTranscript`, which keeps what `parseUsageLines` extracts: the message id, timestamp, model and the four token counts. The text of a message is never stored, returned or logged, and a line that does not parse is counted, not quoted.
+- The biller is `subscription` (the daemon holds no API key). The billing code is the root session of the lineage, found by following `parentId` (a loop stops the walk).
+- It fails open: any error is logged with a fixed message and the session id, counts toward the degraded state like the other hooks, and changes nothing.
+
+A transcript is read whole at each `Stop`; re-ingesting is idempotent. `transcriptUsageIngestion.test.ts` asserts that a canary placed in message text, in a malformed line and in a non-JSON line appears nowhere in the database, the logs or the ledger read the routes serve.

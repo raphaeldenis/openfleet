@@ -9,6 +9,7 @@ import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import type { TranscriptUsageIngestion } from '../usage/transcriptUsageIngestion.js';
 import { handoverReminder, type HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { json, type Handler } from './router.js';
@@ -41,7 +42,7 @@ function trackTodosFailingOpen(todos: TodoTracker | undefined, sessionId: string
 /** A conversation that starts, restarts or resumes has the base and the mission note only if it reads them again; a manager that never read them is unaffected. */
 const SESSION_START_SOURCES_THAT_RESET_THE_BASE_AND_NOTE_READS = ['startup', 'compact', 'clear', 'resume'];
 
-export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead' | 'forgetNoteRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
+export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead' | 'forgetNoteRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
   const decideStopRefusalFailingOpen = (sessionId: string, stopHookActive: boolean): StopHookOutput | undefined =>
     failingOpen(deps.degraded, 'stop refusal check failed, letting the turn end', () => deps.stopRefusal?.decide({ sessionId, stopHookActive }));
 
@@ -70,6 +71,13 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
       if (startsFreshConversation) deps.contextNotice?.clearForNewConversation(sessionId);
     });
 
+  const ingestUsageAfterAnswering = (sessionId: string, event: ClaudeHookEvent): void => {
+    const endsTurn = event.hook_event_name === 'Stop';
+    if (!endsTurn || !deps.usageIngestion) return;
+    const { usageIngestion } = deps;
+    setImmediate(() => failingOpen(deps.degraded, 'usage ingestion failed, recording nothing', () => usageIngestion.ingestAtStop(sessionId)));
+  };
+
   return async ({ res, params, body }) => {
     const session = deps.sessions.byHookToken(params.hookToken ?? '');
     const parsed = ClaudeHookEventSchema.safeParse(body);
@@ -91,6 +99,7 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
     const handoverReminderOutput = event.hook_event_name === 'UserPromptSubmit' && !isDaemonSeededPrompt ? recordHandoversFailingOpen({ sessionId: session.id, prompt: event.prompt }) : undefined;
     deps.sessions.applyInput(session.id, { kind: 'hook', event, turnContinues: stopRefusal !== undefined });
     trackContextNoticeFailingOpen(session.id, event);
+    ingestUsageAfterAnswering(session.id, event);
     trackTodosFailingOpen(deps.todos, session.id, event, todoCall);
     if (stopRefusal) return json(res, 200, stopRefusal);
     if (sessionStartContext) return json(res, 200, sessionStartContext);

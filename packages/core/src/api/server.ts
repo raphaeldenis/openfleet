@@ -43,6 +43,7 @@ import { registerGovernanceE2eRoutes } from './governanceE2eRoutes.js';
 import { registerCommandPolicyRoutes } from './commandPolicyRoutes.js';
 import { registerReviewFindingsRoutes } from './reviewFindingsRoutes.js';
 import { registerUsageRoutes } from './usageRoutes.js';
+import type { TranscriptUsageIngestion } from '../usage/transcriptUsageIngestion.js';
 import type { UsageLedgerService } from '../usage/usageLedgerService.js';
 import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
 import { registerGovernanceRoutes } from './governanceRoutes.js';
@@ -96,6 +97,8 @@ export interface ServerDeps {
   // Without it no handover is recorded and the handovers route does not exist.
   handoverLedger?: HandoverLedger;
   contextNotice?: ContextNotice;
+  /** Present only when the operator enabled the usage ingestion. */
+  usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>;
   // Without it the daemon reports no degraded state: /health says ok and the snapshot carries no daemonIssues.
   degraded?: DegradedRegistry;
   // Without it PreToolUse is answered {} and a PermissionRequest always opens an approval, as before the command policy.
