@@ -20,6 +20,8 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
   const state = {
     closesToFail: 0,
     closeDuringCreate: false,
+    createRejects: false,
+    createAttempts: 0,
     /** Makes the next create() wait until the returned function is called. */
     holdCreate: () => {
       const held = new Promise<void>((resolve) => { releaseCreate = resolve; });
@@ -35,7 +37,9 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
   const deps = {
     sessions: {
       create: async (spec: Record<string, unknown>) => {
+        state.createAttempts += 1;
         await createGate;
+        if (state.createRejects) throw new Error('create failed');
         const session: FakeSession = { id: `arbiter-${created.length + 1}`, name: spec.name as string, role: spec.role as string, parentId: spec.parentId as string, state: 'running', directory: spec.directory as string, harness: 'fake' };
         sessionsById.set(session.id, session);
         created.push(session);
@@ -151,6 +155,32 @@ describe('ArbiterRunner — no arbiter session stays live without a run', () => 
     expect(scheduled).toEqual([]);
     expect(created).toHaveLength(1);
     expect(escalateBatchToHuman).not.toHaveBeenCalled();
+  });
+
+  it('starts no second arbiter and escalates nothing when creation rejects after stop()', async () => {
+    const { runner, state, scheduled, escalateBatchToHuman } = aRunner();
+    const releaseCreate = state.holdCreate();
+
+    const outcome = runner.launch(BATCH_ID);
+    runner.stop();
+    state.createRejects = true;
+    releaseCreate();
+    await outcome;
+    await settle();
+
+    expect(state.createAttempts).toBe(1);
+    expect(escalateBatchToHuman).not.toHaveBeenCalled();
+    expect(scheduled).toEqual([]);
+  });
+
+  it('launches nothing once stopped', async () => {
+    const { runner, state } = aRunner();
+    runner.stop();
+
+    const outcome = await runner.launch(BATCH_ID);
+
+    expect(outcome).toEqual({ status: 'idle' });
+    expect(state.createAttempts).toBe(0);
   });
 
   it('tracks no arbiter after stop(), whatever calls track', () => {
