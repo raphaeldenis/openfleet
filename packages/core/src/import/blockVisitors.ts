@@ -49,8 +49,16 @@ const renderListItemLines = (item: LexicalNode, context: RenderContext): string[
   return [...textLines, ...nestedListLines].join('\n').split('\n');
 };
 
+export const visitHorizontalRule: NodeVisitor = () => '---';
+
+const bulletMarkerOf = (item: LexicalNode, { isChecklist }: { isChecklist: boolean }): string => {
+  if (!isChecklist) return '- ';
+  return item.checked === true ? '- [x] ' : '- [ ] ';
+};
+
 export const visitList: NodeVisitor = (node, context) => {
   const isNumbered = stringField(node, 'listType') === 'number';
+  const isChecklist = stringField(node, 'listType') === 'check';
   const outputLines: string[] = [];
   let itemNumber = numberField(node, 'start', 1);
   let lastMarkerWidth = 0;
@@ -62,7 +70,7 @@ export const visitList: NodeVisitor = (node, context) => {
       outputLines.push(...indentContinuationLines(renderListItemLines(item, context), lastMarkerWidth));
       continue;
     }
-    const marker = isNumbered ? `${itemNumber}. ` : '- ';
+    const marker = isNumbered ? `${itemNumber}. ` : bulletMarkerOf(item, { isChecklist });
     itemNumber += 1;
     lastMarkerWidth = marker.length;
     if (hasOnlyNestedLists) {

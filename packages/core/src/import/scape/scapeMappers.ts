@@ -1,5 +1,6 @@
 import { convertLexicalToMarkdown } from '../lexicalToMarkdown.js';
-import { COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, type ColumnFormat, type DsViewConfig } from '@openfleet/shared';
+import { COLUMN_TYPE_BY_FORMAT, ColumnFormatSchema, type ColumnFormat, type DsViewConfig, type OrderTerm } from '@openfleet/shared';
+import { inlineMarkdownText } from './importReport.js';
 import { ScapeImportError } from './scapeImportError.js';
 import { hexOfOptionColor, settingsOfScapeColumn, type ColumnSettings, type DroppedSetting } from './scapeColumnSettings.js';
 import { cellKeyOf, type ScapeColumn, type ScapeNote, type ScapeNoteVersion, type ScapeRow, type ScapeRowChange, type ScapeView } from './scapeSource.js';
@@ -214,10 +215,40 @@ function importedReferenceList(input: { value: unknown; knownIds: Set<string> })
   return { ids, hasLoss: ids.length !== input.value.length };
 }
 
+const SORT_FIELDS = ['sortColumnID', 'sortDescending', 'sortMode'];
+const isNotSortField = (key: string) => !SORT_FIELDS.includes(key);
+
+function neutralLabelOfRawValue(value: unknown): string {
+  if (typeof value === 'string') return inlineMarkdownText(value);
+  if (Array.isArray(value)) return '(array)';
+  if (typeof value === 'object' && value !== null) return '(object)';
+  return String(value);
+}
+
+const isNullOrEmpty = (value: unknown) => value === null || value === undefined || value === '';
+
+/** Maps the sort column and direction to orderBy; sortMode has no known meaning in Scape, so it is always listed with its raw value. */
+function mapSort(source: Record<string, unknown>, columnIds: Set<string>): { orderBy?: OrderTerm[]; droppedFields: string[] } {
+  const droppedFields: string[] = [];
+  if (Object.hasOwn(source, 'sortMode')) droppedFields.push(`sortMode = ${neutralLabelOfRawValue(source.sortMode)}`);
+  const hasDirection = Object.hasOwn(source, 'sortDescending');
+  const sortColumnId = source.sortColumnID;
+  const hasSortColumn = !isNullOrEmpty(sortColumnId);
+  if (!hasSortColumn) return { droppedFields: hasDirection ? ['sortDescending', ...droppedFields] : droppedFields };
+
+  const isKnownSortColumn = typeof sortColumnId === 'string' && columnIds.has(sortColumnId);
+  if (!isKnownSortColumn) return { droppedFields: ['sortColumnID', ...droppedFields] };
+
+  const hasValidDirection = typeof source.sortDescending === 'boolean';
+  if (hasDirection && !hasValidDirection) droppedFields.unshift('sortDescending');
+  const dir = source.sortDescending === true ? 'desc' : 'asc';
+  return { orderBy: [{ columnId: sortColumnId, dir }], droppedFields };
+}
+
 function mapKanbanConfig(source: Record<string, unknown>, columns: MappedColumn[], groupColumn: MappedColumn): { config: DsViewConfig; droppedFields: string[] } {
   const config: DsViewConfig = { groupByColumnId: groupColumn.id };
   const supportedFields = new Set(['groupByColumnID', 'cardTitleColumnID', 'cardFieldColumnIDs', 'columnOrder', 'showUngrouped']);
-  const droppedFields = Object.keys(source).filter((key) => !supportedFields.has(key));
+  const droppedFields = Object.keys(source).filter((key) => !supportedFields.has(key) && isNotSortField(key));
   const columnIds = new Set(columns.map((column) => column.id));
   if (Object.hasOwn(source, 'cardTitleColumnID')) {
     const titleId = source.cardTitleColumnID;
@@ -250,9 +281,12 @@ export function mapView(view: ScapeView, columns: MappedColumn[]) {
   const groupByColumn = columns.find((column) => column.id === groupByColumnId);
   if (isKanban && groupByColumn?.columnType !== 'select') return undefined;
 
-  const { config, droppedFields } = isKanban && groupByColumn
+  const layout = isKanban && groupByColumn
     ? mapKanbanConfig(scapeConfig, columns, groupByColumn)
-    : { config: {}, droppedFields: Object.keys(scapeConfig) };
+    : { config: {} as DsViewConfig, droppedFields: Object.keys(scapeConfig).filter(isNotSortField) };
+  const sort = mapSort(scapeConfig, new Set(columns.map((column) => column.id)));
+  const config: DsViewConfig = sort.orderBy ? { ...layout.config, orderBy: sort.orderBy } : layout.config;
+  const droppedFields = [...layout.droppedFields, ...sort.droppedFields];
   const record = {
     store_id: view.storeId,
     display_name: view.name,

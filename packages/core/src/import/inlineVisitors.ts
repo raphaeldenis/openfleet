@@ -1,5 +1,5 @@
 import { MENTION_KINDS, type MentionKind } from '@openfleet/shared';
-import { numberField, stringField, type LexicalNode, type NodeVisitor } from './lexicalNode.js';
+import { childrenOf, numberField, stringField, type LexicalNode, type NodeVisitor } from './lexicalNode.js';
 import { delimiterLongerThanAnyBacktickRunIn } from './markdownFences.js';
 
 export const HARD_BREAK = '  \n';
@@ -57,6 +57,42 @@ export const visitText: NodeVisitor = (node, context) => {
 };
 
 export const visitLinebreak: NodeVisitor = () => HARD_BREAK;
+
+export const visitTab: NodeVisitor = () => '\t';
+
+const MAX_LINK_URL_LENGTH = 2048;
+const LINK_URL_THAT_RENDERS_SAFELY = /^(?:https?:\/\/|mailto:)[A-Za-z0-9\-._~:/?#@!$&'*+,;=%]+$/i;
+const LINE_BREAK = /[\r\n]/;
+
+/** Whether the brackets pair up once each backslash has escaped the character after it; a trailing backslash would escape the closing bracket of the link. */
+function hasPairedBracketsAndNoTrailingBackslash(text: string): boolean {
+  let openBrackets = 0;
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    if (character === '\\') {
+      const isLastCharacter = index === text.length - 1;
+      if (isLastCharacter) return false;
+      index += 1;
+    } else if (character === '[') {
+      openBrackets += 1;
+    } else if (character === ']') {
+      openBrackets -= 1;
+      if (openBrackets < 0) return false;
+    }
+  }
+  return openBrackets === 0;
+}
+
+const hasEvenBacktickCount = (text: string) => (text.match(/`/g)?.length ?? 0) % 2 === 0;
+
+export const visitLink: NodeVisitor = (node, context) => {
+  const url = stringField(node, 'url');
+  const linkText = context.renderInline(childrenOf(node));
+  const hasSafeUrl = url.length <= MAX_LINK_URL_LENGTH && LINK_URL_THAT_RENDERS_SAFELY.test(url);
+  const hasSafeText = linkText.trim() !== '' && !LINE_BREAK.test(linkText) && hasPairedBracketsAndNoTrailingBackslash(linkText) && hasEvenBacktickCount(linkText);
+  if (!hasSafeUrl || !hasSafeText) return context.renderUnconverted(node.type) + linkText;
+  return `[${linkText}](${url})`;
+};
 
 const mentionedIdOf = (node: LexicalNode, scapeKind: string): string => {
   const genericId = stringField(node, 'mentionId');
