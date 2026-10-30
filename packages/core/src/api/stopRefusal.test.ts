@@ -128,11 +128,13 @@ describe('user can rely on the daemon refusing the end of a turn while the worki
     fx.setNow(writtenAt - 5 * MINUTE_MS);
     fx.db.prepare('INSERT INTO session_working_states (session_id, sections_json, updated_at) VALUES (?, ?, ?)').run(sessionId, JSON.stringify(bigState), new Date(fx.now()).toISOString());
     fx.setNow(writtenAt);
-    await fx.sessions.create({ directory: '/tmp', name: 'Late-child', harness: 'fake', emoji: '🧒', parentId: sessionId });
+    const lateChild = await fx.sessions.create({ directory: '/tmp', name: 'Late-child', harness: 'fake', emoji: '🧒', parentId: sessionId });
     fx.setNow(writtenAt + 1_000);
 
     const oversizeAndFleetStale = await stop();
-    fx.db.prepare('UPDATE session_working_states SET updated_at = ? WHERE session_id = ?').run(new Date(writtenAt + 500).toISOString(), sessionId);
+    const spawnedAtMs = Date.parse((fx.db.prepare('SELECT created_at FROM sessions WHERE id = ?').get(lateChild.id) as { created_at: string }).created_at);
+    const writtenOneMsAfterSpawnMs = spawnedAtMs + 1;
+    fx.db.prepare('UPDATE session_working_states SET updated_at = ? WHERE session_id = ?').run(new Date(writtenOneMsAfterSpawnMs).toISOString(), sessionId);
     const oversizeOnly = await stop();
 
     expect(oversizeAndFleetStale.reason).toContain('Late-child');
