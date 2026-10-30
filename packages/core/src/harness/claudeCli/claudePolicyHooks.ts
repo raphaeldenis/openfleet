@@ -124,8 +124,8 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
     if (verdict === undefined) return undefined;
     const waitsOnFindingsGate = this.deps.findingsGate !== undefined && isFindingsGateVerdict(verdict);
     if (waitsOnFindingsGate) return this.answerFindingsGate(session, event);
-    const isRefusedByThePolicy = verdict.decision === 'deny';
-    const artifactAnswer = isRefusedByThePolicy ? undefined : this.answerArtifactWrite(session, event);
+    const isCleanlyAllowedByThePolicy = verdict.decision === 'allow' && verdict.observed === undefined;
+    const artifactAnswer = isCleanlyAllowedByThePolicy ? this.answerArtifactWrite(session, event) : undefined;
     if (artifactAnswer !== undefined) return artifactAnswer;
     if (verdict.decision === 'allow') return this.answerAllowed(session, event, verdict);
     const refusal = this.refusalOf(session, verdict);

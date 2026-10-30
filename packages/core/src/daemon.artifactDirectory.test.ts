@@ -1,6 +1,6 @@
 import { mkdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
+import { E2E_FLAG_ENV, E2E_FLAG_ON, type CommandPolicyDocument, type PolicyRule } from '@openfleet/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig, type Config } from './config.js';
 import { startDaemon, type Daemon, type DaemonOptions } from './daemon.js';
@@ -26,12 +26,27 @@ afterEach(async () => {
   tempDirs.removeAll();
 });
 
-const enforcingPolicy = (): NonNullable<DaemonOptions['commandPolicy']> => {
+const ASK_BEFORE_WRITING_RULE_ID = 'ask-before-writing';
+const askBeforeWriting: PolicyRule = { id: ASK_BEFORE_WRITING_RULE_ID, tools: ['Write'], decision: 'ask', when: {}, reason: 'Every Write needs a human look.' };
+
+const policyAskingBeforeWrites = (): CommandPolicyDocument => ({
+  ...DEFAULT_COMMAND_POLICY,
+  rules: [askBeforeWriting, ...DEFAULT_COMMAND_POLICY.rules],
+  profiles: {
+    ...DEFAULT_COMMAND_POLICY.profiles,
+    default: { rules: [ASK_BEFORE_WRITING_RULE_ID, ...DEFAULT_COMMAND_POLICY.profiles.default!.rules] },
+    manager: { rules: [ASK_BEFORE_WRITING_RULE_ID, ...DEFAULT_COMMAND_POLICY.profiles.manager!.rules] },
+  },
+});
+
+const policyObservingEveryRule = (): CommandPolicyDocument => ({ ...DEFAULT_COMMAND_POLICY, mode: 'observe' });
+
+const policyOf = (document: CommandPolicyDocument): NonNullable<DaemonOptions['commandPolicy']> => {
   const defaults = defaultCommandPolicySettings();
-  return { settings: { document: { ...DEFAULT_COMMAND_POLICY, mode: 'enforce' }, unattended: defaults.unattended } };
+  return { settings: { document, unattended: defaults.unattended } };
 };
 
-async function bootDaemon({ configJson }: { configJson?: Record<string, unknown> } = {}): Promise<Daemon> {
+async function bootDaemon({ configJson, policyDocument = { ...DEFAULT_COMMAND_POLICY, mode: 'enforce' } }: { configJson?: Record<string, unknown>; policyDocument?: CommandPolicyDocument } = {}): Promise<Daemon> {
   const home = tempDirs.make('of-daemon-artifacts-');
   docsFolder = realpathSync.native(tempDirs.make('of-daemon-artifacts-docs-'));
   if (configJson !== undefined) writeFileSync(join(home, 'config.json'), JSON.stringify(configJson));
@@ -42,7 +57,7 @@ async function bootDaemon({ configJson }: { configJson?: Record<string, unknown>
   projects.insert({ id: PROJECT_WITHOUT_DOCS_FOLDER_ID, name: 'Two', docsFolderPath: null, createdAt: 't0' });
   seedDb.close();
   mkdirSync(config.worktreesRoot, { recursive: true });
-  daemon = await startDaemon(config, { commandPolicy: enforcingPolicy() });
+  daemon = await startDaemon(config, { commandPolicy: policyOf(policyDocument) });
   return daemon;
 }
 
@@ -68,6 +83,7 @@ const managerDirectoryOf = (name = MANAGER_NAME) => join(docsFolder, 'artifacts'
 const journalRows = () => (daemon!.db.prepare("SELECT session_id, kind, payload_json FROM session_events WHERE kind LIKE 'artifact_write%' ORDER BY id").all() as { session_id: string; kind: string; payload_json: string }[])
   .map((row) => ({ sessionId: row.session_id, kind: row.kind, payload: JSON.parse(row.payload_json) as Record<string, unknown> }));
 const decisionOf = (answer: HookAnswer) => answer.hookSpecificOutput?.permissionDecision;
+const denialRows = () => daemon!.db.prepare('SELECT rule_id, outcome, tool_name FROM denied_commands ORDER BY created_at, rowid').all() as { rule_id: string; outcome: string; tool_name: string }[];
 const isDirectory = (path: string) => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
 
 describe('a Write to the artifact directory of a manager', () => {
@@ -262,6 +278,43 @@ describe('a Write refused inside the artifact directory', () => {
     expect(decisionOf(answer)).toBe('deny');
     expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('no-write-into-git-dir');
     expect(journalRows()).toEqual([]);
+  });
+});
+
+describe('a Write a policy rule asks about', () => {
+  it('stays with the approval flow for the manager: the artifact directory grants nothing over an ask rule', async () => {
+    await bootDaemon({ policyDocument: policyAskingBeforeWrites() });
+    const manager = await createManager();
+
+    const answer = await write(manager.id, join(managerDirectoryOf(), 'x.md'), 'hi');
+
+    expect(answer).toEqual({});
+    expect(journalRows()).toEqual([]);
+  });
+
+  it('stays refused for an unattended child, never allowed by the artifact directory', async () => {
+    await bootDaemon({ policyDocument: policyAskingBeforeWrites() });
+    const manager = await createManager();
+    const child = await createChildOf(manager.id);
+
+    const answer = await write(child.id, join(managerDirectoryOf(), 'x.md'), 'hi');
+
+    expect(decisionOf(answer)).toBe('deny');
+    expect(journalRows()).toEqual([]);
+  });
+});
+
+describe('a Write a policy rule only observes', () => {
+  it('journals the observed refusal and is not vouched for by the artifact directory', async () => {
+    await bootDaemon({ policyDocument: policyObservingEveryRule() });
+    const manager = await createManager();
+    const child = await createChildOf(manager.id);
+
+    const answer = await write(child.id, join(managerDirectoryOf(), '.git', 'hooks', 'x'), 'hi');
+
+    expect(answer).toEqual({});
+    expect(journalRows()).toEqual([]);
+    await vi.waitFor(() => expect(denialRows()).toEqual([{ rule_id: 'no-write-into-git-dir', outcome: 'observed', tool_name: 'Write' }]));
   });
 });
 
