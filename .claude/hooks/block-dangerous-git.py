@@ -24,7 +24,9 @@ SHELL_INLINE_SCRIPT_FLAGS = {"-c", "-lc", "-ic", "-ec"}
 COMMIT_MESSAGE_PLACEHOLDER = "HEREDOC_COMMIT_MESSAGE_BODY"
 COMMIT_MESSAGE_HEREDOC_START = re.compile(r"\$\(\s*cat\s+<<(-?)[ \t]*(['\"])([A-Za-z_][\w.-]*)\2[ \t]*\n")
 ARITHMETIC_OF_DIGITS_ONLY = re.compile(r"\(\([\d\s<+*-]*\)\)")
-HEREDOC_OPERATOR_RUN = re.compile(r"<{2,}")
+QUOTED_STRING = re.compile(r"\"[^\"]*\"|'[^']*'")
+COMMENT_OR_SUBSTITUTION_CHARACTERS = ("#", "`", "(")
+HEREDOC_OPERATOR_RUN =re.compile(r"<{2,}")
 HERE_STRING_OPERATOR_LENGTH = 3
 PIECE_SEPARATORS = re.compile(r"&&|\|\||[;\n|&]")
 MESSAGE_PROGRAMS_WITH_SUBCOMMANDS = {"git": {"commit"}, "gh": {"pr", "issue"}}
@@ -51,11 +53,14 @@ def is_opening_a_live_double_quoted_string(text_before_substitution):
     has_exotic_quoting = "\\" in text_before_substitution or "$'" in text_before_substitution or "<<" in text_before_substitution
     if not ends_with_double_quote or has_exotic_quoting:
         return False
+    text_before_quote = text_before_substitution[:-1]
     try:
-        shlex.split(text_before_substitution[:-1])
+        shlex.split(text_before_quote)
     except ValueError:
         return False
-    return True
+    text_outside_quoted_strings = QUOTED_STRING.sub(" ", text_before_quote)
+    has_comment_or_substitution_outside_quotes = any(char in text_outside_quoted_strings for char in COMMENT_OR_SUBSTITUTION_CHARACTERS)
+    return not has_comment_or_substitution_outside_quotes
 
 
 def find_heredoc_end(command, body_start, delimiter, strips_tabs):

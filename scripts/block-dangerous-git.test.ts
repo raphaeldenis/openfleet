@@ -183,6 +183,26 @@ const BLOCKED_WHEN_THE_COMMIT_MESSAGE_FORM_IS_NOT_CLEAN_OR_NOT_THE_EXACT_FORM = 
   'git commit -m "$(cat <<\'EOF\'\nx\nEOF\n)" && git push -f',
 ];
 
+const HEREDOC_THAT_RUNS_A_FORCE_PUSH = "<<'EOF'\ngit push -f\nEOF\n)\"";
+
+const BLOCKED_WHEN_THE_PREFIX_HIDES_THE_HEREDOC_BODY_BEHIND_A_COMMENT_OR_SUBSTITUTION = [
+  `git commit -m x # "$(cat ${HEREDOC_THAT_RUNS_A_FORCE_PUSH}`,
+  `ls # "$(cat ${HEREDOC_THAT_RUNS_A_FORCE_PUSH}`,
+  `git commit -m \`x\` "$(cat ${HEREDOC_THAT_RUNS_A_FORCE_PUSH}`,
+  `ls \`pwd\` # "$(cat ${HEREDOC_THAT_RUNS_A_FORCE_PUSH}`,
+  `git commit -m $(x) "$(cat ${HEREDOC_THAT_RUNS_A_FORCE_PUSH}`,
+  `ls (x) "$(cat ${HEREDOC_THAT_RUNS_A_FORCE_PUSH}`,
+];
+
+const COMMIT_MESSAGE_FORMS_WITH_PUNCTUATION_IN_A_QUOTED_PREFIX_STAYING_ALLOWED = [
+  `git commit -m "feat(x): y # z" -m "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+  `git commit -m x -m "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+];
+
+const BLOCKED_AS_A_KNOWN_OVER_REFUSAL_WHEN_GIT_TAKES_A_GLOBAL_OPTION = [
+  `git -C <feature> commit -m "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+];
+
 const BLOCKED_WHEN_A_HEREDOC_BODY_MENTIONS_A_DANGEROUS_GIT_COMMAND_OUTSIDE_THE_COMMIT_MESSAGE_FORM = [
   'cat <<\'EOF\'\ngit reset --hard is blocked now\nEOF',
   'cat <<EOF\ngit push --force is documented here\nEOF',
@@ -335,6 +355,18 @@ describe('block-dangerous-git hook', () => {
     );
 
     it.each(BLOCKED_BYPASSES_FOUND_BY_THE_ROUND_3_REVIEW)('blocks %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
+    });
+
+    it.each(BLOCKED_WHEN_THE_PREFIX_HIDES_THE_HEREDOC_BODY_BEHIND_A_COMMENT_OR_SUBSTITUTION)('blocks %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
+    });
+
+    it.each(COMMIT_MESSAGE_FORMS_WITH_PUNCTUATION_IN_A_QUOTED_PREFIX_STAYING_ALLOWED)('allows the commit-message form %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
+    });
+
+    it.each(BLOCKED_AS_A_KNOWN_OVER_REFUSAL_WHEN_GIT_TAKES_A_GLOBAL_OPTION)('blocks (stricter than needed, known) %j', (command) => {
       expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
     });
   });
