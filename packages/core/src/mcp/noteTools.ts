@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { MAX_QUERY_CHARS, MAX_QUERY_TERMS, MAX_SEARCH_RESULTS, buildFtsQuery } from '../notes/ftsQuery.js';
 import { FileBackedNoteError } from '../notes/noteService.js';
-import { bodyPageView, bodyWithMentionsIndexView, mentionsIndexEntryOf, NOTE_READ_SAFE_BYTES, readLimitBytes, serializedBytes } from './noteReadPaging.js';
+import { boundedReadView, mentionsIndexEntryOf, NOTE_READ_SAFE_BYTES, readLimitBytes } from './noteReadPaging.js';
 import { createNoteToolSupport, type NoteToolDeps } from './noteToolSupport.js';
 import { guardedFor, refuse } from './toolResults.js';
 
@@ -36,8 +36,6 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
     return guarded(() => {
       const ownNote = requireOwnNote(scope.projectId, note);
       const viewerScope = { viewerProjectId: scope.projectId };
-      const limitBytes = readLimitBytes(max_bytes);
-      const isReadingFromOffset = offset !== undefined && offset > 0;
       const answeredAndRecorded = <View extends object>(view: View): View => {
         deps.onNoteRead?.({ noteId: ownNote.id, noteRev: ownNote.rev, response: view });
         return view;
@@ -52,17 +50,17 @@ export function registerNoteTools(server: McpServer, deps: RegisterNoteToolsDeps
         return noteView(expandedNote, expandedBody);
       };
 
-      if (!isReadingFromOffset) {
-        const fullView = readFullView();
-        if (serializedBytes(fullView) <= limitBytes) return answeredAndRecorded(fullView);
-      }
+      const readFraming = () => ({
+        header: noteHeader(ownNote),
+        bodyMd: ownNote.bodyMd,
+        mentionsIndex: notes.getMentionIndex(note, viewerScope).map(mentionsIndexEntryOf),
+      });
 
-      const mentionsIndex = notes.getMentionIndex(note, viewerScope).map(mentionsIndexEntryOf);
-      const framing = { header: noteHeader(ownNote), bodyMd: ownNote.bodyMd, mentionsIndex };
-      const bodyWithIndex = bodyWithMentionsIndexView(framing);
-      if (!isReadingFromOffset && serializedBytes(bodyWithIndex) <= limitBytes) return answeredAndRecorded(bodyWithIndex);
-
-      return answeredAndRecorded(bodyPageView({ noteId: ownNote.id, ...framing, offset: offset ?? 0, limitBytes }));
+      return answeredAndRecorded(boundedReadView({
+        readFullView, readFraming, offset,
+        nextPageCall: (nextOffset) => `get_note note=${ownNote.id} offset=${nextOffset}`,
+        limitBytes: readLimitBytes(max_bytes),
+      }));
     });
   });
 
