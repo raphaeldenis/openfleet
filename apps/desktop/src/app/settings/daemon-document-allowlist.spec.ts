@@ -138,6 +138,13 @@ describe('the daemon document allowlist', () => {
       expect(versionKeptAs(version)).toBe(UNRECOGNISED);
     });
 
+    it.each(['x1.2.3', '1.2.3x', ' 1.2.3', '1.2.3 ', '\n1.2.3', '1.2.3\n', 'xdev', 'devx', ' dev', 'dev ', 'dev-0123abcdx', 'xdev-0123abcd', 'dev-0123abcd ', 'develop'])(
+      'reduces %j, a version with text before or after it, to unrecognised',
+      (version) => {
+        expect(versionKeptAs(version)).toBe(UNRECOGNISED);
+      },
+    );
+
     it('reduces a token-shaped build metadata to unrecognised', () => {
       const keptAs = hostileTokens().flatMap((token) => [`1.2.3+${token}`, `1.2.3+412.${token}`, `1.2.3-rc.1+${token}`]).map(versionKeptAs);
 
