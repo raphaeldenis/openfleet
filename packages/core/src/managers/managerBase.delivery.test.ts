@@ -17,7 +17,6 @@ const TARGET_BYTES = 6144;
 const MAX_BYTES = 8192;
 const SECTION_COUNT = 10;
 
-
 const tempDirs = createTempDirTracker();
 let daemon: Daemon;
 let registeredToolNames: ReadonlySet<string>;

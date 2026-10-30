@@ -1,5 +1,7 @@
 // A shipped version is immutable: managers already read it by (version, sha). A body change means a new version
 // and a new line here; editing a line below means a shipped version was edited, which is never allowed.
+// When the drift check fails: never edit a line below. Bump `version:` in templates/manager/base.md, write the sha of
+// the new body (`loadManagerBase().sha`) in templates/manager/base.sha256, and add `<version>: '<sha>'` here.
 export const RELEASED_BASE_SHAS: Record<number, string> = {
   1: '4ee6ed1d031e912d825972627a8e759ea881218bcd33f4f9609e6c066daa56a6',
   2: 'fe4afd8ff81625b6ff76711c059222f817472fe3c2a4f6e0daa291c13a7a077c',

@@ -13,7 +13,7 @@ describe('checkBaseDrift', () => {
     expect(findings).toEqual([]);
   });
 
-  describe('base_edited_without_bump', () => {
+  describe('the pin', () => {
     it('reports a base whose sha differs from the sha released for its version', () => {
       const findings = checkBaseDrift({ base, releasedShas: { 3: 'sha-released-v3' }, missions: [] });
 
@@ -22,6 +22,12 @@ describe('checkBaseDrift', () => {
 
     it('reports a version that no pin records', () => {
       const findings = checkBaseDrift({ base, releasedShas: { 2: 'sha-v2' }, missions: [] });
+
+      expect(findings).toEqual([{ kind: 'base_version_unpinned', version: 3, actualSha: 'sha-v3' }]);
+    });
+
+    it('reports every version as unpinned when the pin is empty', () => {
+      const findings = checkBaseDrift({ base, releasedShas: {}, missions: [] });
 
       expect(findings).toEqual([{ kind: 'base_version_unpinned', version: 3, actualSha: 'sha-v3' }]);
     });
@@ -78,13 +84,49 @@ describe('checkBaseDrift', () => {
       expect(findings).toEqual([expect.objectContaining({ kind: 'duplicated_rule', mission: 'Alpha' })]);
     });
 
-    it('scans a 64 KiB mission without a quadratic blow-up', () => {
-      const hostile = `${'a. '.repeat(21_000)}${'!'.repeat(1_000)}`;
-      const startedAt = performance.now();
+    it('reports a sentence of exactly the minimum length and ignores one character less', () => {
+      const atMinimum = 'a'.repeat(MIN_RULE_SENTENCE_LENGTH);
+      const belowMinimum = 'b'.repeat(MIN_RULE_SENTENCE_LENGTH - 1);
+      const boundaryBase = { ...base, body: `${atMinimum}\n${belowMinimum}` };
 
-      checkBaseDrift({ base, missions: [{ label: 'Alpha', text: hostile }] });
+      const findings = checkBaseDrift({ base: boundaryBase, missions: [{ label: 'Alpha', text: `${atMinimum}\n${belowMinimum}` }] });
 
-      expect(performance.now() - startedAt).toBeLessThan(500);
+      expect(findings).toEqual([{ kind: 'duplicated_rule', mission: 'Alpha', sentence: atMinimum }]);
+    });
+
+    it('treats a full-width rendering of a rule as the same rule', () => {
+      const toFullWidth = (text: string) => [...text].map((character) => (character >= '!' && character <= '~' ? String.fromCharCode(character.charCodeAt(0) + 0xfee0) : character)).join('');
+
+      const findings = checkBaseDrift({ base, missions: [{ label: 'Alpha', text: toFullWidth(RULE) }] });
+
+      expect(findings).toEqual([expect.objectContaining({ kind: 'duplicated_rule', mission: 'Alpha' })]);
+    });
+
+    describe('on large inputs', () => {
+      const SENTENCE_COUNT = 20_000;
+      const LINEAR_TIME_BUDGET_MS = 1_000;
+      const LONG_COMMON_PREFIX = 'every generated sentence starts with the same long prefix so that a comparison reads far before it differs'.repeat(2);
+      const distinctSentences = (ownWord: string) => Array.from({ length: SENTENCE_COUNT }, (_, index) => `${LONG_COMMON_PREFIX} ${ownWord} ${String(index).padStart(6, '0')}`);
+
+      it('looks up thousands of distinct sentences against a large base in linear time', () => {
+        const largeBase = { ...base, body: distinctSentences('alpha').join('.\n') };
+        const largeMission = { label: 'Alpha', text: distinctSentences('omega').join('.\n') };
+        const startedAt = performance.now();
+
+        const findings = checkBaseDrift({ base: largeBase, missions: [largeMission] });
+
+        expect(findings).toEqual([]);
+        expect(performance.now() - startedAt).toBeLessThan(LINEAR_TIME_BUDGET_MS);
+      });
+
+      it('scans a 64 KiB block without any separator in linear time', () => {
+        const block = 'word '.repeat(13_200);
+        const startedAt = performance.now();
+
+        checkBaseDrift({ base, missions: [{ label: 'Alpha', text: block }] });
+
+        expect(performance.now() - startedAt).toBeLessThan(LINEAR_TIME_BUDGET_MS);
+      });
     });
   });
 });

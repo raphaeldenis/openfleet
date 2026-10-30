@@ -50,7 +50,9 @@ function duplicatedRulesOf(baseRules: ReadonlySet<string>, mission: DriftMission
 
 /**
  * Compares the shipped base with the sha released for its version and with the rules each mission restates.
- * Without `releasedShas` the pin is not checked.
+ * A rule is restated when a mission sentence equals a sentence of the base once case, spacing and punctuation are
+ * normalized: the match is exact, not fuzzy. Sentences are cut at `. ! ? ; \n` and those under
+ * `MIN_RULE_SENTENCE_LENGTH` normalized characters are ignored. Without `releasedShas` the pin is not checked.
  */
 export function checkBaseDrift({ base, releasedShas, missions }: { base: DriftBase; releasedShas?: Record<number, string>; missions: readonly DriftMission[] }): BaseDriftFinding[] {
   const pinFindings = releasedShas ? pinFindingOf(base, releasedShas) : [];
