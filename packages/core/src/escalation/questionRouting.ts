@@ -27,7 +27,8 @@ export function routeQuestion(question: PlanQuestion, policy: RoutingPolicy = {}
 
   const isUnknown = declared === 'unknown';
   const hasClassOnHumanList = effective.length > disabledByProject.length;
-  const isFactualAndProvenByARun = declared === 'factual' && question.resolution !== undefined && isExecutedClaim(question.resolution);
+  const isReopeningAnArbiterDecision = question.reopens !== undefined;
+  const isFactualAndProvenByARun = !isReopeningAnArbiterDecision && declared === 'factual' && question.resolution !== undefined && isExecutedClaim(question.resolution);
   const isEscalatingOnlyThroughDisabledClasses = effective.length > 0 && !hasClassOnHumanList;
 
   const route = routeOf({ isUnknown, hasClassOnHumanList, isEscalatingOnlyThroughDisabledClasses, isFactualAndProvenByARun });

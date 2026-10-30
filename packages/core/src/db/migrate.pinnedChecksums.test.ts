@@ -66,6 +66,7 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '057_escalation_handover_refusal': '3a7d338d21004767eb0a596e829ff2ff87633c9b7f4a4bfbc26ccdce1b55d761',
   '058_session_attended': 'c037613f2fd78396fc266f9c6b5734d4a6f2d37f4fbe26cdb25df8ad59617b0b',
   '059_session_read_directories': '666f42093fff20f2f18ad955a5745d03c94195ff0dcf79bb3872a3021f495585',
+  '060_plan_question_reopens': '158a800f4b0cf00775246257463bfe42381d7b43bb8f8c6147f8fdcc0ad45762',
 };
 
 const migrationVersionsOnDisk = () =>

@@ -118,6 +118,61 @@ describe('the questions', () => {
   });
 });
 
+describe('the reopen links', () => {
+  const forTicket = { managerId: MANAGER_ID, ticket: TICKET };
+
+  it('keeps the batch and the question a reopening question points at', () => {
+    aBatch('b1');
+    aBatch('b2');
+    repository.insertQuestion(aQuestion({ batchId: 'b1', questionId: 'q1', status: 'decided' }));
+
+    repository.insertQuestion(aQuestion({ batchId: 'b2', questionId: 'n1', reopensBatchId: 'b1', reopensQuestionId: 'q1' }));
+
+    expect(repository.questionsOfBatch('b2')[0]).toMatchObject({ questionId: 'n1', reopensBatchId: 'b1', reopensQuestionId: 'q1' });
+    expect(repository.questionsOfBatch('b1')[0]).not.toHaveProperty('reopensBatchId');
+  });
+
+  it('finds the most recent decided question with the id, not an older one', () => {
+    aBatch('b1');
+    aBatch('b2');
+    repository.insertQuestion(aQuestion({ batchId: 'b1', questionId: 'q1', status: 'decided' }));
+    repository.insertQuestion(aQuestion({ batchId: 'b2', questionId: 'q1', status: 'decided' }));
+
+    expect(repository.decidedQuestionForReopen({ ...forTicket, questionId: 'q1' })).toMatchObject({ batchId: 'b2' });
+  });
+
+  it('skips a more recent question with the id that is not decided', () => {
+    aBatch('b1');
+    aBatch('b2');
+    repository.insertQuestion(aQuestion({ batchId: 'b1', questionId: 'q1', status: 'decided' }));
+    repository.insertQuestion(aQuestion({ batchId: 'b2', questionId: 'q1', status: 'open' }));
+
+    expect(repository.decidedQuestionForReopen({ ...forTicket, questionId: 'q1' })).toMatchObject({ batchId: 'b1' });
+  });
+
+  it('finds nothing for another ticket, another manager or a question that is not decided', () => {
+    aBatch('b1');
+    aBatch('b2', 'KB-02');
+    repository.insertQuestion(aQuestion({ batchId: 'b1', questionId: 'q1', status: 'pending_human' }));
+    repository.insertQuestion(aQuestion({ batchId: 'b2', questionId: 'q2', status: 'decided' }));
+
+    expect(repository.decidedQuestionForReopen({ ...forTicket, questionId: 'q1' })).toBeUndefined();
+    expect(repository.decidedQuestionForReopen({ ...forTicket, questionId: 'q2' })).toBeUndefined();
+    expect(repository.decidedQuestionForReopen({ managerId: 'someone-else', ticket: TICKET, questionId: 'q1' })).toBeUndefined();
+  });
+
+  it('tells a question that a later question already reopens', () => {
+    aBatch('b1');
+    aBatch('b2');
+    repository.insertQuestion(aQuestion({ batchId: 'b1', questionId: 'q1', status: 'decided' }));
+    repository.insertQuestion(aQuestion({ batchId: 'b1', questionId: 'q2', status: 'decided' }));
+    repository.insertQuestion(aQuestion({ batchId: 'b2', questionId: 'n1', reopensBatchId: 'b1', reopensQuestionId: 'q1' }));
+
+    expect(repository.isReopened({ batchId: 'b1', questionId: 'q1' })).toBe(true);
+    expect(repository.isReopened({ batchId: 'b1', questionId: 'q2' })).toBe(false);
+  });
+});
+
 describe('the escalations', () => {
   beforeEach(() => aBatch());
 

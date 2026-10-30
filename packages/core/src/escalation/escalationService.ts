@@ -1,4 +1,4 @@
-import { EVIDENCE_MESSAGE, OpenFleetError, WORKING_STATE_MAX_ITEMS_PER_SECTION, type ArbiterOpinion, type EscalatingClass, type EscalationAnswerBody, type EscalationPolicy, type EscalationQuestionView, type EscalationStatus, type EscalationView, type PlanQuestion, type ReproClaim, type WorkingState, type WorkingStateSections } from '@openfleet/shared';
+import { EVIDENCE_MESSAGE, OpenFleetError, WORKING_STATE_MAX_ITEMS_PER_SECTION, isExecutedClaim, type ArbiterOpinion, type EscalatingClass, type EscalationAnswerBody, type EscalationPolicy, type EscalationQuestionView, type EscalationStatus, type EscalationView, type PlanQuestion, type ReproClaim, type WorkingState, type WorkingStateSections } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
 import { log } from '../logger.js';
@@ -14,6 +14,7 @@ export const CLASS_DISABLED_BY_PROJECT_REASON = 'class_disabled_by_project';
 export const ARBITER_DEFERRED_REASON = 'arbiter_deferred';
 export const ARBITER_UNAVAILABLE_REASON = 'arbiter_unavailable';
 export const ARBITER_QUOTA_REASON = 'arbiter_quota';
+export const ARBITER_DISPUTE_REASON = 'arbiter_dispute';
 
 export interface EscalationServiceDeps {
   db: DatabaseSync;
@@ -63,16 +64,26 @@ export interface PlanQuestionBatch {
   policy: EscalationPolicy;
 }
 
+/** A question that contests an arbiter decision: the first contest goes back to the arbiter with its new evidence, the second one goes to the human. */
+interface ReopenPlan {
+  kind: 'review' | 'dispute';
+  evidence: ReproClaim;
+  /** Absent only when the decision could not be checked and the question is handed to the human. */
+  contested?: { batchId: string; questionId: string };
+}
+
 export interface SubmittedPlanQuestions {
   batchId: string;
   selfResolvedQuestionIds: string[];
   arbiterQuestionIds: string[];
   human?: { escalationId: string; questionIds: string[] };
+  reopened: { questionId: string; kind: ReopenPlan['kind']; contestedQuestionId?: string }[];
 }
 
 const STATUS_OF_ROUTE: Record<QuestionRoute, QuestionStatus> = { human: 'pending_human', self: 'self_resolved', arbiter: 'open' };
 
-const reasonOf = (routing: QuestionRouting): string | undefined => {
+const reasonOf = (routing: QuestionRouting, reopen?: ReopenPlan): string | undefined => {
+  if (reopen?.kind === 'dispute') return ARBITER_DISPUTE_REASON;
   if (routing.declared === 'unknown') return UNCLASSIFIED_LABEL;
   const isArbiterQuestionOfDisabledClass = routing.route === 'arbiter' && routing.disabledByProject.length > 0;
   return isArbiterQuestionOfDisabledClass ? CLASS_DISABLED_BY_PROJECT_REASON : undefined;
@@ -117,6 +128,7 @@ export class EscalationService {
   submitBatch(batch: PlanQuestionBatch): SubmittedPlanQuestions {
     const submitted = this.storeBatch(batch);
     this.journalSelfResolved({ managerId: batch.managerId, ticket: batch.ticket, submitted });
+    this.journalReopened({ managerId: batch.managerId, ticket: batch.ticket, submitted });
     if (submitted.human) this.emitRaised(submitted.human.escalationId);
     return submitted;
   }
@@ -293,6 +305,17 @@ export class EscalationService {
     this.deps.audit.journal({ managerId, entries });
   }
 
+  private journalReopened({ managerId, ticket, submitted }: { managerId: string; ticket: string; submitted: SubmittedPlanQuestions }): void {
+    if (submitted.reopened.length === 0) return;
+    const entries = submitted.reopened.map(({ questionId, kind, contestedQuestionId }) => {
+      const subject = contestedQuestionId === undefined ? 'an arbiter decision that could not be checked' : `the arbiter decision of ${contestedQuestionId}`;
+      return kind === 'review'
+        ? `${ticket} ${questionId} reopens ${subject}: sent back to the arbiter with new evidence`
+        : `${ticket} ${questionId} contests ${subject}: escalated to the human (${ARBITER_DISPUTE_REASON})`;
+    });
+    this.deps.audit.journal({ managerId, entries });
+  }
+
   /** The escalations of every manager in the given status, oldest first. */
   listByStatus(status: EscalationStatus): EscalationView[] {
     return this.deps.repository.escalationsWithStatus(status).map((escalation) => this.viewOfStored(escalation));
@@ -358,26 +381,81 @@ export class EscalationService {
       const { repository } = this.deps;
       repository.insertBatch({ id: batchId, managerId: batch.managerId, ticket: batch.ticket, planNoteId: batch.planNoteId, planNoteRev: batch.planNoteRev, createdAt: this.deps.clock() });
 
-      const routed = batch.questions.map((question) => ({ question, routing: routeQuestion(question, batch.policy) }));
-      for (const { question, routing } of routed) repository.insertQuestion(this.newQuestionOf({ batchId, question, routing }));
+      const reopenPlans = this.planReopens(batch);
+      const routed = batch.questions.map((question) => {
+        const reopen = reopenPlans.get(question.id);
+        return { question, reopen, routing: this.routingOf({ question, reopen, policy: batch.policy }) };
+      });
+      for (const { question, routing, reopen } of routed) repository.insertQuestion(this.newQuestionOf({ batchId, question, routing, reopen }));
 
       const idsOfRoute = (route: QuestionRoute) => routed.filter(({ routing }) => routing.route === route).map(({ question }) => question.id);
       const humanQuestionIds = idsOfRoute('human');
       const human = humanQuestionIds.length === 0 ? undefined : this.joinEscalation({ batchId, managerId: batch.managerId, ticket: batch.ticket, questionIds: humanQuestionIds });
-      return { batchId, selfResolvedQuestionIds: idsOfRoute('self'), arbiterQuestionIds: idsOfRoute('arbiter'), ...(human && { human }) };
+      const reopened = routed.flatMap(({ question, reopen }) => (reopen === undefined ? [] : [{ questionId: question.id, kind: reopen.kind, ...(reopen.contested && { contestedQuestionId: reopen.contested.questionId }) }]));
+      return { batchId, selfResolvedQuestionIds: idsOfRoute('self'), arbiterQuestionIds: idsOfRoute('arbiter'), reopened, ...(human && { human }) };
     });
   }
 
-  private newQuestionOf({ batchId, question, routing }: { batchId: string; question: PlanQuestion; routing: QuestionRouting }): NewQuestion {
-    const reason = reasonOf(routing);
+  /** A second contest never reaches the arbiter: the question goes to the human whatever its class says. */
+  private routingOf({ question, reopen, policy }: { question: PlanQuestion; reopen: ReopenPlan | undefined; policy: EscalationPolicy }): QuestionRouting {
+    const routing = routeQuestion(question, policy);
+    return reopen?.kind === 'dispute' ? { ...routing, route: 'human' } : routing;
+  }
+
+  /**
+   * Checks every question that reopens an arbiter decision before anything is stored. A decision can be contested once: the first contest goes back to the arbiter,
+   * the contest of that answer is a dispute for the human. When the stored decisions cannot be read, the question fails closed to the human, never to the arbiter.
+   */
+  private planReopens({ managerId, ticket, questions }: PlanQuestionBatch): Map<string, ReopenPlan> {
+    const plans = new Map<string, ReopenPlan>();
+    const contestedKeys = new Set<string>();
+    for (const question of questions) {
+      if (question.reopens === undefined) continue;
+      const evidence = this.executedEvidenceOf(question);
+      const target = this.decidedTargetOf({ managerId, ticket, questionId: question.reopens });
+      if (target === 'unreadable') { plans.set(question.id, { kind: 'dispute', evidence }); continue; }
+
+      if (target === undefined) throw new OpenFleetError('invalid_body', `${question.id}: reopens ${question.reopens}, but the arbiter decided no question with this id on ${ticket}`, { hint: 'Only a question the arbiter decided can be reopened; one that waits for the arbiter or a human cannot.' });
+      const contested = { batchId: target.batchId, questionId: target.questionId };
+      const key = `${contested.batchId}/${contested.questionId}`;
+      const isAlreadyContested = contestedKeys.has(key) || this.deps.repository.isReopened(contested);
+      if (isAlreadyContested) throw new OpenFleetError('invalid_body', `${question.id}: the arbiter decision of ${question.reopens} was already reopened once, and it is reopened once only`, { hint: 'A human answers the dispute; do not submit this question again.' });
+
+      contestedKeys.add(key);
+      const isSecondContest = target.reopensQuestionId !== undefined;
+      plans.set(question.id, { kind: isSecondContest ? 'dispute' : 'review', evidence, contested });
+    }
+    return plans;
+  }
+
+  private decidedTargetOf({ managerId, ticket, questionId }: { managerId: string; ticket: string; questionId: string }): StoredQuestion | 'unreadable' | undefined {
+    try {
+      return this.deps.repository.decidedQuestionForReopen({ managerId, ticket, questionId });
+    } catch (error) {
+      log('error', `escalation: the decision of ${questionId} on ${ticket} could not be read, its reopening goes to the human`, error);
+      return 'unreadable';
+    }
+  }
+
+  private executedEvidenceOf(question: PlanQuestion): ReproClaim {
+    const evidence = question.resolution === undefined ? undefined : sanitizedReproClaim(question.resolution);
+    const isExecutedEvidence = evidence !== undefined && !hasBlankClaim(evidence) && isExecutedClaim(evidence) && !lacksExecutedEvidence(evidence);
+    if (!isExecutedEvidence) throw new OpenFleetError('invalid_body', `${question.id}: reopens needs new evidence in resolution, a proven or plausible claim with the command you ran and its output`, { hint: 'Run the check, put the command and its output in resolution, then submit again.' });
+    return evidence;
+  }
+
+  private newQuestionOf({ batchId, question, routing, reopen }: { batchId: string; question: PlanQuestion; routing: QuestionRouting; reopen?: ReopenPlan | undefined }): NewQuestion {
+    const reason = reasonOf(routing, reopen);
     const options = question.options?.map(humanReadableText);
     const recommendation = readableOptional(question.recommendation);
     const paths = question.paths?.map(humanReadableText);
+    const resolution = reopen?.evidence ?? question.resolution;
     return {
       batchId, questionId: question.id, text: humanReadableText(question.text), declaredClass: question.class,
       computedClasses: routing.computed, effectiveClasses: routing.effective, route: routing.route, status: STATUS_OF_ROUTE[routing.route],
       ...(reason !== undefined && { reason }), ...(options && { options }), ...(recommendation && { recommendation }), ...(paths && { paths }),
-      ...(question.resolution && { resolution: question.resolution }),
+      ...(resolution && { resolution }),
+      ...(reopen?.contested && { reopensBatchId: reopen.contested.batchId, reopensQuestionId: reopen.contested.questionId }),
     };
   }
 

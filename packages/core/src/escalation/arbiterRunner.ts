@@ -7,10 +7,10 @@ import type { ManagerService } from '../managers/managerService.js';
 import type { ProjectRepository } from '../projects/projectRepository.js';
 import { DEFAULT_TICKET_PATTERN, ticketOfBranch } from '../review/worktreeGit.js';
 import type { SessionService } from '../sessions/sessionService.js';
-import { arbiterPromptOf } from './arbiterBrief.js';
+import { arbiterPromptOf, type EarlierDecision } from './arbiterBrief.js';
 import type { ArbiterWorkspaces } from './arbiterWorkspaces.js';
 import { ARBITER_QUOTA_REASON, ARBITER_UNAVAILABLE_REASON, type EscalatedToHuman, type EscalationService } from './escalationService.js';
-import type { EscalationRepository } from './escalationRepository.js';
+import type { EscalationRepository, StoredQuestion } from './escalationRepository.js';
 import { escalationPolicyOf } from './projectPolicy.js';
 
 const MINUTE_MS = 60_000;
@@ -48,7 +48,7 @@ export interface ArbiterRunnerDeps {
   bus: Pick<EventBus, 'subscribe'>;
   managers: Pick<ManagerService, 'get'>;
   projects: Pick<ProjectRepository, 'get'>;
-  repository: Pick<EscalationRepository, 'findBatch' | 'questionsOfBatch' | 'addArbiterRun' | 'arbiterRunsOfTicket' | 'batchIdsWithOpenArbiterQuestions'>;
+  repository: Pick<EscalationRepository, 'findBatch' | 'questionsOfBatch' | 'decisionsOfBatch' | 'addArbiterRun' | 'arbiterRunsOfTicket' | 'batchIdsWithOpenArbiterQuestions'>;
   escalations: Pick<EscalationService, 'escalateBatchToHuman'>;
   modelTable: ModelTable;
   /** Where each arbiter starts: an empty directory of its own, away from any repository. */
@@ -144,6 +144,7 @@ export class ArbiterRunner {
     const managerSession = sessions.get(batch.managerId);
     if (manager === undefined || managerSession === undefined) throw new Error(`manager ${batch.managerId} is gone`);
 
+    const waitingQuestions = repository.questionsOfBatch(batchId).filter((question) => question.route === 'arbiter' && question.status === 'open');
     const directoryToRead = this.deps.realPathOf(this.directoryOf({ managerId: batch.managerId, managerDirectory: managerSession.directory, ticket: batch.ticket }));
     const workspace = this.deps.workspaces.create();
     let arbiter: Awaited<ReturnType<typeof sessions.create>>;
@@ -152,7 +153,7 @@ export class ArbiterRunner {
         directory: workspace, readDirectories: [directoryToRead],
         name: `Arbiter ${batch.ticket} ${batchTagOf(batchId)}`, emoji: ARBITER_EMOJI, model, role: ARBITER_ROLE, parentId: batch.managerId,
         harness: managerSession.harness, permissionMode: 'plan', ...(managerSession.projectId && { projectId: managerSession.projectId }),
-        seededPrompt: arbiterPromptOf({ batch, questions: repository.questionsOfBatch(batchId).filter((question) => question.route === 'arbiter' && question.status === 'open') }),
+        seededPrompt: arbiterPromptOf({ batch, questions: waitingQuestions, earlierDecisions: this.earlierDecisionsOf(waitingQuestions) }),
       });
     } catch (error) {
       this.deps.workspaces.remove(workspace);
@@ -166,6 +167,18 @@ export class ArbiterRunner {
       throw new Error(`arbiter ${arbiter.id} closed while it was starting`);
     }
     this.track({ arbiterSessionId: arbiter.id, batchId, manager });
+  }
+
+  /** The latest arbiter decision on each question that the given reopening questions contest, keyed by the id of the reopening question. */
+  private earlierDecisionsOf(questions: readonly StoredQuestion[]): Map<string, EarlierDecision> {
+    const earlierDecisions = new Map<string, EarlierDecision>();
+    for (const { questionId, reopensBatchId, reopensQuestionId } of questions) {
+      const isReopening = reopensBatchId !== undefined && reopensQuestionId !== undefined;
+      if (!isReopening) continue;
+      const earlier = this.deps.repository.decisionsOfBatch(reopensBatchId).filter((decision) => decision.questionId === reopensQuestionId).at(-1);
+      if (earlier !== undefined) earlierDecisions.set(questionId, { decision: earlier.decision, rationale: earlier.rationale });
+    }
+    return earlierDecisions;
   }
 
   private track({ arbiterSessionId, batchId, manager }: { arbiterSessionId: string; batchId: string; manager: ManagerRecord }): void {

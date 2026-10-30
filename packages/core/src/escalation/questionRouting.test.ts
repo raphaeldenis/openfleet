@@ -48,6 +48,20 @@ describe('routeQuestion', () => {
     });
   });
 
+  describe('a question that reopens an arbiter decision', () => {
+    it('goes to the arbiter even when it is factual and its resolution is proven by a run: the evidence is for the arbiter, not a self-resolution', () => {
+      const routing = routeQuestion(questionOf({ class: 'factual', resolution: provenResolution, reopens: 'q0' }));
+
+      expect(routing.route).toBe('arbiter');
+    });
+
+    it('still goes to the human when the floor classes find an escalating subject', () => {
+      const routing = routeQuestion(questionOf({ text: 'Do we need a contract_version bump for this?', resolution: provenResolution, reopens: 'q0' }));
+
+      expect(routing).toMatchObject({ computed: ['contract'], route: 'human' });
+    });
+  });
+
   describe('a factual question', () => {
     it('is resolved by itself when its resolution is proven by a run (A7)', () => {
       const routing = routeQuestion(questionOf({ class: 'factual', resolution: provenResolution }));

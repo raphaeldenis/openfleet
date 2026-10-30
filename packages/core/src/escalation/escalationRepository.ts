@@ -37,6 +37,9 @@ export interface NewQuestion {
   recommendation?: string;
   paths?: string[];
   resolution?: ReproClaim;
+  /** The question whose arbiter decision this question contests; both are set together. */
+  reopensBatchId?: string;
+  reopensQuestionId?: string;
 }
 
 export interface StoredQuestion extends NewQuestion {
@@ -81,6 +84,7 @@ interface QuestionRow {
   batch_id: string; question_id: string; text: string; declared_class: string; computed_classes_json: string; effective_classes_json: string;
   route: QuestionRoute; status: QuestionStatus; reason: string | null; options_json: string | null; recommendation: string | null;
   paths_json: string | null; resolution_json: string | null; escalation_id: string | null; human_answer: string | null; answered_at: string | null;
+  reopens_batch_id: string | null; reopens_question_id: string | null;
 }
 
 interface EscalationRow {
@@ -112,6 +116,7 @@ const toQuestion = (row: QuestionRow): StoredQuestion => ({
   ...(row.escalation_id !== null && { escalationId: row.escalation_id }),
   ...(row.human_answer !== null && { humanAnswer: row.human_answer }),
   ...(row.answered_at !== null && { answeredAt: row.answered_at }),
+  ...(row.reopens_batch_id !== null && row.reopens_question_id !== null && { reopensBatchId: row.reopens_batch_id, reopensQuestionId: row.reopens_question_id }),
 });
 
 const toEscalation = (row: EscalationRow): StoredEscalation => ({
@@ -160,12 +165,27 @@ export class EscalationRepository {
   }
 
   insertQuestion(question: NewQuestion): void {
-    this.db.prepare(`INSERT INTO plan_questions (batch_id, question_id, text, declared_class, computed_classes_json, effective_classes_json, route, status, reason, options_json, recommendation, paths_json, resolution_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    this.db.prepare(`INSERT INTO plan_questions (batch_id, question_id, text, declared_class, computed_classes_json, effective_classes_json, route, status, reason, options_json, recommendation, paths_json, resolution_json, reopens_batch_id, reopens_question_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(
         question.batchId, question.questionId, question.text, question.declaredClass, JSON.stringify(question.computedClasses), JSON.stringify(question.effectiveClasses),
         question.route, question.status, question.reason ?? null, jsonOrNull(question.options), question.recommendation ?? null, jsonOrNull(question.paths), jsonOrNull(question.resolution),
+        question.reopensBatchId ?? null, question.reopensQuestionId ?? null,
       );
+  }
+
+  /** The most recent question with this id that the arbiter decided on a ticket of the manager; an older decided question with the same id is never returned while a newer one exists. */
+  decidedQuestionForReopen({ managerId, ticket, questionId }: { managerId: string; ticket: string; questionId: string }): StoredQuestion | undefined {
+    const row = this.db.prepare(`SELECT question.* FROM plan_questions AS question JOIN plan_question_batches AS batch ON batch.id = question.batch_id
+      WHERE batch.manager_id = ? AND batch.ticket = ? AND question.question_id = ? AND question.status = 'decided' ORDER BY question.rowid DESC LIMIT 1`)
+      .get(managerId, ticket, questionId) as QuestionRow | undefined;
+    return row ? toQuestion(row) : undefined;
+  }
+
+  /** Whether a later question already contests the arbiter decision of this question. */
+  isReopened({ batchId, questionId }: { batchId: string; questionId: string }): boolean {
+    const row = this.db.prepare('SELECT 1 AS found FROM plan_questions WHERE reopens_batch_id = ? AND reopens_question_id = ? LIMIT 1').get(batchId, questionId);
+    return row !== undefined;
   }
 
   questionsOfBatch(batchId: string): StoredQuestion[] {
