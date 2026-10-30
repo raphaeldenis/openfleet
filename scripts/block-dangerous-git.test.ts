@@ -167,6 +167,21 @@ const BLOCKED_WHEN_QUOTING_HIDES_A_GIT_COMMAND = [
   "HUSKY=0 git push 'x",
 ];
 
+const BLOCKED_WHEN_A_HEREDOC_LOOKALIKE_SWALLOWS_THE_NEXT_COMMANDS = [
+  'echo x # <<EOF\ngit push -f\nEOF',
+  'echo x #<<EOF\ngit push -f\nEOF',
+  'git status # <<EOF\ngit push -f\nEOF',
+  'cat <<E"O"F\nx\nEOF\ngit push -f\nE',
+  "cat <<'EOF'x\nx\nEOFx\ngit push -f\nEOF",
+  'cat <<"EOF"x\nx\nEOFx\ngit push -f\nEOF',
+  'cat <<EOF"x"\nx\nEOFx\ngit push -f\nEOF',
+];
+
+const ALLOWED_AROUND_COMMENTS = [
+  "pnpm test # it's fine <<EOF\ngit status",
+  'cat <<EOF > notes.txt\ngit push -f is documented\nEOF',
+];
+
 const BLOCKED_BEHIND_SHELL_GROUPING_OR_FORCING_FLAGS = [
   '{ git reset --hard; }',
   '! git reset --hard',
@@ -229,6 +244,16 @@ describe('block-dangerous-git hook', () => {
 
     it.each(BLOCKED_WHEN_QUOTING_HIDES_A_GIT_COMMAND)('blocks the unparsable %j', (command) => {
       expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
+    });
+  });
+
+  describe('heredoc lookalikes', () => {
+    it.each(BLOCKED_WHEN_A_HEREDOC_LOOKALIKE_SWALLOWS_THE_NEXT_COMMANDS)('blocks %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
+    });
+
+    it.each(ALLOWED_AROUND_COMMENTS)('allows %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
     });
   });
 

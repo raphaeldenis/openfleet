@@ -55,6 +55,19 @@ def skip_heredoc_bodies(command, start, heredocs):
     return index
 
 
+def refuse_unless_delimiter_is_a_whole_word(command, delimiter_end):
+    """Refuses a heredoc whose delimiter is glued to more text, because bash then reads a different delimiter."""
+    next_char = command[delimiter_end:delimiter_end + 1]
+    ends_the_word = next_char == "" or next_char.isspace() or next_char in ";|&)"
+    if not ends_the_word:
+        refuse("unanalysable", "a heredoc delimiter followed by quotes or other text hides which lines are commands, write a bare delimiter.")
+
+
+def starts_a_comment(command, index):
+    previous_char = command[index - 1] if index > 0 else "\n"
+    return command[index] == "#" and (previous_char.isspace() or previous_char in ";|&(")
+
+
 def split_outside_quotes(command):
     segments = []
     current = []
@@ -76,6 +89,7 @@ def split_outside_quotes(command):
         elif command.startswith("<<", index):
             heredoc_start = HEREDOC_START.match(command, index)
             if heredoc_start:
+                refuse_unless_delimiter_is_a_whole_word(command, heredoc_start.end())
                 strips_tabs, delimiter_quote, delimiter = heredoc_start.groups()
                 heredocs.append(Heredoc(delimiter, bool(strips_tabs), bool(delimiter_quote)))
             current.append("<<")
@@ -83,6 +97,10 @@ def split_outside_quotes(command):
             continue
         elif char in ("'", '"'):
             quote = char
+        elif starts_a_comment(command, index):
+            comment_end = command.find("\n", index)
+            index = len(command) if comment_end == -1 else comment_end
+            continue
         else:
             separator = next((s for s in SEGMENT_SEPARATORS if command.startswith(s, index)), None)
             if separator:
