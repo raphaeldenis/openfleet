@@ -5,7 +5,8 @@
 ## What it does
 
 - `parseUsageLines(transcriptText)` reads assistant lines of a JSONL transcript and returns `{ rows, skippedLineCount }`. Each row carries the message id, the timestamp, the model, `input_tokens`, `output_tokens`, `cache_read_input_tokens` and `cache_creation_input_tokens`.
-- A non-empty line that gives no row is skipped and counted: malformed JSON, a line that is not an assistant line, a missing id, model, timestamp or `usage`, or a token count that is negative, fractional or past `Number.MAX_SAFE_INTEGER`. Blank lines are not counted. A missing cache count is read as zero.
+- A non-empty line that gives no row is skipped and counted: malformed JSON, a line that is not an assistant line, a missing id, model, timestamp or `usage`, or a token count that is negative, fractional or past `MAX_TOKEN_COUNT` (10^9). Blank lines are not counted. A missing cache count is read as zero.
+- Some skipped lines are also rejected and counted in `rejectedLineCount`, because no honest transcript writes them: a line longer than `MAX_LINE_LENGTH` (512 KiB, not parsed), a message id or model that does not match `^[A-Za-z0-9_.:-]{1,128}$`, and a token count above `MAX_TOKEN_COUNT`. `rejectedLineCount` is a subset of `skippedLineCount`.
 - A message id can appear on several lines while a reply streams. The last line of an id wins. Rows come out in order of first appearance of the id. A line replaced by a later one is not counted as skipped.
 - Cost: a finite, non-negative `costUSD` on the line gives `costUsd` and `costStatus: 'reported'`. Any other line gets `costUsd: null` and `costStatus: 'unpriced'`. The module holds no price table.
 - `buildLedgerRows({ sessionId, biller, rows, billingCodeOf })` stamps rows with the session id, the `biller` (`'subscription'` or `'api'`) and the billing code, which is the id of the root session of the lineage. The caller supplies all three; the module infers none of them.
@@ -17,7 +18,7 @@
 
 ## Limits
 
-- Sums are plain numbers. A total past `Number.MAX_SAFE_INTEGER` (about 9e15) stays a number but is approximate. A single row can never exceed that limit, since the parser rejects unsafe counts.
+- Sums are plain numbers. A total past `Number.MAX_SAFE_INTEGER` (about 9e15) stays a number but is approximate. A single count can never exceed `MAX_TOKEN_COUNT` (10^9), since the parser rejects larger counts; this keeps the SQLite `SUM()` of a bucket far from the 2^63 integer overflow that a few thousand forged counts at 2^53 would reach.
 - Sidechain lines are kept: they are billed too.
 - The parser accepts the shape of the lines only. It does not check that a transcript belongs to a given session.
 
@@ -44,7 +45,7 @@ Migration `046_usage_daily.sql` adds two tables. Its down script is `packages/co
 Known limits of the storage:
 
 - **The same message under two sessions is counted twice.** The idempotency key is the session id plus the message id. When a resume or a fork writes the same assistant message (same message id) into the transcripts of two sessions, both are ingested and both are billed in the totals. Nothing deduplicates across sessions.
-- **Precision above 2^53.** Token sums are stored and summed as JSON numbers. A single count is rejected past `Number.MAX_SAFE_INTEGER` (2^53 - 1), but a bucket total above it is approximate. The same holds for the costs, which are floating-point sums.
+- **Precision above 2^53.** Token sums are stored and summed as JSON numbers. A single count is rejected past `MAX_TOKEN_COUNT` (10^9), but a bucket total above 2^53 - 1 would be approximate. The same holds for the costs, which are floating-point sums.
 - **Timestamps.** A line is read only when its timestamp is an ISO 8601 date-time with a `Z` or a numeric offset (`+02:00`); the UTC day comes from that instant. A timestamp without a zone, or in another format, is skipped and counted, since its day would depend on the machine's time zone.
 
 There is no ingestion route, no MCP tool, no price table and no automatic reading of any transcript file, unless the operator enables usageIngestion: then only the token counts are read.
@@ -58,6 +59,19 @@ When it is on, each `Stop` hook of a session launched by the daemon schedules `T
 - The file is `SessionService.trustedTranscriptFileOf(sessionId)`: the path the session's own hook reported, accepted only if it is an absolute `.jsonl` under the Claude projects directory, symlinks resolved, and named after the session's CLI id. No other path is opened.
 - The text goes to `UsageLedgerService.ingestTranscript`, which keeps what `parseUsageLines` extracts: the message id, timestamp, model and the four token counts. The text of a message is never stored, returned or logged, and a line that does not parse is counted, not quoted.
 - The biller is `subscription` (the daemon holds no API key). The billing code is the root session of the lineage, found by following `parentId` (a loop stops the walk).
-- It fails open: any error is logged with a fixed message and the session id, counts toward the degraded state like the other hooks, and changes nothing.
+- It fails open: `ingestAtStop` throws an error with a fixed message (never the text of the underlying error); the hook handler logs it after the fixed prefix `usage ingestion failed, recording nothing`, counts it toward the degraded state like the other hooks (`recordHookFailOpen`), and the ingestion changes nothing.
 
-A transcript is read whole at each `Stop`; re-ingesting is idempotent. `transcriptUsageIngestion.test.ts` asserts that a canary placed in message text, in a malformed line and in a non-JSON line appears nowhere in the database, the logs or the ledger read the routes serve.
+Reading is incremental and bounded:
+
+- Each session has a cursor (`{ path, inode, offset }`) in the memory of the daemon. A `Stop` reads at most 1 MiB (`USAGE_INGESTION_CHUNK_BYTES`) past the cursor, through `readTranscriptChunk`: it opens the file with `O_NOFOLLOW` and `O_NONBLOCK`, refuses anything that is not a regular file, and keeps an incomplete last line for the next `Stop`. A line longer than the chunk is skipped.
+- The cursor is lost when the daemon restarts. The transcript is then read again from its start, but under the same cap per `Stop`: the catch-up takes several `Stop` hooks. Re-ingesting is idempotent (upsert on session id and message id), so no message is counted twice. Until the catch-up ends, the totals of a session with a large transcript are partial.
+- A file that replaced the transcript (another inode) or became shorter drops the cursor; the next `Stop` reads the new file from its start.
+- `Stop` hooks of a session that arrive before the read has run make one read (`PerSessionCoalescer`), and the ingestion is synchronous, so there is never more than one read in flight per session.
+- A `Stop` that finds rejected lines logs one warning, `usage ingestion: lines that no honest transcript writes were rejected`, with the session id and the count; it never quotes a line.
+
+Known limits:
+
+- **A session can forge its own usage.** An agent can write assistant lines with any token counts, within the limits above, into its own transcript. The impact is the display and the totals of that session and of its project only; nothing is billed from this ledger.
+- **No rate limit on `/hooks/<token>`.** A child that posts `Stop` hooks in a loop costs at most one bounded read (1 MiB) per scheduled ingestion; the hook endpoint itself has no rate limit.
+
+`transcriptUsageIngestion.test.ts` asserts that a canary placed in message text, in a message id, in a model, in a malformed line and in a non-JSON line appears nowhere in the database, the logs or the ledger read the routes serve.
