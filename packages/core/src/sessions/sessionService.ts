@@ -33,7 +33,7 @@ import { canDeliverNow, isClear, nextState, provesTurnEnded, startsClearedConver
 // Absent, the service still closes sessions with their reason but broadcasts no error events.
 export type DescribeError = (error: unknown, scope: { sessionId?: string; where?: string }) => ErrorEnvelope;
 
-export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; submitKeystrokeDelayMs?: number; turnStartTimeoutMs?: number;
+export interface SessionServiceDeps { db: DatabaseSync; bus: EventBus; harnesses: Harness[]; baseUrl: string; worktreesRoot: string; resumeTimeoutMs?: number; firstStartTimeoutMs?: number; forceKillGraceMs?: number; submitKeystrokeDelayMs?: number; turnStartTimeoutMs?: number;
   /** Probes `<bin> --version` before each spawn; defaults to a real check with a 60 s cache. */
   binaryHealth?: BinaryHealthCheck;
   /** How long a launch may show neither a PTY byte nor transcript progress before its readiness is failed; absent: launches are not watched. */
@@ -143,6 +143,8 @@ const FRESH_START_PROMPT_TOO_LARGE_NOTICE = '\r\n[OpenFleet] Started a new conve
 // first launch gets its own, more generous ceiling instead of sharing resumeTimeoutMs (AUD-06).
 const DEFAULT_FIRST_START_TIMEOUT_MS = 60_000;
 const START_FAILURE_DETAIL_LIMIT = 2048;
+// How long a process may outlive the force kill before its session is closed without its exit.
+const DEFAULT_FORCE_KILL_GRACE_MS = 10_000;
 // ponytail: fixed delay giving Claude Code's composer time to settle after typeMessage's bracketed-paste
 // write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
 // from the pty output instead of trusting a fixed delay.
@@ -1454,7 +1456,8 @@ export class SessionService {
       // The CLI ended its session but never exited: this kill is the daemon's own, so its exit is no failure.
       this.forgetSessionEndCause(sessionId);
     }
-    await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
+    const hasExited = await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
+    if (!hasExited) this.markClosed(sessionId, { reason: this.reasonOfRequestedClose(sessionId) });
   }
 
   // The CLI's own SessionEnd, fired because the daemon killed it, is the echo of a close somebody already asked for.
@@ -1492,19 +1495,28 @@ export class SessionService {
     });
   }
 
-  private async killWithEscalation(handle: HarnessHandle, escalateAfterMs: number): Promise<void> {
+  // Resolves true when the process exited, false when it outlived the force kill by the grace: the caller closes the session itself.
+  private async killWithEscalation(handle: HarnessHandle, escalateAfterMs: number): Promise<boolean> {
     const exited = waitForExit(handle);
     handle.kill();
-    let escalateTimer: ReturnType<typeof setTimeout>;
-    const gracePeriodExpired = new Promise<false>((resolve) => {
-      escalateTimer = setTimeout(() => resolve(false), escalateAfterMs);
-    });
-    const exitedGracefully = await Promise.race([exited.then(() => true as const), gracePeriodExpired]);
-    clearTimeout(escalateTimer!);
-    if (exitedGracefully) return;
+    const exitedGracefully = await this.exitedWithin(exited, escalateAfterMs);
+    if (exitedGracefully) return true;
     const exitedAfterForce = waitForExit(handle);
     handle.kill({ force: true });
-    await exitedAfterForce;
+    const forceKillGraceMs = this.deps.forceKillGraceMs ?? DEFAULT_FORCE_KILL_GRACE_MS;
+    const hasExited = await this.exitedWithin(exitedAfterForce, forceKillGraceMs);
+    if (!hasExited) log('warn', `a process survived the force kill for ${forceKillGraceMs} ms: its session is closed without its exit`, undefined, { code: 'kill_failed' });
+    return hasExited;
+  }
+
+  private async exitedWithin(exit: Promise<void>, graceMs: number): Promise<boolean> {
+    let graceTimer: ReturnType<typeof setTimeout>;
+    const graceExpired = new Promise<false>((resolve) => {
+      graceTimer = setTimeout(() => resolve(false), graceMs);
+    });
+    const hasExited = await Promise.race([exit.then(() => true as const), graceExpired]);
+    clearTimeout(graceTimer!);
+    return hasExited;
   }
 
   async closeAll(): Promise<void> {
@@ -2462,21 +2474,10 @@ export class SessionService {
     this.armStartTimeout(sessionId, handle, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
   }
 
-  private armFirstStartTimeout(sessionId: string, handle: HarnessHandle, { isExtension = false }: { isExtension?: boolean } = {}): void {
+  private armFirstStartTimeout(sessionId: string, handle: HarnessHandle): void {
     const harnessTimeoutMs = this.harnessFor(this.require(sessionId).harness).startSignalTimeoutMs;
     const timeoutMs = this.deps.firstStartTimeoutMs ?? harnessTimeoutMs ?? DEFAULT_FIRST_START_TIMEOUT_MS;
-    this.armStartTimeout(sessionId, handle, timeoutMs, () => this.judgeMissingStartSignal(sessionId, handle, { isExtension }));
-  }
-
-  // A slow CLI (a large resume) can be reading its transcript before it reports its start: it gets one more delay, once.
-  private judgeMissingStartSignal(sessionId: string, handle: HarnessHandle, { isExtension }: { isExtension: boolean }): 'extended' | 'failed' {
-    const isTranscriptMoving = handle.probeTranscriptProgress?.() !== undefined;
-    if (isTranscriptMoving && !isExtension) {
-      this.armFirstStartTimeout(sessionId, handle, { isExtension: true });
-      return 'extended';
-    }
-    this.failStartSignal(sessionId);
-    return 'failed';
+    this.armStartTimeout(sessionId, handle, timeoutMs, () => this.failStartSignal(sessionId));
   }
 
   private failStartSignal(sessionId: string): void {
@@ -2495,12 +2496,11 @@ export class SessionService {
     return trimToTail(maskedText, START_FAILURE_DETAIL_LIMIT).trim();
   }
 
-  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number, onTimedOut?: () => 'extended' | 'failed'): void {
+  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number, onTimedOut?: () => void): void {
     this.clearResumeTimer(sessionId);
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
-      const isWaitingLonger = onTimedOut?.() === 'extended';
-      if (isWaitingLonger) return;
+      onTimedOut?.();
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
       // timeout's own resume_timeout closure with whatever exit code the harness happens to report.
       activeHandleBySessionId.delete(sessionId);

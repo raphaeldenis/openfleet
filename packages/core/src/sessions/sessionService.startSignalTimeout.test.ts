@@ -143,28 +143,40 @@ describe('the start signal timeout of a new session', () => {
     expect(service.get(session.id)).toMatchObject({ state: 'closed', closeReason: 'closed_by_user' });
   });
 
-  it('waits once more when the transcript is moving, then fails if the signal still does not come', async () => {
-    const { service, harness } = bootDaemon();
-    const session = await service.create(spec);
-    harness.handles[0]!.transcriptCursor = { identity: 'transcript-1', offset: 120 };
+  describe('a process that survives the force kill', () => {
+    const FORCE_KILL_GRACE_MS = 2_000;
+    const GRACEFUL_KILL_WAIT_MS = 5_000;
 
-    await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS);
-    expect(service.get(session.id)?.readiness).not.toBe('failed');
-    await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS);
+    const bootWithUndyingProcess = async () => {
+      const harness = new FakeHarness();
+      const bus = new EventBus();
+      const service = new SessionService({ db: openDatabase(':memory:'), bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', describeError, forceKillGraceMs: FORCE_KILL_GRACE_MS });
+      const session = await service.create(spec);
+      harness.handles[0]!.neverDies = true;
+      return { service, session, handle: harness.handles[0]! };
+    };
 
-    expect(service.get(session.id)?.readiness).toBe('failed');
-  });
+    it('closes the session once the grace after the force kill has passed, and frees its slot', async () => {
+      const { service, session, handle } = await bootWithUndyingProcess();
 
-  it('does not extend the wait when the signal comes during the extension', async () => {
-    const { service, harness } = bootDaemon();
-    const session = await service.create(spec);
-    harness.handles[0]!.transcriptCursor = { identity: 'transcript-1', offset: 120 };
-    await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS + GRACEFUL_KILL_WAIT_MS + FORCE_KILL_GRACE_MS - 1);
+      expect(service.get(session.id)?.state).toBe('starting');
+      await vi.advanceTimersByTimeAsync(1);
 
-    reportSessionStart(service, session.id);
-    await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS * 3);
+      const closed = service.get(session.id)!;
+      expect(handle.forceKilled).toBe(true);
+      expect(closed).toMatchObject({ state: 'closed', closeReason: 'resume_timeout' });
+      expect(countsAgainstChildrenCap(closed)).toBe(false);
+    });
 
-    expect(service.get(session.id)).toMatchObject({ state: 'idle' });
+    it('closes a session its user closed, with the reason of that close', async () => {
+      const { service, session } = await bootWithUndyingProcess();
+
+      void service.close(session.id);
+      await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_WAIT_MS + FORCE_KILL_GRACE_MS);
+
+      expect(service.get(session.id)).toMatchObject({ state: 'closed', closeReason: 'closed_by_user' });
+    });
   });
 
   describe('a session found failed by a daemon that did not fail it', () => {
