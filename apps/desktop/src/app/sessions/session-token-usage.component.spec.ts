@@ -33,10 +33,11 @@ describe('SessionTokenUsageComponent', () => {
     expect(await screen.findByText('n/a')).toBeInTheDocument();
   });
 
-  it('shows n/a when the request fails, never a stale or zero count', async () => {
+  it('shows an error, not n/a, when the request fails, never a stale or zero count', async () => {
     await renderFor({ answers: [new Error('daemon down')] });
 
-    expect(await screen.findByText('n/a')).toBeInTheDocument();
+    expect(await screen.findByText('error')).toBeInTheDocument();
+    expect(screen.queryByText('n/a')).not.toBeInTheDocument();
   });
 
   it('asks again when the session changes state, since a turn has ended', async () => {

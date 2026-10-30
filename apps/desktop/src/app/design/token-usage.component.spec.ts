@@ -59,6 +59,14 @@ describe('TokenUsageComponent', () => {
     expect(element).toHaveAccessibleName('Token usage not available');
   });
 
+  it('tells a failed request from an absence of data', async () => {
+    const element = await renderUsage('unavailable');
+
+    expect(element).toHaveTextContent('error');
+    expect(element).toHaveAccessibleName('Token usage unavailable: the request failed');
+    expect(element).not.toHaveTextContent('n/a');
+  });
+
   it('says it is loading before the first answer', async () => {
     const element = await renderUsage(undefined);
 

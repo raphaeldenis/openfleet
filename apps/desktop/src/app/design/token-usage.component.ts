@@ -30,19 +30,21 @@ const exactCount = (count: number): string => count.toLocaleString('en-US');
   `,
 })
 export class TokenUsageComponent {
-  /** `undefined` while loading, `null` when the daemon has no usage for the session. */
+  /** `undefined` while loading, `null` when the daemon has no usage for the session, `'unavailable'` when the request failed. */
   readonly usage = input.required<TokenUsageLoad>();
 
   protected readonly text = computed(() => {
     const usage = this.usage();
     if (usage === undefined) return '…';
     if (usage === null) return 'n/a';
+    if (usage === 'unavailable') return 'error';
     return `${compactTokenCount(usage.inputTokens)} in / ${compactTokenCount(usage.outputTokens)} out`;
   });
   protected readonly label = computed(() => {
     const usage = this.usage();
     if (usage === undefined) return 'Token usage loading';
     if (usage === null) return 'Token usage not available';
+    if (usage === 'unavailable') return 'Token usage unavailable: the request failed';
     return `${exactCount(usage.inputTokens)} input tokens, ${exactCount(usage.outputTokens)} output tokens`;
   });
 }
