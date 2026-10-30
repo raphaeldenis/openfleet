@@ -32,6 +32,7 @@ import { registerEscalationTools } from './escalationTools.js';
 import { registerGovernanceTools } from './governanceTools.js';
 import { registerManagerBaseTools } from './managerBaseTools.js';
 import { registerManagerLinkTools } from './managerLinkTools.js';
+import { registerManagerMissionTools } from './managerMissionTools.js';
 import { registerManagerProfileTools } from './managerProfileTools.js';
 import { registerNoteTools } from './noteTools.js';
 import { registerKnowledgeTools, type KnowledgeToolSearchPort } from './knowledgeTools.js';
@@ -96,6 +97,7 @@ export function createMcpHandler(deps: { askUserGate?: AskUserGate; criteria?: C
     registerManagerProfileTools(toolServer, { managers: deps.managers, caller });
     if (deps.projectProfile) registerProjectProfileTools(toolServer, { projectProfile: deps.projectProfile, managers: deps.managers, sessions: deps.sessions, caller });
     if (deps.managerBase) registerManagerBaseTools(toolServer, { managerBase: deps.managerBase, managers: deps.managers, caller });
+    registerManagerMissionTools(toolServer, { managers: deps.managers, notes: deps.notes, caller });
     if (deps.managerDenials) registerDeniedCommandTools(toolServer, { managerDenials: deps.managerDenials, sessions: deps.sessions, caller });
     registerGovernanceTools(toolServer, { governanceQueue: deps.governanceQueue, caller });
     if (deps.escalations && deps.arbiters && deps.criteria) registerEscalationTools(toolServer, { criteria: deps.criteria, escalations: deps.escalations, arbiters: deps.arbiters, managers: deps.managers, noteRepo: deps.noteRepo, projects: deps.projects, caller });
