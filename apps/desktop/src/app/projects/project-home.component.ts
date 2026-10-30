@@ -13,6 +13,7 @@ import { moveFocusWithinListbox } from '../design/listbox-keyboard';
 import { PopoverComponent } from '../design/popover.component';
 import { StateChipComponent } from '../design/state-chip.component';
 import { ProjectFormComponent } from './project-form.component';
+import { ProjectTokenUsageComponent } from './project-token-usage.component';
 
 type PageView = 'loading' | 'failed' | 'empty' | 'redirecting' | 'missing' | 'project';
 
@@ -56,7 +57,7 @@ function rememberLastVisitedProjectId(projectId: string): void {
 @Component({
   selector: 'of-project-home',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ErrorLineComponent, NgComponentOutlet, PopoverComponent, ProjectFormComponent, RouterLink, StateChipComponent],
+  imports: [ErrorLineComponent, NgComponentOutlet, PopoverComponent, ProjectFormComponent, ProjectTokenUsageComponent, RouterLink, StateChipComponent],
   template: `
     <div class="home" data-testid="project-home">
       @switch (view()) {
@@ -102,6 +103,7 @@ function rememberLastVisitedProjectId(projectId: string): void {
           @if (project(); as current) {
             <header class="header">
               <h1>{{ current.name }}</h1>
+              <of-project-token-usage [projectId]="current.id" [sessionStates]="sessionStates()" />
               @if (projects().length > 1) {
                 <of-popover #switcher triggerTestId="project-switcher" triggerLabel="Switch project" width="12rem">
                   <span popoverTrigger class="switcher-current"><span class="switcher-prefix">Project</span> {{ current.name }}</span>
@@ -306,6 +308,7 @@ export class ProjectHomeComponent {
   });
 
   private readonly sessionsOfProject = computed(() => this.events.sessions().filter((session) => session.projectId === this.projectId()));
+  protected readonly sessionStates = computed(() => this.sessionsOfProject().map((session) => `${session.id}:${session.state}`).join(','));
   protected readonly managers = computed(() => this.sessionsOfProject().filter((session) => session.role === MANAGER_ROLE));
   protected readonly workerSessions = computed(() => this.sessionsOfProject().filter((session) => session.role !== MANAGER_ROLE));
 

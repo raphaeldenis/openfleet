@@ -40,3 +40,38 @@ describe('FleetApiService.getSessionUsage', () => {
     await expect(api.getSessionUsage('s1')).resolves.toBeNull();
   });
 });
+
+describe('FleetApiService.getProjectUsageToday', () => {
+  let api: FleetApiService;
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    api = new FleetApiService();
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  const answerWith = (body: unknown) => fetchMock.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(body) } as unknown as Response);
+
+  it('reads the usage-today route of the project and keeps the two token counts', async () => {
+    answerWith({ dayUtc: '2026-10-30', inputTokens: 107, outputTokens: 23 });
+
+    await expect(api.getProjectUsageToday('p/1')).resolves.toEqual({ inputTokens: 107, outputTokens: 23 });
+
+    expect(String(fetchMock.mock.calls[0]![0])).toMatch(/\/api\/projects\/p%2F1\/usage\/today$/);
+  });
+
+  it('reads a null answer as no data', async () => {
+    answerWith(null);
+
+    await expect(api.getProjectUsageToday('p1')).resolves.toBeNull();
+  });
+
+  it('reads an unreadable count as no data, never as zero', async () => {
+    answerWith({ dayUtc: '2026-10-30', inputTokens: -4, outputTokens: 2 });
+
+    await expect(api.getProjectUsageToday('p1')).resolves.toBeNull();
+  });
+});

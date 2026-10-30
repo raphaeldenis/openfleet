@@ -155,6 +155,10 @@ export class FleetApiService {
   async getSessionUsage(id: string): Promise<TokenUsage | null> {
     return parseTokenUsage(await this.call<unknown>(`/api/sessions/${encodeURIComponent(id)}/usage`));
   }
+  /** The input and output tokens the sessions of the project have used on the current UTC day; null when none has usage today. */
+  async getProjectUsageToday(projectId: string): Promise<TokenUsage | null> {
+    return parseTokenUsage(await this.call<unknown>(`/api/projects/${encodeURIComponent(projectId)}/usage/today`));
+  }
   /** The last working state the session wrote, kept after it closes; undefined when it never wrote one. */
   async getWorkingState(id: string): Promise<WorkingState | undefined> {
     const path = `/api/sessions/${encodeURIComponent(id)}/working-state`;
