@@ -140,8 +140,8 @@ export class UsageLedgerService {
 
   /**
    * Stores the messages one at a time, refusing the ones that would exceed the session maximum or the bucket budget of the
-   * ingestion, then rebuilds the touched buckets. Every bucket rebuild reads all the messages of the session, so the budget and
-   * the maximum bound the CPU an ingestion costs.
+   * ingestion, then rebuilds the touched buckets with one read of the messages of the session, so the maximum
+   * bounds the CPU an ingestion costs and the budget bounds the size of that read's filter.
    */
   private storeWithinLimits(sessionId: string, ledgerRows: LedgerRow[]): StoreOutcome {
     const touchedBuckets = new Map<string, BucketKey>();
@@ -163,7 +163,7 @@ export class UsageLedgerService {
       if (isNewMessage) sessionMessageCount += 1;
       storedCount += 1;
     }
-    for (const bucket of touchedBuckets.values()) this.rebuildBucket(bucket);
+    this.rebuildBuckets(sessionId, [...touchedBuckets.values()]);
     return { storedCount, refusedCount, sessionIsFull: sessionMessageCount >= this.limits.maxMessagesPerSession };
   }
 
@@ -192,14 +192,17 @@ export class UsageLedgerService {
       .run(row.sessionId, row.messageId, dayUtc, row.model, row.billingCode, row.biller, row.inputTokens, row.outputTokens, row.cacheReadInputTokens, row.cacheCreationInputTokens, row.costUsd, row.costStatus);
   }
 
-  private rebuildBucket(bucket: BucketKey): void {
-    const keyParameters = [bucket.dayUtc, bucket.model, bucket.sessionId, bucket.billingCode, bucket.biller, bucket.costStatus];
-    const sameBucket = 'day_utc = ? AND model = ? AND session_id = ? AND billing_code = ? AND biller = ? AND cost_status = ?';
-    this.db.prepare(`DELETE FROM usage_daily WHERE ${sameBucket}`).run(...keyParameters);
+  /** Deletes the buckets then rebuilds them all from one grouped read of the session's messages, whatever the number of buckets. */
+  private rebuildBuckets(sessionId: string, buckets: BucketKey[]): void {
+    if (buckets.length === 0) return;
+    const deleteBucket = this.db.prepare('DELETE FROM usage_daily WHERE day_utc = ? AND model = ? AND session_id = ? AND billing_code = ? AND biller = ? AND cost_status = ?');
+    for (const bucket of buckets) deleteBucket.run(bucket.dayUtc, bucket.model, sessionId, bucket.billingCode, bucket.biller, bucket.costStatus);
+    const bucketKeyValues = buckets.map(() => '(?, ?, ?, ?, ?)').join(', ');
+    const bucketKeyParameters = buckets.flatMap((bucket) => [bucket.dayUtc, bucket.model, bucket.billingCode, bucket.biller, bucket.costStatus]);
     this.db.prepare(`INSERT INTO usage_daily (day_utc, model, session_id, billing_code, biller, cost_status, message_count, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd)
       SELECT day_utc, model, session_id, billing_code, biller, cost_status, COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_read_input_tokens), SUM(cache_creation_input_tokens),
         CASE cost_status WHEN 'reported' THEN SUM(cost_usd) END
-      FROM usage_messages WHERE ${sameBucket}
-      GROUP BY day_utc, model, session_id, billing_code, biller, cost_status`).run(...keyParameters);
+      FROM usage_messages WHERE session_id = ? AND (day_utc, model, billing_code, biller, cost_status) IN (VALUES ${bucketKeyValues})
+      GROUP BY day_utc, model, session_id, billing_code, biller, cost_status`).run(sessionId, ...bucketKeyParameters);
   }
 }

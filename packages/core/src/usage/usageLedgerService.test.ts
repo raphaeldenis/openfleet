@@ -205,14 +205,37 @@ describe('UsageLedgerService', () => {
       expect(modelsOf(service)).toEqual(['model-b', 'model-c']);
     });
 
+    const seedMessages = (db: DatabaseSync, { idPrefix, model, count }: { idPrefix: string; model: (position: string) => string; count: number }) =>
+      db.exec(`WITH RECURSIVE seeded(position) AS (SELECT 0 UNION ALL SELECT position + 1 FROM seeded WHERE position < ${count - 1})
+        INSERT INTO usage_messages (session_id, message_id, day_utc, model, billing_code, biller, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd, cost_status)
+        SELECT 's1', '${idPrefix}' || position, '2026-10-01', ${model('position')}, 'root-lead', 'api', 1, 1, 1, 1, NULL, 'unpriced' FROM seeded`);
+
+    it('rewrites the largest allowed number of buckets of a session one message short of its maximum within a time budget far under the per-bucket rebuild cost', () => {
+      const REWRITE_BUDGET_MS = 150;
+      const db = new DatabaseSync(':memory:');
+      applyMigrations(db);
+      const rewrittenCount = DEFAULT_USAGE_LEDGER_LIMITS.maxBucketsPerChunk / 2;
+      seedMessages(db, { idPrefix: 'seeded-', model: () => "'model-seeded'", count: DEFAULT_USAGE_LEDGER_LIMITS.maxMessagesPerSession - DEFAULT_USAGE_LEDGER_LIMITS.maxBucketsPerChunk });
+      seedMessages(db, { idPrefix: 'live-', model: (position) => `'model-old-' || ${position}`, count: rewrittenCount });
+      const service = new UsageLedgerService(db);
+      const sameMessagesWithOtherModels = transcriptOf(...Array.from({ length: rewrittenCount }, (_, index) => assistantLine({ id: `live-${index}`, timestamp: DAY_ONE, model: `model-new-${index}` })));
+
+      const startedAt = performance.now();
+      const result = service.ingestTranscript({ sessionId: 's1', biller: 'api', transcriptText: sameMessagesWithOtherModels, billingCodeOf: rootBillingCode, timestampWindow: EVERY_INSTANT });
+      const durationMs = performance.now() - startedAt;
+
+      const models = service.dailyUsage({ sessionId: 's1' }).map((row) => row.model);
+      expect(result).toMatchObject({ messageCount: rewrittenCount, rejectedLineCount: 0 });
+      expect(models.filter((model) => model.startsWith('model-old-'))).toEqual([]);
+      expect(models.filter((model) => model.startsWith('model-new-'))).toHaveLength(rewrittenCount);
+      expect(durationMs).toBeLessThan(REWRITE_BUDGET_MS);
+    });
+
     it('rebuilds the largest allowed number of buckets of a session that reaches its maximum within the time budget', () => {
       const WORST_CASE_BUDGET_MS = 1500;
       const db = new DatabaseSync(':memory:');
       applyMigrations(db);
-      const seededMessageCount = DEFAULT_USAGE_LEDGER_LIMITS.maxMessagesPerSession - DEFAULT_USAGE_LEDGER_LIMITS.maxBucketsPerChunk;
-      db.exec(`WITH RECURSIVE seeded(position) AS (SELECT 0 UNION ALL SELECT position + 1 FROM seeded WHERE position < ${seededMessageCount - 1})
-        INSERT INTO usage_messages (session_id, message_id, day_utc, model, billing_code, biller, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd, cost_status)
-        SELECT 's1', 'seeded-' || position, '2026-10-01', 'model-seeded', 'root-lead', 'api', 1, 1, 1, 1, NULL, 'unpriced' FROM seeded`);
+      seedMessages(db, { idPrefix: 'seeded-', model: () => "'model-seeded'", count: DEFAULT_USAGE_LEDGER_LIMITS.maxMessagesPerSession - DEFAULT_USAGE_LEDGER_LIMITS.maxBucketsPerChunk });
       const service = new UsageLedgerService(db);
       const oneMessagePerBucket = transcriptOf(...Array.from({ length: DEFAULT_USAGE_LEDGER_LIMITS.maxBucketsPerChunk }, (_, index) => assistantLine({ id: `last-${index}`, timestamp: DAY_ONE, model: `model-${index}` })));
 
