@@ -180,7 +180,85 @@ describe('get_manager_mission', () => {
     const { missionText } = jsonOf(await callTool(client, 'get_manager_mission')) as { missionText: string };
 
     expect(missionText).not.toContain('BODY-OF-THE-MISSION-NOTE');
-    expect(missionText).toContain(`--- @note:${missionNoteId}: not expanded (already expanded) ---`);
+    expect(missionText).toContain(`--- @note:${missionNoteId}: not expanded (mission note: read it with get_note note=${missionNoteId}) ---`);
+    expect(missionText).not.toContain('already expanded');
+  });
+
+  it('lists the mission note in the index with the same get_note call when the mission is too large to expand its mentions', async () => {
+    const missionNoteId = await aNoteBody('Mission note in index', 'BODY-OF-THE-MISSION-NOTE');
+    const bigNoteId = await aNoteBody('Big beside the mission note', 'n'.repeat(THIRTY_KB));
+    const managerId = await aManagerWithMission('Indexing', `${missionOfBytes(EIGHT_KB)}\n@note:${missionNoteId} @note:${bigNoteId}`);
+    daemon.db.prepare('UPDATE managers SET mission_note_id = ? WHERE session_id = ?').run(missionNoteId, managerId);
+    const client = await mcpClientOf(managerId);
+
+    const { mentionsIndex } = jsonOf(await callTool(client, 'get_manager_mission')) as { mentionsIndex: { id: string; readWith: string }[] };
+
+    expect(mentionsIndex.find((entry) => entry.id === missionNoteId)?.readWith).toBe(`get_note note=${missionNoteId}`);
+  });
+
+  it('lowers the cap with max_bytes', async () => {
+    const client = await mcpClientOf(await aManagerWithMission('Lowered', missionOfBytes(EIGHT_KB)));
+
+    const page = jsonOf(await callTool(client, 'get_manager_mission', { max_bytes: 4 * 1024 }));
+
+    expect(sizeInBytes(JSON.stringify(page))).toBeLessThanOrEqual(4 * 1024);
+    expect(page).toMatchObject({ truncated: true, complete: false });
+  });
+
+  it('keeps the floor of 2 KiB under a max_bytes below it', async () => {
+    const client = await mcpClientOf(await aManagerWithMission('Floored', missionOfBytes(EIGHT_KB)));
+
+    const page = jsonOf(await callTool(client, 'get_manager_mission', { max_bytes: 100 })) as { bytes: number };
+
+    expect(sizeInBytes(JSON.stringify(page))).toBeLessThanOrEqual(2 * 1024);
+    expect(page.bytes).toBeGreaterThan(1024);
+  });
+
+  it('never raises the cap above 24 KiB with max_bytes', async () => {
+    const client = await mcpClientOf(await aManagerWithMission('Capped', missionOfBytes(THIRTY_KB)));
+
+    const page = jsonOf(await callTool(client, 'get_manager_mission', { max_bytes: 10 * THIRTY_KB }));
+
+    expect(sizeInBytes(JSON.stringify(page))).toBeLessThanOrEqual(SAFE_ANSWER_BYTES);
+    expect(page).toMatchObject({ truncated: true });
+  });
+
+  it('gives an empty last page for an offset past the end of the mission, as get_note does', async () => {
+    const client = await mcpClientOf(await aManagerWithMission('Past the end', missionOfBytes(THIRTY_KB)));
+
+    const page = jsonOf(await callTool(client, 'get_manager_mission', { offset: 10 * THIRTY_KB }));
+
+    expect(page).toMatchObject({ missionText: '', bytes: 0, truncated: false, complete: false });
+    expect(page).not.toHaveProperty('nextOffset');
+  });
+
+  it('cuts a multi-byte mission between characters, never inside one', async () => {
+    const mission = '€é'.repeat(3750);
+    const client = await mcpClientOf(await aManagerWithMission('Multibyte', mission));
+
+    const pages: Json[] = [];
+    let nextOffset: number | undefined = 0;
+    while (nextOffset !== undefined) {
+      const page = jsonOf(await callTool(client, 'get_manager_mission', { offset: nextOffset, max_bytes: 2 * 1024 }));
+      pages.push(page);
+      nextOffset = page.nextOffset as number | undefined;
+    }
+
+    const texts = pages.map((page) => page.missionText as string);
+    expect(pages.length).toBeGreaterThan(1);
+    expect(texts.some((text) => text.includes('�'))).toBe(false);
+    expect(texts.join('')).toBe(mission);
+  });
+
+  it('refuses the mission of another manager even when an offset is given', async () => {
+    const otherManagerId = await aManagerWithMission('Other with offset', 'SECRET-MISSION-OF-ANOTHER');
+    const client = await mcpClientOf(await aManagerWithMission('Curious with offset', 'Own mission'));
+
+    const result = await callTool(client, 'get_manager_mission', { manager_id: otherManagerId, offset: 5 });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('error outside_lineage');
+    expect(textOf(result)).not.toContain('SECRET-MISSION-OF-ANOTHER');
   });
 
   it('accepts the id of the calling manager itself', async () => {

@@ -33,18 +33,20 @@ export function registerManagerMissionTools(server: McpServer, deps: RegisterMan
 
     const { missionText, missionNoteId } = record;
     const header = missionDigestOf(missionText);
-    const viewerProjectId = caller.projectId;
-    const hasProject = viewerProjectId !== undefined && viewerProjectId !== null;
+    const viewerScope = caller.projectId ? { viewerProjectId: caller.projectId } : undefined;
+    const missionNoteSkipReason = `mission note: read it with get_note note=${missionNoteId}`;
 
     const readFullView = () => {
-      const expandedMission = hasProject ? notes.expandText(missionText, { viewerProjectId, rootNoteId: missionNoteId }) : missionText;
+      const expandedMission = viewerScope
+        ? notes.expandText(missionText, { ...viewerScope, rootNoteId: missionNoteId, rootNoteSkipReason: missionNoteSkipReason })
+        : missionText;
       return { ...header, missionText: expandedMission };
     };
     const readFraming = () => ({
       header,
       bodyMd: missionText,
       bodyField: 'missionText' as const,
-      mentionsIndex: hasProject ? notes.getTextMentionIndex(missionText, { viewerProjectId }).map(mentionsIndexEntryOf) : [],
+      mentionsIndex: viewerScope ? notes.getTextMentionIndex(missionText, viewerScope).map(mentionsIndexEntryOf) : [],
     });
 
     return ok(boundedReadView({
