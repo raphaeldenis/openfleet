@@ -1094,6 +1094,31 @@ mod tests {
     assert!(!last_line.contains("schema"), "{last_line}");
   }
 
+  const PAST_THE_LARGEST_LENGTH_BUCKET: usize = (1 << 26) + 1;
+
+  #[test]
+  fn a_stderr_line_past_the_largest_bucket_shows_a_bucket_inside_the_grammar() {
+    let state = state_with_a_spawned_child();
+    state.on_stderr(&"a".repeat(PAST_THE_LARGEST_LENGTH_BUCKET));
+
+    state.on_terminated(Some(1));
+
+    let status = state.snapshot(Instant::now());
+    assert_eq!(status.last_line(), Some(format!("the daemon wrote an unrecognised error ([text:67108864]); {SAVE_A_BUNDLE}")));
+  }
+
+  #[test]
+  fn a_spawn_failure_text_past_the_largest_bucket_is_logged_as_a_spawn_failure() {
+    let (state, daemon_log, fs) = state_writing_to_a_log();
+    let failure = SpawnFailure::Unclassified(state.opaque(&vec![b'a'; PAST_THE_LARGEST_LENGTH_BUCKET]));
+
+    state.record_event(DesktopEvent::DaemonSpawnFailed { failure });
+
+    let lines = stored_lines(&daemon_log, &fs);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("daemon_spawn_failed") && lines[0].ends_with("text=[text:67108864]"), "{lines:?}");
+  }
+
   #[test]
   fn a_termination_reports_the_last_stderr_line_as_an_unrecognised_error() {
     let state = state_with_a_spawned_child();
