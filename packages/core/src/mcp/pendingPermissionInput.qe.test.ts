@@ -156,6 +156,22 @@ describe('QE — the pending permission a manager reads carries a masked, capped
     expect(queued[0]).toContain('It waits on mcp__x__login:');
   });
 
+  it('sends the generic silent-block message, with no tool and no secret, when the block is raised before the approval is pending', async () => {
+    const { client, managerId, handle } = await managerWithChild();
+    await fetch(handle.hookUrl!, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'c', hook_event_name: 'Notification', notification_type: 'permission_prompt' }) });
+    expect((await putUnattendedPolicy(false)).status).toBe(200);
+
+    raiseUnattendedSilentBlock();
+    void handle.requestPermission({ sessionId: 'c', toolName: 'Bash', toolInput: { command: 'deploy --user bob --password hunter2' } });
+    await pendingPermissionSeenByManager(client);
+    const queued = messagesQueuedFor(managerId);
+
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatch(/^\[OpenFleet\] Worker \([^)]+\) has waited more than 3 seconds on a permission prompt nobody can answer\. Look at it, or close and relaunch it\.$/);
+    expect(queued[0]).not.toContain('It waits on');
+    expect(queued[0]).not.toContain('hunter2');
+  });
+
   it('caps a 5000-character input at the limit with the truncation marker, in both statuses', async () => {
     const { client, childId, handle } = await managerWithChild();
     await requestPermissionOnUnwatchedPrompt(handle, { toolName: 'mcp__scape__create_note', toolInput: { body_md: 'ab '.repeat(1700) } });

@@ -47,6 +47,6 @@ for (const theme of ['light', 'dark'] as const) {
     await page.setViewportSize({ width: 1280, height: 1200 });
     await openGeneralSettings(page, theme);
 
-    await page.screenshot({ path: testInfo.outputPath(`settings-general-${theme}.png`),fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`settings-general-${theme}.png`), fullPage: true });
   });
 }

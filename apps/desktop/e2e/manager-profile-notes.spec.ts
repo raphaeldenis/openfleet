@@ -75,7 +75,7 @@ for (const theme of ['light', 'dark'] as const) {
     await managerWritesItsProfile(request, manager.id, { expertise: 'Release trains and incident follow-up', pulseActions: ['Check CI on every open pull request', 'Unblock reviews older than a day'] });
     await openProfileOf(page, manager.id);
     await expect(page.getByRole('textbox', { name: 'Pulse action 2' })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath(`manager-profile-notes-${theme}-1280x1200.png`),fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`manager-profile-notes-${theme}-1280x1200.png`), fullPage: true });
 
     await expertiseField(page).fill('Typed by the user');
     await managerWritesItsProfile(request, manager.id, { expertise: 'Written by the manager' });
@@ -83,6 +83,6 @@ for (const theme of ['light', 'dark'] as const) {
     await page.getByRole('button', { name: 'Add pulse action' }).click();
     await page.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByText('Write the action or remove it')).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath(`manager-profile-notes-conflict-${theme}-1280x1200.png`),fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`manager-profile-notes-conflict-${theme}-1280x1200.png`), fullPage: true });
   });
 }
