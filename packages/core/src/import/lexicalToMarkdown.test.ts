@@ -522,6 +522,40 @@ describe('convertLexicalToMarkdown', () => {
     });
   });
 
+  describe('children that are not nodes', () => {
+    const NOT_NODES: [string, unknown][] = [['null', null], ['a number', 5], ['a string', 'x'], ['an array', []]];
+    const CONTAINERS: [string, (child: unknown) => Node][] = [
+      ['a paragraph', (child) => ({ type: 'paragraph', children: [child] } as Node)],
+      ['a heading', (child) => ({ type: 'heading', tag: 'h2', children: [child] } as Node)],
+      ['a quote', (child) => ({ type: 'quote', children: [child] } as Node)],
+      ['a link', (child) => paragraph({ type: 'link', url: 'https://example.test', children: [child] } as Node)],
+      ['a list item', (child) => ({ type: 'list', listType: 'bullet', children: [{ type: 'listitem', children: [child] }] } as Node)],
+      ['a table cell', (child) => ({ type: 'table', children: [{ type: 'tablerow', children: [{ type: 'tablecell', children: [child] }] }] } as Node)],
+      ['an unknown block', (child) => ({ type: 'callout', children: [child] } as Node)],
+    ];
+
+    describe.each(CONTAINERS)('in %s', (_container, containerOf) => {
+      it.each(NOT_NODES)('names %s as a node without type and does not fail', (_notNode, notNode) => {
+        const result = convertLexicalToMarkdown(documentOf(containerOf(notNode)));
+
+        expect(result.unconvertedTypes).toContain('(sans type)');
+        expect(result.markdown).toContain('[non converti: (sans type)]');
+      });
+    });
+
+    it.each(NOT_NODES)('names %s at the root as a node without type', (_notNode, notNode) => {
+      const result = convertLexicalToMarkdown({ root: { type: 'root', children: [notNode] } });
+
+      expect(result).toEqual({ markdown: '[non converti: (sans type)]', unconvertedTypes: ['(sans type)'] });
+    });
+
+    it('reads a children field that is not an array as no children', () => {
+      const result = convertLexicalToMarkdown(documentOf({ type: 'paragraph', children: 'text' } as unknown as Node));
+
+      expect(result).toEqual({ markdown: '', unconvertedTypes: [] });
+    });
+  });
+
   describe('deeply nested documents', () => {
     const NESTING_DEPTH = 10_000;
     const nest = (wrap: (inner: Node) => Node): Node => {
