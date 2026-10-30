@@ -249,6 +249,30 @@ describe('QE — the escalation routes on a booted daemon', () => {
         expect(questionsForHumanOf(booted.manager.id)).toEqual([]);
       });
 
+      it('does not bring the item back when a retry-handover arrives after the answer: the retry is refused', async () => {
+        const booted = await bootManager();
+        const escalationId = await submitAndReadEscalationId(booted, [contractQuestion('q1')]);
+        await answerQ1(escalationId);
+
+        const retry = await adminApi(`/api/escalations/${escalationId}/retry-handover`, { method: 'POST', body: '{}' });
+
+        expect(retry.status).toBe(409);
+        expect(await retry.json()).toMatchObject({ error: 'already_resolved' });
+        expect(escalationItemOf(booted.manager.id, escalationId)).toBeUndefined();
+      });
+
+      it('lists a later escalation of the same ticket under its own id and does not bring the answered one back', async () => {
+        const booted = await bootManager();
+        const answeredId = await submitAndReadEscalationId(booted, [contractQuestion('q1')]);
+        await answerQ1(answeredId);
+
+        const laterId = await submitAndReadEscalationId(booted, [contractQuestion('q2', 'may we add a migration?')]);
+
+        expect(laterId).not.toBe(answeredId);
+        expect(escalationItemOf(booted.manager.id, answeredId)).toBeUndefined();
+        expect(escalationItemOf(booted.manager.id, laterId)).toBeDefined();
+      });
+
       it('leaves the item of an escalation whose answer is refused', async () => {
         const booted = await bootManager();
         const escalationId = await submitAndReadEscalationId(booted, [contractQuestion('q1')]);
