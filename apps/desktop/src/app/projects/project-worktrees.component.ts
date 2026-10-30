@@ -104,7 +104,7 @@ const pluralFilesIgnored = (count: number): string => `${count} ignored ${count 
     .count { font-size: .6875rem; color: var(--mut); }
     .note { margin: 0; padding: .75rem .875rem; display: flex; align-items: center; gap: .5rem; font-size: .75rem; color: var(--mut); border-top: 1px solid var(--line); }
     .banner { margin: 0; min-width: 0; padding: .5rem .875rem; font-size: .75rem; border-top: 1px solid var(--line); background: var(--sunk); overflow-wrap: anywhere; }
-    .banner:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .banner:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem; }
     .repo { margin: 0; padding: .5rem .875rem; border-top: 1px solid var(--line); background: var(--sunk); font-family: var(--mono); font-size: .75rem; font-weight: 500; overflow-wrap: anywhere; }
     .rows { list-style: none; margin: 0; padding: 0; }
     .rows li { border-top: 1px solid var(--line); }
