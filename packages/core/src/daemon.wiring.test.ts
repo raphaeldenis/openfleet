@@ -17,20 +17,21 @@ import { PulseScheduler } from './managers/pulseScheduler.js';
 import { SessionRepository } from './sessions/sessionRepository.js';
 import { SessionService } from './sessions/sessionService.js';
 import { createTempDirTracker } from './tempDirTracker.js';
+import { TranscriptUsageIngestion } from './usage/transcriptUsageIngestion.js';
 
 const tempDirs = createTempDirTracker();
 let daemon: Daemon | undefined;
 let adminToken: string;
 let bootedConfig: Config;
 
-async function bootDaemon(configJson?: object, { seedPreviousRun, e2e = true, commandPolicy }: { seedPreviousRun?: (config: Config) => void; e2e?: boolean; commandPolicy?: DaemonOptions['commandPolicy'] } = {}): Promise<Daemon> {
+async function bootDaemon(configJson?: object, { seedPreviousRun, e2e = true, commandPolicy, usageIngestion }: { seedPreviousRun?: (config: Config) => void; e2e?: boolean; commandPolicy?: DaemonOptions['commandPolicy']; usageIngestion?: boolean } = {}): Promise<Daemon> {
   const home = tempDirs.make('of-daemon-wiring-');
   if (configJson) writeFileSync(join(home, 'config.json'), JSON.stringify(configJson));
   const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', ...(e2e ? { [E2E_FLAG_ENV]: E2E_FLAG_ON } : {}) });
   seedPreviousRun?.(config);
   bootedConfig = config;
   adminToken = config.adminToken;
-  daemon = await startDaemon(config, { commandPolicy });
+  daemon = await startDaemon(config, { commandPolicy, usageIngestion });
   return daemon;
 }
 afterEach(async () => { vi.restoreAllMocks(); await daemon?.close(); daemon = undefined; tempDirs.removeAll(); });
@@ -50,6 +51,44 @@ async function firstWsFrame(): Promise<{ workingStateMaxAgeMinutes?: number; man
   ws.close();
   return JSON.parse(frame);
 }
+
+describe('usage ingestion at the Stop hook is opt-in', () => {
+  const stopOfNewSession = async () => {
+    const { id } = await createSession();
+    await postHook(id, { hook_event_name: 'Stop' });
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    return id;
+  };
+
+  it('ingests nothing when the daemon boots without the option', async () => {
+    const ingestAtStop = vi.spyOn(TranscriptUsageIngestion.prototype, 'ingestAtStop').mockImplementation(() => {});
+    await bootDaemon();
+
+    await stopOfNewSession();
+
+    expect(ingestAtStop).not.toHaveBeenCalled();
+  });
+
+  it('ingests the transcript of the session at its Stop when the option is on', async () => {
+    const ingestAtStop = vi.spyOn(TranscriptUsageIngestion.prototype, 'ingestAtStop').mockImplementation(() => {});
+    await bootDaemon(undefined, { usageIngestion: true });
+
+    const sessionId = await stopOfNewSession();
+
+    expect(ingestAtStop.mock.calls).toEqual([[sessionId]]);
+  });
+
+  it('forgets the cursor of a session when it closes', async () => {
+    const forget = vi.spyOn(TranscriptUsageIngestion.prototype, 'forget');
+    await bootDaemon(undefined, { usageIngestion: true });
+    const { id } = await createSession();
+
+    await api(`/api/sessions/${id}/close`, { method: 'POST', body: JSON.stringify({}) });
+
+    expect(forget.mock.calls).toEqual([[id]]);
+  });
+});
 
 describe('operator gets every daemon feature when the daemon boots from its config', () => {
   it('offers neither the fake harness nor the fake-output route unless the e2e flag is set (AUD-18)', async () => {

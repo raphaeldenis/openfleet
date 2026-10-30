@@ -42,6 +42,22 @@ describe('SessionDetailsComponent', () => {
     expect(screen.getByTestId('state-chip')).toHaveTextContent('idle');
   });
 
+  it('shows the input and output tokens of the session in its facts', async () => {
+    const session = baseSession();
+    const api = { ...fakeApi(), getSessionUsage: vi.fn().mockResolvedValue({ inputTokens: 12_300, outputTokens: 4_100 }) };
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+
+    expect(await within(screen.getByTestId('session-token-usage')).findByText('12.3k in / 4.1k out')).toBeInTheDocument();
+  });
+
+  it('shows n/a for the tokens of a session the daemon has no usage for', async () => {
+    const session = baseSession({ harness: 'fake' });
+    const api = { ...fakeApi(), getSessionUsage: vi.fn().mockResolvedValue(null) };
+    await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session, api) });
+
+    expect(await within(screen.getByTestId('session-token-usage')).findByText('n/a')).toBeInTheDocument();
+  });
+
   it('renders the harness right away', async () => {
     const session = baseSession();
     await render(SessionDetailsComponent, { bindings: [inputBinding('session', () => session)], providers: providersFor(session) });

@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 import { RouterLink } from '@angular/router';
 import { StateChipComponent } from '../../design/state-chip.component';
 import { showInvisibleControlsAsEscapes } from '../../core/bidi-escapes';
+import { SessionTokenUsageComponent } from '../../sessions/session-token-usage.component';
 import { CLOSED_STATE } from './children-progress';
 import { plural } from './plural';
 import type { ChildProgress, ChildrenLoad } from './session-todos-source';
@@ -42,7 +43,7 @@ function keepPriorityOf(row: ChildRow): number {
 @Component({
   selector: 'of-manager-children',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, StateChipComponent, TodoProgressComponent],
+  imports: [RouterLink, SessionTokenUsageComponent, StateChipComponent, TodoProgressComponent],
   template: `
     @if (load(); as current) {
       @if (current.kind === 'unsupported') {
@@ -56,6 +57,7 @@ function keepPriorityOf(row: ChildRow): number {
                 <span class="emoji" aria-hidden="true">{{ row.child.emoji }}</span>
                 <a class="name" data-testid="manager-child-link" [routerLink]="row.link" [title]="row.displayName" (click)="opened.emit()">{{ row.displayName }}</a>
                 <of-state-chip [state]="row.child.state" />
+                <of-session-token-usage data-testid="manager-child-token-usage" [sessionId]="row.child.id" [state]="row.child.state" />
                 <span class="progress-text" data-testid="manager-child-progress-text">{{ row.progressText }}</span>
                 @if (row.isClosedWithUnfinishedWork) {
                   <span class="unfinished" data-testid="manager-child-unfinished">unfinished</span>

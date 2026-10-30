@@ -34,6 +34,7 @@ import { SqliteDenialJournal } from './policy/sqliteDenialJournal.js';
 import { ManagerDenials } from './policy/managerDenials.js';
 import { FINDINGS_GATE_ENFORCEMENT, FindingsGate, type FindingsGateEnforcement } from './review/findingsGate.js';
 import { ReviewFindingsRepository } from './review/reviewFindingsRepository.js';
+import { TranscriptUsageIngestion } from './usage/transcriptUsageIngestion.js';
 import { UsageLedgerService } from './usage/usageLedgerService.js';
 import { descendantSessionIdsOf } from './managers/lineage.js';
 import type { BaseNotReadEnforcement } from './managers/baseReadGuard.js';
@@ -150,6 +151,8 @@ export interface DaemonOptions {
   noteNotReadEnforcement?: NoteNotReadEnforcement;
   /** Overrides FINDINGS_GATE_ENFORCEMENT and the findingsGate.enforcement setting: 'observe' journals the findings_required refusal of gh pr create and lets the command pass. */
   findingsGateEnforcement?: FindingsGateEnforcement;
+  /** When true, each Stop hook hands the session's transcript to the usage ledger, which keeps only token counts; absent or false, no transcript is read for usage. */
+  usageIngestion?: boolean;
   /** Replaces the base this build ships, so a test can boot a daemon that ships a newer version. */
   managerBase?: ManagerBase;
   /** Replaces the GitHub CLI the daemon polls the checks of watched pull requests with, so a test needs no network and no login. */
@@ -334,6 +337,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     schedule: options.arbiter?.schedule ?? scheduleOnRealClock, ticketPattern: findingsGateSettings.ticketPattern,
   });
   const usageLedger = new UsageLedgerService(db);
+  const usageIngestion = options.usageIngestion === true
+    ? new TranscriptUsageIngestion({ ledger: usageLedger, trustedTranscriptFileOf: (sessionId) => sessions.trustedTranscriptFileOf(sessionId), parentOf: (sessionId) => sessions.get(sessionId)?.parentId, createdAtOf: (sessionId) => sessions.get(sessionId)?.createdAt })
+    : undefined;
+  bus.subscribe((event) => {
+    if (event.type === 'session.closed') usageIngestion?.forget(event.sessionId);
+  });
   const findingsGate = {
     gate: new FindingsGate({ findings: reviewFindings, ticketPattern: findingsGateSettings.ticketPattern }),
     enforcement: options.findingsGateEnforcement ?? findingsGateSettings.enforcement ?? FINDINGS_GATE_ENFORCEMENT,
@@ -365,7 +374,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     clock: options.childSilence?.clock ?? Date.now, schedule: options.childSilence?.schedule ?? scheduleOnRealClock,
   });
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

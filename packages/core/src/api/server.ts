@@ -43,6 +43,8 @@ import { registerGovernanceE2eRoutes } from './governanceE2eRoutes.js';
 import { registerCommandPolicyRoutes } from './commandPolicyRoutes.js';
 import { registerReviewFindingsRoutes } from './reviewFindingsRoutes.js';
 import { registerUsageRoutes } from './usageRoutes.js';
+import type { PerSessionTrailingThrottleOptions } from '../usage/perSessionTrailingThrottle.js';
+import type { TranscriptUsageIngestion } from '../usage/transcriptUsageIngestion.js';
 import type { UsageLedgerService } from '../usage/usageLedgerService.js';
 import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
 import { registerGovernanceRoutes } from './governanceRoutes.js';
@@ -56,7 +58,7 @@ import { registerHandoffPickerRoutes } from './handoffPickerRoutes.js';
 import { HandoffSeed } from '../notes/handoffSeed.js';
 import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { registerRestRoutes } from './restHandlers.js';
-import { decodeParams, json, readJson, redactedRequestPath, Router } from './router.js';
+import { decodeParams, json, readJson, redactedRequestPath, Router, type Handler } from './router.js';
 import { createWsHandler } from './wsHandler.js';
 import { createWsTicketStore, type WsTicketStore } from './wsTicketStore.js';
 
@@ -96,6 +98,10 @@ export interface ServerDeps {
   // Without it no handover is recorded and the handovers route does not exist.
   handoverLedger?: HandoverLedger;
   contextNotice?: ContextNotice;
+  /** Present only when the operator enabled the usage ingestion. */
+  usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>;
+  /** The window in which a session's Stops cause one usage ingestion (one second by default) and the clock, scheduler and timer that drive it. */
+  usageIngestionThrottle?: Partial<PerSessionTrailingThrottleOptions>;
   // Without it the daemon reports no degraded state: /health says ok and the snapshot carries no daemonIssues.
   degraded?: DegradedRegistry;
   // Without it PreToolUse is answered {} and a PermissionRequest always opens an approval, as before the command policy.
@@ -124,12 +130,12 @@ function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
 }
 
-async function handleHookRequest(req: IncomingMessage, res: ServerResponse, hookToken: string, deps: ServerDeps): Promise<void> {
+async function handleHookRequest(req: IncomingMessage, res: ServerResponse, hookToken: string, deps: ServerDeps, handleHook: Handler): Promise<void> {
   const session = deps.sessions.byHookToken(hookToken);
   if (!session) return json(res, 200, {});
   const warnAboutTheIgnoredBody = (bytes: number) => log('warn', 'hook body over 1 MiB ignored', undefined, { code: 'hook_body_too_large', sessionId: session.id, bytes });
   const body = await readJson(req, undefined, { skipOversized: true, onSkipped: warnAboutTheIgnoredBody });
-  await hooksHandler(deps)({ req, res, params: { hookToken }, body });
+  await handleHook({ req, res, params: { hookToken }, body });
 }
 
 async function handleMcpRequest(
@@ -184,12 +190,14 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.escalations) registerEscalationRoutes(router, { escalations: deps.escalations, isManager: (sessionId) => deps.managers.get(sessionId) !== undefined });
   if (deps.commandPolicyAdmin) registerCommandPolicyRoutes(router, deps.commandPolicyAdmin);
   if (deps.reviewFindings) registerReviewFindingsRoutes(router, { findings: deps.reviewFindings });
-  if (deps.usageLedger) registerUsageRoutes(router, { usageLedger: deps.usageLedger });
+  if (deps.usageLedger) registerUsageRoutes(router, { usageLedger: deps.usageLedger, sessions: deps.sessions, projects: deps.projects });
   if (deps.governanceQueue && deps.e2eRoutes) registerGovernanceE2eRoutes(router, { governanceQueue: deps.governanceQueue });
   if (deps.projects && deps.noteRepo) registerHandoffPickerRoutes(router, new HandoffSeed({ projects: deps.projects, notes: deps.noteRepo, files: nodeHandoffFileReader }));
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
   if (deps.handoff) registerHandoffRoutes(router, deps.handoff);
   if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });
+
+  const handleHook = hooksHandler(deps);
 
   const server = createServer(async (req, res) => {
     applyCorsHeaders(req, res);
@@ -203,7 +211,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
       if (hookMatch) {
         const hookParams = decodeParams(['hookToken'], hookMatch);
         if (!hookParams) throw new OpenFleetError('not_found', 'the route does not exist.');
-        return await handleHookRequest(req, res, hookParams.hookToken!, deps);
+        return await handleHookRequest(req, res, hookParams.hookToken!, deps, handleHook);
       }
       if (url.pathname === '/mcp' && deps.mcp) return await handleMcpRequest(req, res, deps.mcp, deps.sessions);
 
@@ -238,9 +246,13 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   return {
     url: `http://${deps.host}:${port}`,
     routes: router.list(),
-    /** Makes /health answer 503 while the sessions are still closing and the port is still bound. */
-    beginShutdown: () => { isShuttingDown = true; },
+    /** Makes /health answer 503 while the sessions are still closing and the port is still bound; ingests the usage still waiting in a window while the transcripts are reachable. */
+    beginShutdown: () => {
+      isShuttingDown = true;
+      handleHook.dispose();
+    },
     close: () => {
+      handleHook.dispose();
       // closeAllConnections() only ever covered plain HTTP sockets — an upgraded WS connection is not one
       // of "server's" connections any more as far as node:http is concerned, so server.close() would wait
       // on it forever with the UI still open (MAJ-08/AUD-08). Close those out first, then the rest as before.

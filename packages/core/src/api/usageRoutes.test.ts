@@ -15,7 +15,7 @@ beforeAll(async () => {
   config = loadConfig({ OPENFLEET_HOME: tempDirs.make('of-usage-route-'), OPENFLEET_PORT: '0' });
   daemon = await startDaemon(config);
   const transcriptText = [assistantLine('m1', '2026-10-01T10:00:00.000Z', 'model-a'), assistantLine('m2', '2026-10-02T10:00:00.000Z', 'model-b')].join('\n');
-  new UsageLedgerService(daemon.db).ingestTranscript({ sessionId: 's1', biller: 'api', transcriptText, billingCodeOf: () => 'root' });
+  new UsageLedgerService(daemon.db).ingestTranscript({ sessionId: 's1', biller: 'api', transcriptText, billingCodeOf: () => 'root', timestampWindow: { earliestMs: 0, latestMs: Number.MAX_SAFE_INTEGER } });
 });
 afterAll(async () => {
   await daemon.close();

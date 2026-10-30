@@ -8,6 +8,7 @@ import { StateChipComponent } from '../design/state-chip.component';
 import { closedSessionPresentationFor } from './closed-session-presentation';
 import { ModelSelectorComponent } from './model-selector.component';
 import { PermissionModePickerComponent } from './permission-mode-picker.component';
+import { SessionTokenUsageComponent } from './session-token-usage.component';
 import { SessionActionsComponent } from './session-actions.component';
 import { restoreFocusWhenFree } from './handoff/handoff-focus';
 import { HandoffPreviewHostComponent } from './handoff/handoff-preview-host.component';
@@ -21,7 +22,7 @@ const SUPERVISED_TEXT = 'No - supervised: its questions go through the escalatio
 @Component({
   selector: 'of-session-details',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ErrorLineComponent, StateChipComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent, HandoffPreviewHostComponent],
+  imports: [ErrorLineComponent, StateChipComponent, SessionTokenUsageComponent, ModelSelectorComponent, PermissionModePickerComponent, SessionActionsComponent, HandoffPreviewHostComponent],
   template: `
     <section class="session-details" data-testid="session-details" aria-label="Session details">
       <div class="card" data-testid="session-details-identity">
@@ -82,6 +83,10 @@ const SUPERVISED_TEXT = 'No - supervised: its questions go through the escalatio
             <span class="fact-value" data-testid="session-attended">{{ attendedText() }}</span>
           </div>
         }
+        <div class="fact">
+          <span class="fact-label">Tokens</span>
+          <span class="fact-value" data-testid="session-token-usage"><of-session-token-usage [sessionId]="session().id" [state]="session().state" /></span>
+        </div>
         <div class="fact fact--field">
           <span class="fact-label">Model</span>
           <of-model-selector [sessionId]="session().id" />

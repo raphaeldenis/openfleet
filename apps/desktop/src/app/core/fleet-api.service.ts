@@ -10,6 +10,7 @@ import { parseCloseHandoffResult, parseHandoffPreview, parseHandoffTarget } from
 import { parseManagerProfile } from './manager-profile-parser';
 import { parseProject } from './project-response-parser';
 import { parseSessionTodos } from './session-todos-parser';
+import { parseTokenUsage, type TokenUsage } from './token-usage';
 
 export type PageRequest = Partial<Pick<Page<unknown>, 'limit' | 'offset'>>;
 export type ProposalDecision = { decision: 'approve' } | { decision: 'deny'; reason: string };
@@ -149,6 +150,10 @@ export class FleetApiService {
     const todos = parseSessionTodos(await this.call<unknown>(path));
     if (!todos) throw new ApiError(200, `GET ${path} → unreadable todo list`);
     return todos;
+  }
+  /** The input and output tokens the session has used; null when the daemon holds no usage for it. */
+  async getSessionUsage(id: string): Promise<TokenUsage | null> {
+    return parseTokenUsage(await this.call<unknown>(`/api/sessions/${encodeURIComponent(id)}/usage`));
   }
   /** The last working state the session wrote, kept after it closes; undefined when it never wrote one. */
   async getWorkingState(id: string): Promise<WorkingState | undefined> {

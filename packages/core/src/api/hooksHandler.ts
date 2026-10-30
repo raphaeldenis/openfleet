@@ -3,15 +3,25 @@ import { narrowTodoHookCall, withoutTodoPayload, type TodoHookCall } from '../to
 import type { TodoTracker } from '../todos/todoTracker.js';
 import type { ContextNotice } from '../workingState/contextNotice.js';
 import type { SessionStartContext, SessionStartRequest } from '../workingState/sessionStartContext.js';
+import type { EventBus } from '../events/eventBus.js';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { CommandPolicyHooks } from '../policy/ports.js';
 import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import { OncePerWindowPerKey } from '../usage/oncePerWindowPerKey.js';
+import { PerSessionTrailingThrottle, type PerSessionTrailingThrottleOptions } from '../usage/perSessionTrailingThrottle.js';
+import type { TranscriptUsageIngestion } from '../usage/transcriptUsageIngestion.js';
 import { handoverReminder, type HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { json, type Handler } from './router.js';
+
+/** A session whose usage ingestion keeps failing adds one failure to the degraded count per window, not one per Stop. */
+const USAGE_FAILURE_COUNT_WINDOW_MS = 60_000;
+
+/** The Stops of a session cause at most one usage ingestion per window, which bounds the CPU a looping child can take. */
+const USAGE_INGESTION_WINDOW_MS = 1000;
 
 /** Runs `work`; a throw is logged, counted toward the degraded state, and answered as if the feature were absent (undefined). */
 function failingOpen<T>(degraded: DegradedRegistry | undefined, failure: string, work: () => T): T | undefined {
@@ -41,7 +51,7 @@ function trackTodosFailingOpen(todos: TodoTracker | undefined, sessionId: string
 /** A conversation that starts, restarts or resumes has the base and the mission note only if it reads them again; a manager that never read them is unaffected. */
 const SESSION_START_SOURCES_THAT_RESET_THE_BASE_AND_NOTE_READS = ['startup', 'compact', 'clear', 'resume'];
 
-export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead' | 'forgetNoteRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler {
+export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBaseRead' | 'forgetNoteRead'>; sessions: SessionService; approvals: ApprovalService; stopRefusal?: StopRefusal; sessionStartContext?: SessionStartContext; handoverLedger?: HandoverLedger; contextNotice?: ContextNotice; usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>; usageIngestionThrottle?: Partial<PerSessionTrailingThrottleOptions>; bus?: Pick<EventBus, 'subscribe'>; todos?: TodoTracker; degraded?: DegradedRegistry; commandPolicy?: CommandPolicyHooks }): Handler & { dispose(): void } {
   const decideStopRefusalFailingOpen = (sessionId: string, stopHookActive: boolean): StopHookOutput | undefined =>
     failingOpen(deps.degraded, 'stop refusal check failed, letting the turn end', () => deps.stopRefusal?.decide({ sessionId, stopHookActive }));
 
@@ -70,7 +80,39 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
       if (startsFreshConversation) deps.contextNotice?.clearForNewConversation(sessionId);
     });
 
-  return async ({ res, params, body }) => {
+  const stopIngestions = new PerSessionTrailingThrottle({ windowMs: USAGE_INGESTION_WINDOW_MS, ...deps.usageIngestionThrottle });
+
+  const degradedCountsOfUsageFailures = new OncePerWindowPerKey(USAGE_FAILURE_COUNT_WINDOW_MS);
+
+  const stopListeningToClosedSessions = deps.bus?.subscribe((event) => {
+    if (event.type !== 'session.closed') return;
+    stopIngestions.forget(event.sessionId);
+    degradedCountsOfUsageFailures.forget(event.sessionId);
+  });
+
+  const dispose = (): void => {
+    stopListeningToClosedSessions?.();
+    stopIngestions.dispose();
+  };
+
+  const ingestUsageFailingOpen = (usageIngestion: Pick<TranscriptUsageIngestion, 'ingestAtStop'>, sessionId: string): void => {
+    try {
+      usageIngestion.ingestAtStop(sessionId);
+    } catch (error) {
+      log('warn', `usage ingestion failed, recording nothing: ${error instanceof Error ? error.message : String(error)}`, undefined, { code: 'usage_ingestion_failed', sessionId });
+      const countsTowardDegraded = degradedCountsOfUsageFailures.admits(sessionId);
+      if (countsTowardDegraded) deps.degraded?.recordHookFailOpen();
+    }
+  };
+
+  const ingestUsageAfterAnswering = (sessionId: string, event: ClaudeHookEvent): void => {
+    const endsTurn = event.hook_event_name === 'Stop';
+    if (!endsTurn || !deps.usageIngestion) return;
+    const { usageIngestion } = deps;
+    stopIngestions.request(sessionId, () => ingestUsageFailingOpen(usageIngestion, sessionId));
+  };
+
+  const handleHook: Handler = async ({ res, params, body }) => {
     const session = deps.sessions.byHookToken(params.hookToken ?? '');
     const parsed = ClaudeHookEventSchema.safeParse(body);
     const isIgnorable = !session || !parsed.success || session.state === 'closed';
@@ -91,6 +133,7 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
     const handoverReminderOutput = event.hook_event_name === 'UserPromptSubmit' && !isDaemonSeededPrompt ? recordHandoversFailingOpen({ sessionId: session.id, prompt: event.prompt }) : undefined;
     deps.sessions.applyInput(session.id, { kind: 'hook', event, turnContinues: stopRefusal !== undefined });
     trackContextNoticeFailingOpen(session.id, event);
+    ingestUsageAfterAnswering(session.id, event);
     trackTodosFailingOpen(deps.todos, session.id, event, todoCall);
     if (stopRefusal) return json(res, 200, stopRefusal);
     if (sessionStartContext) return json(res, 200, sessionStartContext);
@@ -111,4 +154,6 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
     const message = decision === 'deny' ? 'denied in OpenFleet' : undefined;
     return json(res, 200, { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: decision, message } } });
   };
+
+  return Object.assign(handleHook, { dispose });
 }
