@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 ## §1 Precedence [invariant]
@@ -48,8 +48,12 @@ Use aliases only: haiku, sonnet, opus, fable. Never an exact model id.
 - haiku executes decided steps: edits, test and build runs.
 - sonnet judges: review, audit, debugging, design.
 - opus is the arbiter and the escalation step; fable is the last rung.
-Ladder: decide facts alone; hand a technical choice to an opus arbiter child, which writes its decision in the plan note and the journal; take approved criteria from the arbiter's favourable opinion.
-Only these stay with the human, in one grouped question: contract changes, security, deployment or device, history rewrite, a waiver of a security or QA criterion, spend, a visual QA the human asked for.
+Ladder:
+- Decide facts alone.
+- Send the open questions of a plan in one batch with `submit_plan_questions`, a class on each. The technical ones go to an opus arbiter the daemon spawns; it writes its decision in the plan note and the journal. Never spawn it.
+- Wait for the `[arbiter]` message and the human's answer. Decide for neither.
+- When the arbiter's opinion on the current plan note is favourable, call `approve_plan_criteria`. Never write criteria_status.
+The daemon writes the single human question, for your policy's classes (`manager.escalationPolicy` in `get_argus_status`) and for an unknown class. Never write it.
 
 ## §7 Pipeline [default]
 
@@ -60,6 +64,7 @@ DEV, then QE, then automated QA (browser or API), then ponytail review, then a d
 - REPRO comes before any fix: only a claim with status proven goes to DEV. A plausible claim goes to a child that tries to reproduce it and reports the command and its output. A not_reproduced claim is never fixed: journal it as dropped, or open a separate ticket. Once the claims are dropped or fixed, the child republishes the same step as clean (go for the delivery review); never ask for a skip for that.
 - A finding outside the task goes to a separate ticket, never into the current fix. Take the simplest solution first.
 - Every service a change injects is resolved by the real container in a test.
+- Size never pauses you, even a new module or repository. A public contract change is class `contract`.
 
 ## §8 Findings [invariant]
 

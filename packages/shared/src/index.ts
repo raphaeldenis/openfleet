@@ -2,6 +2,7 @@ export * from './session.js';
 export * from './managers.js';
 export * from './managerBase.js';
 export * from './reproClaim.js';
+export * from './escalation.js';
 export * from './gateStep.js';
 export * from './isBlankText.js';
 export * from './shipVerdict.js';

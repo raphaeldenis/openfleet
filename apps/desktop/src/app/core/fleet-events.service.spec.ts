@@ -1,4 +1,4 @@
-import { SESSION_CLOSE_REASONS, type DaemonIssue, type ErrorEnvelope, type GovernanceProposalView } from '@openfleet/shared';
+import { SESSION_CLOSE_REASONS, type DaemonIssue, type ErrorEnvelope, type EscalationView, type GovernanceProposalView } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closedSessionPresentationFor } from '../sessions/closed-session-presentation';
 import { FleetEventsService, silentBlockKey } from './fleet-events.service';
@@ -1297,6 +1297,104 @@ describe('FleetEventsService daemon issues and background failures', () => {
       socket.dispatchMessage({ type: 'governance.resolved', proposal: proposal('unknown', { status: 'approved' }) });
 
       expect(service.proposals().map(({ id }) => id)).toEqual(['p1']);
+    });
+  });
+
+  describe('escalations', () => {
+    const escalation = (id: string, patch: Partial<EscalationView> = {}): EscalationView => ({
+      id, managerId: 'm1', ticket: 'CCM-1', status: 'pending', body: `Escalation ${id}`, createdAt: '2026-10-29T10:00:00.000Z', questions: [], ...patch,
+    });
+    const snapshotWith = (escalations?: EscalationView[]) => ({ type: 'snapshot', sessions: [], approvals: [], ...(escalations && { escalations }) });
+    const pendingIds = () => service.escalations().map(({ id }) => id);
+
+    it('holds no escalation before any snapshot', () => {
+      expect(service.escalations()).toEqual([]);
+    });
+
+    it('seeds the pending escalations from the snapshot', () => {
+      socket.dispatchMessage(snapshotWith([escalation('e1'), escalation('e2')]));
+
+      expect(pendingIds()).toEqual(['e1', 'e2']);
+    });
+
+    it('holds none after a snapshot from a daemon that reports no escalations', () => {
+      socket.dispatchMessage(snapshotWith([escalation('e1')]));
+
+      socket.dispatchMessage(snapshotWith());
+
+      expect(service.escalations()).toEqual([]);
+    });
+
+    it('appends an escalation announced by escalation.raised', () => {
+      socket.dispatchMessage(snapshotWith([escalation('e1')]));
+
+      socket.dispatchMessage({ type: 'escalation.raised', escalation: escalation('e2') });
+
+      expect(pendingIds()).toEqual(['e1', 'e2']);
+    });
+
+    it('replaces an escalation that escalation.raised announces again with a rebuilt body', () => {
+      socket.dispatchMessage({ type: 'escalation.raised', escalation: escalation('e1') });
+
+      socket.dispatchMessage({ type: 'escalation.raised', escalation: escalation('e1', { body: 'Escalation e1 with one more question' }) });
+
+      expect(service.escalations().map(({ body }) => body)).toEqual(['Escalation e1 with one more question']);
+    });
+
+    it('drops an escalation that escalation.resolved announces', () => {
+      socket.dispatchMessage(snapshotWith([escalation('e1'), escalation('e2')]));
+
+      socket.dispatchMessage({ type: 'escalation.resolved', escalation: escalation('e1', { status: 'answered' }) });
+
+      expect(pendingIds()).toEqual(['e2']);
+    });
+
+    it('does not bring back an answered escalation when its escalation.raised is replayed', () => {
+      socket.dispatchMessage({ type: 'escalation.raised', escalation: escalation('e1', { status: 'answered' }) });
+
+      expect(service.escalations()).toEqual([]);
+    });
+
+    describe('known escalation ids', () => {
+      const knownIds = () => [...service.knownEscalationIds()];
+
+      it('holds no id before any snapshot', () => {
+        expect(knownIds()).toEqual([]);
+      });
+
+      it('knows the pending escalations of the snapshot', () => {
+        socket.dispatchMessage(snapshotWith([escalation('e1')]));
+
+        expect(knownIds()).toEqual(['e1']);
+      });
+
+      it('keeps knowing an escalation after escalation.resolved', () => {
+        socket.dispatchMessage(snapshotWith([escalation('e1'), escalation('e2')]));
+
+        socket.dispatchMessage({ type: 'escalation.resolved', escalation: escalation('e1', { status: 'answered' }) });
+
+        expect(knownIds().sort()).toEqual(['e1', 'e2']);
+      });
+
+      it('knows an escalation that escalation.raised announces already answered', () => {
+        socket.dispatchMessage({ type: 'escalation.raised', escalation: escalation('e1', { status: 'answered' }) });
+
+        expect(knownIds()).toEqual(['e1']);
+      });
+
+      it('keeps knowing a resolved escalation after a later snapshot that no longer lists it', () => {
+        socket.dispatchMessage({ type: 'escalation.resolved', escalation: escalation('e1', { status: 'answered' }) });
+
+        socket.dispatchMessage(snapshotWith());
+
+        expect(knownIds()).toEqual(['e1']);
+      });
+
+      it('does not know an id it never heard of', () => {
+        socket.dispatchMessage(snapshotWith([escalation('e1')]));
+
+        expect(service.knownEscalationIds().has('gone')).toBe(false);
+      });
     });
   });
 });

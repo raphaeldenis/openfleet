@@ -3,7 +3,7 @@ import { log } from '../logger.js';
 import type { DescribeError, SessionService } from '../sessions/sessionService.js';
 import { profileRecallOf } from './managerProfileRecall.js';
 import { isPulseEnabled, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
-import { toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
+import { countsAgainstChildrenCap, toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
 import { nextPulseAt } from './pulseTiming.js';
 import { toSingleLineName } from './singleLineName.js';
 import { STALE_IN_PROGRESS_ROW_MS } from './staleRows.js';
@@ -382,7 +382,7 @@ export class PulseScheduler {
     const pulsedAt = new Date().toISOString();
     this.deps.managers.setLastPulseAt(record.sessionId, pulsedAt);
     const updated: ManagerRecord = { ...record, lastPulseAt: pulsedAt };
-    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && (s.state !== 'closed' || s.restartPending === true)).length;
+    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && countsAgainstChildrenCap(s)).length;
     this.deps.bus.emit({ type: 'manager.pulsed', manager: toManagerView(updated, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId), this.deps.managerBase) });
     this.arm(updated);
     this.managerIdsInFailureStreak.delete(record.sessionId);

@@ -30,7 +30,7 @@ async function renderMissionPanelShowing(missionText: string): Promise<void> {
     models: vi.fn().mockResolvedValue({}),
   };
   const events = {
-    sessions: signal([MANAGER_SESSION]), approvals: signal([]), proposals: signal([]), queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: signal([profileWithMission(missionText).manager]), snapshotReceived: signal(true),
+    sessions: signal([MANAGER_SESSION]), approvals: signal([]), proposals: signal([]), escalations: signal([]), knownEscalationIds: signal<ReadonlySet<string>>(new Set()), queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: signal([profileWithMission(missionText).manager]), snapshotReceived: signal(true),
     workingStates: signal(new Map()), workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
   };
   await render(ManagerDashboardComponent, {

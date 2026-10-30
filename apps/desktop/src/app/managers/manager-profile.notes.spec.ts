@@ -40,7 +40,7 @@ function fakeApi({ profile = profileOf(), updateManager = vi.fn().mockResolvedVa
 async function openProfile(api = fakeApi()) {
   const liveManagers = signal<ManagerView[]>([managerViewOf()]);
   const events = {
-    sessions: signal([sessionOf()]), approvals: signal([]), proposals: signal([]), queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: liveManagers, snapshotReceived: signal(true),
+    sessions: signal([sessionOf()]), approvals: signal([]), proposals: signal([]), escalations: signal([]), knownEscalationIds: signal<ReadonlySet<string>>(new Set()), queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: liveManagers, snapshotReceived: signal(true),
     workingStates: signal(new Map()), workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
   };
   await render(ManagerDashboardComponent, {

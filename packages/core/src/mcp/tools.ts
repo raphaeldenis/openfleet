@@ -1,4 +1,4 @@
-import { CONTRACT_VERSION, configDirHarnessRefusalOf, effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
+import { ARBITER_ROLE, CONTRACT_VERSION, configDirHarnessRefusalOf, DEFAULT_ESCALATION_POLICY, effortRefusalOf, MANAGER_ROLE, ManagerSpecSchema, ModelIdSchema, PERMISSION_MODES, type Approval, type Session } from '@openfleet/shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -23,7 +23,7 @@ import { baseReadVerdictOf, type BaseNotReadEnforcement } from '../managers/base
 import { NOTE_NOT_READ_RULE_ID, noteReadVerdictOf, type NoteNotReadEnforcement } from '../managers/noteReadGuard.js';
 import type { DenialJournal } from '../policy/ports.js';
 import type { NoteRepository } from '../notes/noteRepository.js';
-import { toManagerView, type ManagerBaseIdentity } from '../managers/managerView.js';
+import { countsAgainstChildrenCap, toManagerView, type ManagerBaseIdentity } from '../managers/managerView.js';
 import { log } from '../logger.js';
 import type { PulseScheduler } from '../managers/pulseScheduler.js';
 import { guardedFor, ok, refuse } from './toolResults.js';
@@ -38,8 +38,8 @@ import type { ReviewFindingsRepository } from '../review/reviewFindingsRepositor
 import type { ScheduledEventService } from '../managers/scheduledEventService.js';
 import { scheduledEventView } from './scheduledEventTools.js';
 
-/** A child counts against the children cap while it is live or waiting for the daemon to restart it. */
-const isActiveChild = (child: Session): boolean => child.state !== 'closed' || child.restartPending === true;
+const isArbiter = (session: Session): boolean => session.role === ARBITER_ROLE;
+const refuseArbiterLifecycle = () => refuse('outside_lineage', 'an arbiter is run by the escalation service: only the daemon and the human open, message or close it');
 
 const MAX_AMBIGUITY_CANDIDATES = 4;
 const MAX_CANDIDATE_NAME_CHARS = 24;
@@ -208,6 +208,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     if (tooLong) return refuse('message_too_long', tooLong);
     const target = sessions.get(target_uuid);
     if (!target || !isInLineage(target) || target.id === caller.id) return refuse('outside_lineage', 'target not found or outside your lineage');
+    if (isArbiter(target)) return refuseArbiterLifecycle();
     return sendMessage(() => sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id, messageId: message_id }));
   });
 
@@ -265,6 +266,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     // mode: a plain MCP-spawned child gets neither privilege.
     const isTrustedOrchestrator = isRootSession || caller.role === MANAGER_ROLE;
     const resolvedTargetRole = input.manager ? MANAGER_ROLE : input.role;
+    if (resolvedTargetRole === ARBITER_ROLE) return refuse('invalid_body', 'role "arbiter" is spawned by the daemon only');
     if (resolvedTargetRole === MANAGER_ROLE && !input.manager) return refuse('invalid_body', 'role "manager" requires a manager spec');
     if (input.manager && !isTrustedOrchestrator) return refuse('not_a_manager', 'only an existing manager may create another manager');
 
@@ -350,7 +352,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       // inside sessions.create()/managers.createManagerSession() below: Node never interleaves another
       // callback into this handler before that insert happens, so two concurrent create_session calls
       // can never both pass this check before either session exists — see Review Focus #3.
-      const activeChildren = sessions.list().filter((s) => s.parentId === caller.id && isActiveChild(s)).length;
+      const activeChildren = sessions.list().filter((s) => s.parentId === caller.id && countsAgainstChildrenCap(s)).length;
       // A manager-role caller with no ManagerRecord (legacy data, a role forged before this guard existed,
       // a deleted record) is capped at 0 rather than treated as unlimited — defence in depth.
       const childrenCap = record ? record.childrenCap : 0;
@@ -397,6 +399,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     if (targetId !== caller.id) {
       const target = sessions.get(targetId);
       if (!target || target.parentId !== caller.id) return refuse('outside_lineage', 'you can only update yourself or your own child');
+      if (isArbiter(target)) return refuseArbiterLifecycle();
     }
     return ok(sessions.updateModel(targetId, resolveModel(modelTable, model)));
   });
@@ -410,7 +413,8 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       ...(child.restartPending && { restartPending: true }),
     }));
     const record = caller.role === MANAGER_ROLE ? managers.get(caller.id) : undefined;
-    const manager = record ? managerView(toManagerView(record, children.filter((c) => c.state !== 'closed' || c.restartPending).length, deps.managerDenials?.countsOf(record.sessionId), managerBase)) : null;
+    const escalationPolicy = (caller.projectId ? deps.projects.get(caller.projectId)?.escalation : undefined) ?? DEFAULT_ESCALATION_POLICY;
+    const manager = record ? { ...managerView(toManagerView(record, sessions.list().filter((s) => s.parentId === caller.id && countsAgainstChildrenCap(s)).length, deps.managerDenials?.countsOf(record.sessionId), managerBase)), escalationPolicy } : null;
     const blockedTickets = (deps.reviewFindings?.latestAdversarialLinePerTicketOf(caller.id) ?? [])
       .filter((line) => line.severity === 'no-go')
       .map(({ ticket, sha, reasons }) => ({ ticket, sha, reasons }));
@@ -433,6 +437,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
   server.registerTool('close_session', { description: 'Close one of your children', inputSchema: { session_id: z.string() } }, async ({ session_id }) => {
     const target = sessions.get(session_id);
     if (!target || target.parentId !== caller.id) return refuse('outside_lineage', 'not your child');
+    if (isArbiter(target)) return refuseArbiterLifecycle();
     await sessions.close(target.id, { closedByParent: true });
     return ok({ closed: target.id });
   });

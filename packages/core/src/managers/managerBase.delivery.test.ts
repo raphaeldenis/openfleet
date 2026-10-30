@@ -8,6 +8,7 @@ import { startDaemon, type Daemon } from '../daemon.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 import { loadManagerBase, parseManagerBase } from './managerBase.js';
 import { lintManagerBase } from './managerBaseLint.testkit.js';
+import { FILE_COUNT_PAUSE_PHRASES } from './managerContentPatterns.js';
 
 const SHIPPED_BASE_URL = new URL('../../templates/manager/base.md', import.meta.url);
 const SHIPPED_SHA_URL = new URL('../../templates/manager/base.sha256', import.meta.url);
@@ -22,6 +23,7 @@ const RELEASED_BASE_SHAS: Record<number, string> = {
   2: 'fe4afd8ff81625b6ff76711c059222f817472fe3c2a4f6e0daa291c13a7a077c',
   3: '0ecc04887dbd48ab066dfe6b2fe23c583213e7ac582cff8e7db82781a7906607',
   4: 'e5e32b25404777c5885746f8d460bedf2aa89b0887c41ae928487285aa73cdb2',
+  5: '6a4f96f827efa9ac37ee928ec35f460fdd8150811895c5a4bcf970afb077385d',
 };
 
 const tempDirs = createTempDirTracker();
@@ -48,6 +50,7 @@ afterAll(async () => {
 
 describe('the shipped manager base', () => {
   it('breaks none of the delivery rules', () => {
+    expect(shippedSource()).not.toMatch(FILE_COUNT_PAUSE_PHRASES);
     expect(lint(shippedSource())).toEqual([]);
   });
 
@@ -124,6 +127,30 @@ describe('the shipped manager base', () => {
     expect(childProhibitions?.text).toMatch(/cite a reproduction \(command and output\) or NON REPRODUIT for every claim they report, and fix nothing before it/);
   });
 
+  it('tells the ladder in §6: submit the questions, wait for the arbiter and the human, approve the criteria, never write criteria_status', () => {
+    const ladder = loadManagerBase().sections.find((section) => section.id === '§6')?.text ?? '';
+
+    expect(ladder).toContain('`submit_plan_questions`');
+    expect(ladder).toContain('Never spawn it.');
+    expect(ladder).toMatch(/Wait for the `\[arbiter\]` message and the human's answer\. Decide for neither\./);
+    expect(ladder).toMatch(/favourable, call `approve_plan_criteria`\. Never write criteria_status\./);
+    expect(ladder).toContain('`manager.escalationPolicy`');
+    expect(ladder).toContain('Never write it.');
+  });
+
+  it('cites the two manager escalation tools the real daemon registers', () => {
+    for (const toolName of ['submit_plan_questions', 'approve_plan_criteria']) {
+      expect(registeredToolNames.has(toolName), toolName).toBe(true);
+      expect(shippedSource(), toolName).toContain(`\`${toolName}\``);
+    }
+  });
+
+  it('never pauses on the size of a change: a public contract change is the contract class', () => {
+    const pipeline = loadManagerBase().sections.find((section) => section.id === '§7')?.text ?? '';
+
+    expect(pipeline).toContain('Size never pauses you, even a new module or repository. A public contract change is class `contract`.');
+  });
+
   it('tells the manager to read the base with get_manager_base, whole, after a reset and on a version change', () => {
     const source = shippedSource();
 
@@ -144,6 +171,10 @@ describe('the delivery lint', () => {
 
   it.each(['Spawn at most 2 children.', 'Spawn 3 children.', 'Keep a cap of 8.', 'cap = 4', 'Spawn 3 enfants.'])('fails when the base writes a children cap: %s', (sentence) => {
     expect(lint(`${shippedSource()}\n${sentence}\n`)).not.toEqual([]);
+  });
+
+  it.each(['Pause when a plan touches more than 5 files.', 'Stop above five files.', 'Au-delà de 5 fichiers, demande.'])('fails when the base pauses on a number of files: %s', (sentence) => {
+    expect(lint(`${shippedSource()}\n${sentence}\n`)).toEqual([expect.stringContaining('pauses on a number of files')]);
   });
 
   it('fails when the base names an exact model id', () => {

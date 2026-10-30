@@ -43,6 +43,7 @@ describe('the wire contract of the registry', () => {
     note_not_found: 'not_found/never', store_not_found: 'not_found/never', view_not_found: 'not_found/never', row_not_found: 'not_found/never',
     manager_not_found: 'not_found/never', proposal_not_found: 'not_found/never',
     governance_queue_full: 'conflict/later',
+    question_unclassified: 'invalid_request/never', escalation_open: 'conflict/later', criteria_stale: 'conflict/never', escalation_not_found: 'not_found/never',
     law_not_found: 'not_found/never', law_revision_conflict: 'conflict/after_refresh', law_withdrawn: 'conflict/never',
     session_closed: 'conflict/never', stale_revision: 'conflict/after_refresh', file_backed: 'conflict/never', file_unreadable: 'conflict/later',
     path_escapes_docs_folder: 'conflict/never', duplicate_name: 'conflict/never', worktree_exists: 'conflict/never',

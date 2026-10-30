@@ -1,5 +1,5 @@
 import type { CloseHandoffResult, ManagerSpec, SessionSpec } from '@openfleet/shared';
-import { CloseSessionRequestSchema, isManagerMode, MANAGER_MODES, ModelIdSchema, OpenFleetError, PERMISSION_MODES, ReopenRequestSchema, SessionSpecSchema, UpdateManagerSchema } from '@openfleet/shared';
+import { ARBITER_ROLE, CloseSessionRequestSchema, isManagerMode, MANAGER_MODES, ModelIdSchema, OpenFleetError, PERMISSION_MODES, ReopenRequestSchema, SessionSpecSchema, UpdateManagerSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import type { ApprovalService } from '../governance/approvalService.js';
 import type { FakeHandle } from '../harness/fakeHarness.js';
@@ -65,6 +65,7 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
 
   router.add('POST', '/api/sessions', async ({ res, body }) => {
     const requestedSpec = CreateSessionSchema.parse(body);
+    if (requestedSpec.role === ARBITER_ROLE) throw new OpenFleetError('invalid_body', 'role "arbiter" is spawned by the daemon only.');
     const spec = requestedSpec.model ? { ...requestedSpec, model: resolveModel(deps.modelTable, requestedSpec.model) } : requestedSpec;
     const hasRepo = spec.repoPath !== undefined && spec.branchName !== undefined;
     const session = spec.manager

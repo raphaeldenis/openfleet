@@ -26,6 +26,22 @@ describe('CreateProjectRequestSchema', () => {
   });
 });
 
+describe('UpdateProjectRequestSchema escalation', () => {
+  it('fills the defaults of the policy and counts as a change on its own', () => {
+    const patch = UpdateProjectRequestSchema.parse({ escalation: { askUserGate: 'off' } });
+
+    expect(patch.escalation).toMatchObject({ askUserGate: 'off', arbiterModel: 'opus', maxArbiterRunsPerTicket: 3 });
+  });
+
+  it('accepts null, which clears the setting', () => {
+    expect(UpdateProjectRequestSchema.parse({ escalation: null })).toEqual({ escalation: null });
+  });
+
+  it('refuses a policy that removes contract from the human list', () => {
+    expect(() => UpdateProjectRequestSchema.parse({ escalation: { humanClasses: ['security'] } })).toThrow();
+  });
+});
+
 describe('CreateProjectRequestSchema profile', () => {
   const profile = { goal: 'Ship it', stack: ['TypeScript'], commands: { test: 'pnpm test' }, repositories: ['/work/fleet'] };
 

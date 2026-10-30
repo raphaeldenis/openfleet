@@ -50,6 +50,7 @@ const IMPORT_LINE_BY_STATUS: Record<ScapeImportStatus, string | undefined> = {
                 }
               </div>
               <div class="fact"><dt>Model</dt><dd>{{ session().model || notKnown }}</dd></div>
+              <div class="fact"><dt>Open escalations</dt><dd>{{ openEscalationCount() }}</dd></div>
               @if (baseLine(); as line) {
                 <div class="fact"><dt>Manager base</dt><dd class="base-line">{{ line }}</dd></div>
               }
@@ -132,6 +133,7 @@ export class ManagerProfileComponent {
 
   private readonly sessionId = computed(() => this.session().id);
   private readonly events = inject(FleetEventsService);
+  protected readonly openEscalationCount = computed(() => this.events.escalations().filter((escalation) => escalation.managerId === this.sessionId()).length);
   private readonly announcedManager = computed(() => this.events.managers().find((manager) => manager.sessionId === this.sessionId()));
 
   constructor() {

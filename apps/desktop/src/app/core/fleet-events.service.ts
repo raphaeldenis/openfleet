@@ -1,6 +1,6 @@
 import { Injectable, computed, signal } from '@angular/core';
 import { TodoSummarySchema, closeReasonOfExitCode, parseSessionCloseReason } from '@openfleet/shared';
-import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, GovernanceProposalView, ManagerView, NoteChangeEvent, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
+import type { Approval, DaemonIssue, ErrorEnvelope, ErrorEventScope, EscalationView, GovernanceProposalView, ManagerView, NoteChangeEvent, NotificationTrigger, ServerEvent, Session, SessionTodos, SilentBlock, TodoSummary, WorkingState } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { parseSessionTodos } from './session-todos-parser';
@@ -29,6 +29,8 @@ function isBackgroundFailure({ error: envelope, scope }: { error: ErrorEnvelope;
 
 /** Names one prompt of one session: the same prompt keeps its key for as long as it stays undecided. */
 export const silentBlockKey = ({ sessionId, waitingSince }: SilentBlock): string => `${sessionId}@${waitingSince}`;
+
+const isAwaitingAnswer = ({ status }: EscalationView): boolean => status === 'pending';
 
 function parseServerEvent(text: string): ServerEvent | undefined {
   try {
@@ -64,6 +66,8 @@ const REQUIRED_PAYLOAD_FIELDS: Record<PayloadCarryingEventType, readonly string[
   'governance.proposed': ['proposal'],
   'governance.resolved': ['proposal'],
   'governance.queue_changed': ['managerId', 'queuedCount'],
+  'escalation.raised': ['escalation'],
+  'escalation.resolved': ['escalation'],
   'law.created': ['law'],
   'law.updated': ['law'],
   'law.withdrawn': ['law'],
@@ -129,6 +133,11 @@ export class FleetEventsService {
   readonly managers = signal<ManagerView[]>([]);
   /** The governance proposals still awaiting a human decision; empty for a daemon that reports none. */
   readonly proposals = signal<GovernanceProposalView[]>([]);
+  /** The escalations still awaiting a human answer; empty for a daemon that reports none. */
+  readonly escalations = signal<EscalationView[]>([]);
+  private readonly settledEscalationIds = signal<ReadonlySet<string>>(new Set());
+  /** The ids of the escalations awaiting an answer and of those this client saw settled; the snapshot does not forget the settled ones. */
+  readonly knownEscalationIds = computed(() => new Set([...this.escalations().map(({ id }) => id), ...this.settledEscalationIds()]));
   private readonly queuedCounts = signal<Readonly<Record<string, number>>>({});
   /** How many proposals wait for a pending place across all managers; zero for a daemon that reports no waiting list. */
   readonly queuedTotal = computed(() => Object.values(this.queuedCounts()).reduce((sum, count) => sum + count, 0));
@@ -317,6 +326,8 @@ export class FleetEventsService {
         this.approvals.set(event.approvals);
         this.managers.set(event.managers ?? []);
         this.proposals.set(event.proposals ?? []);
+        this.escalations.set((event.escalations ?? []).filter(isAwaitingAnswer));
+        this.rememberSettled((event.escalations ?? []).filter((escalation) => !isAwaitingAnswer(escalation)));
         this.queuedCounts.set(event.queuedCounts ?? {});
         this.workingStates.set(new Map((event.workingStates ?? []).map((state) => [state.sessionId, state])));
         this.workingStatesReported.set(event.workingStates !== undefined);
@@ -354,6 +365,8 @@ export class FleetEventsService {
       case 'approval.resolved': return this.approvals.update((all) => all.filter((a) => a.id !== event.approval.id));
       case 'governance.proposed': return this.upsertProposal(event.proposal);
       case 'governance.resolved': return this.proposals.update((all) => all.filter((p) => p.id !== event.proposal.id));
+      case 'escalation.raised': return this.upsertEscalation(event.escalation);
+      case 'escalation.resolved': return this.settleEscalation(event.escalation);
       case 'governance.queue_changed': return this.queuedCounts.update((all) => ({ ...all, [event.managerId]: event.queuedCount }));
       case 'law.created':
       case 'law.updated':
@@ -447,6 +460,21 @@ export class FleetEventsService {
     const isStillAwaitingDecision = proposal.status === 'pending';
     if (!isStillAwaitingDecision) return;
     this.proposals.update((all) => (all.some((p) => p.id === proposal.id) ? all.map((p) => (p.id === proposal.id ? proposal : p)) : [...all, proposal]));
+  }
+
+  private upsertEscalation(incoming: EscalationView): void {
+    if (!isAwaitingAnswer(incoming)) return this.settleEscalation(incoming);
+    this.escalations.update((all) => (all.some((escalation) => escalation.id === incoming.id) ? all.map((escalation) => (escalation.id === incoming.id ? incoming : escalation)) : [...all, incoming]));
+  }
+
+  private settleEscalation(settled: EscalationView): void {
+    this.escalations.update((all) => all.filter((escalation) => escalation.id !== settled.id));
+    this.rememberSettled([settled]);
+  }
+
+  private rememberSettled(settled: readonly EscalationView[]): void {
+    if (settled.length === 0) return;
+    this.settledEscalationIds.update((ids) => new Set([...ids, ...settled.map(({ id }) => id)]));
   }
 
   private upsertManager(manager: ManagerView): void {

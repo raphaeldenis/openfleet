@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { EscalationPolicySchema, type EscalationPolicy } from './escalation.js';
 import { hasNoteTitleText } from './projectNote.js';
 
 export const MAX_PROJECT_NAME_CHARS = 80;
@@ -21,6 +22,8 @@ export interface Project {
   rowGuardEnabled?: true;
   /** Present and true when the project's repository is shared with a team, so the fleet's tooling stays out of it; absent means off. */
   sharedRepo?: true;
+  /** Present when the project sets its own escalation policy; absent means the defaults of the ladder. */
+  escalation?: EscalationPolicy;
   /** Present when the guard is on and a `status` or `step` column of the project is not a select column, so the done rule never fires on it. */
   rowGuardWarning?: string;
 }
@@ -91,6 +94,8 @@ export const UpdateProjectRequestSchema = z
     postCreateHookTimeoutSeconds: PostCreateHookTimeoutSchema.optional(),
     rowGuardEnabled: z.boolean().optional(),
     sharedRepo: z.boolean().optional(),
+    /** `null` clears the setting and brings the defaults back. */
+    escalation: EscalationPolicySchema.nullable().optional(),
   })
-  .refine((patch) => Object.values(patch).some((value) => value !== undefined), { message: 'name, docsFolderPath, postCreateHookScript, postCreateHookTimeoutSeconds, rowGuardEnabled or sharedRepo is required' });
+  .refine((patch) => Object.values(patch).some((value) => value !== undefined), { message: 'name, docsFolderPath, postCreateHookScript, postCreateHookTimeoutSeconds, rowGuardEnabled, sharedRepo or escalation is required' });
 export type UpdateProjectRequest = z.infer<typeof UpdateProjectRequestSchema>;

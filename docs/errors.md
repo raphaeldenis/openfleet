@@ -22,10 +22,10 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Kind | HTTP status | Codes |
 | --- | --- | --- |
-| `invalid_request` | 400 | 16 |
+| `invalid_request` | 400 | 17 |
 | `unauthorized` | 401 | 1 |
-| `not_found` | 404 | 12 |
-| `conflict` | 409 | 42 |
+| `not_found` | 404 | 13 |
+| `conflict` | 409 | 44 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 11 |
 | `internal` | 500 | 4 |
@@ -50,6 +50,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `outside_own_repository` | 400 | `never` |
 | `docs_root_invalid` | 400 | `never` |
 | `docs_root_forbidden` | 400 | `never` |
+| `question_unclassified` | 400 | `never` |
 | `row_guard_violation` | 400 | `never` |
 | `message_held_for_review` | 400 | `never` |
 
@@ -75,6 +76,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `handoff_not_found` | 404 | `never` |
 | `proposal_not_found` | 404 | `never` |
 | `law_not_found` | 404 | `never` |
+| `escalation_not_found` | 404 | `never` |
 
 ### conflict
 
@@ -100,6 +102,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `governance_queue_full` | 409 | `later` |
 | `law_revision_conflict` | 409 | `after_refresh` |
 | `law_withdrawn` | 409 | `never` |
+| `escalation_open` | 409 | `later` |
+| `criteria_stale` | 409 | `never` |
 | `outside_lineage` | 409 | `never` |
 | `not_a_manager` | 409 | `never` |
 | `manager_paused` | 409 | `never` |

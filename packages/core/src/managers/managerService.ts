@@ -6,7 +6,7 @@ import { StoreNotFoundError } from '../stores/dataStoreRepository.js';
 import { managerFirstPromptOf } from './managerFirstPrompt.js';
 import { isPulseEnabled, modeOf, type ManagerRecord, type ManagerRepository } from './managerRepository.js';
 import { DEFAULT_HEARTBEAT_SECONDS } from '../workingState/workingStateSettings.js';
-import { toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
+import { countsAgainstChildrenCap, toManagerView, type DeniedCommandCounts, type ManagerBaseIdentity } from './managerView.js';
 import { isNoteReadInFull, noteReadEventOf, progressAfterOwedMentionRead, progressAfterRead } from './noteReadGuard.js';
 
 export interface PulseSchedulerLike {
@@ -234,7 +234,7 @@ export class ManagerService {
   }
 
   private view(record: ManagerRecord): ManagerView {
-    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && (s.state !== 'closed' || s.restartPending === true)).length;
+    const childrenCount = this.deps.sessions.list().filter((s) => s.parentId === record.sessionId && countsAgainstChildrenCap(s)).length;
     const view = toManagerView(record, childrenCount, this.deps.deniedCommandCountsOf?.(record.sessionId), this.deps.currentBase);
     const handoffDeliveredAt = record.sleepHandoffDeliveredAt;
     if (!handoffDeliveredAt) return view;

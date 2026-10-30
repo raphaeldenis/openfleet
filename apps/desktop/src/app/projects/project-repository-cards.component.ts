@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import type { Project } from '@openfleet/shared';
+import { ProjectEscalationSettingComponent } from './project-escalation-setting.component';
 import { ProjectHookSettingComponent } from './project-hook-setting.component';
 import { ProjectWorktreesComponent } from './project-worktrees.component';
 
@@ -7,10 +8,11 @@ import { ProjectWorktreesComponent } from './project-worktrees.component';
 @Component({
   selector: 'of-project-repository-cards',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ProjectHookSettingComponent, ProjectWorktreesComponent],
+  imports: [ProjectEscalationSettingComponent, ProjectHookSettingComponent, ProjectWorktreesComponent],
   template: `
     <of-project-worktrees [projectId]="project().id" />
     <of-project-hook-setting [project]="project()" (saved)="onProjectSaved()($event)" />
+    <of-project-escalation-setting [project]="project()" (saved)="onProjectSaved()($event)" />
   `,
   styles: `
     :host { display: flex; flex-direction: column; gap: 1rem; }

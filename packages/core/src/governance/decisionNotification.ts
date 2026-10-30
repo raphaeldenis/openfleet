@@ -1,4 +1,4 @@
-import type { GovernanceProposalView } from '@openfleet/shared';
+import type { EscalationView, GovernanceProposalView } from '@openfleet/shared';
 import { maskedSecrets } from '../redact.js';
 import { wrapAgentMessage } from '../sessions/messageEnvelope.js';
 import { visibleTextOf } from './visibleText.js';
@@ -6,6 +6,16 @@ import { visibleTextOf } from './visibleText.js';
 const MAX_NOTIFICATION_TEXT_CHARS = 700;
 
 const releaseMention = (releasedProposalId: string) => `Queued proposal ${releasedProposalId} is now pending`;
+
+const MAX_ESCALATION_ANSWER_NOTIFICATION_CHARS = 2400;
+
+/** The message that tells a manager what the human answered to each question of an escalation. */
+export function escalationAnswerNotification(escalation: EscalationView): string {
+  const answerLines = escalation.questions.map(({ questionId, humanAnswer }) => `${questionId}: ${humanAnswer ?? '(no answer)'}`);
+  const text = `Escalation ${escalation.id} on ${escalation.ticket} answered. ${answerLines.join(' | ')}`;
+  const body = maskedSecrets(visibleTextOf(text)).slice(0, MAX_ESCALATION_ANSWER_NOTIFICATION_CHARS);
+  return wrapAgentMessage({ fromSessionId: 'governance', fromBranch: 'governance', messageId: `escalation-${escalation.id}`, body });
+}
 
 export function decisionNotification(input: { proposal: GovernanceProposalView; reason?: string; releasedProposalIds?: string[] }): string {
   const { proposal, reason, releasedProposalIds = [] } = input;

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { EscalationPolicySchema, type EscalationPolicy } from '@openfleet/shared';
 
 export interface ProjectRecord {
   id: string;
@@ -13,6 +14,8 @@ export interface ProjectRecord {
   rowGuardEnabled?: true;
   /** Present and true when the project's repository is shared with a team; absent means it is the fleet's own. */
   sharedRepo?: true;
+  /** Absent when the project sets none, or when the stored one no longer passes the schema: the defaults of the ladder then apply. */
+  escalation?: EscalationPolicy;
 }
 
 /** A field left out keeps its value; `null` clears the ones that can be cleared. */
@@ -23,20 +26,34 @@ export interface ProjectPatch {
   postCreateHookTimeoutSeconds?: number | null;
   rowGuardEnabled?: boolean;
   sharedRepo?: boolean;
+  escalation?: EscalationPolicy | null;
 }
 
 interface Row {
   id: string; name: string; docs_folder_path: string | null; created_at: string;
   post_create_hook_script: string | null; post_create_hook_timeout_seconds: number | null; row_guard_enabled: number; shared_repo: number;
+  escalation_policy_json: string | null;
 }
 
-const toProject = (r: Row): ProjectRecord => ({
-  id: r.id, name: r.name, docsFolderPath: r.docs_folder_path, createdAt: r.created_at,
-  ...(r.post_create_hook_script !== null && { postCreateHookScript: r.post_create_hook_script }),
-  ...(r.post_create_hook_timeout_seconds !== null && { postCreateHookTimeoutSeconds: r.post_create_hook_timeout_seconds }),
-  ...(r.row_guard_enabled === 1 && { rowGuardEnabled: true as const }),
-  ...(r.shared_repo === 1 && { sharedRepo: true as const }),
-});
+const escalationPolicyOf = (storedJson: string | null): EscalationPolicy | undefined => {
+  if (storedJson === null) return undefined;
+  const parsed = EscalationPolicySchema.safeParse(JSON.parse(storedJson));
+  return parsed.success ? parsed.data : undefined;
+};
+
+const toProject = (r: Row): ProjectRecord => {
+  const escalation = escalationPolicyOf(r.escalation_policy_json);
+  return {
+    id: r.id, name: r.name, docsFolderPath: r.docs_folder_path, createdAt: r.created_at,
+    ...(r.post_create_hook_script !== null && { postCreateHookScript: r.post_create_hook_script }),
+    ...(r.post_create_hook_timeout_seconds !== null && { postCreateHookTimeoutSeconds: r.post_create_hook_timeout_seconds }),
+    ...(r.row_guard_enabled === 1 && { rowGuardEnabled: true as const }),
+    ...(r.shared_repo === 1 && { sharedRepo: true as const }),
+    ...(escalation !== undefined && { escalation }),
+  };
+};
+
+const policyJsonOf = (policy: EscalationPolicy | null): string | null => (policy === null ? null : JSON.stringify(policy));
 
 const keptWhenUndefined = <T>(patched: T | undefined, current: T): T => (patched === undefined ? current : patched);
 
@@ -54,7 +71,7 @@ export class ProjectRepository {
   update(id: string, patch: ProjectPatch): void {
     const current = this.get(id);
     if (!current) return;
-    this.db.prepare('UPDATE projects SET name = ?, docs_folder_path = ?, post_create_hook_script = ?, post_create_hook_timeout_seconds = ?, row_guard_enabled = ?, shared_repo = ? WHERE id = ?')
+    this.db.prepare('UPDATE projects SET name = ?, docs_folder_path = ?, post_create_hook_script = ?, post_create_hook_timeout_seconds = ?, row_guard_enabled = ?, shared_repo = ?, escalation_policy_json = ? WHERE id = ?')
       .run(
         patch.name ?? current.name,
         patch.docsFolderPath ?? current.docsFolderPath,
@@ -62,6 +79,7 @@ export class ProjectRepository {
         keptWhenUndefined(patch.postCreateHookTimeoutSeconds, current.postCreateHookTimeoutSeconds ?? null),
         Number(keptWhenUndefined(patch.rowGuardEnabled, current.rowGuardEnabled === true)),
         Number(keptWhenUndefined(patch.sharedRepo, current.sharedRepo === true)),
+        policyJsonOf(keptWhenUndefined(patch.escalation, current.escalation ?? null)),
         id,
       );
   }

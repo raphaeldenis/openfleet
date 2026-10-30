@@ -1,4 +1,4 @@
-import type { ServerEvent } from '@openfleet/shared';
+import { ARBITER_ROLE, type ServerEvent } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
 import { CHILD_RESTARTED_PREFIX, CHILD_RESTART_EXHAUSTED_PREFIX, HARNESS_EXITED_PREFIX } from '../sessions/daemonLines.js';
@@ -70,6 +70,8 @@ export class ChildAutoRestarter {
     const child = this.deps.sessions.get(childId);
     const managerId = child?.parentId;
     if (!child || !managerId || child.state !== 'closed') return;
+    const isArbiterReplacedByItsRunner = child.role === ARBITER_ROLE;
+    if (isArbiterReplacedByItsRunner) return;
     const manager = this.deps.managers.get(managerId);
     const managerOptedIn = manager?.childAutoRestart === true;
     if (!managerOptedIn) return;

@@ -1,13 +1,13 @@
 import { dirname, join } from 'node:path';
 import {
-  WORKING_STATE_TOOL_NAMES,
+  MANAGER_ROLE, WORKING_STATE_TOOL_NAMES,
   type ClaudeHookEvent, type PermissionRequestHookOutput, type PolicyActor, type PolicyPresence, type PolicyRequest, type PolicySource, type PolicyVerdict,
   type PreToolUseHookOutput, type ServerEvent, type Session,
 } from '@openfleet/shared';
 import { log } from '../../logger.js';
 import type { DegradedRegistry } from '../../process/degradedRegistry.js';
 import type { CommandPolicySettings, PolicyEvaluate } from '../../policy/commandPolicySettings.js';
-import { FINDINGS_GATE_RULE_ID } from '../../policy/defaultCommandPolicy.js';
+import { ASK_USER_QUESTION_TOOL, FINDINGS_GATE_RULE_ID, ROOT_MANAGER_ASK_USER_EVENT_ID } from '../../policy/defaultCommandPolicy.js';
 import { pullRequestCreationsOf } from '../../policy/ghPrCreate.js';
 import { profileNameOf } from '../../policy/policyEvaluator.js';
 import type { FindingsGate, FindingsGateEnforcement, GateAnswer } from '../../review/findingsGate.js';
@@ -109,6 +109,7 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
   constructor(private readonly deps: ClaudePolicyHooksDeps) {}
 
   onPreToolUse(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PreToolUse' }>): PreToolUseHookOutput | undefined | Promise<PreToolUseHookOutput | undefined> {
+    this.journalRootManagerQuestion(session, event);
     const verdict = this.evaluateFailingOpen(session, event, 'pre_tool_use');
     if (verdict === undefined) return undefined;
     const waitsOnFindingsGate = this.deps.findingsGate !== undefined && isFindingsGateVerdict(verdict);
@@ -133,6 +134,15 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
     if (refusal === undefined) return undefined;
     this.recordAfterAnswering(session, event, { ...refusal, outcome: 'denied' });
     return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: this.textOf(session, refusal) } } };
+  }
+
+  /** A root manager has no superior to answer it: its question goes to the human, and the journal keeps the trace of it. */
+  private journalRootManagerQuestion(session: Session, event: ToolHookEvent): void {
+    const isRootManagerAsking = event.tool_name === ASK_USER_QUESTION_TOOL && session.role === MANAGER_ROLE && presenceOf(session) === 'attended';
+    if (!isRootManagerAsking) return;
+    this.recordAfterAnswering(session, event, {
+      ruleId: ROOT_MANAGER_ASK_USER_EVENT_ID, reason: 'A root manager asked the human directly.', alternative: '', source: 'policy', outcome: 'observed',
+    });
   }
 
   /** Opens the call when the ticket has its findings; otherwise refuses it, or only journals the refusal while the gate observes. A session not run by a manager is not judged. */

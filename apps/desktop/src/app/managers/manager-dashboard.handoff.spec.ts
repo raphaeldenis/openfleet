@@ -56,7 +56,7 @@ async function renderDashboard({ session = MANAGER_SESSION, getHandoffPreview = 
       {
         provide: FleetEventsService,
         useValue: {
-          sessions, approvals: signal([]), proposals: signal([]), queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: signal([MANAGER_VIEW]), snapshotReceived: signal(true), workingStates: signal(new Map()),
+          sessions, approvals: signal([]), proposals: signal([]), escalations: signal([]), knownEscalationIds: signal<ReadonlySet<string>>(new Set()), queuedCountOf: () => 0, reconnectCount: signal(0), lawChanges: EMPTY, managers: signal([MANAGER_VIEW]), snapshotReceived: signal(true), workingStates: signal(new Map()),
           workingStatesReported: signal(false), workingStateMaxAgeMinutes: signal<number | undefined>(30), workingStateMaxBytes: signal<number | undefined>(6144),
         },
       },
