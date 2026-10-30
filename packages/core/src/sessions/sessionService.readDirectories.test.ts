@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import { parseStoredReadDirectories, stillReadableDirectories } from './readDirectories.js';
 import { SessionService } from './sessionService.js';
 
 const serviceOptions = { baseUrl: 'http://127.0.0.1:7331', worktreesRoot: '/tmp/of-wt' };
@@ -105,6 +106,24 @@ describe('SessionService with read directories', () => {
     const { restartHarness } = await relaunchAfterDaemonRestart({ db, bus });
 
     expect(restartHarness.launches[0]!.readDirectories).toBeUndefined();
+  });
+
+  it('reads malformed stored JSON as no directory without throwing', () => {
+    const notAnArray = ['{"path":"/tmp"}', '"/tmp"', 'null', '42', 'not json at all', null];
+
+    const readings = notAnArray.map((stored) => parseStoredReadDirectories(stored));
+
+    expect(readings).toEqual(notAnArray.map(() => []));
+  });
+
+  it('drops non-string entries, relative paths and paths with a NUL byte without throwing', () => {
+    const root = makeRealRoot();
+    const valid = makeDirectoryIn(root, 'valid');
+    const stored = JSON.stringify([valid, 42, null, { path: valid }, 'relative/dir', `${valid}\0evil`]);
+
+    const readable = stillReadableDirectories(parseStoredReadDirectories(stored));
+
+    expect(readable).toEqual([valid]);
   });
 
   it('keeps the read directories out of the session as the API shows it', async () => {

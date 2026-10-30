@@ -225,6 +225,17 @@ describe.skipIf(!isLive)('the arbiter launch flags keep planted instructions and
     createdRepos.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }));
   });
 
+  it('control: follows the CLAUDE.md of the launch directory itself, so the cases below are not vacuous', () => {
+    const marker = makeMarker();
+    const worktree = makeTemporaryDirectory('of-canary-worktree-');
+    const neutralCwd = makeTemporaryDirectory('of-canary-cwd-');
+    writeFileSync(join(neutralCwd, 'CLAUDE.md'), instructionToEndWith(marker));
+
+    const answer = askClaudeLikeTheArbiter(ASK_FOR_A_PLAIN_REPLY, { worktree, neutralCwd });
+
+    expect(answer).toContain(marker);
+  }, TEST_TIMEOUT_MS);
+
   it('does not follow the CLAUDE.md of the added directory', () => {
     const marker = makeMarker();
     const worktree = makeTemporaryDirectory('of-canary-worktree-');

@@ -13,7 +13,7 @@ export function parseStoredReadDirectories(stored: string | null): string[] {
 
 function isUnchangedExistingDirectory(storedPath: string): boolean {
   try {
-    const isItsOwnRealPath = realpathSync(storedPath) === storedPath;
+    const isItsOwnRealPath = realpathSync.native(storedPath) === storedPath;
     return isItsOwnRealPath && statSync(storedPath).isDirectory();
   } catch {
     return false;
