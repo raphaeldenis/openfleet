@@ -10,7 +10,6 @@ import re
 import shlex
 import subprocess
 import sys
-from collections import namedtuple
 
 PROTECTED_BRANCHES = {"main", "master"}
 SEGMENT_SEPARATORS = ("&&", "||", ";", "\n", "|", "&")
@@ -22,8 +21,13 @@ HOOK_DISABLING_VARIABLE = re.compile(r"HUSKY|^GIT_(CONFIG|DIR|WORK_TREE)", re.IG
 SHELL_INLINE_SCRIPT_FLAGS = {"-c", "-lc", "-ic", "-ec"}
 
 
-HEREDOC_START = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][\w.-]*)\2")
-Heredoc = namedtuple("Heredoc", ["delimiter", "strips_tabs", "is_quoted"])
+COMMIT_MESSAGE_PLACEHOLDER = "HEREDOC_COMMIT_MESSAGE_BODY"
+COMMIT_MESSAGE_HEREDOC_START = re.compile(r"\$\(\s*cat\s+<<(-?)[ \t]*(['\"])([A-Za-z_][\w.-]*)\2[ \t]*\n")
+ARITHMETIC_OF_DIGITS_ONLY = re.compile(r"\(\([\d\s<+*-]*\)\)")
+HEREDOC_OPERATOR_RUN = re.compile(r"<{2,}")
+HERE_STRING_OPERATOR_LENGTH = 3
+PIECE_SEPARATORS = re.compile(r"&&|\|\||[;\n|&]")
+MESSAGE_PROGRAMS_WITH_SUBCOMMANDS = {"git": {"commit"}, "gh": {"pr", "issue"}}
 
 
 class Refusal(Exception):
@@ -34,41 +38,88 @@ def refuse(rule, explanation):
     raise Refusal(f"BLOCKED by git-guardrails ({rule}): {explanation}")
 
 
-def skip_heredoc_bodies(command, start, heredocs):
-    """Returns the index just after the bodies of `heredocs`, which are text and not commands."""
-    index = start
-    for heredoc in heredocs:
-        body_lines = []
-        while index < len(command):
-            line_end = command.find("\n", index)
-            line_end = len(command) if line_end == -1 else line_end
-            line = command[index:line_end]
-            index = line_end + 1
-            terminator_candidate = line.lstrip("\t") if heredoc.strips_tabs else line
-            if terminator_candidate == heredoc.delimiter:
-                break
-            body_lines.append(line)
-        body = "\n".join(body_lines)
-        runs_substitution = "$(" in body or "`" in body
-        if not heredoc.is_quoted and runs_substitution and re.search(r"\bgit\b", body):
-            refuse("unanalysable", "a command substitution inside an unquoted heredoc hides a git command, quote the heredoc delimiter.")
-    return index
+def contains_heredoc_candidate(command):
+    """Returns True when `command` has a `<<` that is neither a here-string nor a shift of plain digits."""
+    without_digit_arithmetic = ARITHMETIC_OF_DIGITS_ONLY.sub(" ", command)
+    operator_runs = HEREDOC_OPERATOR_RUN.findall(without_digit_arithmetic)
+    return any(len(run) != HERE_STRING_OPERATOR_LENGTH for run in operator_runs)
 
 
-def refuse_unless_delimiter_is_a_whole_word(command, delimiter_end):
-    """Refuses a heredoc whose delimiter is glued to more text, because bash then reads a different delimiter."""
-    next_char = command[delimiter_end:delimiter_end + 1]
-    ends_the_word = next_char == "" or next_char.isspace() or next_char in ";|&)"
-    if not ends_the_word:
-        refuse("unanalysable", "a heredoc delimiter followed by quotes or other text hides which lines are commands, write a bare delimiter.")
+def is_opening_a_live_double_quoted_string(text_before_substitution):
+    """Returns True when the text ends with a `"` that opens a double-quoted string in plain, simply quoted text."""
+    ends_with_double_quote = text_before_substitution.endswith('"')
+    has_exotic_quoting = "\\" in text_before_substitution or "$'" in text_before_substitution or "<<" in text_before_substitution
+    if not ends_with_double_quote or has_exotic_quoting:
+        return False
+    try:
+        shlex.split(text_before_substitution[:-1])
+    except ValueError:
+        return False
+    return True
 
 
-def is_inside_arithmetic(text_before):
-    """Returns True when `<<` after `text_before` is a shift: inside an open $(( )), (( )) or $[ ], or after `let`."""
-    has_open_double_parenthesis = text_before.count("((") > text_before.count("))")
-    has_open_bracket_arithmetic = text_before.count("$[") > text_before.count("]")
-    is_let_command = re.match(r"\s*let\b", text_before) is not None
-    return has_open_double_parenthesis or has_open_bracket_arithmetic or is_let_command
+def find_heredoc_end(command, body_start, delimiter, strips_tabs):
+    """Returns the index just after the terminator line of a heredoc body, or None when no line terminates it."""
+    index = body_start
+    while index <= len(command):
+        line_end = command.find("\n", index)
+        line_end = len(command) if line_end == -1 else line_end
+        line = command[index:line_end]
+        terminator_candidate = line.lstrip("\t") if strips_tabs else line
+        if terminator_candidate == delimiter:
+            return line_end + 1
+        if line_end == len(command):
+            return None
+        index = line_end + 1
+    return None
+
+
+def replace_commit_message_heredocs(command):
+    """Returns `command` with each `"$(cat <<'DELIM' ... DELIM )"` message replaced by a placeholder, and how many were replaced."""
+    replaced_count = 0
+    while True:
+        start_match = COMMIT_MESSAGE_HEREDOC_START.search(command)
+        if not start_match:
+            return command, replaced_count
+        text_before = command[:start_match.start()]
+        strips_tabs, _, delimiter = start_match.groups()
+        body_end = find_heredoc_end(command, start_match.end(), delimiter, bool(strips_tabs))
+        closing = re.match(r"\s*\)\"", command[body_end:]) if body_end is not None else None
+        if not closing or not is_opening_a_live_double_quoted_string(text_before):
+            return command, replaced_count
+        command = text_before + COMMIT_MESSAGE_PLACEHOLDER + command[body_end + closing.end() - 1:]
+        replaced_count += 1
+
+
+def refuse_unless_placeholders_sit_in_a_commit_or_pr_command(command):
+    for segment in split_outside_quotes(command):
+        if COMMIT_MESSAGE_PLACEHOLDER not in segment:
+            continue
+        try:
+            _, tokens = strip_wrappers(shlex.split(segment))
+        except ValueError:
+            tokens = []
+        subcommands = MESSAGE_PROGRAMS_WITH_SUBCOMMANDS.get(program_name(tokens[0]) if tokens else "", set())
+        is_message_command = len(tokens) > 1 and tokens[1] in subcommands
+        if not is_message_command:
+            refuse("unanalysable", "a heredoc message is only accepted inside git commit or gh pr/issue, write the command plainly.")
+
+
+def refuse_dangerous_git_in_heredoc_candidate(command, shell_state):
+    """Reads every line and piece of `command` as command text, ignoring quotes, because heredoc bodies and what follows them cannot be told apart."""
+    for piece in PIECE_SEPARATORS.split(command):
+        hides_git_in_substitution = ("$(" in piece or "`" in piece) and re.search(r"\bgit\b", piece)
+        try:
+            if hides_git_in_substitution:
+                refuse("unanalysable", "a command substitution mentions git.")
+            check_segment(piece.strip(), shell_state.nested())
+        except Refusal as inner:
+            reason = str(inner).split("): ", 1)[-1]
+            refuse(
+                "heredoc-text",
+                f"the heredoc body or the lines after it contain a dangerous git command ({reason}) "
+                "or cannot be analysed (unanalysable), use a quoted <<'EOF' commit-message form or put the text in a file.",
+            )
 
 
 def starts_a_comment(command, index):
@@ -79,28 +130,23 @@ def starts_a_comment(command, index):
 def split_outside_quotes(command):
     segments = []
     current = []
-    heredocs = []
     quote = None
+    is_ansi_c_quote = False
     index = 0
     while index < len(command):
         char = command[index]
-        if char == "\\" and quote != "'":
+        if char == "\\" and (quote != "'" or is_ansi_c_quote):
             current.append(command[index:index + 2])
             index += 2
             continue
         if quote:
-            quote = None if char == quote else quote
-        elif command.startswith("<<<", index):
-            current.append("<<<")
-            index += 3
-            continue
-        elif command.startswith("<<", index):
-            heredoc_start = HEREDOC_START.match(command, index)
-            if heredoc_start and not is_inside_arithmetic("".join(current)):
-                refuse_unless_delimiter_is_a_whole_word(command, heredoc_start.end())
-                strips_tabs, delimiter_quote, delimiter = heredoc_start.groups()
-                heredocs.append(Heredoc(delimiter, bool(strips_tabs), bool(delimiter_quote)))
-            current.append("<<")
+            closes_quote = char == quote
+            quote = None if closes_quote else quote
+            is_ansi_c_quote = is_ansi_c_quote and not closes_quote
+        elif command.startswith("$'", index):
+            current.append("$'")
+            quote = "'"
+            is_ansi_c_quote = True
             index += 2
             continue
         elif char in ("'", '"'):
@@ -115,9 +161,6 @@ def split_outside_quotes(command):
                 segments.append("".join(current))
                 current = []
                 index += len(separator)
-                if separator == "\n" and heredocs:
-                    index = skip_heredoc_bodies(command, index, heredocs)
-                    heredocs = []
                 continue
         current.append(char)
         index += 1
@@ -444,7 +487,12 @@ def check_segment(segment, shell_state):
 
 
 def check_command(command, shell_state):
-    for segment in split_outside_quotes(command):
+    body_free_command, replaced_count = replace_commit_message_heredocs(command)
+    if replaced_count:
+        refuse_unless_placeholders_sit_in_a_commit_or_pr_command(body_free_command)
+    if contains_heredoc_candidate(body_free_command):
+        refuse_dangerous_git_in_heredoc_candidate(body_free_command, shell_state)
+    for segment in split_outside_quotes(body_free_command):
         check_segment(segment, shell_state)
 
 

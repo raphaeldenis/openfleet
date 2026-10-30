@@ -153,10 +153,65 @@ const ALLOWED_DESPITE_RESEMBLING_HOOK_SKIPPING = [
 const ALLOWED_DESPITE_MENTIONING_GIT_INSIDE_OTHER_TEXT = [
   "echo it's git",
   "pnpm test # don't forget git",
+  "echo $'a\\'b; git push -f'",
+  "echo $'a\\'b'\ngit status",
+];
+
+const COMMIT_MESSAGE_BODY = [
+  'fix(x): y',
+  '',
+  'git push -f is documented, git reset --hard is blocked',
+  'arithmetic (( and # comments are plain text here, and so is it\'s',
+].join('\n');
+
+const COMMIT_MESSAGE_HEREDOC_FORMS_STAYING_ALLOWED = [
+  `git commit -m "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+  `git commit -m "$(cat <<"EOF"\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+  `git commit -m "$(cat <<-'EOF'\n\t${COMMIT_MESSAGE_BODY}\n\tEOF\n)"`,
+  `git add a.ts && git commit -m "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+  `gh pr create --title t --body "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+];
+
+const BLOCKED_WHEN_THE_COMMIT_MESSAGE_FORM_IS_NOT_CLEAN_OR_NOT_THE_EXACT_FORM = [
+  `git commit -n -m "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+  `git reset --hard && git commit -m "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+  `echo "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+  `git commit -m "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\n`,
+  `git commit -m "$(cat <<EOF\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
+  `git commit -m '$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)'`,
+  "echo 'x $(cat <<\"EOF\"\n' ; git reset --hard ; echo '\nEOF\n)'",
+  'git commit -m "$(cat <<\'EOF\'\nx\nEOF\n)" && git push -f',
+];
+
+const BLOCKED_WHEN_A_HEREDOC_BODY_MENTIONS_A_DANGEROUS_GIT_COMMAND_OUTSIDE_THE_COMMIT_MESSAGE_FORM = [
   'cat <<\'EOF\'\ngit reset --hard is blocked now\nEOF',
   'cat <<EOF\ngit push --force is documented here\nEOF',
   'git commit -F - <<\'EOF\'\nfix(x): y\n\ngit reset --hard is documented\nEOF',
   'cat <<-EOF\n\tgit clean -fd\n\tEOF',
+  'echo $((1<<2)) <<EOF\ngit push -f is documented\nEOF',
+  'cat <<EOF > notes.txt\ngit push -f is documented\nEOF',
+];
+
+const BLOCKED_BYPASSES_FOUND_BY_THE_ROUND_3_REVIEW = [
+  "echo $'\\''\ngit push -f",
+  "echo $'it\\'s' # x\ngit reset --hard",
+  'echo $(cat <<EOF)\ngit reset --hard\nEOF',
+  'echo $((1|1<<EOF))\ngit reset --hard\nEOF',
+  'for ((i=0;i<<EOF;i++)); do :; done\ngit reset --hard\nEOF',
+  'echo $((1||1<<EOF))\ngit reset --hard\nEOF',
+  '$((1||1<<EOF))\ngit reset --hard\nEOF',
+  'echo ${x:- <<EOF }\ngit reset --hard\nEOF',
+  'cat <<EOF\r\nx\r\nEOF\r\ngit reset --hard',
+  "cat <<EOF\nit's\nEOF\ngit reset --hard\n'",
+  'cat <<EOF\n`git reset --hard`\nEOF',
+  'cat <<EOF\necho `git reset --hard`\nEOF',
+  'cat <<EOF\necho $(git reset --hard)\nEOF',
+  'cat <<-EOF\n\tgit reset --hard\n\tEOF',
+  'cat <<\\EOF\ngit reset --hard\nEOF',
+  'cat <<A <<B\ngit reset --hard\nA\nB',
+  'cat <<EOF | sh\ngit status\nEOF',
+  'cat <<EOF; git push -f\nx\nEOF',
+  'cat 1<<2\ngit reset --hard\n2',
 ];
 
 const BLOCKED_WHEN_QUOTING_HIDES_A_GIT_COMMAND = [
@@ -185,9 +240,7 @@ const BLOCKED_WHEN_A_HEREDOC_LOOKALIKE_SWALLOWS_THE_NEXT_COMMANDS = [
 
 const ALLOWED_AROUND_COMMENTS = [
   'x=$((1<<2))\ngit status',
-  'echo $((1<<2)) <<EOF\ngit push -f is documented\nEOF',
   "pnpm test # it's fine <<EOF\ngit status",
-  'cat <<EOF > notes.txt\ngit push -f is documented\nEOF',
 ];
 
 const BLOCKED_BEHIND_SHELL_GROUPING_OR_FORCING_FLAGS = [
@@ -262,6 +315,27 @@ describe('block-dangerous-git hook', () => {
 
     it.each(ALLOWED_AROUND_COMMENTS)('allows %j', (command) => {
       expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
+    });
+  });
+
+  describe('heredoc bodies are analysed as command text, except the quoted commit-message form', () => {
+    it.each(COMMIT_MESSAGE_HEREDOC_FORMS_STAYING_ALLOWED)('allows the commit-message form %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
+    });
+
+    it.each(BLOCKED_WHEN_THE_COMMIT_MESSAGE_FORM_IS_NOT_CLEAN_OR_NOT_THE_EXACT_FORM)('blocks %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
+    });
+
+    it.each(BLOCKED_WHEN_A_HEREDOC_BODY_MENTIONS_A_DANGEROUS_GIT_COMMAND_OUTSIDE_THE_COMMIT_MESSAGE_FORM)(
+      'blocks (was allowed before round 3) %j',
+      (command) => {
+        expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
+      },
+    );
+
+    it.each(BLOCKED_BYPASSES_FOUND_BY_THE_ROUND_3_REVIEW)('blocks %j', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
     });
   });
 
