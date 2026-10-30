@@ -75,6 +75,9 @@ import { registerHandoffOnClose } from './notes/handoffService.js';
 import { ChildAutoRestarter } from './managers/childAutoRestarter.js';
 import { SleepHandoff } from './managers/sleepHandoff.js';
 import { ChildRestartLedger } from './managers/childRestartLedger.js';
+import { ArtifactDirectory } from './artifacts/artifactDirectory.js';
+import { loadArtifactSettings } from './artifacts/artifactSettings.js';
+import { SqliteArtifactJournal } from './artifacts/sqliteArtifactJournal.js';
 import { loadHandoffSettings } from './notes/handoffSettings.js';
 import { DocsRootSettings } from './notes/docsRootSettings.js';
 import { expandMentions } from './notes/mentionExpander.js';
@@ -336,10 +339,15 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   };
   const denialJournal = new SqliteDenialJournal({ db, clock: () => new Date().toISOString() });
   const askUserGate = new AskUserGate({ db, projects, repository: escalationRepository, audit: escalationAudit, denials: denialJournal, clock: () => new Date().toISOString() });
+  const artifacts = new ArtifactDirectory({
+    docsFolderPathOf: (projectId) => projects.get(projectId)?.docsFolderPath ?? undefined,
+    settings: loadArtifactSettings(modelConfigPath),
+    journal: new SqliteArtifactJournal({ db, clock: () => new Date().toISOString() }),
+  });
   const commandPolicy = new ClaudePolicyHooks({
     settings: () => commandPolicyService.settings(),
     evaluate: evaluatePolicy,
-    sessions, isManager, bus, degraded, findingsGate,
+    sessions, isManager, bus, degraded, findingsGate, artifacts,
     journal: denialJournal,
     repeatGuard: new RefusalRepeatGuard({ clock: Date.now, settings: () => commandPolicyService.settings().unattended.escalateAfterRepeats }),
   });
