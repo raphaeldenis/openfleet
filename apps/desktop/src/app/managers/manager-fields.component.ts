@@ -135,7 +135,7 @@ function kilobytesLabelOf(bytes: number): string {
     .preset { flex: 1 1 3rem; height: 2rem; padding: 0 .375rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg); font: inherit; font-size: .75rem; white-space: nowrap; cursor: pointer }
     .preset[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-bg) }
     .preset[aria-disabled='true'] { cursor: not-allowed }
-    .preset:focus-visible, .step:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .preset:focus-visible, .step:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .custom, .stepper { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem }
     .pulse-input { flex: none; width: 9rem; font-family: var(--mono); font-size: .75rem }
     .cap-input { flex: none; width: 4rem; text-align: center; font-family: var(--mono); appearance: textfield; -moz-appearance: textfield }

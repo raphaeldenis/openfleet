@@ -51,7 +51,7 @@ import type { NoteVersionSummary } from '@openfleet/shared';
     }
     .version[aria-pressed='true'] { background: var(--active) }
     .version:hover:not([aria-pressed='true']) { background: var(--hover) }
-    .version:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .version:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .head { display: flex; gap: .375rem }
     .author { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .when, .rev { font-family: var(--mono); font-size: .6875rem; color: var(--mut) }

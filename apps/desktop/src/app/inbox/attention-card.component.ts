@@ -41,7 +41,7 @@ import { showBidiControlsAsEscapes, showInvisibleControlsAsEscapes } from '../co
     .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .5rem; }
     .meta { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; }
     .session-link { min-width: 0; font-weight: 500; color: var(--fg); text-decoration: none; overflow-wrap: anywhere; }
-    .session-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .session-link:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem; }
     .age { margin-left: auto; font-size: .6875rem; color: var(--mut); }
     .card--blocking { border-color: color-mix(in oklch, var(--state-waiting-input) 40%, transparent); }
     .blocking { display: inline-flex; align-items: center; gap: .25rem; height: 1rem; margin-left: auto; padding: 0 .375rem; border-radius: .25rem; border: 1px solid color-mix(in oklch, var(--state-waiting-input) 45%, transparent); background: color-mix(in oklch, var(--state-waiting-input) 14%, transparent); font-family: var(--mono); font-size: .625rem; }

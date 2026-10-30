@@ -162,7 +162,7 @@ async function fetchAllPages<T>(fetchPage: (request: PageRequest) => Promise<Pag
       margin: .625rem .75rem 0; height: 1.625rem; padding: 0 .5rem; border: 1px solid var(--line); border-radius: .375rem;
       background: var(--sunk); color: var(--fg); font: inherit; font-size: .75rem;
     }
-    .project-select:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .project-select:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column }
     .action-failure { flex: none; display: flex; align-items: center; gap: .75rem; padding: .5rem 1.25rem; border-bottom: 1px solid var(--line); font-size: .75rem }
     .action-failure-title { font-weight: 600 }

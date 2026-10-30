@@ -129,7 +129,7 @@ function oldestFirstThenById(first: GovernanceProposalView, second: GovernancePr
     .deny { display: flex; flex-direction: column; gap: .375rem; }
     .deny-label { font-size: .75rem; font-weight: 500; }
     .reason { width: 100%; box-sizing: border-box; padding: .375rem .5rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); color: var(--fg); font: inherit; resize: vertical; }
-    .reason:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .reason:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem; }
     .hint { margin: 0; font-size: .75rem; color: var(--mut); }
     .approved-title { display: flex; align-items: center; gap: .5rem; margin: 0; font-weight: 500; }
     .check { color: var(--state-idle); }

@@ -30,7 +30,7 @@ for (const theme of ['light', 'dark'] as const) {
 
     await openProfile(page, manager.id);
     await expect(baseFact(page)).toContainText('not read');
-    await page.screenshot({ path: testInfo.outputPath(`mt2-base-line-unread-${theme}.png`),fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`mt2-base-line-unread-${theme}.png`), fullPage: true });
 
     await interceptDaemonGet(page, `/api/managers/${manager.id}`, async (route) => {
       const real = await (await route.fetch()).json();
@@ -38,6 +38,6 @@ for (const theme of ['light', 'dark'] as const) {
     });
     await openProfile(page, manager.id);
     await expect(baseFact(page)).toContainText(`Base v${version}, read on`);
-    await page.screenshot({ path: testInfo.outputPath(`mt2-base-line-read-${theme}.png`),fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`mt2-base-line-read-${theme}.png`), fullPage: true });
   });
 }

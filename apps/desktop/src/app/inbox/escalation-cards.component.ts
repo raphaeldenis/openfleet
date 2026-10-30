@@ -107,7 +107,7 @@ const classesLabelOf = ({ effectiveClasses, reason }: EscalationQuestionView): s
     .recommendation { margin: 0; font-size: .75rem; color: var(--mut); white-space: pre-wrap; overflow-wrap: anywhere; }
     .recommendation-label { font-weight: 600; }
     .answer { width: 100%; box-sizing: border-box; padding: .375rem .5rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); color: var(--fg); font: inherit; resize: vertical; }
-    .answer:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .answer:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem; }
     .hint { margin: 0; font-size: .75rem; color: var(--mut); }
     .refusal { margin: 0; font-size: .75rem; color: var(--mut); white-space: pre-wrap; overflow-wrap: anywhere; }
     .actions { display: flex; flex-wrap: wrap; gap: .5rem; }
