@@ -291,15 +291,18 @@ describe('QE — the escalation routes on a booted daemon', () => {
         daemon.db.exec(`CREATE TRIGGER refuse_working_state_update BEFORE UPDATE ON session_working_states BEGIN SELECT RAISE(ABORT, 'working state is read-only'); END`);
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-        const response = await answerQ1(escalationId);
+        try {
+          const response = await answerQ1(escalationId);
 
-        expect(response.status).toBe(200);
-        expect(await response.json()).toMatchObject({ id: escalationId, status: 'answered' });
-        await nextFrameOfType('escalation.resolved');
-        expect(framesOfType('escalation.resolved')).toHaveLength(1);
-        expect(queuedBodiesOf(booted.manager.id).some((body) => body.includes(`Escalation ${escalationId}`))).toBe(true);
-        expect(warn.mock.calls.some(([line]) => String(line).includes('could not be removed'))).toBe(true);
-        warn.mockRestore();
+          expect(response.status).toBe(200);
+          expect(await response.json()).toMatchObject({ id: escalationId, status: 'answered' });
+          await nextFrameOfType('escalation.resolved');
+          expect(framesOfType('escalation.resolved')).toHaveLength(1);
+          expect(queuedBodiesOf(booted.manager.id).some((body) => body.includes(`Escalation ${escalationId}`))).toBe(true);
+          expect(warn.mock.calls.some(([line]) => String(line).includes('could not be removed'))).toBe(true);
+        } finally {
+          warn.mockRestore();
+        }
       });
 
       it('leaves the item of an escalation whose answer is refused', async () => {
