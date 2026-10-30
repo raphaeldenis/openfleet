@@ -42,7 +42,10 @@ function parseServerEvent(text: string): ServerEvent | undefined {
   }
 }
 
-/** The event types the service reads no payload field of: a frame of one of them is never dropped. */
+/**
+ * The event types the service reads no payload field of: a frame of one of them is never dropped.
+ * A payload read added to reduce() for one of these types requires moving the type out of this list and into REQUIRED_PAYLOAD_FIELDS with the fields it reads.
+ */
 const EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD = ['session.attention', 'session.relaunching', 'message.queued', 'message.held', 'command.denied'] as const;
 
 export type PayloadCarryingEventType = Exclude<ServerEvent['type'], (typeof EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD)[number]>;
@@ -84,7 +87,9 @@ const REQUIRED_PAYLOAD_FIELDS: Record<PayloadCarryingEventType, readonly string[
 };
 
 function carriesItsRequiredPayload(event: ServerEvent): boolean {
-  const requiredFields = REQUIRED_PAYLOAD_FIELDS[event.type as PayloadCarryingEventType] ?? [];
+  const isPayloadCarryingType = Object.hasOwn(REQUIRED_PAYLOAD_FIELDS, event.type);
+  if (!isPayloadCarryingType) return true;
+  const requiredFields = REQUIRED_PAYLOAD_FIELDS[event.type as PayloadCarryingEventType];
   const fields = event as unknown as Record<string, unknown>;
   return requiredFields.every((field) => fields[field] != null);
 }
@@ -197,6 +202,15 @@ export class FleetEventsService {
   // is what makes the second one a no-op instead of a duplicate replay. Cleared the moment the socket
   // drops, so a real future reconnect still attaches normally.
   private readonly attachedSinceOpenSessionIds = new Set<string>();
+  // A daemon that keeps sending the same malformed frame would flood the console: each type is reported once per connection.
+  private readonly typesWarnedAboutSinceOpen = new Set<string>();
+
+  private warnOnceAboutDroppedFrame(type: string): void {
+    const isAlreadyReported = this.typesWarnedAboutSinceOpen.has(type);
+    if (isAlreadyReported) return;
+    this.typesWarnedAboutSinceOpen.add(type);
+    console.warn(`Dropped a ${type} frame that lacks its payload`);
+  }
 
   connect(): Promise<void> {
     const isAlreadyConnectingOrOpen =
@@ -225,13 +239,14 @@ export class FleetEventsService {
       this.reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
       if (this.hasConnectedBefore) this.reconnectCount.update((n) => n + 1);
       this.hasConnectedBefore = true;
+      this.typesWarnedAboutSinceOpen.clear();
       this.flushQueuedSends();
     });
     socket.addEventListener('message', (m) => {
       const event = parseServerEvent(String(m.data));
       if (!event) return;
       if (!carriesItsRequiredPayload(event)) {
-        console.warn(`Dropped a ${event.type} frame that lacks its payload`);
+        this.warnOnceAboutDroppedFrame(event.type);
         return;
       }
       this.reduce(event);

@@ -143,12 +143,14 @@ export class ArbiterRunner {
       harness: managerSession.harness, permissionMode: 'plan', ...(managerSession.projectId && { projectId: managerSession.projectId }),
       seededPrompt: arbiterPromptOf({ batch, questions: repository.questionsOfBatch(batchId).filter((question) => question.route === 'arbiter' && question.status === 'open') }),
     });
+    if (this.isStopped) return void this.closeQuietly(arbiter.id);
     const hasClosedWhileStarting = sessions.get(arbiter.id)?.state === 'closed';
     if (hasClosedWhileStarting) throw new Error(`arbiter ${arbiter.id} closed while it was starting`);
     this.track({ arbiterSessionId: arbiter.id, batchId, manager });
   }
 
   private track({ arbiterSessionId, batchId, manager }: { arbiterSessionId: string; batchId: string; manager: ManagerRecord }): void {
+    if (this.isStopped) return;
     const cancelExpiry = this.deps.schedule(() => void this.retire(arbiterSessionId), expiryMsOf(manager));
     this.runBySessionId.set(arbiterSessionId, { batchId, managerId: manager.sessionId, cancelExpiry, refusedOpinions: 0 });
   }

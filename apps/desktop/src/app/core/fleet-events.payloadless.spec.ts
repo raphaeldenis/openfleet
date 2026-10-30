@@ -17,6 +17,11 @@ class FakeWebSocket {
     (this.listeners[type] ??= []).push(listener);
   }
 
+  open(): void {
+    this.readyState = FakeWebSocket.OPEN;
+    for (const listener of this.listeners['open'] ?? []) listener({ data: '' });
+  }
+
   dispatchMessage(payload: unknown): void {
     for (const listener of this.listeners['message'] ?? []) listener({ data: JSON.stringify(payload) });
   }
@@ -60,6 +65,44 @@ const TYPES_THAT_READ_A_PAYLOAD = [
 
 const aSession = { id: 's1', name: 'Gimli', emoji: '⚔️', directory: '/tmp', harness: 'fake', state: 'idle', stateSince: 't', createdAt: 't' };
 
+const TYPES_WITHOUT_REQUIRED_PAYLOAD = ['session.attention', 'session.relaunching', 'message.queued', 'message.held', 'command.denied'] as const;
+
+const MINIMAL_VALID_FRAME_OF: Record<(typeof TYPES_THAT_READ_A_PAYLOAD)[number], Record<string, unknown>> = {
+  'snapshot': { sessions: [], approvals: [] },
+  'session.todos': { todos: {} },
+  'session.working_state': { state: { sessionId: 's1' } },
+  'session.created': { session: aSession },
+  'session.updated': { session: aSession },
+  'session.state': { sessionId: 's1', state: 'idle' },
+  'session.closed': { sessionId: 's1' },
+  'session.output': { sessionId: 's1', data: 'x' },
+  'session.replay': { sessionId: 's1', data: 'x' },
+  'session.model_changed': { sessionId: 's1', model: 'm' },
+  'session.permission_mode_changed': { sessionId: 's1', mode: 'plan' },
+  'session.reopened': { sessionId: 's1' },
+  'message.delivered': { messageId: 'm1' },
+  'approval.created': { approval: { id: 'a1' } },
+  'approval.resolved': { approval: { id: 'a1' } },
+  'governance.proposed': { proposal: { id: 'p1', status: 'pending' } },
+  'governance.resolved': { proposal: { id: 'p1' } },
+  'governance.queue_changed': { managerId: 'm1', queuedCount: 0 },
+  'escalation.raised': { escalation: { id: 'e1', status: 'pending' } },
+  'escalation.resolved': { escalation: { id: 'e1', status: 'answered' } },
+  'law.created': { law: { id: 'l1' } },
+  'law.updated': { law: { id: 'l1' } },
+  'law.withdrawn': { law: { id: 'l1' } },
+  'manager.created': { manager: { sessionId: 's1' } },
+  'manager.pulsed': { manager: { sessionId: 's1' } },
+  'manager.updated': { manager: { sessionId: 's1' } },
+  'error': { error: { kind: 'internal', error: 'boom' } },
+  'daemon.issues': { issues: [] },
+  'permission.silent_blocks': { blocks: [] },
+  'notification.trigger': { category: 'approval' },
+  'note.created': { noteId: 'n1' },
+  'note.updated': { noteId: 'n1' },
+  'note.deleted': { noteId: 'n1' },
+};
+
 describe('FleetEventsService frames without their payload', () => {
   let service: FleetEventsService;
   let consoleError: ReturnType<typeof vi.spyOn>;
@@ -101,6 +144,13 @@ describe('FleetEventsService frames without their payload', () => {
     silentBlocks: fleet.silentBlocks(),
     snapshotReceived: fleet.snapshotReceived(),
     deliveredMessageIds: fleet.deliveredMessageIds(),
+    reconnectCount: fleet.reconnectCount(),
+    connected: fleet.connected(),
+    workingStateMaxAgeMinutes: fleet.workingStateMaxAgeMinutes(),
+    workingStateMaxBytes: fleet.workingStateMaxBytes(),
+    dismissedSilentBlockKeys: (fleet as unknown as { dismissedSilentBlockKeys: () => unknown }).dismissedSilentBlockKeys(),
+    todoEventCounts: new Map((fleet as unknown as { todoEventCounts: Map<string, number> }).todoEventCounts),
+    sessionIdWhoseTodosAreKept: (fleet as unknown as { sessionIdWhoseTodosAreKept?: string }).sessionIdWhoseTodosAreKept,
   });
 
   const listenToEverySubject = (fleet: FleetEventsService) => {
@@ -164,6 +214,15 @@ describe('FleetEventsService frames without their payload', () => {
     expect(consoleError).not.toHaveBeenCalled();
   });
 
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])('ignores a %s frame like any unknown type, without throwing or warning', (inheritedKey) => {
+    const stateBefore = observableStateOf(service);
+
+    expect(() => socket().dispatchMessage({ type: inheritedKey })).not.toThrow();
+
+    expect(observableStateOf(service)).toStrictEqual(stateBefore);
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
   it('covers every ServerEvent type that carries a payload, and only those', () => {
     expectTypeOf<PayloadCarryingEventType>().toEqualTypeOf<(typeof TYPES_THAT_READ_A_PAYLOAD)[number]>();
   });
@@ -172,5 +231,35 @@ describe('FleetEventsService frames without their payload', () => {
     socket().dispatchMessage({ type: 'session.updated', session: aSession });
 
     expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
+  it.each(Object.entries(MINIMAL_VALID_FRAME_OF))('does not warn on a minimal valid %s frame', (type, payload) => {
+    socket().dispatchMessage({ type, ...payload });
+
+    expect(consoleWarn).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it.each([...TYPES_WITHOUT_REQUIRED_PAYLOAD, 'a.type.from.the.future'])('does not warn on a bare %s frame', (type) => {
+    socket().dispatchMessage({ type });
+
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
+  it('warns once per type for a repeated bad frame, and again for a different type', () => {
+    socket().dispatchMessage({ type: 'session.created' });
+    socket().dispatchMessage({ type: 'session.created' });
+    socket().dispatchMessage({ type: 'session.updated' });
+
+    expect(consoleWarn).toHaveBeenCalledTimes(2);
+  });
+
+  it('warns again about a type after the socket reconnects', () => {
+    socket().dispatchMessage({ type: 'session.created' });
+
+    socket().open();
+    socket().dispatchMessage({ type: 'session.created' });
+
+    expect(consoleWarn).toHaveBeenCalledTimes(2);
   });
 });
