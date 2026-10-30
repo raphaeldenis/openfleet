@@ -23,6 +23,31 @@ describe('rewriteScapeToolReferences', () => {
     expect(unmappedToolNames).toEqual([]);
   });
 
+  describe('a line that sends the manager to the status tool to read its mission', () => {
+    it.each([
+      ['Re-read your mission with mcp__scape__get_argus_status.', 'Re-read your mission with mcp__openfleet__get_manager_mission.'],
+      ['Relis ta mission avec get_argus_status.', 'Relis ta mission avec get_manager_mission.'],
+      ['Read your mission: `manager.missionText` of `get_argus_status`.', 'Read your mission: `get_manager_mission`.'],
+      ['Your mission is in get_argus_status: manager.missionText.', 'Your mission is in get_manager_mission.'],
+    ])('points %j at get_manager_mission', (line, expected) => {
+      const { text } = rewriteScapeToolReferences(line);
+
+      expect(text).toBe(expected);
+    });
+
+    it('keeps the status tool on a line that does not speak of the mission', () => {
+      const { text } = rewriteScapeToolReferences('Check your cap with mcp__scape__get_argus_status, then bare get_argus_status.');
+
+      expect(text).toBe('Check your cap with mcp__openfleet__get_argus_status, then bare get_argus_status.');
+    });
+
+    it('rewrites only the lines that speak of the mission', () => {
+      const { text } = rewriteScapeToolReferences('Read your mission with get_argus_status.\nCheck your children with get_argus_status.');
+
+      expect(text).toBe('Read your mission with get_manager_mission.\nCheck your children with get_argus_status.');
+    });
+  });
+
   it('leaves a tool name without the Scape prefix as it is', () => {
     const original = 'Call message_parent, create_session and mcp__repowise__get_overview.';
 

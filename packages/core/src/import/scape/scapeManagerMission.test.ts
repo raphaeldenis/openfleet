@@ -12,6 +12,16 @@ const anApprovedRequest = (input: { kind: 'law' | 'permission'; text: string; cr
 const composeWith = (input: { governanceRequests: ScapeGovernanceRequest[]; resourceGrants?: { resourceType: string; resourceId: string; access: string }[] }) =>
   composeMission({ noteBody: NOTE_BODY, governanceRequests: input.governanceRequests, resourceGrants: input.resourceGrants ?? [], availabilityOf: () => 'available' });
 
+describe('composeMission and a note that sends the manager to the status tool for its mission', () => {
+  it('writes get_manager_mission in the imported mission and keeps the other status reads', () => {
+    const noteBody = '# Rules\n\nRelis ta mission avec mcp__scape__get_argus_status à chaque réveil.\nVérifie ton cap avec mcp__scape__get_argus_status.';
+
+    const { text } = composeMission({ noteBody, governanceRequests: [], resourceGrants: [], availabilityOf: () => 'available' });
+
+    expect(text).toBe('# Rules\n\nRelis ta mission avec mcp__openfleet__get_manager_mission à chaque réveil.\nVérifie ton cap avec mcp__openfleet__get_argus_status.');
+  });
+});
+
 describe('composeMission and the approved laws', () => {
   it('has neither a Laws section nor a Standing laws section when the Argus has only laws', () => {
     const { text } = composeWith({ governanceRequests: [anApprovedRequest({ kind: 'law', text: 'First law.' }), anApprovedRequest({ kind: 'law', text: 'Second law.' })] });

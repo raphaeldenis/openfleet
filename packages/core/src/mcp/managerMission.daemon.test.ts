@@ -30,11 +30,12 @@ const missionOfBytes = (bytes: number) => `START-OF-MISSION\n${'m'.repeat(bytes 
 
 const api = (path: string, init: RequestInit = {}) =>
   fetch(`${daemon.server.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${config.adminToken}`, ...(init.headers ?? {}) } });
-const aManagerWithMission = async (name: string, mission: string) => {
-  const created = (await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: config.worktreesRoot, harness: 'fake', emoji: '🧭', name, projectId: PROJECT_ID, manager: { pulseSeconds: 3600, childrenCap: 5, mission: 'placeholder' } }) })).json()) as { id: string };
+const aManagerWithMission = async (name: string, mission: string, { projectId }: { projectId?: string } = { projectId: PROJECT_ID }) => {
+  const created = (await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: config.worktreesRoot, harness: 'fake', emoji: '🧭', name, ...(projectId && { projectId }), manager: { pulseSeconds: 3600, childrenCap: 5, mission: 'placeholder' } }) })).json()) as { id: string };
   daemon.db.prepare('UPDATE managers SET mission_text = ? WHERE session_id = ?').run(mission, created.id);
   return created.id;
 };
+const aManagerWithoutProject = (name: string, mission: string) => aManagerWithMission(name, mission, {});
 const aPlainSession = async (name: string) =>
   ((await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: config.worktreesRoot, harness: 'fake', emoji: '🔧', name, projectId: PROJECT_ID }) })).json()) as { id: string }).id;
 const aNoteBody = async (title: string, bodyMd: string) => {
@@ -65,7 +66,7 @@ afterAll(async () => {
 });
 
 describe('get_argus_status never carries the body of the mission', () => {
-  it('answers in under 2 KB for a manager whose mission is 30 KB', async () => {
+  it('adds no more than a digest of the mission: a manager with a 30 KB mission, no child and no scheduled event gets an answer under 2 KB', async () => {
     const mission = missionOfBytes(THIRTY_KB);
     const client = await mcpClientOf(await aManagerWithMission('Heavy', mission));
 
@@ -124,6 +125,29 @@ describe('get_manager_mission', () => {
     expect(missionText).toContain('--- from note @note:');
     expect(missionText).toContain('BODY-OF-THE-MENTIONED-NOTE');
     expect(missionBytes).toBe(sizeInBytes(`Follow @note:${noteId}`));
+  });
+
+  it('does not expand the mention of a note of another project that is not shared', async () => {
+    const otherProjectId = randomUUID();
+    new ProjectRepository(daemon.db).insert({ id: otherProjectId, name: 'Elsewhere', docsFolderPath: null, createdAt: 't0' });
+    const created = (await (await api('/api/notes', { method: 'POST', body: JSON.stringify({ projectId: otherProjectId, title: 'Private', bodyMd: 'BODY-OF-A-PRIVATE-NOTE' }) })).json()) as { id?: string; data?: { id: string } };
+    const privateNoteId = created.id ?? created.data!.id;
+    const client = await mcpClientOf(await aManagerWithMission('Nosy', `See @note:${privateNoteId}`));
+
+    const { missionText } = jsonOf(await callTool(client, 'get_manager_mission')) as { missionText: string };
+
+    expect(missionText).not.toContain('BODY-OF-A-PRIVATE-NOTE');
+    expect(missionText).toContain(`@note:${privateNoteId} → not resolved`);
+  });
+
+  it('returns the mission as stored when the manager has no project', async () => {
+    const noteId = await aNoteBody('Plan', 'BODY-OF-A-NOTE-NOBODY-EXPANDS');
+    const managerWithoutProjectId = await aManagerWithoutProject('Projectless', `Follow @note:${noteId}`);
+    const client = await mcpClientOf(managerWithoutProjectId);
+
+    const { missionText } = jsonOf(await callTool(client, 'get_manager_mission')) as { missionText: string };
+
+    expect(missionText).toBe(`Follow @note:${noteId}`);
   });
 
   it('refuses a session that is not a manager', async () => {

@@ -23,6 +23,27 @@ const PLAYBOOK_TOOL_POINTERS: Readonly<Record<string, string>> = {
 const PLAYBOOK_TOOL_REFERENCE = new RegExp(`${NOT_PART_OF_AN_IDENTIFIER}(?:${SCAPE_TOOL_PREFIX})?(${Object.keys(PLAYBOOK_TOOL_POINTERS).join('|')})(?![A-Za-z0-9_])`, 'g');
 const SCAPE_TOOL_REFERENCE = new RegExp(`${NOT_PART_OF_AN_IDENTIFIER}${SCAPE_TOOL_PREFIX}([A-Za-z0-9_]+)`, 'g');
 
+const OPENFLEET_MISSION_TOOL = 'get_manager_mission';
+const STATUS_TOOL_PATTERN = `${NOT_PART_OF_AN_IDENTIFIER}(${SCAPE_TOOL_PREFIX})?get_argus_status(?![A-Za-z0-9_])`;
+const STATUS_TOOL_REFERENCE = new RegExp(STATUS_TOOL_PATTERN, 'g');
+const MENTIONS_STATUS_TOOL = new RegExp(STATUS_TOOL_PATTERN);
+const MISSION_TEXT_FIELD_OF_STATUS = /`?manager\.missionText`?\s+(?:of|in|from)\s+/g;
+const MISSION_TEXT_FIELD_AFTER_STATUS = /(get_argus_status`?):\s*`?manager\.missionText`?/g;
+const SPEAKS_OF_THE_MISSION = /mission/i;
+
+/** On a line that speaks of the mission, the status tool is where an agent no longer reads it: the line points at get_manager_mission. */
+function pointMissionReadsAtMissionTool(text: string): string {
+  const rewriteLine = (line: string) => {
+    const isMissionLineWithStatusTool = SPEAKS_OF_THE_MISSION.test(line) && MENTIONS_STATUS_TOOL.test(line);
+    if (!isMissionLineWithStatusTool) return line;
+    return line
+      .replace(MISSION_TEXT_FIELD_OF_STATUS, '')
+      .replace(MISSION_TEXT_FIELD_AFTER_STATUS, '$1')
+      .replace(STATUS_TOOL_REFERENCE, (_reference, scapePrefix: string | undefined) => `${scapePrefix === undefined ? '' : OPENFLEET_TOOL_PREFIX}${OPENFLEET_MISSION_TOOL}`);
+  };
+  return text.split('\n').map(rewriteLine).join('\n');
+}
+
 export interface RewrittenToolReferences {
   text: string;
   renamedCount: number;
@@ -34,7 +55,7 @@ export interface RewrittenToolReferences {
 /** Rewrites the Scape tool references of a mission to what an OpenFleet agent can call: renamed tools, playbook tools pointed at the shims, the rest left and listed. */
 export function rewriteScapeToolReferences(text: string): RewrittenToolReferences {
   let playbookPointerCount = 0;
-  const withPlaybookPointers = text.replace(PLAYBOOK_TOOL_REFERENCE, (_reference, toolName: string) => {
+  const withPlaybookPointers = pointMissionReadsAtMissionTool(text).replace(PLAYBOOK_TOOL_REFERENCE, (_reference, toolName: string) => {
     playbookPointerCount++;
     return PLAYBOOK_TOOL_POINTERS[toolName]!;
   });
