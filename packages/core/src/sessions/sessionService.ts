@@ -10,6 +10,7 @@ import { BinaryHealthCheck, brokenBinaryError, type BinaryHealth } from '../harn
 import { claudeProjectsDir } from '../harness/claudeProjectsDir.js';
 import { newId, newToken } from '../ids.js';
 import { log } from '../logger.js';
+import { maskedSecrets } from '../redact.js';
 import { ProjectNotFoundError } from '../projects/projectErrors.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { HandoffSeed } from '../notes/handoffSeed.js';
@@ -141,6 +142,7 @@ const FRESH_START_PROMPT_TOO_LARGE_NOTICE = '\r\n[OpenFleet] Started a new conve
 // A cold real CLI can sit waiting on an auth or trust prompt far longer than a resume ever should, so a
 // first launch gets its own, more generous ceiling instead of sharing resumeTimeoutMs (AUD-06).
 const DEFAULT_FIRST_START_TIMEOUT_MS = 60_000;
+const START_FAILURE_DETAIL_LIMIT = 2048;
 // ponytail: fixed delay giving Claude Code's composer time to settle after typeMessage's bracketed-paste
 // write before the separate '\r' submits it; upgrade path is confirming the composer holds the full body
 // from the pty output instead of trusting a fixed delay.
@@ -444,6 +446,10 @@ export class SessionService {
   private readonly outputBuffers = new Map<string, string>();
   private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly launchWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  // Sessions whose start signal timed out and whose process is still being stopped: nothing they report brings them back.
+  private readonly sessionsFailedToStart = new Set<string>();
+  // The masked output tail of a session that never signalled its start; in memory only, so a daemon restart forgets it.
+  private readonly startFailureDetails = new Map<string, string>();
   private readonly sessionsWithOutput = new Set<string>();
   private readonly binaryHealth: BinaryHealthCheck;
   private readonly deliveries = new Map<string, Delivery>();
@@ -955,6 +961,8 @@ export class SessionService {
 
   applyInput(sessionId: string, input: SessionInput): void {
     const session = this.require(sessionId);
+    const isIgnoredAfterFailedStart = this.sessionsFailedToStart.has(sessionId) && input.kind !== 'harness_exit';
+    if (isIgnoredAfterFailedStart) return;
     const isProgressHook = input.kind === 'hook' && input.event.hook_event_name !== 'Notification';
     if (isProgressHook && session.state !== 'closed') this.runtime.observeHook(sessionId);
     // The outgoing conversation's SessionEnd carries its old transcript; the SessionStart that follows names the new one.
@@ -1519,7 +1527,8 @@ export class SessionService {
   private projected(session: Session): Session {
     const harnessEnforcement = this.deps.harnesses.find((harness) => harness.id === session.harness)?.policyEnforcement ?? 'none';
     const isPolicyActive = this.deps.isCommandPolicyActive?.() ?? true;
-    return { ...this.runtime.project(session), policyEnforcement: isPolicyActive ? harnessEnforcement : 'none' };
+    const readinessDetail = this.startFailureDetails.get(session.id);
+    return { ...this.runtime.project(session), policyEnforcement: isPolicyActive ? harnessEnforcement : 'none', ...(readinessDetail !== undefined && { readinessDetail }) };
   }
   hasLiveLaunch(id: string): boolean { return this.handles.has(id); }
   runtimeProgressOf(id: string): RuntimeProgress | undefined {
@@ -2101,6 +2110,7 @@ export class SessionService {
     const { exitCode, reason } = closure;
     this.clearResumeTimer(sessionId);
     this.clearLaunchWatchdog(sessionId);
+    this.sessionsFailedToStart.delete(sessionId);
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
     this.dropPendingRecording(sessionId);
@@ -2162,6 +2172,7 @@ export class SessionService {
     const hookToken = newToken();
     const mcpToken = newToken();
     this.repo.setTokens(session.id, hookToken, mcpToken);
+    if (this.startFailureDetails.delete(session.id)) this.repo.clearReadiness(session.id);
     this.startPendingRecording(session.id, session.model);
     let handle: HarnessHandle;
     let isNewConversationAnnounced = false;
@@ -2352,7 +2363,9 @@ export class SessionService {
   }
 
   private markReady(sessionId: string): void {
-    if (this.repo.get(sessionId)?.readiness === 'ready') return;
+    const session = this.repo.get(sessionId);
+    const hasFailedToStart = session?.readiness === 'failed' && session.readinessReason === 'no_start_signal';
+    if (session?.readiness === 'ready' || hasFailedToStart) return;
     this.repo.setReadiness(sessionId, { readiness: 'ready' });
     this.deps.bus.emit({ type: 'session.updated', session: this.repo.get(sessionId)! });
   }
@@ -2448,13 +2461,32 @@ export class SessionService {
   }
 
   private armFirstStartTimeout(sessionId: string, handle: HarnessHandle): void {
-    this.armStartTimeout(sessionId, handle, this.deps.firstStartTimeoutMs ?? DEFAULT_FIRST_START_TIMEOUT_MS);
+    const harnessTimeoutMs = this.harnessFor(this.require(sessionId).harness).startSignalTimeoutMs;
+    const timeoutMs = harnessTimeoutMs ?? this.deps.firstStartTimeoutMs ?? DEFAULT_FIRST_START_TIMEOUT_MS;
+    this.armStartTimeout(sessionId, handle, timeoutMs, () => this.failStartSignal(sessionId));
   }
 
-  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number): void {
+  private failStartSignal(sessionId: string): void {
+    const detail = this.startFailureDetailOf(sessionId);
+    this.sessionsFailedToStart.add(sessionId);
+    this.startFailureDetails.set(sessionId, detail);
+    this.repo.setReadiness(sessionId, { readiness: 'failed', reason: 'no_start_signal' });
+    log('warn', `session ${sessionId} never signalled its start`, undefined, { code: 'no_start_signal', sessionId });
+    this.deps.bus.emit({ type: 'session.updated', session: this.get(sessionId)! });
+    this.deps.bus.emit({ type: 'session.failed', sessionId, reason: 'no_start_signal', detail });
+  }
+
+  private startFailureDetailOf(sessionId: string): string {
+    const drawnText = textDrawnBy(this.outputBuffers.get(sessionId) ?? '');
+    const tail = trimToTail(drawnText, START_FAILURE_DETAIL_LIMIT).trim();
+    return trimToTail(maskedSecrets(tail), START_FAILURE_DETAIL_LIMIT);
+  }
+
+  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number, onTimedOut?: () => void): void {
     this.clearResumeTimer(sessionId);
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
+      onTimedOut?.();
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
       // timeout's own resume_timeout closure with whatever exit code the harness happens to report.
       activeHandleBySessionId.delete(sessionId);

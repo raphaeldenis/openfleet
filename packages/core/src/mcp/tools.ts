@@ -181,7 +181,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     return false;
   };
 
-  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, effort, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree, branch, runtimeAttention, readiness (pending, ready or failed) and readinessReason when set; permissionMode and harness are not echoed';
+  const COMPACT_SESSION = 'Returns a compact session: id, name, emoji, directory, state, stateSince, model, effort, role, exitCode, closedAt, plus resolvedModel, modelDriftedFrom, worktree, branch, runtimeAttention, readiness (pending, ready or failed) and readinessReason (no_output_at_launch, no_start_signal) and readinessDetail (masked output tail, in memory) when set; permissionMode and harness are not echoed';
 
   server.registerTool('get_session_status', { description: `State of your session or one in your lineage. ${COMPACT_SESSION}`, inputSchema: { session_id: z.string().optional() } }, async ({ session_id }) => {
     const target = sessions.get(session_id ?? caller.id);

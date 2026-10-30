@@ -8,6 +8,7 @@ export const sessionView = (session: Session) => ({
   ...(session.runtimeAttention && { runtimeAttention: session.runtimeAttention }),
   ...(session.readiness && { readiness: session.readiness }),
   ...(session.readinessReason && { readinessReason: session.readinessReason }),
+  ...(session.readinessDetail && { readinessDetail: session.readinessDetail }),
 });
 
 /** A session inside a lineage listing, where the parent link is what places it in the tree. */

@@ -29,7 +29,7 @@ export const parseSessionCloseReason = (value: unknown): SessionCloseReason | un
 export const SESSION_READINESS = ['pending', 'ready', 'failed'] as const;
 export type SessionReadiness = (typeof SESSION_READINESS)[number];
 
-export const READINESS_FAILURE_REASONS = ['no_output_at_launch'] as const;
+export const READINESS_FAILURE_REASONS = ['no_output_at_launch', 'no_start_signal'] as const;
 export type ReadinessFailureReason = (typeof READINESS_FAILURE_REASONS)[number];
 
 export const parseSessionReadiness = (value: unknown): SessionReadiness | undefined =>
@@ -112,6 +112,8 @@ export interface Session {
   /** Absent for a session launched before readiness was tracked. A launch that produced no sign of life is failed, whatever its state says. */
   readiness?: SessionReadiness;
   readinessReason?: ReadinessFailureReason;
+  /** The masked tail of the harness output when the start signal never came; kept in the daemon's memory, so absent after a daemon restart. */
+  readinessDetail?: string;
   /** True while the daemon waits to restart this closed child after a crash; absent otherwise. */
   restartPending?: boolean;
   exitCode?: number;

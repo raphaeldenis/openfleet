@@ -46,7 +46,7 @@ function parseServerEvent(text: string): ServerEvent | undefined {
  * The event types the service reads no payload field of: a frame of one of them is never dropped.
  * A payload read added to reduce() for one of these types requires moving the type out of this list and into REQUIRED_PAYLOAD_FIELDS with the fields it reads.
  */
-export const EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD = ['session.attention', 'session.relaunching', 'message.queued', 'message.held', 'command.denied'] as const;
+export const EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD = ['session.attention', 'session.relaunching', 'session.failed', 'message.queued', 'message.held', 'command.denied'] as const;
 
 export type PayloadCarryingEventType = Exclude<ServerEvent['type'], (typeof EVENT_TYPES_WITHOUT_REQUIRED_PAYLOAD)[number]>;
 

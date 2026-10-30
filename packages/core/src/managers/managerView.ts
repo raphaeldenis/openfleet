@@ -11,11 +11,12 @@ export interface DeniedCommandCounts {
 
 export const NO_DENIED_COMMANDS: DeniedCommandCounts = { deniedCommandCount: 0, deniedCommandTotal: 0, noteNotReadWarningCount: 0 };
 
-/** A child counts against the children cap of its manager while it is live or waiting for the daemon to restart it; the arbiter the daemon spawns never counts. */
-export const countsAgainstChildrenCap = (child: Pick<Session, 'role' | 'state' | 'restartPending'>): boolean => {
+/** A child counts against the children cap of its manager while it is live or waiting for the daemon to restart it; the arbiter the daemon spawns and a child whose launch failed never count. */
+export const countsAgainstChildrenCap = (child: Pick<Session, 'role' | 'state' | 'restartPending' | 'readiness'>): boolean => {
   const isArbiter = child.role === ARBITER_ROLE;
   const isActive = child.state !== 'closed' || child.restartPending === true;
-  return isActive && !isArbiter;
+  const hasFailedToLaunch = child.readiness === 'failed';
+  return isActive && !isArbiter && !hasFailedToLaunch;
 };
 
 export interface ManagerBaseIdentity {

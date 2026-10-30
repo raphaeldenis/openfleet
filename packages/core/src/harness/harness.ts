@@ -53,6 +53,8 @@ export interface Harness {
   readonly id: HarnessId;
   /** How the command policy reaches this harness; a harness that does not say is not covered. */
   readonly policyEnforcement?: PolicyEnforcement;
+  /** How long a new session may wait for the harness's start signal (its SessionStart hook) before it fails; absent: the daemon's default. */
+  readonly startSignalTimeoutMs?: number;
   start(launch: HarnessLaunch): HarnessHandle;
   // The executable `start` runs, when it is one file the daemon can probe with `--version`. A harness without one omits it.
   binaryPath?(): string | undefined;
