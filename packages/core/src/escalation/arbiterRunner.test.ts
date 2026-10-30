@@ -22,14 +22,16 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
     closeDuringCreate: false,
     createRejects: false,
     createAttempts: 0,
-    /** Makes the next create() wait until the returned function is called. */
-    holdCreate: () => {
+    /** Makes create() wait until the returned function is called: every call, or only the given attempt (1-based). */
+    holdCreate: ({ onlyAttempt }: { onlyAttempt?: number } = {}) => {
       const held = new Promise<void>((resolve) => { releaseCreate = resolve; });
       createGate = held;
+      gatedAttempt = onlyAttempt;
       return () => releaseCreate?.();
     },
   };
   let createGate: Promise<void> | undefined;
+  let gatedAttempt: number | undefined;
   const emitClosed = (sessionId: string) => listeners.forEach((listener) => listener({ type: 'session.closed', sessionId, reason: 'harness_exit' } as ServerEvent));
 
   sessionsById.set(MANAGER_ID, { id: MANAGER_ID, name: 'Manager', role: 'manager', parentId: '', state: 'running', directory: '/work', harness: 'fake' });
@@ -38,7 +40,8 @@ function aRunner({ batchesWithOpenQuestions = [BATCH_ID] }: { batchesWithOpenQue
     sessions: {
       create: async (spec: Record<string, unknown>) => {
         state.createAttempts += 1;
-        await createGate;
+        const isGated = gatedAttempt === undefined || gatedAttempt === state.createAttempts;
+        if (isGated) await createGate;
         if (state.createRejects) throw new Error('create failed');
         const session: FakeSession = { id: `arbiter-${created.length + 1}`, name: spec.name as string, role: spec.role as string, parentId: spec.parentId as string, state: 'running', directory: spec.directory as string, harness: 'fake' };
         sessionsById.set(session.id, session);
@@ -169,6 +172,23 @@ describe('ArbiterRunner — no arbiter session stays live without a run', () => 
     await settle();
 
     expect(state.createAttempts).toBe(1);
+    expect(escalateBatchToHuman).not.toHaveBeenCalled();
+    expect(scheduled).toEqual([]);
+  });
+
+  it('hands nothing to the human and starts no third arbiter when the retry creation rejects after stop()', async () => {
+    const { runner, state, scheduled, escalateBatchToHuman } = aRunner();
+    state.createRejects = true;
+    const releaseRetryCreate = state.holdCreate({ onlyAttempt: 2 });
+
+    const outcome = runner.launch(BATCH_ID);
+    await settle();
+    runner.stop();
+    releaseRetryCreate();
+    await outcome;
+    await settle();
+
+    expect(state.createAttempts).toBe(2);
     expect(escalateBatchToHuman).not.toHaveBeenCalled();
     expect(scheduled).toEqual([]);
   });
