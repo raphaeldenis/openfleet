@@ -20,3 +20,5 @@ command_policy_saved command policy saved
 restore_without_expected_rev restore without expected_rev
 harness_binary_fails_version_check harness binary fails its version check
 ci_watch_pass_failed a CI watch pass failed; the next pass retries
+usage_ingestion_lines_rejected usage ingestion: lines that no honest transcript writes were rejected
+usage_ingestion_session_full usage ingestion: the session reached its message limit, ingesting nothing more for it
