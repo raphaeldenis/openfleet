@@ -20,7 +20,7 @@ const OTHER_THEME = { dark: 'light', light: 'dark' } as const;
       background: transparent; color: var(--mut); font-size: .875rem; cursor: pointer; outline: 0;
     }
     .theme-toggle:hover { background: var(--hover); color: var(--fg); }
-    .theme-toggle:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+    .theme-toggle:focus-visible { box-shadow: 0 0 0 .125rem var(--accent); }
   `,
 })
 export class ThemeToggleButtonComponent {

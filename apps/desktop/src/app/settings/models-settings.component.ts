@@ -78,7 +78,7 @@ const NO_MODEL_ID_LABEL = '—';
     .detail { font-size: .75rem; color: var(--mut); }
     .option { display: flex; align-items: center; gap: .5rem; width: 100%; height: 1.875rem; padding: 0 .5rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font-family: var(--mono); font-size: .75rem; text-align: left; cursor: pointer; }
     .option:hover, .option[aria-selected='true'] { background: var(--hover); }
-    .option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .option:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem; }
     .option-id { flex: 1; min-width: 0; overflow-wrap: anywhere; }
     .check { color: var(--accent); }
     .loading { display: flex; flex-direction: column; gap: .5rem; }

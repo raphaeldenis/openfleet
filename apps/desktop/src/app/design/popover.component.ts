@@ -82,7 +82,7 @@ function nextIndexInCycle({ currentIndex, count, isBackwards }: { currentIndex: 
     :host(.popover--fill) .caret { margin-left: auto; }
     :host(.popover--fill) .panel { top: 2rem; }
     .trigger[aria-disabled='true'] { cursor: not-allowed; opacity: .7; }
-    .trigger:focus-visible, .panel:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .trigger:focus-visible, .panel:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem; }
     .caret { color: var(--faint); }
     .panel {
       position: absolute; top: 1.875rem; left: 0; z-index: 20; max-width: calc(100vw - 1.5rem);
