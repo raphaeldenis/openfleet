@@ -22,8 +22,11 @@ const mcpTokenOf = (sessionId: string) => (daemon.db.prepare('SELECT mcp_token F
 const rawText = (result: unknown) => (result as { content: { text: string }[] }).content[0]!.text;
 const parsed = (result: unknown) => JSON.parse(rawText(result));
 
+let connectedClients: Client[] = [];
+
 async function connectAs(sessionId: string): Promise<Client> {
   const client = new Client({ name: 'qe', version: '0.0.0' });
+  connectedClients.push(client);
   await client.connect(new StreamableHTTPClientTransport(new URL(`${daemon.server.url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${mcpTokenOf(sessionId)}` } } }));
   return client;
 }
@@ -91,7 +94,14 @@ beforeEach(async () => {
   const settings = defaultCommandPolicySettings();
   daemon = await startDaemon(config, { commandPolicy: { settings: { ...settings, unattended: { ...settings.unattended, askBecomesDeny: false } } } });
 });
-afterEach(async () => { await daemon.close(); tempDirs.removeAll(); });
+/** Closing the MCP clients before the daemon leaves no pooled keep-alive socket for a later daemon on a reused ephemeral port to meet. */
+const closeConnectedClients = async () => {
+  const clientsToClose = connectedClients;
+  connectedClients = [];
+  await Promise.allSettled(clientsToClose.map((client) => client.close()));
+};
+
+afterEach(async () => { await closeConnectedClients(); await daemon.close(); tempDirs.removeAll(); });
 
 describe('QE — report_ship_verdict on a booted daemon', () => {
   it('a reviewer launched in the DEV worktree records a go at the head: the daemon writes the line, the gate reads open', async () => {
