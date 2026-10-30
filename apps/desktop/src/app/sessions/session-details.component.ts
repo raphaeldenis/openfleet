@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, ElementRef, Injector, computed, effect, inject, input, signal, untracked, viewChild } from '@angular/core';
-import type { Session } from '@openfleet/shared';
+import { MANAGER_ROLE, type Session } from '@openfleet/shared';
 import { copyFor } from '../core/error-copy';
 import { FleetApiService } from '../core/fleet-api.service';
 import { SessionRequestsService } from '../core/session-requests';
@@ -13,6 +13,9 @@ import { restoreFocusWhenFree } from './handoff/handoff-focus';
 import { HandoffPreviewHostComponent } from './handoff/handoff-preview-host.component';
 import { closeStatusFor } from './session-close-status';
 import { clockTimeOf } from '../core/clock-time';
+
+const ATTENDED_TEXT = 'Yes - you sit beside this manager';
+const SUPERVISED_TEXT = 'No - supervised: its questions go through the escalation ladder';
 
 /** Who the session is and what can be done to it: rename, model, permission mode, handoff, close. */
 @Component({
@@ -71,6 +74,12 @@ import { clockTimeOf } from '../core/clock-time';
           <div class="fact">
             <span class="fact-label">Profile</span>
             <span class="fact-value" data-testid="session-config-profile">{{ profileName }}</span>
+          </div>
+        }
+        @if (isManager()) {
+          <div class="fact">
+            <span class="fact-label">Attended</span>
+            <span class="fact-value" data-testid="session-attended">{{ attendedText() }}</span>
           </div>
         }
         <div class="fact fact--field">
@@ -155,6 +164,8 @@ export class SessionDetailsComponent {
   });
 
   private readonly sessionId = computed(() => this.session().id);
+  protected readonly isManager = computed(() => this.session().role === MANAGER_ROLE);
+  protected readonly attendedText = computed(() => (this.session().attended === true ? ATTENDED_TEXT : SUPERVISED_TEXT));
   /** A closed session is not running, so its chip shows no timer. */
   protected readonly runningSince = computed(() => (this.session().state === 'closed' ? undefined : this.session().stateSince));
   private readonly closeStatus = computed(() => (this.session().state === 'closed' ? closeStatusFor(this.session().exitCode) : undefined));
