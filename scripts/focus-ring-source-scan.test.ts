@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -20,14 +20,17 @@ const FOCUS_PSEUDO_CLASS = /:focus\b/i;
 const NEGATION_WITHOUT_NESTED_PARENTHESES = /:not\([^()]*\)/g;
 const INLINE_STYLE_ATTRIBUTE = /\sstyle\s*=\s*(["'])([\s\S]*?)\1/g;
 const HOST_PROPERTY_OPENING = /\bhost\s*:\s*\{/g;
-const HOST_STYLE_ENTRY = /["']?\bstyle["']?\s*:\s*(["'`])([\s\S]*?)\1/g;
+const HOST_STYLE_ENTRY = /(?<![\w$.-])(["']?)(?:style|\[attr\.style\])\1\s*:\s*(["'`])([\s\S]*?)\2/g;
+const OUTER_QUOTES = /^\s*["'`]|["'`]\s*$/g;
 const INLINE_STYLE_BINDING = new RegExp(
   String.raw`(?:\[style\.|\bbind-style\.)(${RING_PROPERTY_NAME}|filter)(\.px)?\]?["']?\s*[=:]\s*(["'\`])([\s\S]*?)\3`,
   'gi',
 );
 const STYLE_MAP_BINDING = /(?:\[(?:style|ngStyle)\]|\bbind-(?:style|ngStyle))["']?\s*[=:]\s*(["'`])([\s\S]*?)\1/gi;
 const ADJACENT_STRING_LITERALS_JOINED_BY_PLUS = /["'`]\s*\+\s*["'`]/g;
-const STYLES_PROPERTY_KEY = /\bstyles["'`]?\s*:/g;
+const STYLES_PROPERTY_KEY = /(?<![\w$.])(?:styles|(["'`])styles\1\s*\]?)\s*:/g;
+const STYLES_IDENTIFIER = /(?<![\w$.])styles(?![\w$])/g;
+const RELATIVE_MODULE_SPECIFIER = /^\.\.?(?:\/|$)/;
 const STYLE_ELEMENT = /<style\b[^>]*>([\s\S]*?)<\/style>/gi;
 const STYLE_CONSTANT_FILE = /(?:^|\/)[^/]*styles[^/]*\.ts$/;
 const OPAQUE_INTERPOLATION = '/* interpolation */';
@@ -292,27 +295,50 @@ function withOpaqueInterpolations(text: string): string {
   return result;
 }
 
+/** Returns the source with comments blanked and, when asked, string contents masked, keeping every offset. */
+function sourceWithoutComments({ source, maskStringContents }: { source: string; maskStringContents: boolean }): string {
+  let result = '';
+  let cursor = 0;
+  while (cursor < source.length) {
+    const opensComment = source.startsWith('//', cursor) || source.startsWith('/*', cursor);
+    if (opensComment) {
+      const end = skipTrivia({ source, start: cursor });
+      result += blanked(source.slice(cursor, end));
+      cursor = end;
+    } else if (isQuote(source[cursor])) {
+      const { end } = scanQuoted({ source, start: cursor });
+      const literal = source.slice(cursor, end);
+      result += maskStringContents ? literal.slice(0, 1) + maskedWith('_', literal.slice(1, -1)) + literal.slice(-1) : literal;
+      cursor = end;
+    } else {
+      result += source[cursor];
+      cursor++;
+    }
+  }
+  return result;
+}
+
 /** Returns the offset just after the colon of every `styles:` key that sits in code, outside strings and comments. */
 function stylesPropertyValueStartsIn(source: string): number[] {
   const starts: number[] = [];
-  const colonAfterKey = /\s*:/y;
   const word = /[\w$]+/y;
-  const recordKeyEndingAt = (keyEnd: number) => {
-    colonAfterKey.lastIndex = keyEnd;
-    const colon = colonAfterKey.exec(source);
-    if (colon) starts.push(keyEnd + colon[0].length);
+  const recordKeyEndingAt = ({ keyEnd, isQuotedKey }: { keyEnd: number; isQuotedKey: boolean }) => {
+    const afterKey = skipTrivia({ source, start: keyEnd });
+    const closesComputedKey = isQuotedKey && source[afterKey] === ']';
+    const beforeColon = closesComputedKey ? skipTrivia({ source, start: afterKey + 1 }) : afterKey;
+    if (source[beforeColon] === ':') starts.push(beforeColon + 1);
   };
   let cursor = skipTrivia({ source, start: 0 });
   while (cursor < source.length) {
     if (isQuote(source[cursor])) {
       const { value, end } = scanQuoted({ source, start: cursor });
-      if (value === 'styles') recordKeyEndingAt(end);
+      if (value === 'styles') recordKeyEndingAt({ keyEnd: end, isQuotedKey: true });
       cursor = end;
     } else {
       word.lastIndex = cursor;
       const identifier = word.exec(source)?.[0];
       const isStylesKey = identifier === 'styles' && source[cursor - 1] !== '.';
-      if (isStylesKey) recordKeyEndingAt(cursor + identifier.length);
+      if (isStylesKey) recordKeyEndingAt({ keyEnd: cursor + identifier.length, isQuotedKey: false });
       cursor += identifier?.length ?? 1;
     }
     cursor = skipTrivia({ source, start: cursor });
@@ -396,33 +422,85 @@ function escapedForRegExp(text: string): string {
   return text.replace(/[$\\^.*+?()[\]{}|]/g, '\\$&');
 }
 
-function stylesheetsOfReference({ source, reference, resolving }: { source: string; reference: string; resolving: Set<string> }): string[] {
-  const name = escapedForRegExp(reference);
-  const importedFromStylesModule = new RegExp(
-    String.raw`import\s*(?:type\s*)?\{[^}]*(?<![\w$])${name}(?![\w$])[^}]*\}\s*from\s*["'](?:[^"'/]*/)*[^"'/]*styles[^"'/]*["']`,
-  ).test(source);
-  if (importedFromStylesModule) return [];
-  const declaration = new RegExp(String.raw`(?<![\w$])const\s+${name}(?![\w$])[^=;]*=`).exec(source);
-  const isResolvable = declaration !== null && !resolving.has(reference);
-  if (!isResolvable) throw new Error(`styles reference "${reference}" is neither imported from a styles module nor a constant of the file`);
-  const expression = readStylesExpression({ source, start: declaration.index + declaration[0].length });
-  return stylesheetsOfExpression({ source, expression, resolving: new Set([...resolving, reference]) });
+interface ImportOrigin {
+  path: string;
+  scannedStylesModules: string[];
 }
 
-function stylesheetsOfExpression({ source, expression, resolving }: { source: string; expression: StylesExpression; resolving: Set<string> }): string[] {
-  const referencedStylesheets = expression.references.flatMap((reference) => stylesheetsOfReference({ source, reference, resolving }));
+/** Returns the path of the scanned styles file an import specifier resolves to, or throws when that file is not scanned. */
+function scannedStylesModuleOf({ specifier, reference, origin }: { specifier: string; reference: string; origin: ImportOrigin }): string {
+  const isPackageImport = !RELATIVE_MODULE_SPECIFIER.test(specifier);
+  if (isPackageImport) throw new Error(`styles reference "${reference}" is imported from the package "${specifier}", which is not scanned`);
+  const resolvedPath = `${posix.normalize(posix.join(posix.dirname(origin.path), specifier))}.ts`;
+  const isScanned = origin.scannedStylesModules.includes(resolvedPath);
+  if (!isScanned) throw new Error(`styles reference "${reference}" is imported from ${resolvedPath}, which is not a scanned styles file`);
+  return resolvedPath;
+}
+
+function stylesheetsOfReference({
+  source,
+  reference,
+  resolving,
+  origin,
+}: {
+  source: string;
+  reference: string;
+  resolving: Set<string>;
+  origin: ImportOrigin;
+}): string[] {
+  const name = escapedForRegExp(reference);
+  const importSpecifier = new RegExp(
+    String.raw`import\s*(?:type\s*)?\{[^}]*(?<![\w$])${name}(?![\w$])[^}]*\}\s*from\s*["']([^"']+)["']`,
+  ).exec(source)?.[1];
+  const isImported = importSpecifier !== undefined;
+  if (isImported) {
+    scannedStylesModuleOf({ specifier: importSpecifier, reference, origin });
+    return [];
+  }
+  const declaration = new RegExp(String.raw`(?<![\w$])const\s+${name}(?![\w$])[^=;]*=`).exec(source);
+  const isResolvable = declaration !== null && !resolving.has(reference);
+  if (!isResolvable) throw new Error(`styles reference "${reference}" is neither imported from a scanned styles file nor a constant of the file`);
+  const expression = readStylesExpression({ source, start: declaration.index + declaration[0].length });
+  return stylesheetsOfExpression({ source, expression, resolving: new Set([...resolving, reference]), origin });
+}
+
+function stylesheetsOfExpression({
+  source,
+  expression,
+  resolving,
+  origin,
+}: {
+  source: string;
+  expression: StylesExpression;
+  resolving: Set<string>;
+  origin: ImportOrigin;
+}): string[] {
+  const referencedStylesheets = expression.references.flatMap((reference) => stylesheetsOfReference({ source, reference, resolving, origin }));
   return [expression.text, ...referencedStylesheets];
 }
 
-function stylesPropertyStylesheetsIn(source: string): string[] {
-  const declaredStylesProperties = [...source.matchAll(STYLES_PROPERTY_KEY)].length;
+function stylesWordCountInCode(source: string): number {
+  const codeWithoutStrings = sourceWithoutComments({ source, maskStringContents: true });
+  const stylesIdentifiers = [...codeWithoutStrings.matchAll(STYLES_IDENTIFIER)].length;
+  const stylesStrings = stringLiteralsIn(source).filter((literal) => literal === 'styles').length;
+  return stylesIdentifiers + stylesStrings;
+}
+
+function stylesPropertyStylesheetsIn({ path, source, scannedStylesModules = [] }: StyleSource): string[] {
+  const codeWithoutComments = sourceWithoutComments({ source, maskStringContents: false });
+  const declaredStylesProperties = [...codeWithoutComments.matchAll(STYLES_PROPERTY_KEY)].length;
   const extractedStylesArrays = stylesPropertyValueStartsIn(source).map((start) => readStylesValue({ source, start }));
   if (extractedStylesArrays.length !== declaredStylesProperties) {
     throw new Error(`${extractedStylesArrays.length} styles array(s) extracted for ${declaredStylesProperties} styles properties`);
   }
+  const stylesWords = stylesWordCountInCode(source);
+  if (extractedStylesArrays.length !== stylesWords) {
+    throw new Error(`${stylesWords} styles word(s) in code for ${extractedStylesArrays.length} extracted styles array(s)`);
+  }
+  const origin = { path, scannedStylesModules };
   return extractedStylesArrays
     .flat()
-    .flatMap((expression) => stylesheetsOfExpression({ source, expression, resolving: new Set() }));
+    .flatMap((expression) => stylesheetsOfExpression({ source, expression, resolving: new Set(), origin }));
 }
 
 function hostObjectTextsIn(source: string): string[] {
@@ -432,19 +510,38 @@ function hostObjectTextsIn(source: string): string[] {
   });
 }
 
-function inlineStylePixelRingsIn(markup: string): PixelRing[] {
-  const attributeStyles = [...markup.matchAll(INLINE_STYLE_ATTRIBUTE)].map(([, , style]) => style ?? '');
-  const hostStyles = hostObjectTextsIn(markup).flatMap((host) => [...host.matchAll(HOST_STYLE_ENTRY)].map(([, , style]) => style ?? ''));
-  const propertyBindingStyles = [...markup.matchAll(INLINE_STYLE_BINDING)].map(
+function styleAttributeStylesIn(markup: string): string[] {
+  return [...markup.matchAll(INLINE_STYLE_ATTRIBUTE)].map(([, , style]) => style ?? '');
+}
+
+function styleBindingStylesIn(source: string): string[] {
+  const hostStyles = hostObjectTextsIn(source).flatMap((host) =>
+    [...host.matchAll(HOST_STYLE_ENTRY)].map(([, , , style]) => joinedLiterals(style ?? '').replace(OUTER_QUOTES, '')),
+  );
+  const propertyBindingStyles = [...source.matchAll(INLINE_STYLE_BINDING)].map(
     ([, property, pixelUnit, , value]) => `${property}: ${joinedLiterals(value ?? '')}${pixelUnit ? 'px' : ''}`,
   );
-  const styleMapStyles = [...markup.matchAll(STYLE_MAP_BINDING)].map(([, , styleMap]) => declarationsOfStyleMap(styleMap ?? ''));
-  return [...attributeStyles, ...hostStyles, ...propertyBindingStyles, ...styleMapStyles].flatMap((style) => pixelRingsIn(style));
+  const styleMapStyles = [...source.matchAll(STYLE_MAP_BINDING)].map(([, , styleMap]) => declarationsOfStyleMap(styleMap ?? ''));
+  return [...hostStyles, ...propertyBindingStyles, ...styleMapStyles];
+}
+
+function pixelRingsInStyles(styles: string[]): PixelRing[] {
+  return styles.flatMap((style) => pixelRingsIn(style));
+}
+
+function inlineStylePixelRingsIn(markup: string): PixelRing[] {
+  return pixelRingsInStyles([...styleAttributeStylesIn(markup), ...styleBindingStylesIn(markup)]);
+}
+
+function inlineStylePixelRingsInTypescript(source: string): PixelRing[] {
+  const attributeStyles = stringLiteralsIn(source).flatMap(styleAttributeStylesIn);
+  return pixelRingsInStyles([...attributeStyles, ...styleBindingStylesIn(source)]);
 }
 
 interface StyleSource {
   path: string;
   source: string;
+  scannedStylesModules?: string[];
 }
 
 function styleElementsIn(source: string): string[] {
@@ -455,18 +552,26 @@ function isStyleConstantFile(path: string): boolean {
   return STYLE_CONSTANT_FILE.test(path) && !path.endsWith('.component.ts') && !path.endsWith('.spec.ts');
 }
 
-function stylesheetTextsIn({ path, source }: StyleSource): string[] {
+function stylesheetTextsIn(styleSource: StyleSource): string[] {
+  const { path, source } = styleSource;
   if (path.endsWith('.scss')) return [source];
   if (path.endsWith('.html')) return styleElementsIn(source);
   if (isStyleConstantFile(path)) return stringLiteralsIn(source);
-  return [...stylesPropertyStylesheetsIn(source), ...styleElementsIn(source)];
+  return [...stylesPropertyStylesheetsIn(styleSource), ...styleElementsIn(source)];
 }
 
-function pixelRingsInFile({ path, source }: StyleSource): PixelRing[] {
+function inlineRingsInFile({ path, source }: StyleSource): PixelRing[] {
+  if (path.endsWith('.scss')) return [];
+  if (path.endsWith('.html')) return inlineStylePixelRingsIn(source);
+  return inlineStylePixelRingsInTypescript(source);
+}
+
+function pixelRingsInFile(styleSource: StyleSource): PixelRing[] {
+  const { path } = styleSource;
   const isScss = path.endsWith('.scss');
   try {
-    const stylesheetRings = stylesheetTextsIn({ path, source }).flatMap((css) => pixelRingsIn(css, { isScss }));
-    const inlineRings = isScss ? [] : inlineStylePixelRingsIn(source);
+    const stylesheetRings = stylesheetTextsIn(styleSource).flatMap((css) => pixelRingsIn(css, { isScss }));
+    const inlineRings = inlineRingsInFile(styleSource);
     return [...stylesheetRings, ...inlineRings];
   } catch (error) {
     throw new Error(`${path}: ${error instanceof Error ? error.message : String(error)}`);
@@ -490,14 +595,12 @@ function invalidAllowances(allowlist: ElevationShadowAllowance[]): ElevationShad
   return allowlist.filter((allowance) => !isNamed(allowance));
 }
 
-function unallowedPixelRingsIn({
-  path,
-  source,
-  allowlist = ELEVATION_SHADOW_ALLOWED,
-}: StyleSource & { allowlist?: ElevationShadowAllowance[] }): PixelRing[] {
+function unallowedPixelRingsIn({ allowlist = ELEVATION_SHADOW_ALLOWED, ...styleSource }: StyleSource & { allowlist?: ElevationShadowAllowance[] }): PixelRing[] {
   const isAllowedElevation = ({ selector, declaration }: PixelRing) =>
-    allowlist.filter(isNamed).some((allowance) => allowance.path === path && allowance.selector === selector && allowance.declaration === declaration);
-  return pixelRingsInFile({ path, source }).filter((ring) => !isAllowedElevation(ring));
+    allowlist
+      .filter(isNamed)
+      .some((allowance) => allowance.path === styleSource.path && allowance.selector === selector && allowance.declaration === declaration);
+  return pixelRingsInFile(styleSource).filter((ring) => !isAllowedElevation(ring));
 }
 
 function sourcesEndingWith(suffix: string): StyleSource[] {
@@ -511,8 +614,8 @@ function componentSources(): StyleSource[] {
   return sourcesEndingWith('.component.ts');
 }
 
-function templateSources(): StyleSource[] {
-  return sourcesEndingWith('.component.html');
+function htmlSources(): StyleSource[] {
+  return sourcesEndingWith('.html');
 }
 
 function globalStylesheetSources(): StyleSource[] {
@@ -821,7 +924,9 @@ describe('the styles property extraction', () => {
   const focusRing = '.a:focus-visible { outline: 2px solid red }';
   const focusRingFinding = [{ selector: '.a:focus-visible', declaration: 'outline: 2px solid red' }];
   const stylesImport = "import { STEP_PANEL_STYLES } from './step-panel.styles';";
-  const ringsOfComponent = (source: string) => pixelRingsInFile({ path: componentPath, source });
+  const scannedStepPanelStyles = ['ui/step-panel.styles.ts'];
+  const ringsOfComponent = (source: string, scannedStylesModules: string[] = scannedStepPanelStyles) =>
+    pixelRingsInFile({ path: componentPath, source, scannedStylesModules });
 
   it('reads the template after an imported constant in a styles array', () => {
     const source = `${stylesImport} @Component({ styles: [\n  STEP_PANEL_STYLES,\n  \`${focusRing}\`,\n] })`;
@@ -880,10 +985,70 @@ describe('the styles property extraction', () => {
     expect(() => ringsOfComponent(source)).toThrow(componentPath);
   });
 
-  it('fails closed when a styles key outside the code differs from the extracted arrays', () => {
-    const source = '/* styles: [] */ @Component({ styles: [`.a { color: red }`] })';
+  it('fails closed when a styles key inside a string differs from the extracted arrays', () => {
+    const source = "const note = 'styles: []'; @Component({ styles: [`.a { color: red }`] })";
 
     expect(() => ringsOfComponent(source)).toThrow(/1 styles array.*2 styles propert/);
+  });
+
+  it('ignores a styles word written in a comment', () => {
+    const source = `/* styles: [] */ // styles\n@Component({ styles: [\`${focusRing}\`] })`;
+
+    expect(ringsOfComponent(source)).toEqual(focusRingFinding);
+  });
+
+  it.each([
+    ['a block comment between the key and the colon', `@Component({ styles /* c */ : [\`${focusRing}\`] })`],
+    ['a line comment between the key and the colon', `@Component({ styles // c\n : [\`${focusRing}\`] })`],
+    ['a computed single-quoted key', `@Component({ ['styles']: [\`${focusRing}\`] })`],
+    ['a computed double-quoted key', `@Component({ ["styles"]: [\`${focusRing}\`] })`],
+    ['a quoted key and a comment before the colon', `@Component({ 'styles' /* c */ : [\`${focusRing}\`] })`],
+  ])('reads a styles key written with %s', (_name, source) => {
+    expect(ringsOfComponent(source)).toEqual(focusRingFinding);
+  });
+
+  it.each([
+    ['a shorthand property', '@Component({ styles })'],
+    ['a computed identifier key', '@Component({ [styles]: [`.a { color: red }`] })'],
+    ['a destructuring', 'const { styles } = compiled;'],
+  ])('fails closed on %s that no styles array is extracted for', (_name, source) => {
+    expect(() => ringsOfComponent(source)).toThrow(/1 styles word.*0 extracted styles array/);
+  });
+
+  it('accepts a styles property read from an object', () => {
+    const source = `const compiledStyles = compiled.styles; @Component({ styles: [\`${focusRing}\`] })`;
+
+    expect(ringsOfComponent(source)).toEqual(focusRingFinding);
+  });
+});
+
+describe('the styles imports', () => {
+  const componentPath = 'ui/x.component.ts';
+  const ringsOfComponent = ({ source, scannedStylesModules }: { source: string; scannedStylesModules: string[] }) =>
+    pixelRingsInFile({ path: componentPath, source, scannedStylesModules });
+
+  it('accepts an import resolving to a scanned styles file in a parent directory', () => {
+    const source = "import { FOO_STYLES } from '../shared/foo-styles'; @Component({ styles: [FOO_STYLES] })";
+
+    expect(ringsOfComponent({ source, scannedStylesModules: ['shared/foo-styles.ts'] })).toEqual([]);
+  });
+
+  it('fails closed on an import from a styles-named module that is not scanned', () => {
+    const source = "import { FOO_STYLES } from '../shared/foo-styles'; @Component({ styles: [FOO_STYLES] })";
+
+    expect(() => ringsOfComponent({ source, scannedStylesModules: ['ui/step-panel.styles.ts'] })).toThrow(/shared\/foo-styles\.ts.*not a scanned styles file/);
+  });
+
+  it('fails closed on an import from a package whose name contains styles', () => {
+    const source = "import { FOO_STYLES } from '@x/design-styles'; @Component({ styles: [FOO_STYLES] })";
+
+    expect(() => ringsOfComponent({ source, scannedStylesModules: ['ui/design-styles.ts'] })).toThrow(/package "@x\/design-styles"/);
+  });
+
+  it('fails closed on an import from a sibling styles module that is not scanned', () => {
+    const source = "import { PANEL } from './panel.styles'; @Component({ styles: [PANEL] })";
+
+    expect(() => ringsOfComponent({ source, scannedStylesModules: [] })).toThrow(/ui\/panel\.styles\.ts.*not a scanned styles file/);
   });
 });
 
@@ -932,6 +1097,22 @@ describe('the host, style map and template style sources', () => {
     expect(inlineDeclarationsIn(source)).toEqual([declaration]);
   });
 
+  it.each([
+    ['a host attr style key', `host: { '[attr.style]': "'outline: 2px solid red'" }`, 'outline: 2px solid red'],
+    ['a host style map key', `host: { '[style]': "'outline: 2px solid red'" }`, 'outline: 2px solid red'],
+    ['a host ngStyle key', `host: { '[ngStyle]': "{ outline: '2px solid red' }" }`, 'outline: 2px solid red'],
+  ])('flags %s sized in pixels exactly once', (_name, source, declaration) => {
+    expect(inlineDeclarationsIn(source)).toEqual([declaration]);
+  });
+
+  it.each([
+    ['a key ending in style', `host: { 'foo-style': 'outline: 2px solid red' }`],
+    ['a data-style key', `host: { 'data-style': "box-shadow: 0 0 0 3px red" }`],
+    ['a bracketed key ending in style', `host: { '[foo-style]': 'outline: 2px solid red' }`],
+  ])('accepts a host entry with %s', (_name, source) => {
+    expect(inlineDeclarationsIn(source)).toEqual([]);
+  });
+
   it('accepts host, style map and string bindings sized in rem or in hairlines', () => {
     const source = `host: { style: 'outline: .125rem solid red', '[style.outline-offset.px]': '1' } <i [ngStyle]="{ outline: '.125rem solid red', width: '20px' }" [style]="'box-shadow: inset 0 0 0 1px red'"></i>`;
 
@@ -963,6 +1144,48 @@ describe('the host, style map and template style sources', () => {
 
   it('does not mistake a longer word for the external stylesheet key', () => {
     expect(EXTERNAL_STYLESHEET.test("const restyleUrl: string = ''")).toBe(false);
+  });
+});
+
+describe('the style attribute scope', () => {
+  const ringsOfComponent = (source: string) => pixelRingsInFile({ path: 'ui/x.component.ts', source });
+
+  it('ignores a variable named style assigned in typescript code', () => {
+    const source = "let style = ''; style = 'outline: 2px solid red';";
+
+    expect(ringsOfComponent(source)).toEqual([]);
+  });
+
+  it('flags a style attribute inside a single-quoted markup string', () => {
+    const source = `const markup = '<i style="outline: 2px solid red"></i>';`;
+
+    expect(ringsOfComponent(source)).toEqual([{ selector: '', declaration: 'outline: 2px solid red' }]);
+  });
+
+  it('flags a style attribute inside a template string exactly once', () => {
+    const source = '@Component({ template: `<i style="outline: 2px solid red"></i>` })';
+
+    expect(ringsOfComponent(source)).toEqual([{ selector: '', declaration: 'outline: 2px solid red' }]);
+  });
+});
+
+describe('the html files', () => {
+  const ringsOfIndex = (source: string) => pixelRingsInFile({ path: 'index.html', source });
+
+  it('flags an inline style attribute of an index html file', () => {
+    expect(ringsOfIndex('<body style="box-shadow: 0 0 0 3px red"></body>')).toEqual([{ selector: '', declaration: 'box-shadow: 0 0 0 3px red' }]);
+  });
+
+  it('flags a style element of an index html file', () => {
+    const source = '<head><style>.a:focus-visible { outline: 2px solid red }</style></head>';
+
+    expect(ringsOfIndex(source)).toEqual([{ selector: '.a:focus-visible', declaration: 'outline: 2px solid red' }]);
+  });
+
+  it('accepts an index html file sized in rem', () => {
+    const source = '<head><style>.a:focus-visible { outline: .125rem solid red }</style></head><body style="box-shadow: inset 0 0 0 1px red"></body>';
+
+    expect(ringsOfIndex(source)).toEqual([]);
   });
 });
 
@@ -1093,9 +1316,15 @@ describe('the elevation shadow allowlist', () => {
 
 describe('the desktop component sources', () => {
   const components = componentSources();
-  const templates = templateSources();
+  const htmlFiles = htmlSources();
   const globalStylesheets = globalStylesheetSources();
   const styleConstants = styleConstantSources();
+  const scannedStylesModules = styleConstants.map(({ path }) => path);
+  const withScannedStylesModules = (styleSource: StyleSource): StyleSource => ({ ...styleSource, scannedStylesModules });
+
+  it('lists the html files it scans, the index page included', () => {
+    expect(htmlFiles.map(({ path }) => path)).toContain('index.html');
+  });
 
   it('lists the components it scans', () => {
     expect(components.length).toBeGreaterThan(50);
@@ -1109,13 +1338,13 @@ describe('the desktop component sources', () => {
     const path = `app/onboarding/${name}.component.ts`;
     const component = components.find((candidate) => candidate.path === path);
 
-    expect(stylesheetTextsIn(component as StyleSource).join('\n')).toContain(':host');
+    expect(stylesheetTextsIn(withScannedStylesModules(component as StyleSource)).join('\n')).toContain(':host');
   });
 
   it('reads the focus rules of the daemon step styles array', () => {
     const component = components.find(({ path }) => path === 'app/onboarding/daemon-step.component.ts');
 
-    const stylesheets = stylesheetTextsIn(component as StyleSource).join('\n');
+    const stylesheets = stylesheetTextsIn(withScannedStylesModules(component as StyleSource)).join('\n');
 
     expect(stylesheets).toContain('h2:focus-visible');
     expect(stylesheets).toContain('.last-line:focus-visible');
@@ -1127,8 +1356,8 @@ describe('the desktop component sources', () => {
   });
 
   it('size every outline, outline offset, box-shadow, drop-shadow and ring property in rem', () => {
-    const pixelRings = [...components, ...templates, ...globalStylesheets, ...styleConstants].flatMap(({ path, source }) =>
-      unallowedPixelRingsIn({ path, source }).map(({ selector, declaration }) => `${path}: ${selector} { ${declaration} }`),
+    const pixelRings = [...components, ...htmlFiles, ...globalStylesheets, ...styleConstants].flatMap((styleSource) =>
+      unallowedPixelRingsIn(withScannedStylesModules(styleSource)).map(({ selector, declaration }) => `${styleSource.path}: ${selector} { ${declaration} }`),
     );
 
     expect(pixelRings).toEqual([]);
