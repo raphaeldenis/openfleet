@@ -32,7 +32,7 @@ import { ThemeToggleButtonComponent } from '../design/theme-toggle-button.compon
     .name { flex: 1; min-width: 0; font-weight: 500; }
     .gear { flex: none; width: 1.75rem; height: 1.75rem; border: 1px solid transparent; border-radius: .375rem; background: transparent; color: var(--mut); font-size: .875rem; cursor: pointer; outline: 0; }
     .gear:hover { background: var(--hover); color: var(--fg); }
-    .gear:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+    .gear:focus-visible { box-shadow: 0 0 0 .125rem var(--accent); }
     .gear[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
   `,
 })

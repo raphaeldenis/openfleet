@@ -25,7 +25,7 @@ import { readGroupOpenPreference, writeGroupOpenPreference } from './sidebar-gro
     :host { display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--line); }
     .header { flex: none; display: flex; align-items: center; gap: .375rem; height: 1.875rem; padding: 0 .75rem; color: var(--mut); }
     .toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: .375rem; height: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: .6875rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; text-align: left; cursor: pointer; }
-    .toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .toggle:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem; }
     .caret { width: .625rem; }
     .summary { font-family: var(--mono); font-size: .6875rem; }
     .body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
