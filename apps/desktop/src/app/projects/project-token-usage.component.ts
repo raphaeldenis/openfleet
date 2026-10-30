@@ -9,7 +9,7 @@ const REFRESH_PERIOD_MS = 60_000;
   selector: 'of-project-token-usage',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [TokenUsageComponent],
-  template: `<span class="today" title="Tokens used by this project since 00:00 UTC"><span class="today-label">Today (UTC)</span> <of-token-usage [usage]="usage()" /></span>`,
+  template: `<span class="today" [title]="todayTitle"><span class="today-label">Today (UTC)</span> <of-token-usage [usage]="usage()" /></span>`,
   styles: `
     :host { display: inline; }
     .today { display: inline-flex; align-items: baseline; gap: .375rem; white-space: nowrap; }
@@ -17,6 +17,8 @@ const REFRESH_PERIOD_MS = 60_000;
   `,
 })
 export class ProjectTokenUsageComponent {
+  protected readonly todayTitle =
+    'Tokens used by this project since 00:00 UTC. Shows n/a until usage ingestion is enabled (OPENFLEET_USAGE_INGESTION=1).';
   readonly projectId = input.required<string>();
   /** Changes whenever a session of the project changes state, which ends a turn. */
   readonly sessionStates = input.required<string>();
