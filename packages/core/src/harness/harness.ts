@@ -5,6 +5,8 @@ export interface HarnessLaunch {
   // The conversation a resume reattaches to, when the CLI left the launch conversation (a /clear).
   cliSessionId?: string;
   directory: string;
+  /** Absolute paths the CLI may read besides `directory`; a resume does not carry them. */
+  readDirectories?: string[];
   model?: string;
   effort?: string;
   /** The account profile directory the CLI runs under; absent runs under the daemon's own environment. */

@@ -546,7 +546,7 @@ export class SessionService {
     let handle: HarnessHandle;
     try {
       handle = harness.start({
-        sessionId: id, directory: spec.directory, model: spec.model, seededPrompt,
+        sessionId: id, directory: spec.directory, readDirectories: spec.readDirectories, model: spec.model, seededPrompt,
         hookUrl: `${this.deps.baseUrl}/hooks/${hookToken}`, mcpUrl: `${this.deps.baseUrl}/mcp`, mcpToken, displayName: `${spec.emoji} ${spec.name}`,
         permissionMode: spec.permissionMode, effort: spec.effort, configDir: spec.configDir,
       });

@@ -76,6 +76,8 @@ export const SessionSpecSchema = z.object({
 export type SessionSpec = z.infer<typeof SessionSpecSchema> & {
   /** A validated absolute config directory; set only by callers that resolved it, never parsed from a request body. */
   configDir?: string;
+  /** Absolute real paths the session may read besides its own directory; set only by the daemon for an arbiter, never parsed from a request body. */
+  readDirectories?: string[];
 };
 
 export interface Session {

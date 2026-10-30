@@ -24,6 +24,34 @@ const tokenFilePaths = {
   hookCurlConfigPath: '/tmp/of-sessions/s1/launch1/hook-curl.conf',
 };
 
+describe('buildClaudeLaunchConfig — read directories', () => {
+  const doubleDashIndexOf = (args: string[]) => args.indexOf('--');
+
+  it('passes each read directory as one --add-dir=<path> argument, before the -- separator', () => {
+    const { args } = buildClaudeLaunchConfig({ ...launch, seededPrompt: 'go', readDirectories: ['/work/ticket', '/work/other'] }, tokenFilePaths);
+
+    expect(args).toContain('--add-dir=/work/ticket');
+    expect(args).toContain('--add-dir=/work/other');
+    expect(args.indexOf('--add-dir=/work/other')).toBeLessThan(doubleDashIndexOf(args));
+  });
+
+  it('keeps a path with spaces as a single argument', () => {
+    const { args } = buildClaudeLaunchConfig({ ...launch, readDirectories: ['/work/my ticket'] }, tokenFilePaths);
+
+    expect(args).toContain('--add-dir=/work/my ticket');
+  });
+
+  it('adds no --add-dir without read directories', () => {
+    const { args } = buildClaudeLaunchConfig(launch, tokenFilePaths);
+
+    expect(args.some((arg) => arg.startsWith('--add-dir'))).toBe(false);
+  });
+
+  it.each(['-evil', 'relative/path', '--dangerously-skip-permissions'])('refuses the read directory %s, which is not an absolute path', (readDirectory) => {
+    expect(() => buildClaudeLaunchConfig({ ...launch, readDirectories: [readDirectory] }, tokenFilePaths)).toThrow(/absolute/);
+  });
+});
+
 describe('buildClaudeLaunchConfig', () => {
   it('passes model, name, session id, and the settings/mcp-config file paths as args', () => {
     const config = buildClaudeLaunchConfig(launch, tokenFilePaths);

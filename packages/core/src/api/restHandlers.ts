@@ -64,6 +64,8 @@ export function registerRestRoutes(router: Router, deps: { sessions: SessionServ
   });
 
   router.add('POST', '/api/sessions', async ({ res, body }) => {
+    const carriesReadDirectories = typeof body === 'object' && body !== null && 'readDirectories' in body;
+    if (carriesReadDirectories) throw new OpenFleetError('invalid_body', 'readDirectories is set by the daemon only.');
     const requestedSpec = CreateSessionSchema.parse(body);
     if (requestedSpec.role === ARBITER_ROLE) throw new OpenFleetError('invalid_body', 'role "arbiter" is spawned by the daemon only.');
     const spec = requestedSpec.model ? { ...requestedSpec, model: resolveModel(deps.modelTable, requestedSpec.model) } : requestedSpec;

@@ -8,6 +8,7 @@ import type { ProjectRepository } from '../projects/projectRepository.js';
 import { DEFAULT_TICKET_PATTERN, ticketOfBranch } from '../review/worktreeGit.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import { arbiterPromptOf } from './arbiterBrief.js';
+import type { ArbiterWorkspaces } from './arbiterWorkspaces.js';
 import { ARBITER_QUOTA_REASON, ARBITER_UNAVAILABLE_REASON, type EscalatedToHuman, type EscalationService } from './escalationService.js';
 import type { EscalationRepository } from './escalationRepository.js';
 import { escalationPolicyOf } from './projectPolicy.js';
@@ -50,6 +51,10 @@ export interface ArbiterRunnerDeps {
   repository: Pick<EscalationRepository, 'findBatch' | 'questionsOfBatch' | 'addArbiterRun' | 'arbiterRunsOfTicket' | 'batchIdsWithOpenArbiterQuestions'>;
   escalations: Pick<EscalationService, 'escalateBatchToHuman'>;
   modelTable: ModelTable;
+  /** Where each arbiter starts: an empty directory of its own, away from any repository. */
+  workspaces: ArbiterWorkspaces;
+  /** The real path of a directory, symlinks resolved; throws when it does not exist. */
+  realPathOf: (path: string) => string;
   /** Arms a timer and answers the function that cancels it. */
   schedule: (callback: () => void, delayMs: number) => () => void;
   ticketPattern?: string;
@@ -68,6 +73,7 @@ export const expiryMsOf = (manager: Pick<ManagerRecord, 'mode' | 'pulseEnabled' 
 export class ArbiterRunner {
   private readonly runBySessionId = new Map<string, Run>();
   private readonly failuresByBatchId = new Map<string, number>();
+  private readonly workspaceBySessionId = new Map<string, string>();
   private readonly cancelCloseRetries = new Set<() => void>();
   private isStopped = false;
 
@@ -138,15 +144,27 @@ export class ArbiterRunner {
     const managerSession = sessions.get(batch.managerId);
     if (manager === undefined || managerSession === undefined) throw new Error(`manager ${batch.managerId} is gone`);
 
-    const arbiter = await sessions.create({
-      directory: this.directoryOf({ managerId: batch.managerId, managerDirectory: managerSession.directory, ticket: batch.ticket }),
-      name: `Arbiter ${batch.ticket} ${batchTagOf(batchId)}`, emoji: ARBITER_EMOJI, model, role: ARBITER_ROLE, parentId: batch.managerId,
-      harness: managerSession.harness, permissionMode: 'plan', ...(managerSession.projectId && { projectId: managerSession.projectId }),
-      seededPrompt: arbiterPromptOf({ batch, questions: repository.questionsOfBatch(batchId).filter((question) => question.route === 'arbiter' && question.status === 'open') }),
-    });
+    const directoryToRead = this.deps.realPathOf(this.directoryOf({ managerId: batch.managerId, managerDirectory: managerSession.directory, ticket: batch.ticket }));
+    const workspace = this.deps.workspaces.create();
+    let arbiter: Awaited<ReturnType<typeof sessions.create>>;
+    try {
+      arbiter = await sessions.create({
+        directory: workspace, readDirectories: [directoryToRead],
+        name: `Arbiter ${batch.ticket} ${batchTagOf(batchId)}`, emoji: ARBITER_EMOJI, model, role: ARBITER_ROLE, parentId: batch.managerId,
+        harness: managerSession.harness, permissionMode: 'plan', ...(managerSession.projectId && { projectId: managerSession.projectId }),
+        seededPrompt: arbiterPromptOf({ batch, questions: repository.questionsOfBatch(batchId).filter((question) => question.route === 'arbiter' && question.status === 'open') }),
+      });
+    } catch (error) {
+      this.deps.workspaces.remove(workspace);
+      throw error;
+    }
+    this.workspaceBySessionId.set(arbiter.id, workspace);
     if (this.isStopped) return void this.closeQuietly(arbiter.id);
     const hasClosedWhileStarting = sessions.get(arbiter.id)?.state === 'closed';
-    if (hasClosedWhileStarting) throw new Error(`arbiter ${arbiter.id} closed while it was starting`);
+    if (hasClosedWhileStarting) {
+      this.removeWorkspaceOf(arbiter.id);
+      throw new Error(`arbiter ${arbiter.id} closed while it was starting`);
+    }
     this.track({ arbiterSessionId: arbiter.id, batchId, manager });
   }
 
@@ -163,6 +181,8 @@ export class ArbiterRunner {
   recover(): void {
     const { repository, sessions, managers } = this.deps;
     const liveArbitersBeforeRecovery = sessions.list().filter((session) => session.role === ARBITER_ROLE && session.state !== 'closed');
+    for (const { id, directory } of liveArbitersBeforeRecovery) this.workspaceBySessionId.set(id, directory);
+    this.deps.workspaces.removeAllExcept(new Set(liveArbitersBeforeRecovery.map((session) => session.directory)));
     for (const batchId of repository.batchIdsWithOpenArbiterQuestions()) {
       const batch = repository.findBatch(batchId)!;
       const manager = managers.get(batch.managerId);
@@ -181,7 +201,20 @@ export class ArbiterRunner {
     return worktreeOfTicket?.directory ?? managerDirectory;
   }
 
+  /** Removes the workspace of a closed arbiter; a daemon shutdown keeps it, since the arbiter is resumed in it at the next boot. */
+  private removeWorkspaceOf(arbiterSessionId: string): void {
+    const workspace = this.workspaceBySessionId.get(arbiterSessionId);
+    if (workspace === undefined) return;
+    this.workspaceBySessionId.delete(arbiterSessionId);
+    try {
+      this.deps.workspaces.remove(workspace);
+    } catch (error) {
+      log('warn', `arbiter: the workspace of session ${arbiterSessionId} could not be removed`, error);
+    }
+  }
+
   private onSessionClosed({ sessionId, isDaemonShutdown }: { sessionId: string; isDaemonShutdown: boolean }): void {
+    if (!isDaemonShutdown) this.removeWorkspaceOf(sessionId);
     const run = this.forget(sessionId);
     if (run === undefined || isDaemonShutdown) return;
     void this.onArbiterLost(run.batchId).catch((error) => log('error', `arbiter: batch ${run.batchId} could not be recovered after its arbiter closed`, error));
