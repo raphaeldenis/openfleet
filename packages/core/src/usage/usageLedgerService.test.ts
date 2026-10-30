@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { applyMigrations } from '../db/migrate.js';
 import { DEFAULT_USAGE_LEDGER_LIMITS, UsageLedgerService, type IngestTranscriptInput, type TimestampWindow, type UsageDailyFilter, type UsageLedgerLimits } from './usageLedgerService.js';
@@ -210,8 +210,7 @@ describe('UsageLedgerService', () => {
         INSERT INTO usage_messages (session_id, message_id, day_utc, model, billing_code, biller, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd, cost_status)
         SELECT 's1', '${idPrefix}' || position, '2026-10-01', ${model('position')}, 'root-lead', 'api', 1, 1, 1, 1, NULL, 'unpriced' FROM seeded`);
 
-    it('rewrites the largest allowed number of buckets of a session one message short of its maximum within a time budget far under the per-bucket rebuild cost', () => {
-      const REWRITE_BUDGET_MS = 150;
+    it('rewrites the largest allowed number of buckets of a session one message short of its maximum with one grouped read of its messages', () => {
       const db = new DatabaseSync(':memory:');
       applyMigrations(db);
       const rewrittenCount = DEFAULT_USAGE_LEDGER_LIMITS.maxBucketsPerChunk / 2;
@@ -220,15 +219,15 @@ describe('UsageLedgerService', () => {
       const service = new UsageLedgerService(db);
       const sameMessagesWithOtherModels = transcriptOf(...Array.from({ length: rewrittenCount }, (_, index) => assistantLine({ id: `live-${index}`, timestamp: DAY_ONE, model: `model-new-${index}` })));
 
-      const startedAt = performance.now();
+      const preparedStatements = vi.spyOn(db, 'prepare');
       const result = service.ingestTranscript({ sessionId: 's1', biller: 'api', transcriptText: sameMessagesWithOtherModels, billingCodeOf: rootBillingCode, timestampWindow: EVERY_INSTANT });
-      const durationMs = performance.now() - startedAt;
+      const bucketRebuildReadCount = preparedStatements.mock.calls.filter(([sql]) => sql.includes('INSERT INTO usage_daily') && sql.includes('FROM usage_messages')).length;
 
       const models = service.dailyUsage({ sessionId: 's1' }).map((row) => row.model);
       expect(result).toMatchObject({ messageCount: rewrittenCount, rejectedLineCount: 0 });
       expect(models.filter((model) => model.startsWith('model-old-'))).toEqual([]);
       expect(models.filter((model) => model.startsWith('model-new-'))).toHaveLength(rewrittenCount);
-      expect(durationMs).toBeLessThan(REWRITE_BUDGET_MS);
+      expect(bucketRebuildReadCount).toBe(1);
     });
 
     it('rebuilds the largest allowed number of buckets of a session that reaches its maximum within the time budget', () => {
