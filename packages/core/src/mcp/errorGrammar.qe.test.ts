@@ -177,6 +177,7 @@ const hostileCallByTool = (w: World): Record<string, { client: Client; args: Rec
   request_resource_access: { client: w.lead, args: { resource_type: 'dataStore', resource_id: UNKNOWN, access: 'read', role: 'r', incident: 'i' }, code: 'not_a_manager' },
   withdraw_proposal: { client: w.lead, args: { request_id: UNKNOWN }, code: 'not_a_manager' },
   get_argus_governance: { client: w.child, args: {}, code: 'not_a_manager' },
+  get_manager_mission: { client: w.child, args: {}, code: 'not_a_manager' },
   set_data_store_natural_key: { client: w.lead, args: { store: UNKNOWN, column: 'c' }, code: 'store_not_found' },
   update_data_store_column: { client: w.lead, args: { store: UNKNOWN, column_id: 'c', name: 'n' }, code: 'store_not_found' },
   delete_data_store_column: { client: w.lead, args: { store: UNKNOWN, column_id: 'c' }, code: 'store_not_found' },
