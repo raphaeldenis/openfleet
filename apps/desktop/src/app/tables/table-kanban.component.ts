@@ -67,7 +67,7 @@ export interface KanbanGroup {
       cursor: pointer; font: inherit; font-size: .75rem;
     }
     .card.selected { border-color: var(--accent); background: var(--accent-bg) }
-    .card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .card:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .title { font-weight: 500; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden }
     .details {
       color: var(--mut); font-size: .6875rem; overflow-wrap: anywhere;
