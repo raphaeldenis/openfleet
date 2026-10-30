@@ -1,5 +1,6 @@
 import { lstatSync, mkdirSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
+import { log } from '../logger.js';
 
 const ARTIFACTS_FOLDER = 'artifacts';
 const FALLBACK_DIRECTORY_NAME = 'manager';
@@ -49,7 +50,15 @@ interface WriteRequest {
   content: unknown;
 }
 
-const NOT_IN_ARTIFACTS: ArtifactWriteJudgement = { kind: 'not_in_artifacts' };
+interface RefusalRequest {
+  filePath: string;
+  content: unknown;
+  managerDirectory: string;
+  projectId: string;
+}
+
+const NOT_IN_ARTIFACTS:ArtifactWriteJudgement = { kind: 'not_in_artifacts' };
+const UNREADABLE = Symbol('unreadable');
 
 /** Turns a manager name into one safe path segment: ASCII letters, digits, dot, dash and underscore only, no leading dot or dash. */
 export function managerDirectoryNameOf(managerName: string): string {
@@ -111,15 +120,33 @@ export class ArtifactDirectory {
   }
 
   judgeWrite(request: WriteRequest): ArtifactWriteJudgement {
-    const managerDirectory = this.ensureFor(request);
     const { filePath } = request;
-    if (managerDirectory === undefined || typeof filePath !== 'string') return NOT_IN_ARTIFACTS;
+    if (typeof filePath !== 'string' || !this.isUnderArtifactsFolder(request.projectId, filePath)) return NOT_IN_ARTIFACTS;
+    const managerDirectory = this.ensureFor(request);
+    if (managerDirectory === undefined) return NOT_IN_ARTIFACTS;
     const targetsManagerDirectory = isStrictlyInside(filePath, managerDirectory);
     if (!targetsManagerDirectory) return NOT_IN_ARTIFACTS;
 
-    const refusal = this.refusalOf({ ...request, filePath, managerDirectory });
+    const refusal = this.refusalOrUnreadable({ ...request, filePath, managerDirectory });
+    if (refusal === UNREADABLE) return NOT_IN_ARTIFACTS;
     if (refusal !== undefined) return this.refuse(request, filePath, refusal);
     return this.grant(request, filePath);
+  }
+
+  private isUnderArtifactsFolder(projectId: string, filePath: string): boolean {
+    const docsFolderPath = this.deps.docsFolderPathOf(projectId);
+    if (docsFolderPath === undefined) return false;
+    return isStrictlyInside(filePath, join(realpathSync.native(docsFolderPath), ARTIFACTS_FOLDER));
+  }
+
+  /** A folder the quota walk cannot read gives no opinion: the write is left to the approval flow, never allowed. */
+  private refusalOrUnreadable(request: RefusalRequest):string | undefined | typeof UNREADABLE {
+    try {
+      return this.refusalOf(request);
+    } catch (error) {
+      log('warn', `artifact write could not be judged, left to the approval flow: ${error instanceof Error ? error.message : String(error)}`);
+      return UNREADABLE;
+    }
   }
 
   private ensureArtifactsRoot(projectId: string): string | undefined {
@@ -133,13 +160,15 @@ export class ArtifactDirectory {
     return staysInsideDocsFolder ? canonicalArtifactsRoot : undefined;
   }
 
-  private refusalOf({ filePath, content, managerDirectory, projectId }: { filePath: string; content: unknown; managerDirectory: string; projectId: string }): string | undefined {
+  private refusalOf({ filePath, content, managerDirectory, projectId }: RefusalRequest): string | undefined {
     const isNotCanonical = filePath.includes(NUL) || resolve(filePath) !== filePath;
     if (isNotCanonical) return 'the path must be absolute and canonical (no "..", ".", "//" or NUL)';
 
     const target = lstatOrUndefined(filePath);
     if (target?.isSymbolicLink()) return 'the target is a symbolic link';
     if (target?.isDirectory()) return 'the target is a directory';
+    const hasSeveralHardLinks = target?.isFile() === true && target.nlink > 1;
+    if (hasSeveralHardLinks) return 'the target is a hard link shared with another path';
 
     const existingAncestor = realpathOfNearestExistingAncestor(dirname(filePath));
     const escapesThroughALink = existingAncestor === undefined || !isInsideOrEqual(existingAncestor, managerDirectory);

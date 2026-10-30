@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTempDirTracker } from '../tempDirTracker.js';
@@ -200,6 +200,44 @@ describe('a write judged against the artifact directory', () => {
     const { write, artifactsDirectoryOf } = setup();
 
     expect(write({ filePath: join(artifactsDirectoryOf('Mnemosyne'), 'x.md'), content: undefined })).toMatchObject({ kind: 'deny' });
+  });
+
+  it('is refused and journaled when the existing target is a hard link to another file', () => {
+    const { write, artifactsDirectoryOf, entries } = setup();
+    const directory = artifactsDirectoryOf('Mnemosyne');
+    const outside = tempDirs.make('of-artifacts-outside-');
+    writeFileSync(join(outside, 'precious.md'), 'x');
+    linkSync(join(outside, 'precious.md'), join(directory, 'alias.md'));
+
+    const judgement = write({ filePath: join(directory, 'alias.md'), content: 'hi' });
+
+    expect(judgement).toMatchObject({ kind: 'deny', reason: expect.stringContaining('hard link') });
+    expect(entries).toEqual([expect.objectContaining({ outcome: 'refused', path: join(directory, 'alias.md') })]);
+  });
+
+  it('has no opinion, and allows nothing, when the quota walk cannot read a folder', () => {
+    const { write, artifactsDirectoryOf, entries } = setup();
+    const unreadable = join(artifactsDirectoryOf('Other'), 'locked');
+    mkdirSync(unreadable);
+    chmodSync(unreadable, 0o000);
+
+    try {
+      const judgement = write({ filePath: join(artifactsDirectoryOf('Mnemosyne'), 'x.md'), content: 'hi' });
+
+      expect(judgement).toEqual({ kind: 'not_in_artifacts' });
+      expect(entries).toEqual([]);
+    } finally {
+      chmodSync(unreadable, 0o755);
+    }
+  });
+
+  it('creates no folder for a path outside the artifacts folder', () => {
+    const { write, docsFolder } = setup();
+
+    const judgement = write({ filePath: join(docsFolder, 'specs', 'x.md'), content: 'hi' });
+
+    expect(judgement).toEqual({ kind: 'not_in_artifacts' });
+    expect(statSync(join(docsFolder, 'artifacts'), { throwIfNoEntry: false })).toBeUndefined();
   });
 
   it('is refused when the target is an existing directory', () => {
