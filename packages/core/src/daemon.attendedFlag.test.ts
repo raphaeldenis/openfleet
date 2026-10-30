@@ -282,3 +282,59 @@ describe('the attended flag is fixed at creation', () => {
     expect(attendedColumnOf(lead.id)).toBe(1);
   });
 });
+
+describe('the attended refusal at the edges of a request', () => {
+  const attendedReason = 'attended is immutable after creation';
+  const withAttended = JSON.stringify({ name: 'Renamed', attended: true });
+
+  it.each([
+    ['a wrong admin token', { authorization: 'Bearer not-the-admin-token' }],
+    ['no admin token', { authorization: '' }],
+  ])('answers 401 before the attended refusal with %s', async (_label, headers) => {
+    await bootDaemon('observe');
+    const lead = await createSession({ name: 'Lead', manager: aManager });
+
+    const response = await api(`/api/sessions/${lead.id}`, { method: 'PATCH', headers, body: withAttended });
+
+    expect(response.status).toBe(401);
+    expect(await response.text()).not.toContain(attendedReason);
+  });
+
+  it.each([
+    ['a null body', 'null'],
+    ['an array body', '[{"attended":true}]'],
+    ['a non-JSON body', 'attended=true'],
+  ])('does not raise the attended refusal for %s', async (_label, rawBody) => {
+    await bootDaemon('observe');
+    const lead = await createSession({ name: 'Lead', manager: aManager, attended: true });
+
+    const response = await api(`/api/sessions/${lead.id}`, { method: 'PATCH', body: rawBody });
+
+    const isServerError = response.status >= 500;
+    expect(isServerError).toBe(false);
+    expect(await response.text()).not.toContain(attendedReason);
+    expect(attendedColumnOf(lead.id)).toBe(1);
+  });
+
+  it.each([
+    ['session', (id: string) => `/api/sessions/${id}`],
+    ['manager', (id: string) => `/api/managers/${id}`],
+  ])('refuses attended with 400 on an unknown %s id, before the handler can answer 404', async (_label, pathOf) => {
+    await bootDaemon('observe');
+
+    const response = await api(pathOf(randomUUID()), { method: 'PATCH', body: JSON.stringify({ attended: true }) });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain(attendedReason);
+  });
+
+  it('leaves a GET on a prefixed route alone, since it has no body', async () => {
+    await bootDaemon('observe');
+    const lead = await createSession({ name: 'Lead', manager: aManager, attended: true });
+
+    const response = await api(`/api/sessions/${lead.id}`);
+
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { attended?: boolean }).attended).toBe(true);
+  });
+});
