@@ -96,6 +96,37 @@ describe('InboxComponent escalations', () => {
       await renderInbox([], [stateWith(['[esc:gone] Escalation gone on CCM-9'])]);
 
       expect(screen.getByText(/\[esc:gone\]/)).toBeVisible();
+      expect(screen.getByTestId('inbox-count')).toHaveTextContent('1');
+    });
+
+    it('user no longer sees the line, nor a count for it, once the daemon resolves its escalation', async () => {
+      const { resolveEscalationOnDaemon } = await renderInbox([escalationOf('1')], [stateWith(['[esc:1] Escalation 1 on CCM-1'])]);
+
+      resolveEscalationOnDaemon(escalationOf('1'));
+
+      await waitFor(() => expect(screen.queryByTestId('escalation-card')).toBeNull());
+      expect(screen.queryByText(/\[esc:1\]/)).toBeNull();
+      expect(screen.queryByTestId('inbox-attention-card')).toBeNull();
+      expect(screen.queryByTestId('inbox-count')).toBeNull();
+    });
+
+    it('user does not see the line of an escalation the daemon announces already answered', async () => {
+      const { raiseEscalationOnDaemon } = await renderInbox([], [stateWith(['[esc:1] Escalation 1 on CCM-1'])]);
+
+      raiseEscalationOnDaemon(escalationOf('1', { status: 'answered' }));
+
+      await waitFor(() => expect(screen.queryByText(/\[esc:1\]/)).toBeNull());
+      expect(screen.queryByTestId('inbox-count')).toBeNull();
+    });
+
+    it('user still sees the line of another escalation when one escalation is resolved', async () => {
+      const { resolveEscalationOnDaemon } = await renderInbox([escalationOf('1')], [stateWith(['[esc:1] Escalation 1 on CCM-1', '[esc:gone] Escalation gone on CCM-9'])]);
+
+      resolveEscalationOnDaemon(escalationOf('1'));
+
+      await waitFor(() => expect(screen.queryByText(/\[esc:1\]/)).toBeNull());
+      expect(screen.getByText(/\[esc:gone\]/)).toBeVisible();
+      await waitFor(() => expect(screen.getByTestId('inbox-count')).toHaveTextContent('1'));
     });
   });
 });

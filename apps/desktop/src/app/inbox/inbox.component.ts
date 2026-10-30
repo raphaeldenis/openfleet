@@ -14,7 +14,7 @@ import { ErrorLineComponent } from '../design/error-line.component';
 import { KindBadgeComponent } from '../design/kind-badge.component';
 import { REPLY_DELIVERED_COPY } from '../sessions/reply-delivered-copy';
 import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
-import { answeredItemsOf, attentionItemsOf, itemsNeedingYouOf, statesWithoutOpenEscalationLines } from '../working-state/attention-items';
+import { answeredItemsOf, attentionItemsOf, itemsNeedingYouOf, statesWithoutKnownEscalationLines } from '../working-state/attention-items';
 import { contextNoticeCopyOf, contextNoticesOf } from '../working-state/context-notices';
 import { AttentionCardComponent } from './attention-card.component';
 import { EscalationCardsComponent } from './escalation-cards.component';
@@ -320,9 +320,8 @@ export class InboxComponent {
     });
   });
 
-  private readonly openEscalationIds = computed(() => new Set(this.events.escalations().map(({ id }) => id)));
   private readonly attentionItems = computed(() => {
-    const statesToAsk = statesWithoutOpenEscalationLines(this.events.workingStates(), this.openEscalationIds());
+    const statesToAsk = statesWithoutKnownEscalationLines(this.events.workingStates(), this.events.knownEscalationIds());
     return attentionItemsOf(this.events.sessions(), statesToAsk, this.answeredReplies.answeredReplyBySessionId());
   });
   protected readonly attentionItemsNeedingYou = computed(() => itemsNeedingYouOf(this.attentionItems()));

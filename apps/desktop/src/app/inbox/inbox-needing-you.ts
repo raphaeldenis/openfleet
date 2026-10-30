@@ -1,7 +1,7 @@
 import { Injectable, computed, inject } from '@angular/core';
 import { FleetEventsService } from '../core/fleet-events.service';
 import { AnsweredRepliesStore } from '../working-state/answered-replies.store';
-import { attentionItemsOf, inboxCountLabelOf, itemsNeedingYouOf, statesWithoutOpenEscalationLines } from '../working-state/attention-items';
+import { attentionItemsOf, inboxCountLabelOf, itemsNeedingYouOf, statesWithoutKnownEscalationLines } from '../working-state/attention-items';
 import { contextNoticesOf } from '../working-state/context-notices';
 
 /** What the Inbox title and the sidebar Inbox badge both count: gates, governance proposals, escalations, questions and context notices. */
@@ -12,7 +12,7 @@ export class InboxNeedingYou {
 
   readonly count = computed(() => {
     const openEscalations = this.events.escalations();
-    const statesToAsk = statesWithoutOpenEscalationLines(this.events.workingStates(), new Set(openEscalations.map(({ id }) => id)));
+    const statesToAsk = statesWithoutKnownEscalationLines(this.events.workingStates(), this.events.knownEscalationIds());
     const attentionItems = attentionItemsOf(this.events.sessions(), statesToAsk, this.answeredReplies.answeredReplyBySessionId());
     const attentionCount = itemsNeedingYouOf(attentionItems).length;
     const contextNoticeCount = contextNoticesOf(this.events.sessions()).length;

@@ -3,7 +3,7 @@ import { WORKING_STATE_SECTIONS, type Session } from '@openfleet/shared';
 import { clockTimeOf } from '../core/clock-time';
 import { FleetApiService } from '../core/fleet-api.service';
 import { FleetEventsService } from '../core/fleet-events.service';
-import { withoutOpenEscalationLines } from './attention-items';
+import { withoutKnownEscalationLines } from './attention-items';
 import { StateSectionComponent } from './state-section.component';
 import { SECTION_HEADINGS, ageInWholeMinutes, hasReadableUpdatedAt, tickingNow } from './working-state-freshness';
 import { injectOverdue } from './working-state-overdue';
@@ -77,11 +77,10 @@ export class StatePanelComponent {
     params: () => (this.isClosed() ? this.session().id : undefined),
     loader: ({ params: sessionId }) => this.api.getWorkingState(sessionId),
   });
-  private readonly openEscalationIds = computed(() => new Set(this.events.escalations().map(({ id }) => id)));
   protected readonly state = computed(() => {
     const liveState = this.events.workingStates().get(this.session().id);
     const shownState = liveState ?? this.lastStateOfClosedSessionIfAny();
-    return shownState && withoutOpenEscalationLines(shownState, this.openEscalationIds());
+    return shownState && withoutKnownEscalationLines(shownState, this.events.knownEscalationIds());
   });
 
   protected readonly meta = computed(() => {

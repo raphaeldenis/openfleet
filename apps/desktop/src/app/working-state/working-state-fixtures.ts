@@ -40,6 +40,7 @@ export function silentWorkingStateSignals() {
     daemonIssues: signal<DaemonIssue[]>([]),
     proposals: signal<GovernanceProposalView[]>([]),
     escalations: signal<EscalationView[]>([]),
+    knownEscalationIds: signal<ReadonlySet<string>>(new Set()),
     queuedTotal: () => 0,
     queuedCountOf: () => 0,
     reconnectCount: signal(0),
@@ -70,6 +71,7 @@ export function fakeWorkingStateEvents(options: FakeEventsOptions = {}) {
   return {
     ...silentWorkingStateSignals(),
     escalations: signal(escalations),
+    knownEscalationIds: signal<ReadonlySet<string>>(new Set(escalations.map(({ id }) => id))),
     sessions: signal(sessions),
     approvals: signal<unknown[]>([]),
     managers: signal<unknown[]>([]),

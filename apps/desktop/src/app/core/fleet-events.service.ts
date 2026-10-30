@@ -88,6 +88,9 @@ export class FleetEventsService {
   readonly proposals = signal<GovernanceProposalView[]>([]);
   /** The escalations still awaiting a human answer; empty for a daemon that reports none. */
   readonly escalations = signal<EscalationView[]>([]);
+  private readonly settledEscalationIds = signal<ReadonlySet<string>>(new Set());
+  /** The ids of the escalations awaiting an answer and of those this client saw settled; the snapshot does not forget the settled ones. */
+  readonly knownEscalationIds = computed(() => new Set([...this.escalations().map(({ id }) => id), ...this.settledEscalationIds()]));
   private readonly queuedCounts = signal<Readonly<Record<string, number>>>({});
   /** How many proposals wait for a pending place across all managers; zero for a daemon that reports no waiting list. */
   readonly queuedTotal = computed(() => Object.values(this.queuedCounts()).reduce((sum, count) => sum + count, 0));
@@ -272,6 +275,7 @@ export class FleetEventsService {
         this.managers.set(event.managers ?? []);
         this.proposals.set(event.proposals ?? []);
         this.escalations.set((event.escalations ?? []).filter(isAwaitingAnswer));
+        this.rememberSettled((event.escalations ?? []).filter((escalation) => !isAwaitingAnswer(escalation)));
         this.queuedCounts.set(event.queuedCounts ?? {});
         this.workingStates.set(new Map((event.workingStates ?? []).map((state) => [state.sessionId, state])));
         this.workingStatesReported.set(event.workingStates !== undefined);
@@ -310,7 +314,7 @@ export class FleetEventsService {
       case 'governance.proposed': return this.upsertProposal(event.proposal);
       case 'governance.resolved': return this.proposals.update((all) => all.filter((p) => p.id !== event.proposal.id));
       case 'escalation.raised': return this.upsertEscalation(event.escalation);
-      case 'escalation.resolved': return this.escalations.update((all) => all.filter((escalation) => escalation.id !== event.escalation.id));
+      case 'escalation.resolved': return this.settleEscalation(event.escalation);
       case 'governance.queue_changed': return this.queuedCounts.update((all) => ({ ...all, [event.managerId]: event.queuedCount }));
       case 'law.created':
       case 'law.updated':
@@ -407,8 +411,18 @@ export class FleetEventsService {
   }
 
   private upsertEscalation(incoming: EscalationView): void {
-    if (!isAwaitingAnswer(incoming)) return;
+    if (!isAwaitingAnswer(incoming)) return this.settleEscalation(incoming);
     this.escalations.update((all) => (all.some((escalation) => escalation.id === incoming.id) ? all.map((escalation) => (escalation.id === incoming.id ? incoming : escalation)) : [...all, incoming]));
+  }
+
+  private settleEscalation(settled: EscalationView): void {
+    this.escalations.update((all) => all.filter((escalation) => escalation.id !== settled.id));
+    this.rememberSettled([settled]);
+  }
+
+  private rememberSettled(settled: readonly EscalationView[]): void {
+    if (settled.length === 0) return;
+    this.settledEscalationIds.update((ids) => new Set([...ids, ...settled.map(({ id }) => id)]));
   }
 
   private upsertManager(manager: ManagerView): void {

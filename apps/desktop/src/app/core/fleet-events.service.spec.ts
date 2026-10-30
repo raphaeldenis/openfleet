@@ -1354,5 +1354,47 @@ describe('FleetEventsService daemon issues and background failures', () => {
 
       expect(service.escalations()).toEqual([]);
     });
+
+    describe('known escalation ids', () => {
+      const knownIds = () => [...service.knownEscalationIds()];
+
+      it('holds no id before any snapshot', () => {
+        expect(knownIds()).toEqual([]);
+      });
+
+      it('knows the pending escalations of the snapshot', () => {
+        socket.dispatchMessage(snapshotWith([escalation('e1')]));
+
+        expect(knownIds()).toEqual(['e1']);
+      });
+
+      it('keeps knowing an escalation after escalation.resolved', () => {
+        socket.dispatchMessage(snapshotWith([escalation('e1'), escalation('e2')]));
+
+        socket.dispatchMessage({ type: 'escalation.resolved', escalation: escalation('e1', { status: 'answered' }) });
+
+        expect(knownIds().sort()).toEqual(['e1', 'e2']);
+      });
+
+      it('knows an escalation that escalation.raised announces already answered', () => {
+        socket.dispatchMessage({ type: 'escalation.raised', escalation: escalation('e1', { status: 'answered' }) });
+
+        expect(knownIds()).toEqual(['e1']);
+      });
+
+      it('keeps knowing a resolved escalation after a later snapshot that no longer lists it', () => {
+        socket.dispatchMessage({ type: 'escalation.resolved', escalation: escalation('e1', { status: 'answered' }) });
+
+        socket.dispatchMessage(snapshotWith());
+
+        expect(knownIds()).toEqual(['e1']);
+      });
+
+      it('does not know an id it never heard of', () => {
+        socket.dispatchMessage(snapshotWith([escalation('e1')]));
+
+        expect(service.knownEscalationIds().has('gone')).toBe(false);
+      });
+    });
   });
 });
