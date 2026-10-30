@@ -116,7 +116,7 @@ interface Editing {
     .editor { display: flex; flex-direction: column; gap: .375rem; }
     .field-label { font-size: .75rem; font-weight: 500; }
     .draft { width: 100%; box-sizing: border-box; padding: .375rem .5rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--sunk); color: var(--fg); font: inherit; resize: vertical; }
-    .draft:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .draft:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem; }
     .hint { margin: 0; font-size: .75rem; color: var(--mut); }
     .changed { display: flex; flex-direction: column; gap: .125rem; margin: 0; padding: .5rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--sunk); }
     .changed-label { font-size: .75rem; font-weight: 600; color: var(--mut); }
