@@ -203,6 +203,11 @@ const BLOCKED_AS_A_KNOWN_OVER_REFUSAL_WHEN_GIT_TAKES_A_GLOBAL_OPTION = [
   `git -C <feature> commit -m "$(cat <<'EOF'\n${COMMIT_MESSAGE_BODY}\nEOF\n)"`,
 ];
 
+const KNOWN_UNCOVERED_BYPASSES_DOCUMENTED_IN_GIT_GUARDRAILS = [
+  'echo $(git reset --hard)',
+  "g''it push -f",
+];
+
 const BLOCKED_WHEN_A_HEREDOC_BODY_MENTIONS_A_DANGEROUS_GIT_COMMAND_OUTSIDE_THE_COMMIT_MESSAGE_FORM = [
   'cat <<\'EOF\'\ngit reset --hard is blocked now\nEOF',
   'cat <<EOF\ngit push --force is documented here\nEOF',
@@ -368,6 +373,12 @@ describe('block-dangerous-git hook', () => {
 
     it.each(BLOCKED_AS_A_KNOWN_OVER_REFUSAL_WHEN_GIT_TAKES_A_GLOBAL_OPTION)('blocks (stricter than needed, known) %j', (command) => {
       expect(hookExitCode(command, featureCheckout)).toBe(EXIT_BLOCKED);
+    });
+  });
+
+  describe('known limits (docs/git-guardrails.md), flip to blocked when covered', () => {
+    it.each(KNOWN_UNCOVERED_BYPASSES_DOCUMENTED_IN_GIT_GUARDRAILS)('known limit: lets %j through', (command) => {
+      expect(hookExitCode(command, featureCheckout)).toBe(EXIT_ALLOWED);
     });
   });
 
