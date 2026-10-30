@@ -23,6 +23,7 @@ import type { TodoTracker } from '../todos/todoTracker.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import { ALLOWED_ORIGINS } from './allowedOrigins.js';
 import { answerError } from './answerError.js';
+import { refuseAttendedChange } from './refuseAttendedChange.js';
 import { registerDataStoreRoutes } from './dataStoreRoutes.js';
 import type { SessionStartContext } from '../workingState/sessionStartContext.js';
 import type { ContextNotice } from '../workingState/contextNotice.js';
@@ -210,7 +211,9 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
       if (!match) throw new OpenFleetError('not_found', 'the route does not exist.');
       const isProtected = url.pathname.startsWith('/api/');
       if (isProtected && !tokensMatch(req.headers.authorization ?? '', `Bearer ${deps.adminToken}`)) throw new OpenFleetError('unauthorized', 'the admin token is missing or wrong.');
-      await match.handler({ req, res, params: match.params, body: await readJson(req) });
+      const body = await readJson(req);
+      refuseAttendedChange(url.pathname, body);
+      await match.handler({ req, res, params: match.params, body });
     } catch (error) {
       try {
         answerError(res, error, { where: `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500` });

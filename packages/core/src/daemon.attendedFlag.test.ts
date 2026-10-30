@@ -202,14 +202,63 @@ describe('a manager spawning a child manager through MCP create_session', () => 
 });
 
 describe('the attended flag is fixed at creation', () => {
-  it('cannot be flipped through the session or manager REST routes', async () => {
+  const routesAcceptingABody: [string, string, (sessionId: string) => string, Record<string, unknown>][] = [
+    ['PATCH', 'rename a session', (id) => `/api/sessions/${id}`, { name: 'Renamed' }],
+    ['PATCH', 'update a manager', (id) => `/api/managers/${id}`, { mission: 'Other' }],
+    ['POST', 'send a message', (id) => `/api/sessions/${id}/messages`, { body: 'hello' }],
+    ['POST', 'reopen a session', (id) => `/api/sessions/${id}/reopen`, { mode: 'resume' }],
+    ['POST', 'change the permission mode', (id) => `/api/sessions/${id}/permission-mode`, { mode: 'default' }],
+    ['POST', 'write raw input', (id) => `/api/sessions/${id}/input`, { data: 'x' }],
+    ['POST', 'switch the model', (id) => `/api/sessions/${id}/model`, { model: 'sonnet' }],
+    ['POST', 'resize the terminal', (id) => `/api/sessions/${id}/resize`, { cols: 80, rows: 24 }],
+    ['POST', 'close a session', (id) => `/api/sessions/${id}/close`, {}],
+    ['POST', 'write a handoff', (id) => `/api/sessions/${id}/handoff`, {}],
+    ['POST', 'fake session output', (id) => `/api/sessions/${id}/fake-output`, { data: 'x' }],
+    ['POST', 'fake session exit', (id) => `/api/sessions/${id}/fake-exit`, { code: 0 }],
+    ['POST', 'fail next pulses', (id) => `/api/managers/${id}/fail-next-pulses`, { count: 1 }],
+  ];
+  const flips = [{ requested: true, createdAttended: false }, { requested: false, createdAttended: true }];
+
+  describe.each(routesAcceptingABody)('%s to %s', (method, _label, pathOf, fields) => {
+    it.each(flips)('refuses attended=$requested with 400 and leaves the flag untouched', async ({ requested, createdAttended }) => {
+      await bootDaemon('observe');
+      const lead = await createSession({ name: 'Lead', manager: aManager, ...(createdAttended ? { attended: true } : {}) });
+      const flagBefore = attendedColumnOf(lead.id);
+
+      const response = await api(pathOf(lead.id), { method, body: JSON.stringify({ ...fields, attended: requested }) });
+
+      expect(response.status).toBe(400);
+      const text = await response.text();
+      expect(text).toContain('invalid_body');
+      expect(text).toContain('attended is immutable after creation');
+      expect(attendedColumnOf(lead.id)).toBe(flagBefore);
+    });
+  });
+
+  it.each(flips)('refuses a bare attended=$requested patch with the same explicit reason', async ({ requested, createdAttended }) => {
     await bootDaemon('observe');
-    const lead = await createSession({ name: 'Lead', manager: aManager });
+    const lead = await createSession({ name: 'Lead', manager: aManager, ...(createdAttended ? { attended: true } : {}) });
 
-    await api(`/api/sessions/${lead.id}`, { method: 'PATCH', body: JSON.stringify({ name: 'Renamed', attended: true }) });
-    await api(`/api/managers/${lead.id}`, { method: 'PATCH', body: JSON.stringify({ mission: 'Other', attended: true }) });
+    const sessionResponse = await api(`/api/sessions/${lead.id}`, { method: 'PATCH', body: JSON.stringify({ attended: requested }) });
+    const managerResponse = await api(`/api/managers/${lead.id}`, { method: 'PATCH', body: JSON.stringify({ attended: requested }) });
 
-    expect(attendedColumnOf(lead.id)).toBe(0);
+    for (const response of [sessionResponse, managerResponse]) {
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain('attended is immutable after creation');
+    }
+  });
+
+  it('still applies a normal patch that does not carry attended', async () => {
+    await bootDaemon('observe');
+    const lead = await createSession({ name: 'Lead', manager: aManager, attended: true });
+
+    const renamed = await api(`/api/sessions/${lead.id}`, { method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }) });
+    const updated = await api(`/api/managers/${lead.id}`, { method: 'PATCH', body: JSON.stringify({ mission: 'Other' }) });
+
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as { name: string }).name).toBe('Renamed');
+    expect(updated.status).toBe(200);
+    expect(attendedColumnOf(lead.id)).toBe(1);
   });
 
   it('cannot be flipped by a direct database update, in either direction', async () => {
