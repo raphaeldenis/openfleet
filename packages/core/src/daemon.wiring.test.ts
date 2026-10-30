@@ -78,6 +78,16 @@ describe('usage ingestion at the Stop hook is opt-in', () => {
 
     expect(ingestAtStop.mock.calls).toEqual([[sessionId]]);
   });
+
+  it('forgets the cursor of a session when it closes', async () => {
+    const forget = vi.spyOn(TranscriptUsageIngestion.prototype, 'forget');
+    await bootDaemon(undefined, { usageIngestion: true });
+    const { id } = await createSession();
+
+    await api(`/api/sessions/${id}/close`, { method: 'POST', body: JSON.stringify({}) });
+
+    expect(forget.mock.calls).toEqual([[id]]);
+  });
 });
 
 describe('operator gets every daemon feature when the daemon boots from its config', () => {

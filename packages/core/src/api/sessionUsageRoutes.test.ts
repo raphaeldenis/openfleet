@@ -23,7 +23,7 @@ const createSession = async (fields: Record<string, unknown> = {}) =>
 
 const recordUsage = (sessionId: string, messageId: string, timestamp: string, tokens: TokenCounts) => {
   const line = JSON.stringify({ type: 'assistant', timestamp, message: { id: messageId, model: 'model-a', usage: { input_tokens: tokens.inputTokens, output_tokens: tokens.outputTokens } } });
-  ledger.ingestTranscript({ sessionId, biller: 'subscription', transcriptText: line, billingCodeOf: () => sessionId });
+  ledger.ingestTranscript({ sessionId, biller: 'subscription', transcriptText: line, billingCodeOf: () => sessionId, timestampWindow: { earliestMs: 0, latestMs: Number.MAX_SAFE_INTEGER } });
 };
 
 beforeAll(async () => {

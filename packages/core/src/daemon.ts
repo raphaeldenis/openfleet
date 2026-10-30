@@ -327,8 +327,11 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   });
   const usageLedger = new UsageLedgerService(db);
   const usageIngestion = options.usageIngestion === true
-    ? new TranscriptUsageIngestion({ ledger: usageLedger, trustedTranscriptFileOf: (sessionId) => sessions.trustedTranscriptFileOf(sessionId), parentOf: (sessionId) => sessions.get(sessionId)?.parentId })
+    ? new TranscriptUsageIngestion({ ledger: usageLedger, trustedTranscriptFileOf: (sessionId) => sessions.trustedTranscriptFileOf(sessionId), parentOf: (sessionId) => sessions.get(sessionId)?.parentId, createdAtOf: (sessionId) => sessions.get(sessionId)?.createdAt })
     : undefined;
+  bus.subscribe((event) => {
+    if (event.type === 'session.closed') usageIngestion?.forget(event.sessionId);
+  });
   const findingsGate = {
     gate: new FindingsGate({ findings: reviewFindings, ticketPattern: findingsGateSettings.ticketPattern }),
     enforcement: options.findingsGateEnforcement ?? findingsGateSettings.enforcement ?? FINDINGS_GATE_ENFORCEMENT,

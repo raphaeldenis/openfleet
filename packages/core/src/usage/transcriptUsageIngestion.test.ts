@@ -7,8 +7,8 @@ import { openDatabase } from '../db/database.js';
 import { recentLogLines } from '../logger.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 import { readTranscriptChunk } from '../todos/transcriptChunkReader.js';
-import { TranscriptUsageIngestion } from './transcriptUsageIngestion.js';
-import { UsageLedgerService } from './usageLedgerService.js';
+import { TranscriptUsageIngestion, USAGE_INGESTION_CHUNK_BYTES } from './transcriptUsageIngestion.js';
+import { UsageLedgerService, type UsageLedgerLimits } from './usageLedgerService.js';
 
 const tempDirs = createTempDirTracker();
 afterEach(() => tempDirs.removeAll());
@@ -33,14 +33,29 @@ const everyStoredValue = (db: DatabaseSync): string => {
 
 const storedMessageCount = (db: DatabaseSync): number => (db.prepare('SELECT COUNT(*) AS total FROM usage_messages').get() as { total: number }).total;
 
-function newIngestion(options: { transcriptFile?: string; parents?: Record<string, string>; chunkBytes?: number; readChunk?: typeof readTranscriptChunk } = {}) {
+const SESSION_CREATED_AT = '2026-10-29T00:00:00.000Z';
+const NOW_MS = Date.parse('2026-10-30T12:00:00.000Z');
+
+interface NewIngestionOptions {
+  transcriptFile?: string;
+  parents?: Record<string, string>;
+  chunkBytes?: number;
+  readChunk?: typeof readTranscriptChunk;
+  ledgerLimits?: UsageLedgerLimits;
+  createdAt?: string | undefined;
+}
+
+function newIngestion(options: NewIngestionOptions = {}) {
   const db = openDatabase(':memory:');
-  const ledger = new UsageLedgerService(db);
+  const ledger = new UsageLedgerService(db, options.ledgerLimits);
   const readChunk = vi.fn(options.readChunk ?? readTranscriptChunk);
+  const createdAt = 'createdAt' in options ? options.createdAt : SESSION_CREATED_AT;
   const ingestion = new TranscriptUsageIngestion({
     ledger,
     trustedTranscriptFileOf: () => options.transcriptFile,
     parentOf: (sessionId) => options.parents?.[sessionId],
+    createdAtOf: () => createdAt,
+    clock: () => NOW_MS,
     readChunk,
     chunkBytes: options.chunkBytes,
   });
@@ -173,6 +188,16 @@ describe('TranscriptUsageIngestion', () => {
       expect((db.prepare("SELECT message_id FROM usage_messages ORDER BY message_id").all() as { message_id: string }[]).map((row) => row.message_id)).toEqual(['m2']);
     });
 
+    it('does not parse the tail of a skipped oversized line as a line of its own', () => {
+      const tailThatLooksLikeALine = assistantLine('m-tail', 'x');
+      const oversizedLine = `${'z'.repeat(SMALL_CHUNK_BYTES)}${tailThatLooksLikeALine}`;
+      const { db, ingestion } = newIngestion({ transcriptFile: writeTranscript([oversizedLine, assistantLine('m2', 'b')]), chunkBytes: SMALL_CHUNK_BYTES });
+
+      for (let stop = 0; stop < 10; stop += 1) ingestion.ingestAtStop('s1');
+
+      expect((db.prepare('SELECT message_id FROM usage_messages ORDER BY message_id').all() as { message_id: string }[]).map((row) => row.message_id)).toEqual(['m2']);
+    });
+
     it('starts over from the beginning of a file that replaced the transcript', () => {
       const transcriptFile = writeTranscript([assistantLine('m1', 'a')]);
       const { db, ingestion } = newIngestion({ transcriptFile });
@@ -197,6 +222,99 @@ describe('TranscriptUsageIngestion', () => {
 
       expect(storedMessageCount(db)).toBe(0);
       expect(outcome).toBe('failed');
+    });
+  });
+
+  describe('CPU bounds of one Stop', () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const SHARED_LOG_MESSAGE_WHEN_FULL = 'usage ingestion: the session reached its message limit, ingesting nothing more for it';
+
+    const lineAt = (id: string, timestamp: string) => assistantLine(id, 'x').replace('2026-10-30T10:00:00.000Z', timestamp);
+
+    const storedIds = (db: DatabaseSync) => (db.prepare('SELECT message_id FROM usage_messages ORDER BY message_id').all() as { message_id: string }[]).map((row) => row.message_id);
+
+    it('rejects the messages dated before the session was created or in the future, and warns', () => {
+      const lines = [
+        lineAt('too-old', '2026-10-27T00:00:00.000Z'),
+        lineAt('day-before-creation', '2026-10-28T06:00:00.000Z'),
+        lineAt('tomorrow', '2026-10-31T11:00:00.000Z'),
+        lineAt('too-far', '2026-11-05T00:00:00.000Z'),
+        lineAt('year-9999', '9999-12-31T00:00:00.000Z'),
+      ];
+      const { db, ingestion } = newIngestion({ transcriptFile: writeTranscript(lines) });
+
+      ingestion.ingestAtStop('s-window');
+
+      expect(storedIds(db)).toEqual(['day-before-creation', 'tomorrow']);
+      expect(recentLogLines().filter((line) => line.includes('s-window') && line.includes('"rejectedLineCount":3'))).toHaveLength(1);
+    });
+
+    it('reads nothing of a session whose creation date is unknown', () => {
+      const { readChunk, ingestion } = newIngestion({ transcriptFile: writeTranscript([assistantLine('m1', 'a')]), createdAt: undefined });
+
+      ingestion.ingestAtStop('s1');
+
+      expect(readChunk).not.toHaveBeenCalled();
+    });
+
+    it('stops reading a session that holds the maximum of messages and warns once with a fixed message', () => {
+      const sessionId = `s-full-${randomUUID()}`;
+      const { db, ingestion, readChunk } = newIngestion({
+        transcriptFile: writeTranscript(Array.from({ length: 5 }, (_, index) => assistantLine(`m${index}`, 'x'))),
+        chunkBytes: SMALL_CHUNK_BYTES,
+        ledgerLimits: { maxBucketsPerChunk: 32, maxMessagesPerSession: 3 },
+      });
+
+      for (let stop = 0; stop < 10; stop += 1) ingestion.ingestAtStop(sessionId);
+
+      const warningsForTheSession = recentLogLines().filter((line) => line.includes(SHARED_LOG_MESSAGE_WHEN_FULL) && line.includes(sessionId));
+      expect(storedMessageCount(db)).toBe(3);
+      expect(warningsForTheSession).toHaveLength(1);
+      expect(readChunk.mock.calls.length).toBeLessThanOrEqual(2);
+    });
+
+    describe('one mebibyte of forged lines with distinct days and models', () => {
+      const BOUNDED_STOP_BUDGET_MS = 1000;
+      const PASSES = 3;
+      const FORGED_LINE_PREFIX = '{"type":"assistant","timestamp":"';
+
+      const forgedMebibyte = (timestampOf: (index: number) => string): string => {
+        const lines: string[] = [];
+        let bytes = 0;
+        for (let index = 0; bytes < USAGE_INGESTION_CHUNK_BYTES - 200; index += 1) {
+          const line = `${FORGED_LINE_PREFIX}${timestampOf(index)}","message":{"id":"f${index}","model":"m${index}","usage":{"input_tokens":1}}}\n`;
+          lines.push(line);
+          bytes += line.length;
+        }
+        return lines.join('');
+      };
+
+      const bestStopDurationMs = (transcriptText: string): { bestMs: number; storedMessages: number } => {
+        const transcriptFile = join(tempDirs.make('of-usage-forged-'), 'transcript.jsonl');
+        writeFileSync(transcriptFile, transcriptText);
+        const durations: number[] = [];
+        let storedMessages = 0;
+        for (let pass = 0; pass < PASSES; pass += 1) {
+          const { db, ingestion } = newIngestion({ transcriptFile });
+          const startedAt = performance.now();
+          ingestion.ingestAtStop('s-forged');
+          durations.push(performance.now() - startedAt);
+          storedMessages = storedMessageCount(db);
+        }
+        return { bestMs: Math.min(...durations), storedMessages };
+      };
+
+      const MAX_STORED_MESSAGES_OF_ONE_STOP = 32;
+
+      it.each([
+        ['distinct models inside the accepted window', (index: number) => new Date(NOW_MS - (index % 3) * DAY_MS).toISOString()],
+        ['distinct days across the years 1000 to 9999', (index: number) => new Date(Date.UTC(1000, 0, 1) + index * 200 * DAY_MS).toISOString()],
+      ])('keeps a Stop under the time budget: %s', (_name, timestampOf) => {
+        const { bestMs, storedMessages } = bestStopDurationMs(forgedMebibyte(timestampOf));
+
+        expect(bestMs).toBeLessThan(BOUNDED_STOP_BUDGET_MS);
+        expect(storedMessages).toBeLessThanOrEqual(MAX_STORED_MESSAGES_OF_ONE_STOP);
+      }, 120_000);
     });
   });
 });
