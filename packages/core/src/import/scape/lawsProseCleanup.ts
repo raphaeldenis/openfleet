@@ -7,7 +7,7 @@ import { ScapeImportError } from './scapeImportError.js';
 import { hashOfValues, ImportLedger } from './scapeLedger.js';
 import { storedValuesOf, type Repositories } from './scapeManagersWriter.js';
 import { backUpCommittedState, type RecordValues } from './scapeTarget.js';
-import { rewriteScapeToolReferences } from './scapeToolNames.js';
+import { renameScapeToolReferences } from './scapeToolNames.js';
 
 const MANAGER_LEDGER_KIND = 'manager';
 const SECTION_SEPARATOR = '\n\n';
@@ -65,7 +65,7 @@ const lastSectionStartOf = (text: string, marker: string): number => {
 const importLawsSectionStartOf = (missionText: string): number => Math.max(...IMPORT_SECTION_MARKERS.map((marker) => lastSectionStartOf(missionText, marker)));
 
 /** The bullet the earlier import wrote for a law: its text with the tool references rewritten, continuation lines indented. */
-const legacyStandingLawBullet = (lawText: string) => `${BULLET_MARK}${rewriteScapeToolReferences(lawText).text.replaceAll('\n', `\n${CONTINUATION_INDENT}`)}`;
+const legacyStandingLawBullet = (lawText: string) => `${BULLET_MARK}${renameScapeToolReferences(lawText).text.replaceAll('\n', `\n${CONTINUATION_INDENT}`)}`;
 
 function bulletsOf(blockLines: string[]): string[] | undefined {
   const bullets: string[] = [];

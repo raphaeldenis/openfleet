@@ -14,7 +14,7 @@ The description text of a parameter is part of the input schema, so rewording it
 
 Output changes are not detected: the guard hashes input schemas only, so a changed result shape or result field passes unnoticed. Raise the version by hand when a tool's output changes in a way clients can see.
 
-A version that is not published yet (no tag, no release) absorbs the changes made to its tools: the version does not rise again, the pin is refreshed and `CHANGELOG.md` records them in that version's section. An output change that breaks a client of the previous version gets an explicit entry there that starts with "BREAKING vs <previous version>". Nothing in the guard test checks this: a tool added to, or an output changed in, an unpublished version passes the guard whether or not the changelog says so, so the review of the pull request is what checks it.
+A version that is not published yet (no release, no tag: check with `git tag --list`) absorbs the changes made to its tools: the version does not rise again, the pin is refreshed and `CHANGELOG.md` records them in that version's section. An output change that breaks a client of the previous version gets an explicit entry there that starts with "BREAKING vs <previous version>". Nothing in the guard test checks this: a tool added to, or an output changed in, an unpublished version passes the guard whether or not the changelog says so, so the review of the pull request is what checks it.
 
 Example: version 6 added `required`, `displayColumnId`, `config`, `displayWidth` and `wrap` to the column views next to new `update_data_store_column` parameters; the new parameters moved the pin, the new output fields were raised by hand.
 
@@ -44,7 +44,7 @@ One pull request that adds or changes tools does all three.
 
 `submit_plan_questions`, `report_arbiter_opinion` and `approve_plan_criteria` were added at version 15. The pin gained three entries and the version rose by one, with the `CHANGELOG.md` section "15". The same section records the `AskUserQuestion` call that a manager session used to make and is now refused: the guard cannot see it, so it was raised by hand with the tools.
 
-Version 15 was not published when `get_manager_mission` was added to it, so it became the fourth added tool without a new version: the pin gained a fourth entry, and the section "15" records an output change, `get_argus_status` no longer returns `manager.missionText` but `manager.missionBytes` and `manager.missionSha256`, in an entry that starts with "BREAKING vs 14".
+Version 15 had no release and no tag when `get_manager_mission` was added to it (`git tag --list` was empty; the rule holds as long as that is true), so it became the fourth added tool without a new version: the pin gained a fourth entry, and the section "15" records an output change, `get_argus_status` no longer returns `manager.missionText` but `manager.missionBytes` and `manager.missionSha256`, in an entry that starts with "BREAKING vs 14".
 
 ## The guard test
 

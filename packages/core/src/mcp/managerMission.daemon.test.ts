@@ -30,18 +30,19 @@ const missionOfBytes = (bytes: number) => `START-OF-MISSION\n${'m'.repeat(bytes 
 
 const api = (path: string, init: RequestInit = {}) =>
   fetch(`${daemon.server.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${config.adminToken}`, ...(init.headers ?? {}) } });
-const aManagerWithMission = async (name: string, mission: string, { projectId }: { projectId?: string } = { projectId: PROJECT_ID }) => {
-  const created = (await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: config.worktreesRoot, harness: 'fake', emoji: '🧭', name, ...(projectId && { projectId }), manager: { pulseSeconds: 3600, childrenCap: 5, mission: 'placeholder' } }) })).json()) as { id: string };
+const aManagerWithMission = async (name: string, mission: string, { withoutProject = false }: { withoutProject?: boolean } = {}) => {
+  const projectField = withoutProject ? {} : { projectId: PROJECT_ID };
+  const created = (await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: config.worktreesRoot, harness: 'fake', emoji: '🧭', name, ...projectField, manager: { pulseSeconds: 3600, childrenCap: 5, mission: 'placeholder' } }) })).json()) as { id: string };
   daemon.db.prepare('UPDATE managers SET mission_text = ? WHERE session_id = ?').run(mission, created.id);
   return created.id;
 };
-const aManagerWithoutProject = (name: string, mission: string) => aManagerWithMission(name, mission, {});
 const aPlainSession = async (name: string) =>
   ((await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: config.worktreesRoot, harness: 'fake', emoji: '🔧', name, projectId: PROJECT_ID }) })).json()) as { id: string }).id;
-const aNoteBody = async (title: string, bodyMd: string) => {
-  const created = (await (await api('/api/notes', { method: 'POST', body: JSON.stringify({ projectId: PROJECT_ID, title, bodyMd }) })).json()) as { id?: string; data?: { id: string } };
-  return created.id ?? created.data!.id;
+const aNoteIn = async (projectId: string, title: string, bodyMd: string) => {
+  const created = (await (await api('/api/notes', { method: 'POST', body: JSON.stringify({ projectId, title, bodyMd }) })).json()) as { id: string };
+  return created.id;
 };
+const aNoteBody = (title: string, bodyMd: string) => aNoteIn(PROJECT_ID, title, bodyMd);
 const mcpClientOf = async (sessionId: string): Promise<Client> => {
   const { mcp_token } = daemon.db.prepare('SELECT mcp_token FROM sessions WHERE id = ?').get(sessionId) as { mcp_token: string };
   const client = new Client({ name: 'manager-mission', version: '0.0.0' });
@@ -130,8 +131,7 @@ describe('get_manager_mission', () => {
   it('does not expand the mention of a note of another project that is not shared', async () => {
     const otherProjectId = randomUUID();
     new ProjectRepository(daemon.db).insert({ id: otherProjectId, name: 'Elsewhere', docsFolderPath: null, createdAt: 't0' });
-    const created = (await (await api('/api/notes', { method: 'POST', body: JSON.stringify({ projectId: otherProjectId, title: 'Private', bodyMd: 'BODY-OF-A-PRIVATE-NOTE' }) })).json()) as { id?: string; data?: { id: string } };
-    const privateNoteId = created.id ?? created.data!.id;
+    const privateNoteId = await aNoteIn(otherProjectId, 'Private', 'BODY-OF-A-PRIVATE-NOTE');
     const client = await mcpClientOf(await aManagerWithMission('Nosy', `See @note:${privateNoteId}`));
 
     const { missionText } = jsonOf(await callTool(client, 'get_manager_mission')) as { missionText: string };
@@ -142,7 +142,7 @@ describe('get_manager_mission', () => {
 
   it('returns the mission as stored when the manager has no project', async () => {
     const noteId = await aNoteBody('Plan', 'BODY-OF-A-NOTE-NOBODY-EXPANDS');
-    const managerWithoutProjectId = await aManagerWithoutProject('Projectless', `Follow @note:${noteId}`);
+    const managerWithoutProjectId = await aManagerWithMission('Projectless', `Follow @note:${noteId}`, { withoutProject: true });
     const client = await mcpClientOf(managerWithoutProjectId);
 
     const { missionText } = jsonOf(await callTool(client, 'get_manager_mission')) as { missionText: string };

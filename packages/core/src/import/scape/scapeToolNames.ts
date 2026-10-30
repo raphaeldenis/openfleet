@@ -24,24 +24,26 @@ const PLAYBOOK_TOOL_REFERENCE = new RegExp(`${NOT_PART_OF_AN_IDENTIFIER}(?:${SCA
 const SCAPE_TOOL_REFERENCE = new RegExp(`${NOT_PART_OF_AN_IDENTIFIER}${SCAPE_TOOL_PREFIX}([A-Za-z0-9_]+)`, 'g');
 
 const OPENFLEET_MISSION_TOOL = 'get_manager_mission';
-const STATUS_TOOL_PATTERN = `${NOT_PART_OF_AN_IDENTIFIER}(${SCAPE_TOOL_PREFIX})?get_argus_status(?![A-Za-z0-9_])`;
-const STATUS_TOOL_REFERENCE = new RegExp(STATUS_TOOL_PATTERN, 'g');
-const MENTIONS_STATUS_TOOL = new RegExp(STATUS_TOOL_PATTERN);
-const MISSION_TEXT_FIELD_OF_STATUS = /`?manager\.missionText`?\s+(?:of|in|from)\s+/g;
-const MISSION_TEXT_FIELD_AFTER_STATUS = /(get_argus_status`?):\s*`?manager\.missionText`?/g;
-const SPEAKS_OF_THE_MISSION = /mission/i;
+const STATUS_TOOL = `(${SCAPE_TOOL_PREFIX})?get_argus_status(?![A-Za-z0-9_])`;
+const STATUS_TOOL_REFERENCE = new RegExp(`${NOT_PART_OF_AN_IDENTIFIER}${STATUS_TOOL}`, 'g');
+const MISSION_FIELD = '`?manager\\.missionText`?';
+const MISSION_FIELD_RIGHT_BEFORE_STATUS_TOOL = new RegExp(`${MISSION_FIELD}\\s+(?:of|in|from)\\s+(\`?)${NOT_PART_OF_AN_IDENTIFIER}${STATUS_TOOL}`, 'g');
+const MISSION_FIELD_RIGHT_AFTER_STATUS_TOOL = new RegExp(`${NOT_PART_OF_AN_IDENTIFIER}${STATUS_TOOL}(\`?)(?:\\(\\))?\\s*(?::|→|->|\\.)?\\s*${MISSION_FIELD}`, 'g');
+const MISSION_READING_VERBS = ['read', 're-read', 'reread', 'fetch', 'lis', 'lisez', 'lire', 'relis', 'relisez', 'relire', 'consulte', 'consulter'];
+const SENTENCE_READING_THE_MISSION_UP_TO_STATUS_TOOL = new RegExp(`\\b(?:${MISSION_READING_VERBS.join('|')})\\b[^.!?\\n]*\\bmission\\b[^.!?\\n]*?${NOT_PART_OF_AN_IDENTIFIER}${STATUS_TOOL}`, 'gi');
 
-/** On a line that speaks of the mission, the status tool is where an agent no longer reads it: the line points at get_manager_mission. */
+const missionToolWrittenLike = (scapePrefix: string | undefined) => `${scapePrefix === undefined ? '' : OPENFLEET_TOOL_PREFIX}${OPENFLEET_MISSION_TOOL}`;
+
+function pointMissionReadsOfLine(line: string): string {
+  return line
+    .replace(MISSION_FIELD_RIGHT_BEFORE_STATUS_TOOL, (_match, openingBacktick: string, scapePrefix: string | undefined) => `${openingBacktick}${missionToolWrittenLike(scapePrefix)}`)
+    .replace(MISSION_FIELD_RIGHT_AFTER_STATUS_TOOL, (_match, scapePrefix: string | undefined, closingBacktick: string) => `${missionToolWrittenLike(scapePrefix)}${closingBacktick}`)
+    .replace(SENTENCE_READING_THE_MISSION_UP_TO_STATUS_TOOL, (sentence) => sentence.replace(STATUS_TOOL_REFERENCE, (_reference, scapePrefix: string | undefined) => missionToolWrittenLike(scapePrefix)));
+}
+
+/** Returns the text with, on mission lines, get_argus_status references written get_manager_mission: the forms that read `manager.missionText` from the status, and a sentence with a reading verb, "mission" and the tool. A sentence cut over two lines is not followed. */
 function pointMissionReadsAtMissionTool(text: string): string {
-  const rewriteLine = (line: string) => {
-    const isMissionLineWithStatusTool = SPEAKS_OF_THE_MISSION.test(line) && MENTIONS_STATUS_TOOL.test(line);
-    if (!isMissionLineWithStatusTool) return line;
-    return line
-      .replace(MISSION_TEXT_FIELD_OF_STATUS, '')
-      .replace(MISSION_TEXT_FIELD_AFTER_STATUS, '$1')
-      .replace(STATUS_TOOL_REFERENCE, (_reference, scapePrefix: string | undefined) => `${scapePrefix === undefined ? '' : OPENFLEET_TOOL_PREFIX}${OPENFLEET_MISSION_TOOL}`);
-  };
-  return text.split('\n').map(rewriteLine).join('\n');
+  return text.split('\n').map(pointMissionReadsOfLine).join('\n');
 }
 
 export interface RewrittenToolReferences {
@@ -52,10 +54,10 @@ export interface RewrittenToolReferences {
   unmappedToolNames: string[];
 }
 
-/** Rewrites the Scape tool references of a mission to what an OpenFleet agent can call: renamed tools, playbook tools pointed at the shims, the rest left and listed. */
-export function rewriteScapeToolReferences(text: string): RewrittenToolReferences {
+/** Rewrites the Scape tool references of a text to what an OpenFleet agent can call: renamed tools, playbook tools pointed at the shims, the rest left and listed. Mission reads are left to `rewriteScapeToolReferences`. */
+export function renameScapeToolReferences(text: string): RewrittenToolReferences {
   let playbookPointerCount = 0;
-  const withPlaybookPointers = pointMissionReadsAtMissionTool(text).replace(PLAYBOOK_TOOL_REFERENCE, (_reference, toolName: string) => {
+  const withPlaybookPointers = text.replace(PLAYBOOK_TOOL_REFERENCE, (_reference, toolName: string) => {
     playbookPointerCount++;
     return PLAYBOOK_TOOL_POINTERS[toolName]!;
   });
@@ -73,4 +75,9 @@ export function rewriteScapeToolReferences(text: string): RewrittenToolReference
   });
 
   return { text: withRenamedTools, renamedCount, playbookPointerCount, unmappedToolNames };
+}
+
+/** Rewrites the Scape tool references of a mission as `renameScapeToolReferences` does, after pointing its mission reads at get_manager_mission. */
+export function rewriteScapeToolReferences(missionText: string): RewrittenToolReferences {
+  return renameScapeToolReferences(pointMissionReadsAtMissionTool(missionText));
 }

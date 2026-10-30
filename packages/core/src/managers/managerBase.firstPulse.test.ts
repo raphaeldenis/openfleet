@@ -43,8 +43,10 @@ describe('the first pulse of a new manager that has not read the base yet', () =
   it('leaves no incident behind: no denied command, no note warning, the base shown as not read', async () => {
     const managerId = await aNewManager('Quiet');
 
-    await api(`/api/managers/${managerId}/pulse`, { method: 'POST' });
+    const pulse = await api(`/api/managers/${managerId}/pulse`, { method: 'POST' });
 
+    expect(pulse.ok).toBe(true);
+    expect(pulseBodiesOf(managerId)[0]).toContain(`Base v${shippedBase.version}`);
     const manager = await managerViewOf(managerId);
     expect(manager.baseRead).toBeUndefined();
     expect(manager.deniedCommandCount).toBe(0);

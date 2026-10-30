@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rewriteScapeToolReferences } from './scapeToolNames.js';
+import { renameScapeToolReferences, rewriteScapeToolReferences } from './scapeToolNames.js';
 
 describe('rewriteScapeToolReferences', () => {
   it('turns the Scape prefix of a tool with an OpenFleet equivalent into the OpenFleet prefix', () => {
@@ -29,10 +29,40 @@ describe('rewriteScapeToolReferences', () => {
       ['Relis ta mission avec get_argus_status.', 'Relis ta mission avec get_manager_mission.'],
       ['Read your mission: `manager.missionText` of `get_argus_status`.', 'Read your mission: `get_manager_mission`.'],
       ['Your mission is in get_argus_status: manager.missionText.', 'Your mission is in get_manager_mission.'],
+      ['Lis get_argus_status().manager.missionText au réveil.', 'Lis get_manager_mission au réveil.'],
+      ['Your mission: `get_argus_status` → `manager.missionText`.', 'Your mission: `get_manager_mission`.'],
+      ['The text is get_argus_status -> manager.missionText.', 'The text is get_manager_mission.'],
+      ['Consulte la mission via mcp__scape__get_argus_status.', 'Consulte la mission via mcp__openfleet__get_manager_mission.'],
+      ['Fetch the mission from get_argus_status at each wake.', 'Fetch the mission from get_manager_mission at each wake.'],
+      ['The mission text is in manager.missionText of get_argus_status.', 'The mission text is in get_manager_mission.'],
     ])('points %j at get_manager_mission', (line, expected) => {
       const { text } = rewriteScapeToolReferences(line);
 
       expect(text).toBe(expected);
+    });
+
+    it.each([
+      "Vérifie l'avancement de la mission et tes enfants avec get_argus_status.",
+      'Check the progress of the mission and your children with mcp__scape__get_argus_status.',
+      'The mission is long. Read the cap with get_argus_status.',
+      'Compare manager.missionText of the old copy, then call get_argus_status for your cap.',
+    ])('leaves the status tool alone on %j, which speaks of the mission without reading it from the tool', (line) => {
+      const { text } = rewriteScapeToolReferences(line);
+
+      expect(text).not.toContain('get_manager_mission');
+      expect(text).toContain('get_argus_status');
+    });
+
+    it('removes manager.missionText only right before the status tool, not elsewhere on the line', () => {
+      const { text } = rewriteScapeToolReferences('Compare manager.missionText of the old copy with manager.missionText of get_argus_status.');
+
+      expect(text).toBe('Compare manager.missionText of the old copy with get_manager_mission.');
+    });
+
+    it('does not follow a sentence cut over two lines (known limit)', () => {
+      const { text } = rewriteScapeToolReferences('Read your mission\nwith get_argus_status.');
+
+      expect(text).toBe('Read your mission\nwith get_argus_status.');
     });
 
     it('keeps the status tool on a line that does not speak of the mission', () => {
@@ -45,6 +75,14 @@ describe('rewriteScapeToolReferences', () => {
       const { text } = rewriteScapeToolReferences('Read your mission with get_argus_status.\nCheck your children with get_argus_status.');
 
       expect(text).toBe('Read your mission with get_manager_mission.\nCheck your children with get_argus_status.');
+    });
+  });
+
+  describe('renameScapeToolReferences, which rebuilds what an earlier import wrote for a law', () => {
+    it('only renames the prefix of the status tool on a law that speaks of the mission', () => {
+      const { text } = renameScapeToolReferences('Relis ta mission avec mcp__scape__get_argus_status.');
+
+      expect(text).toBe('Relis ta mission avec mcp__openfleet__get_argus_status.');
     });
   });
 
