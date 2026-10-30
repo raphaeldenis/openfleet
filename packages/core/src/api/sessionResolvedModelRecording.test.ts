@@ -679,13 +679,14 @@ describe('resolved model recording from a session\'s transcript', () => {
     const id = await createSession('opus');
     const clearedCliSessionId = randomUUID();
     await sendHook(id, { hook_event_name: 'SessionStart', source: 'clear', session_id: clearedCliSessionId }, transcriptPathOf(clearedCliSessionId));
-    writeFileSync(transcriptPathOf(clearedCliSessionId), assistantLine({ model: 'claude-model-of-the-cleared-session', at: inOneSecond() }));
     writeFileSync(transcriptPathOf(id), assistantLine({ model: 'claude-model-of-the-launch', at: inOneSecond() }));
 
     await postJson(`/api/sessions/${id}/close`);
     await postJson(`/api/sessions/${id}/reopen`);
     await sendHook(id, preToolUse, transcriptPathOf(id));
     const afterLaunchName = await listed(id);
+    // Written only now: the clear's own retry (RECORDING_RETRY_DELAY_MS after its hook) reads this file if it exists while the retry is still armed.
+    writeFileSync(transcriptPathOf(clearedCliSessionId), assistantLine({ model: 'claude-model-of-the-cleared-session', at: inOneSecond() }));
     await sendHook(id, preToolUse, transcriptPathOf(clearedCliSessionId));
 
     expect(afterLaunchName).not.toHaveProperty('resolvedModel');

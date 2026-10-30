@@ -40,9 +40,8 @@ const THEMES = ['light', 'dark'] as const;
 
 for (const theme of THEMES) {
   for (const viewport of VIEWPORTS) {
-    const shotName = (state: string) => `../../mt4-mission-${state}-${theme}-${viewport.width}x${viewport.height}.png`;
-
-    test(`design QA: the mission size under the limit, above it and legacy, in the ${theme} theme at ${viewport.width}x${viewport.height}`, async ({ page, request }) => {
+    test(`design QA: the mission size under the limit, above it and legacy, in the ${theme} theme at ${viewport.width}x${viewport.height}`, async ({ page, request }, testInfo) => {
+      const shotName = (state: string) => testInfo.outputPath(`mt4-mission-${state}-${theme}-${viewport.width}x${viewport.height}.png`);
       await page.setViewportSize(viewport);
       await signInAsAdmin(page, { theme });
       await openNewManagerForm(page);
