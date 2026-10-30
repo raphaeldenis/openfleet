@@ -55,16 +55,11 @@ function withoutEncapsulationMarkers(stylesheet: string): string {
   return stylesheet.replaceAll('[_ngcontent-%COMP%]', '').replaceAll('%NS%', '').replace(/\s+/g, ' ');
 }
 
-const ACTIVE_ROW_ACCENT_BAR =/^box-shadow:\s*inset 2px 0 0 var\(--[^)]*accent\)$/;
-
-function pixelDeclarationsBeyondHairline(stylesheet: string): string[] {
-  const declarations = stylesheet.match(RING_AND_SHADOW_DECLARATION) ?? [];
-  const isActiveRowAccentBar = (declaration: string) => ACTIVE_ROW_ACCENT_BAR.test(declaration.trim());
-  return declarations.filter((declaration) => PIXEL_VALUE_BEYOND_HAIRLINE.test(declaration) && !isActiveRowAccentBar(declaration));
-}
-
 function ringAndShadowDeclarationsInPixels(component: Type<unknown>): string[] {
-  return pixelDeclarationsBeyondHairline(stylesShippedBy(component));
+  const declarations = stylesShippedBy(component).match(RING_AND_SHADOW_DECLARATION) ?? [];
+  const hasNoRingToCheck = declarations.length === 0;
+  if (hasNoRingToCheck) return [`${component.name} ships no ring or shadow in its inline styles`];
+  return declarations.filter((declaration) => PIXEL_VALUE_BEYOND_HAIRLINE.test(declaration));
 }
 
 describe('focus rings and shadows follow the root font size', () => {
