@@ -109,7 +109,7 @@ describe('the diagnostics bundle', () => {
 
   it('copies no window of a token from a hostile ring buffer or document into the bundle', async () => {
     const tokens = hostileTokens();
-    const hostileDocument = { ...A_DOCUMENT, sessions: [{ name: tokens[0], directory: tokens[1] }], db: { quickCheck: tokens[2], sizeBytes: 1 }, log: hostileRingBuffer(tokens) } as unknown as DiagnosticsDocument;
+    const hostileDocument = { ...A_DOCUMENT, version: { openfleet: `1.2.3+${tokens[3]}`, node: tokens[0], platform: `dev-${tokens[1]}` }, sessions: [{ name: tokens[0], directory: tokens[1] }], db: { quickCheck: tokens[2], sizeBytes: 1 }, log: hostileRingBuffer(tokens) } as unknown as DiagnosticsDocument;
 
     const { bytes } = await buildBundle({ daemonDocument: hostileDocument, desktopLog: '', at: AT, projectDaemonRecords: projectingEachRecordAs(A_PROJECTED_RECORD) });
 

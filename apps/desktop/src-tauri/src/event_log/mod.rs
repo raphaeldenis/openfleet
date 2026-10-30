@@ -11,7 +11,7 @@ mod foreign;
 mod grammar;
 mod hash;
 #[cfg(test)]
-mod hostile_corpus;
+pub(crate) mod hostile_corpus;
 mod salt;
 #[cfg(test)]
 pub(crate) mod synthetic_tokens;

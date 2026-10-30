@@ -1180,6 +1180,91 @@ mod tests {
     }
   }
 
+  const STATUS_LINE_COPY_STARTS: [&str; 3] = ["the daemon refused to boot: ", "the daemon stopped on a fatal Node.js error", "the daemon wrote an unrecognised error ([text:"];
+
+  /// The item as the whole line, before text, after text, after 199 characters and after the boot refusal prefix.
+  fn stderr_lines_around(text: &str) -> Vec<String> {
+    vec![
+      text.to_string(),
+      format!("{text} failed to start"),
+      format!("Error: {text}"),
+      format!("{}{text}", "x".repeat(199)),
+      format!("openfleet: refusing to boot: {text}"),
+    ]
+  }
+
+  #[test]
+  fn no_corpus_item_reaches_the_status_line_wherever_it_sits_in_a_stderr_line() {
+    use crate::event_log::hostile_corpus::{all_hostile_items, leaked_form_in};
+    for item in all_hostile_items() {
+      for hostile_line in stderr_lines_around(&item.text) {
+        let state = state_with_a_spawned_child();
+
+        state.on_stderr(&format!("{hostile_line}\n"));
+        state.on_terminated(Some(1));
+
+        let status = state.snapshot(Instant::now());
+        let shown = status.last_line().unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        let shows_only_fixed_copy = STATUS_LINE_COPY_STARTS.iter().any(|copy_start| shown.starts_with(copy_start));
+        assert_eq!(leaked_form_in(&[shown.clone(), json], &item.secret), None, "{}", item.name);
+        assert!(shows_only_fixed_copy, "{}: {shown}", item.name);
+      }
+    }
+  }
+
+  fn health_answer_reporting(version: &str) -> String {
+    format!("HTTP/1.1 200 OK\r\n\r\n{}", serde_json::json!({ "status": "ok", "version": version }))
+  }
+
+  fn issue_report_of(daemon_version: DaemonVersion) -> crate::issue_report::IssueReport {
+    crate::issue_report::IssueReport {
+      app_version: "0.2.0".to_string(),
+      daemon_version: Some(daemon_version),
+      daemon_state: "ready".to_string(),
+      macos_version: "15.4".to_string(),
+      arch: "aarch64".to_string(),
+      log_lines: vec![],
+      user_home: "/Users/jdoe".to_string(),
+    }
+  }
+
+  /// The accepted residual: a pre-release of at most 24 lowercase alphanumerics (and so a short build number or sha) is a valid version.
+  fn is_a_valid_version_part(text: &str) -> bool {
+    let is_lowercase_alphanumeric_or_dot = |byte: u8| byte.is_ascii_digit() || byte.is_ascii_lowercase() || byte == b'.';
+    (1..=24).contains(&text.len()) && text.bytes().all(is_lowercase_alphanumeric_or_dot)
+  }
+
+  #[test]
+  fn no_corpus_item_reaches_the_daemon_version_or_the_issue_url_beyond_the_accepted_residual() {
+    use crate::event_log::hostile_corpus::{all_hostile_items, leaked_form_in};
+    for item in all_hostile_items() {
+      let reported_versions = [item.text.clone(), format!("1.2.3+{}", item.text), format!("1.2.3-{}", item.text), format!("dev-{}", item.text)];
+      for reported in reported_versions {
+        let version = version_in_health_response(&health_answer_reporting(&reported)).expect("a version");
+
+        let url = crate::issue_report::issue_url(&issue_report_of(version.clone()));
+
+        let is_recognised = version.as_str() != "unrecognised";
+        if is_recognised {
+          assert!(is_a_valid_version_part(&item.text), "{} was recognised as {}", item.name, version.as_str());
+          continue;
+        }
+        assert_eq!(leaked_form_in(&[url], &item.secret), None, "{}", item.name);
+      }
+    }
+  }
+
+  #[test]
+  fn a_real_semver_survives_the_health_answer_and_the_issue_url() {
+    for reported in ["0.4.2", "1.2.3-rc.1", "0.4.2+abc1234.7", "dev", "dev-0123abcd"] {
+      let version = version_in_health_response(&health_answer_reporting(reported)).expect("a version");
+
+      assert_eq!(version.as_str(), reported);
+      assert!(crate::issue_report::issue_url(&issue_report_of(version)).contains(&reported.replace('+', "%2B")), "{reported}");
+    }
+  }
+
   #[test]
   fn a_token_shaped_daemon_line_never_reaches_desktop_log_through_the_status() {
     for secret in hostile_secrets() {
