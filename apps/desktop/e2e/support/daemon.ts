@@ -1,6 +1,6 @@
 import { test, type APIRequestContext, type Page, type Route, type TestInfo } from '@playwright/test';
 import { DIAGNOSTICS_PATH } from '../../../../packages/shared/src/diagnostics';
-import { describeDaemonIssues } from '../../../../scripts/e2e/daemonIssuesReport';
+import { describeDaemonIssues, describeUnreadableDaemonIssues } from '../../../../scripts/e2e/daemonIssuesReport';
 import { E2E_API_ENV } from '../../../../scripts/e2e/e2ePorts';
 import { readE2eAdminToken } from '../../../../scripts/e2e/e2eHome';
 
@@ -43,7 +43,7 @@ async function attachDaemonIssues(request: APIRequestContext, testInfo: TestInfo
     .get(`${api}${DIAGNOSTICS_PATH}`, { headers: adminHeaders })
     .then((response) => response.json())
     .then(describeDaemonIssues)
-    .catch((error: unknown) => `daemon issues unreadable: ${String(error)}`);
+    .catch(describeUnreadableDaemonIssues);
   if (issues) await testInfo.attach('daemon-issues', { body: issues, contentType: 'text/plain' });
 }
 
