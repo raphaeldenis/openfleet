@@ -426,6 +426,12 @@ function trimToTail(text: string, maxLength: number): string {
   return text.slice(startsMidSurrogatePair ? start + 1 : start);
 }
 
+/** Only a manager without a parent can be attended: a child, whatever it asks for, never is. */
+function isCreatedAttended({ attended, role, parentId }: SessionSpec): boolean {
+  const isParentlessManager = role === MANAGER_ROLE && parentId === undefined;
+  return attended === true && isParentlessManager;
+}
+
 export class SessionService {
   private readonly runtime: SessionRuntime;
   private readonly repo: SessionRepository;
@@ -526,7 +532,7 @@ export class SessionService {
     const now = new Date().toISOString();
     this.repo.insert({ id, name: spec.name, emoji: spec.emoji, directory: spec.directory, worktree: null, model: spec.model ?? null,
       parent_id: spec.parentId ?? null, role: spec.role ?? null, harness: spec.harness, state: 'starting', state_since: now, hook_token: hookToken, mcp_token: mcpToken,
-      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, project_id: spec.projectId ?? null, effort: spec.effort ?? null, config_dir: spec.configDir ?? null, created_at: now });
+      permission_mode: spec.permissionMode ?? null, branch: options?.branch ?? null, project_id: spec.projectId ?? null, effort: spec.effort ?? null, config_dir: spec.configDir ?? null, attended: isCreatedAttended(spec), created_at: now });
     // Captured now so a later reopen can tell a directory that still resolves the same way apart from an
     // in-between symlink swap from one whose path never resolved to a real directory at all.
     if (existsSync(spec.directory)) this.repo.setDirectoryRealpath(id, realpathSync.native(spec.directory));
