@@ -8,6 +8,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startServer } from '../../api/server.js';
+import { loadConfig } from '../../config.js';
+import { startDaemon, type Daemon } from '../../daemon.js';
 import { openDatabase } from '../../db/database.js';
 import { EventBus } from '../../events/eventBus.js';
 import { ApprovalService } from '../../governance/approvalService.js';
@@ -15,6 +17,7 @@ import { ManagerRepository } from '../../managers/managerRepository.js';
 import { ManagerService } from '../../managers/managerService.js';
 import { PulseScheduler } from '../../managers/pulseScheduler.js';
 import { DEFAULT_MODEL_TABLE } from '../../models.js';
+import { ASK_USER_QUESTION_TOOL, MANAGER_ASK_USER_RULE_ID, ROOT_MANAGER_ASK_USER_EVENT_ID } from '../../policy/defaultCommandPolicy.js';
 import { SessionService } from '../../sessions/sessionService.js';
 import type { HarnessHandle } from '../harness.js';
 import { ClaudeCliHarness } from './claudeCliHarness.js';
@@ -410,5 +413,91 @@ describe.skipIf(!isLive)('ClaudeCliHarness via the daemon, project settings cann
       warnSpy.mockRestore();
       await sessions.close(session.id);
     }
+  }, TEST_TIMEOUT_MS);
+});
+
+const ASK_USER_CANARY_PROMPT = 'Call the AskUserQuestion tool once with the question "canary?" and options "a","b", then say done.';
+const ASK_USER_NOT_CALLED = 'canary inconclusive: the model did not call AskUserQuestion';
+const ASK_USER_POLL_INTERVAL_MS = 500;
+
+async function closeSessionOnDaemon({ daemon, adminToken, sessionId }: { daemon: Daemon; adminToken: string; sessionId: string }): Promise<void> {
+  await fetch(`${daemon.server.url}/api/sessions/${sessionId}/close`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` }, body: '{}',
+  }).catch(() => undefined);
+}
+
+interface AskUserJournalRow {
+  rule_id: string;
+  outcome: string;
+  alternative: string | null;
+}
+
+// Opt-in canary behind the ask-user rule of docs/escalation.md: a throwaway in-process daemon (temp OPENFLEET_HOME, ephemeral port, real claude-cli harness)
+// launches one supervised and one attended manager on the real CLI, and the journal of the daemon says what the guard did with the AskUserQuestion the model called.
+// Whether the model calls the tool is up to the model: a manager whose journal has no AskUserQuestion row fails loudly instead of passing.
+// Side effect: the folder trust writes of the temp repos land in the real ~/.claude.json and the CLI transcripts under ~/.claude/projects;
+// startDaemon's claudeConfigPath is not passed because the redirected run closed both managers with resume_timeout and no journal row.
+// Run: pnpm --filter @openfleet/core test:live -t "AskUserQuestion"
+describe.skipIf(!isLive)('a manager calling AskUserQuestion on the real CLI (live, needs a logged-in claude CLI)', () => {
+  let daemon: Daemon | undefined;
+  let managerId: string | undefined;
+  let adminToken = '';
+
+  afterEach(async () => {
+    if (daemon && managerId) await closeSessionOnDaemon({ daemon, adminToken, sessionId: managerId });
+    await daemon?.close();
+    daemon = undefined;
+    managerId = undefined;
+    createdRepos.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }));
+  });
+
+  async function createManagerOnThrowawayDaemon({ attended }: { attended: boolean }): Promise<string> {
+    const home = makeTemporaryDirectory('of-askuser-home-');
+    const port = await allocatePort();
+    const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: String(port) });
+    adminToken = config.adminToken;
+    daemon = await startDaemon(config, { power: { api: { acquire: () => ({ release: () => {} }) } } });
+    const response = await fetch(`${daemon.server.url}/api/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${config.adminToken}` },
+      body: JSON.stringify({
+        directory: makeRepo(), name: 'Ask-user canary', emoji: '🧪', harness: 'claude-cli', model: CHEAP_MODEL,
+        manager: { childrenCap: 1, mission: ASK_USER_CANARY_PROMPT }, ...(attended ? { attended: true } : {}),
+      }),
+    });
+    expect(response.status).toBeLessThan(300);
+    const created = (await response.json()) as { id: string };
+    managerId = created.id;
+    return created.id;
+  }
+
+  async function waitForAskUserJournalRow(sessionId: string): Promise<AskUserJournalRow> {
+    const readRow = () => daemon!.db
+      .prepare('SELECT rule_id, outcome, alternative FROM denied_commands WHERE session_id = ? AND tool_name = ? ORDER BY created_at, rowid')
+      .get(sessionId, ASK_USER_QUESTION_TOOL) as AskUserJournalRow | undefined;
+    const deadline = Date.now() + HOOK_WAIT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const row = readRow();
+      if (row) return row;
+      await new Promise((resolve) => setTimeout(resolve, ASK_USER_POLL_INTERVAL_MS));
+    }
+    throw new Error(`${ASK_USER_NOT_CALLED} (no journal row within ${HOOK_WAIT_TIMEOUT_MS} ms)`);
+  }
+
+  it('refuses the AskUserQuestion of a supervised manager, with the pointer to submit_plan_questions, and journals it denied', async () => {
+    const sessionId = await createManagerOnThrowawayDaemon({ attended: false });
+
+    const row = await waitForAskUserJournalRow(sessionId);
+
+    expect(row).toMatchObject({ rule_id: MANAGER_ASK_USER_RULE_ID, outcome: 'denied' });
+    expect(row.alternative).toContain('submit_plan_questions');
+  }, TEST_TIMEOUT_MS);
+
+  it('lets an attended manager call AskUserQuestion and journals it observed', async () => {
+    const sessionId = await createManagerOnThrowawayDaemon({ attended: true });
+
+    const row = await waitForAskUserJournalRow(sessionId);
+
+    expect(row).toMatchObject({ rule_id: ROOT_MANAGER_ASK_USER_EVENT_ID, outcome: 'observed' });
   }, TEST_TIMEOUT_MS);
 });
