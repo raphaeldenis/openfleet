@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { ClaudeHookEventSchema, MAX_HOOK_LIST_ENTRIES, MAX_TODO_ITEMS, MAX_TODO_TEXT, type ClaudeHookEvent } from '@openfleet/shared';
 import { describe, expect, it } from 'vitest';
+import { tokenPrefixOf } from '../syntheticTokens.js';
 import { narrowTodoHookCall, withoutTodoPayload, zodIssueCodes } from './todoHookCall.js';
 
 const realHookBodies = readFileSync(new URL('./__fixtures__/hook-post-tool-use-1.jsonl', import.meta.url), 'utf8')
@@ -121,7 +122,7 @@ describe('narrowTodoHookCall on hostile payloads', () => {
   });
 
   it('holds no credential in clear: every text of the input and of the result leaves narrowing masked', () => {
-    const key = 'sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123';
+    const key = `${tokenPrefixOf('openai')}proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123`;
     const create = narrowTodoHookCall(postToolUse({ tool_name: 'TaskCreate', tool_input: { subject: `rotate ${key}`, activeForm: `rotating ${key}` }, tool_response: { task: { id: '1', subject: `rotate ${key}` } } }));
     const write = narrowTodoHookCall(postToolUse({ tool_name: 'TodoWrite', tool_input: { todos: [{ content: `rotate ${key}`, status: 'pending', activeForm: `rotating ${key}` }] }, tool_response: {} }));
     const list = narrowTodoHookCall(postToolUse({ tool_name: 'TaskList', tool_input: {}, tool_response: { tasks: [{ id: '1', subject: `rotate ${key}`, status: 'pending' }] } }));

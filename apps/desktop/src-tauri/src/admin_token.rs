@@ -17,11 +17,6 @@ pub fn read_admin_token_at(token_path: &Path) -> Result<String, String> {
     .map_err(|err| format!("could not read {}: {err}", token_path.display()))
 }
 
-/// Returns the admin token as a list the status line scrub can use: empty when the token cannot be read yet. The event log never reads it.
-pub fn admin_token_secrets(token_path: &Path) -> Vec<String> {
-  read_admin_token_at(token_path).into_iter().filter(|token| !token.is_empty()).collect()
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -66,37 +61,5 @@ mod tests {
     assert!(error.contains("could not read"));
     assert!(error.contains("admin.token"));
     std::fs::remove_dir_all(missing.parent().unwrap()).unwrap();
-  }
-
-  #[test]
-  fn the_secrets_follow_a_token_file_that_was_unreadable_at_first() {
-    use std::os::unix::fs::PermissionsExt;
-    let folder = scratch_folder("unreadable");
-    let path = folder.join("admin.token");
-    std::fs::write(&path, "late-token-0001\n").unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
-    assert_eq!(admin_token_secrets(&path), Vec::<String>::new(), "unreadable");
-
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-
-    assert_eq!(admin_token_secrets(&path), vec!["late-token-0001".to_string()]);
-    std::fs::remove_dir_all(folder).unwrap();
-  }
-
-  #[test]
-  fn the_secrets_follow_the_token_file_as_it_changes() {
-    let folder = scratch_folder("watch");
-    let path = folder.join("admin.token");
-    assert_eq!(admin_token_secrets(&path), Vec::<String>::new(), "no file yet");
-
-    std::fs::write(&path, "first-token-0001\n").unwrap();
-    assert_eq!(admin_token_secrets(&path), vec!["first-token-0001".to_string()], "the file appeared");
-
-    std::fs::write(&path, "other-token-0002\n").unwrap();
-    assert_eq!(admin_token_secrets(&path), vec!["other-token-0002".to_string()], "the file changed");
-
-    std::fs::write(&path, "\n").unwrap();
-    assert_eq!(admin_token_secrets(&path), Vec::<String>::new(), "an empty file holds no secret");
-    std::fs::remove_dir_all(folder).unwrap();
   }
 }

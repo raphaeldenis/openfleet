@@ -1,9 +1,15 @@
 use super::field::{
-  Bool, Bytes, Count, DaemonMessage, DaemonPhase, EventName, ExitCode, IoFailure, KnownCode, KnownErrorName, Level, Opaque, PathClass, PathSource, Pid,
+  closed_enum_names, log_values, Literal, LogValue, Bool, Count, DaemonMessage, DaemonPhase, EventName, ExitCode, IoFailure, KnownCode, KnownErrorName, Level, Opaque, PathClass, PathSource, Pid,
   SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
 use super::grammar::{seal, SanitizedLine};
-use std::fmt::{self, Display};
+use std::fmt;
+
+pub const SPAWN_CAUSE_BUNDLE_NOT_FOUND: Literal = Literal::new("bundle_not_found");
+pub const SPAWN_CAUSE_IO: Literal = Literal::new("io");
+pub const SPAWN_CAUSE_UNCLASSIFIED: Literal = Literal::new("unclassified");
+pub const OUTCOME_NOTHING_TO_STOP: Literal = Literal::new("nothing_to_stop");
+pub const ABSENT: Literal = Literal::new("none");
 
 /// The classes of crate a foreign `log::` record is counted under.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,20 +24,16 @@ pub enum ForeignTarget {
   Other,
 }
 
-impl Display for ForeignTarget {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      ForeignTarget::Tauri => "tauri",
-      ForeignTarget::Tao => "tao",
-      ForeignTarget::Wry => "wry",
-      ForeignTarget::Tokio => "tokio",
-      ForeignTarget::Hyper => "hyper",
-      ForeignTarget::TauriPluginShell => "tauri_plugin_shell",
-      ForeignTarget::App => "app",
-      ForeignTarget::Other => "other",
-    })
-  }
-}
+closed_enum_names!(ForeignTarget {
+  Tauri => "tauri",
+  Tao => "tao",
+  Wry => "wry",
+  Tokio => "tokio",
+  Hyper => "hyper",
+  TauriPluginShell => "tauri_plugin_shell",
+  App => "app",
+  Other => "other",
+});
 
 /// What kind of non-JSON text the daemon wrote.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,15 +43,9 @@ pub enum DaemonTextClass {
   Other,
 }
 
-impl Display for DaemonTextClass {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    formatter.write_str(match self {
-      DaemonTextClass::BootRefusal => "boot_refusal",
-      DaemonTextClass::NodeFatal => "node_fatal",
-      DaemonTextClass::Other => "other",
-    })
-  }
-}
+closed_enum_names!(DaemonTextClass { BootRefusal => "boot_refusal", NodeFatal => "node_fatal", Other => "other" });
+
+log_values!(ForeignTarget, DaemonTextClass);
 
 /// Why the daemon did not start, in the terms the log keeps.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -90,8 +86,6 @@ pub enum DesktopEvent {
   DaemonText { stream: Stream, class: DaemonTextClass, text: Opaque },
   DaemonLine(DaemonLineFields),
   PathRepaired { source: PathSource },
-  IssueReportOpened { lines: Count, url_bytes: Bytes },
-  BundleSaved { bytes: Bytes },
   WriterDropped { count: Count },
   WriterLost { count: Count, failure: IoFailure },
   WriterHeader { started: Ts },
@@ -100,31 +94,57 @@ pub enum DesktopEvent {
   RejectedRecord { event: EventName },
 }
 
-struct LineBuilder {
+/// Builds the text of a candidate line; the only values it accepts are the typed fields of the log vocabulary, never a string.
+pub struct LineBuilder {
   text: String,
 }
 
 impl LineBuilder {
-  fn start(timestamp: Ts, level: Level, event: EventName) -> Self {
+  pub fn start(timestamp: Ts, level: Level, event: EventName) -> Self {
     Self { text: format!("{timestamp} {level} {event}") }
   }
 
-  fn pair(&mut self, key: &'static str, value: impl Display) {
+  /// Appends ` key=value` for a typed value.
+  ///
+  /// ```
+  /// use app_lib::{EventName, Level, LineBuilder, Pid, Ts};
+  /// let timestamp = Ts::parse("2026-10-04T12:00:00Z").unwrap();
+  /// let mut line = LineBuilder::start(timestamp, Level::Info, EventName::DaemonStopRequested);
+  /// line.pair("pid", Pid(42));
+  /// ```
+  ///
+  /// A free string is not a log value:
+  ///
+  /// ```compile_fail,E0277
+  /// use app_lib::{EventName, Level, LineBuilder, Ts};
+  /// let timestamp = Ts::parse("2026-10-04T12:00:00Z").unwrap();
+  /// let mut line = LineBuilder::start(timestamp, Level::Error, EventName::SidecarFailed);
+  /// let token_shaped = ["gh", "p_", "0123456789abcdefghijklmnopqrstuvwxyz"].concat();
+  /// line.pair("text", &token_shaped);
+  /// ```
+  ///
+  /// ```compile_fail,E0277
+  /// use app_lib::{EventName, Level, LineBuilder, Ts};
+  /// let timestamp = Ts::parse("2026-10-04T12:00:00Z").unwrap();
+  /// let mut line = LineBuilder::start(timestamp, Level::Error, EventName::SidecarFailed);
+  /// line.pair("text", "a literal");
+  /// ```
+  pub fn pair(&mut self, key: &'static str, value: impl LogValue) {
     self.text.push_str(&format!(" {key}={value}"));
   }
 
-  /// Appends a value that already renders as `key=value` pairs.
-  fn pairs(&mut self, group: impl Display) {
-    self.text.push_str(&format!(" {group}"));
+  /// Appends the `kind=<kind> errno=<errno>` pairs of an io failure.
+  fn pairs(&mut self, failure: &IoFailure) {
+    self.text.push_str(&format!(" {failure}"));
   }
 
-  fn pair_if_present(&mut self, key: &'static str, value: Option<impl Display>) {
+  fn pair_if_present(&mut self, key: &'static str, value: Option<impl LogValue>) {
     if let Some(value) = value {
       self.pair(key, value);
     }
   }
 
-  fn pair_or(&mut self, key: &'static str, value: Option<impl Display>, absent: &'static str) {
+  fn pair_or(&mut self, key: &'static str, value: Option<impl LogValue>, absent: Literal) {
     match value {
       Some(value) => self.pair(key, value),
       None => self.pair(key, absent),
@@ -146,8 +166,6 @@ impl DesktopEvent {
       DesktopEvent::DaemonText { .. } => EventName::DaemonText,
       DesktopEvent::DaemonLine(_) => EventName::DaemonLine,
       DesktopEvent::PathRepaired { .. } => EventName::PathRepaired,
-      DesktopEvent::IssueReportOpened { .. } => EventName::IssueReportOpened,
-      DesktopEvent::BundleSaved { .. } => EventName::BundleSaved,
       DesktopEvent::WriterDropped { .. } => EventName::WriterDropped,
       DesktopEvent::WriterLost { .. } => EventName::WriterLost,
       DesktopEvent::WriterHeader { .. } => EventName::WriterHeader,
@@ -165,8 +183,6 @@ impl DesktopEvent {
       | DesktopEvent::DaemonLogFlushed { .. }
       | DesktopEvent::DaemonPhaseChanged { .. }
       | DesktopEvent::PathRepaired { .. }
-      | DesktopEvent::IssueReportOpened { .. }
-      | DesktopEvent::BundleSaved { .. }
       | DesktopEvent::WriterHeader { .. } => Level::Info,
       DesktopEvent::DaemonExited { .. } | DesktopEvent::WriterDropped { .. } => Level::Warn,
       DesktopEvent::DaemonSpawnFailed { .. }
@@ -201,13 +217,13 @@ impl DesktopEvent {
       DesktopEvent::DaemonReused => {}
       DesktopEvent::DaemonSpawnFailed { failure } => write_spawn_failure(line, failure),
       DesktopEvent::DaemonStopRequested { pid } => line.pair("pid", pid),
-      DesktopEvent::DaemonStopped { outcome } => line.pair_or("outcome", *outcome, "nothing_to_stop"),
+      DesktopEvent::DaemonStopped { outcome } => line.pair_or("outcome", *outcome, OUTCOME_NOTHING_TO_STOP),
       DesktopEvent::DaemonLogFlushed { drained } => line.pair("drained", drained),
       DesktopEvent::DaemonPhaseChanged { from, to } => {
         line.pair("from", from);
         line.pair("to", to);
       }
-      DesktopEvent::DaemonExited { code } => line.pair_or("code", *code, "none"),
+      DesktopEvent::DaemonExited { code } => line.pair_or("code", *code, ABSENT),
       DesktopEvent::SidecarFailed { reason } => line.pair("reason", reason),
       DesktopEvent::DaemonText { stream, class, text } => {
         line.pair("stream", stream);
@@ -216,11 +232,6 @@ impl DesktopEvent {
       }
       DesktopEvent::DaemonLine(fields) => write_daemon_line(line, fields),
       DesktopEvent::PathRepaired { source } => line.pair("source", source),
-      DesktopEvent::IssueReportOpened { lines, url_bytes } => {
-        line.pair("lines", lines);
-        line.pair("url_bytes", url_bytes);
-      }
-      DesktopEvent::BundleSaved { bytes } => line.pair("bytes", bytes),
       DesktopEvent::WriterDropped { count } => line.pair("count", count),
       DesktopEvent::WriterLost { count, failure } => {
         line.pair("count", count);
@@ -243,15 +254,15 @@ impl DesktopEvent {
 fn write_spawn_failure(line: &mut LineBuilder, failure: &SpawnFailure) {
   match failure {
     SpawnFailure::BundleNotFound(path_class) => {
-      line.pair("cause", "bundle_not_found");
+      line.pair("cause", SPAWN_CAUSE_BUNDLE_NOT_FOUND);
       line.pair("path_class", path_class);
     }
     SpawnFailure::Io(io_failure) => {
-      line.pair("cause", "io");
+      line.pair("cause", SPAWN_CAUSE_IO);
       line.pairs(io_failure);
     }
     SpawnFailure::Unclassified(text) => {
-      line.pair("cause", "unclassified");
+      line.pair("cause", SPAWN_CAUSE_UNCLASSIFIED);
       line.pair("text", text);
     }
   }
@@ -272,8 +283,9 @@ fn write_daemon_line(line: &mut LineBuilder, fields: &DaemonLineFields) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::event_log::grammar::{allowed_keys_of, validate};
+  use crate::event_log::grammar::{fields_of, validate, MAX_LINE_BYTES};
   use crate::event_log::salt::{Salt, SALT_LEN};
+  use crate::event_log::synthetic_tokens::{self, aws_key_id, github_token, TokenShape};
   use crate::linear_growth::{assert_linear_growth, thread_cpu_time_of, LinearGrowthBudget};
   use std::collections::HashSet;
   use std::io;
@@ -289,7 +301,7 @@ mod tests {
   }
 
   fn opaque(text: &str) -> Opaque {
-    Opaque::of(text.as_bytes(), Some(&salt()))
+    Opaque::bucketed(text.as_bytes(), Some(&salt()))
   }
 
   fn io_failure(errno: i32) -> IoFailure {
@@ -349,8 +361,6 @@ mod tests {
         ..daemon_line(text)
       }),
       DesktopEvent::PathRepaired { source: PathSource::Fallback },
-      DesktopEvent::IssueReportOpened { lines: Count(50), url_bytes: Bytes(7_500) },
-      DesktopEvent::BundleSaved { bytes: Bytes(1 << 20) },
       DesktopEvent::WriterDropped { count: Count(12) },
       DesktopEvent::WriterLost { count: Count(3), failure: io_failure(13) },
       DesktopEvent::WriterHeader { started: now() },
@@ -362,6 +372,59 @@ mod tests {
 
   fn sample_events() -> Vec<DesktopEvent> {
     events_carrying("some daemon text")
+  }
+
+  mod log_values_are_sealed {
+    use super::*;
+    use std::borrow::Cow;
+
+    trait AmbiguousIfImplemented<Marker> {
+      fn probe() {}
+    }
+    impl<T: ?Sized> AmbiguousIfImplemented<()> for T {}
+
+    /// Compiles only when the type does NOT implement the bound: an implementation makes `probe` ambiguous.
+    macro_rules! assert_not_implemented {
+      ($type:ty: $bound:path) => {
+        const _: fn() = || {
+          struct Implemented;
+          impl<T: ?Sized + $bound> AmbiguousIfImplemented<Implemented> for T {}
+          let _ = <$type as AmbiguousIfImplemented<_>>::probe;
+        };
+      };
+    }
+
+    assert_not_implemented!(str: LogValue);
+    assert_not_implemented!(&'static str: LogValue);
+    assert_not_implemented!(String: LogValue);
+    assert_not_implemented!(&'static String: LogValue);
+    assert_not_implemented!(Cow<'static, str>: LogValue);
+    assert_not_implemented!(u64: LogValue);
+    assert_not_implemented!(i32: LogValue);
+    assert_not_implemented!(bool: LogValue);
+
+    fn assert_copy<T: Copy>() {}
+
+    #[test]
+    fn a_free_string_or_a_raw_number_is_not_a_log_value() {
+      // The assertions above are the proof: this crate does not compile if one of them is implemented.
+    }
+
+    #[test]
+    fn a_desktop_event_holds_no_string_because_it_is_copy() {
+      assert_copy::<DesktopEvent>();
+      assert_copy::<DaemonLineFields>();
+      assert_copy::<SpawnFailure>();
+    }
+
+    #[test]
+    fn a_literal_is_one_of_the_consts_of_the_event_module() {
+      let words = [SPAWN_CAUSE_BUNDLE_NOT_FOUND, SPAWN_CAUSE_IO, SPAWN_CAUSE_UNCLASSIFIED, OUTCOME_NOTHING_TO_STOP, ABSENT];
+
+      let rendered: Vec<String> = words.iter().map(|word| word.to_string()).collect();
+
+      assert_eq!(rendered, ["bundle_not_found", "io", "unclassified", "nothing_to_stop", "none"]);
+    }
   }
 
   mod rendering {
@@ -393,8 +456,55 @@ mod tests {
 
         let keys = line.as_str().split(' ').skip(3).filter_map(|pair| pair.split('=').next());
         for key in keys {
-          assert!(allowed_keys_of(event.name()).contains(&key), "{key} of {}", event.name());
+          assert!(fields_of(event.name()).iter().any(|field| field.key == key), "{key} of {}", event.name());
         }
+      }
+    }
+
+    #[test]
+    fn every_registered_key_is_rendered_by_some_sample() {
+      let rendered_keys: HashSet<String> = sample_events()
+        .iter()
+        .flat_map(|event| {
+          let line = event.render(now());
+          let keys: Vec<&str> = line.as_str().split(' ').skip(3).filter_map(|pair| pair.split('=').next()).collect();
+          keys.into_iter().map(|key| format!("{}.{key}", event.name())).collect::<Vec<_>>()
+        })
+        .collect();
+
+      let never_rendered: Vec<String> = EventName::ALL
+        .iter()
+        .flat_map(|name| fields_of(*name).iter().map(move |field| format!("{name}.{}", field.key)))
+        .filter(|registered| !rendered_keys.contains(registered))
+        .collect();
+
+      assert!(never_rendered.is_empty(), "registered keys no sample renders: {never_rendered:?}");
+    }
+
+    #[test]
+    fn no_line_exceeds_the_maximum_line_length() {
+      const EIGHT_DIGIT_LENGTH: usize = 10_000_000;
+      let longest_daemon_line = DaemonLineFields {
+        level: Level::Warn,
+        daemon_ts: Ts::parse("2026-10-04T11:59:58.123Z"),
+        id: ShortId::parse("ffffffff"),
+        session: SessionId::parse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        code: Some(KnownCode::from_name("docs_folder_not_writable")),
+        message: Some(DaemonMessage::Unlisted(Opaque::bucketed(&vec![b'x'; EIGHT_DIGIT_LENGTH], Some(&salt())))),
+        error_name: Some(KnownErrorName::from_name("ReferenceError")),
+        error_code: Some(KnownCode::from_name("docs_folder_not_writable")),
+        error_message: Some(Opaque::bucketed(&vec![b'y'; EIGHT_DIGIT_LENGTH], Some(&salt()))),
+        frames: Some(frames_at(&[(123, 456), (123, 456), (123, 456), (123, 456), (123, 456), (123, 456), (123, 456), (1234, 456)])),
+        extra_fields: Count(u64::MAX),
+      };
+      let mut events = sample_events();
+      events.push(DesktopEvent::DaemonLine(longest_daemon_line));
+
+      for event in events {
+        let line = event.render(now());
+
+        assert!(!line.is_rejection(), "{event:?}");
+        assert!(line.as_str().len() <= MAX_LINE_BYTES, "{} bytes: {line}", line.as_str().len());
       }
     }
 
@@ -438,7 +548,7 @@ mod tests {
     fn free_text_renders_as_its_length_and_tag_only() {
       let line = DesktopEvent::SidecarFailed { reason: opaque("No such file or directory") }.render(now());
 
-      let prefix = "2026-10-04T12:00:00Z error sidecar_failed reason=[text:25:";
+      let prefix = "2026-10-04T12:00:00Z error sidecar_failed reason=[text:32:";
       assert!(line.as_str().starts_with(prefix), "{line}");
       assert_eq!(line.as_str().len(), prefix.len() + "xxxxxxxx]".len());
     }
@@ -481,14 +591,52 @@ mod tests {
 
     #[test]
     fn without_a_salt_the_tag_is_absent() {
-      let event = DesktopEvent::SidecarFailed { reason: Opaque::of(b"disk", None) };
+      let event = DesktopEvent::SidecarFailed { reason: Opaque::bucketed(b"disk", None) };
 
-      assert_eq!(event.render(now()).as_str(), "2026-10-04T12:00:00Z error sidecar_failed reason=[text:4]");
+      assert_eq!(event.render(now()).as_str(), "2026-10-04T12:00:00Z error sidecar_failed reason=[text:16]");
+    }
+
+    mod a_renderer_that_prints_an_exact_length_instead_of_a_bucket {
+      use super::*;
+
+      fn exact_length() -> Opaque {
+        Opaque::of(b"disk", Some(&salt()))
+      }
+
+      #[test]
+      #[cfg(debug_assertions)]
+      #[should_panic(expected = "does not match the kind of its field")]
+      fn is_a_bug_for_the_sidecar_reason() {
+        DesktopEvent::SidecarFailed { reason: exact_length() }.render(now());
+      }
+
+      #[test]
+      #[cfg(debug_assertions)]
+      #[should_panic(expected = "does not match the kind of its field")]
+      fn is_a_bug_for_the_spawn_failure_text() {
+        DesktopEvent::DaemonSpawnFailed { failure: SpawnFailure::Unclassified(exact_length()) }.render(now());
+      }
+
+      #[test]
+      #[cfg(debug_assertions)]
+      #[should_panic(expected = "does not match the kind of its field")]
+      fn is_a_bug_for_the_daemon_message() {
+        let fields = DaemonLineFields { message: Some(DaemonMessage::Unlisted(exact_length())), ..daemon_line("x") };
+        DesktopEvent::DaemonLine(fields).render(now());
+      }
+
+      #[test]
+      #[cfg(debug_assertions)]
+      #[should_panic(expected = "does not match the kind of its field")]
+      fn is_a_bug_for_the_daemon_error_message() {
+        let fields = DaemonLineFields { error_message: Some(exact_length()), ..daemon_line("x") };
+        DesktopEvent::DaemonLine(fields).render(now());
+      }
     }
 
     #[test]
     fn an_event_carrying_text_never_prints_it_through_debug() {
-      let event = DesktopEvent::SidecarFailed { reason: opaque("ghp_abcdefghijklmnopqrstuvwxyz0123456789") };
+      let event = DesktopEvent::SidecarFailed { reason: opaque(&github_token()) };
 
       assert!(!format!("{event:?}").contains("ghp_"));
     }
@@ -528,7 +676,8 @@ mod tests {
       let text = random.bytes(text_length);
       let has_salt = !random.next().is_multiple_of(4);
       let maybe_salt = has_salt.then(salt);
-      let opaque = Opaque::of(&text, maybe_salt.as_ref());
+      let opaque = Opaque::bucketed(&text, maybe_salt.as_ref());
+      let exact_length_opaque = Opaque::of(&text, maybe_salt.as_ref());
       let some_ts = |random: &mut XorShift64Star| Ts::from_unix_seconds(random.next() % 253_402_300_800);
       let kind = (random.next() % 4000) as i32;
       let has_os_error_code = random.next().is_multiple_of(2);
@@ -542,7 +691,7 @@ mod tests {
         DesktopEvent::DaemonStopRequested { pid: Pid(words[0] as u32) },
         DesktopEvent::DaemonExited { code: Some(ExitCode(words[1] as i32)) },
         DesktopEvent::SidecarFailed { reason: opaque },
-        DesktopEvent::DaemonText { stream: Stream::Err, class: DaemonTextClass::NodeFatal, text: opaque },
+        DesktopEvent::DaemonText { stream: Stream::Err, class: DaemonTextClass::NodeFatal, text: exact_length_opaque },
         DesktopEvent::DaemonLine(DaemonLineFields {
           level: Level::Error,
           daemon_ts: some_ts(random),
@@ -563,8 +712,6 @@ mod tests {
           frames: Some(frames_at(&[(words[0] as u32, words[1] as u32)])),
           extra_fields: Count(words[2]),
         }),
-        DesktopEvent::IssueReportOpened { lines: Count(words[0]), url_bytes: Bytes(words[1]) },
-        DesktopEvent::BundleSaved { bytes: Bytes(words[2]) },
         DesktopEvent::WriterLost { count: Count(words[0]), failure: IoFailure::of(&error) },
         DesktopEvent::WriterHeader { started: some_ts(random).unwrap_or(now()) },
         DesktopEvent::ForeignRecords { level: Level::Debug, target: ForeignTarget::Other, count: Count(u64::MAX) },
@@ -602,6 +749,8 @@ mod tests {
     use super::*;
 
     const MIN_WINDOW: usize = 12;
+    const JWT_HEADER_BODY_LEN: usize = 17;
+    const JWT_SEED: u64 = 1;
 
     fn token(prefix: &str, length: usize) -> String {
       let body: String = "Zq9XvB3nKd7LpR2sTe5YwUa8HcMj4GfN6Vb1".chars().cycle().take(length).collect();
@@ -615,7 +764,8 @@ mod tests {
     fn hostile_secrets() -> Vec<String> {
       let github = token("ghp_", 36);
       let secret_key = token("sk-", 48);
-      let bearer = format!("Authorization: Bearer {}", token("eyJhbGciOiJIUzI1NiJ9.", 120));
+      let jwt_header_then_dot = format!("{}.", synthetic_tokens::token(TokenShape::Jwt, JWT_HEADER_BODY_LEN, JWT_SEED));
+      let bearer = format!("Authorization: Bearer {}", token(&jwt_header_then_dot, 120));
       let bidi = format!("\u{202e}\u{2066}{}\u{2069}\u{200f}", token("pa55w0rd-", 30));
       let control = format!("\u{0}\u{1b}[31m{}\u{7}\r\n\t{}", token("tok-", 24), token("again-", 24));
       let multibyte = format!("日本語😀é{}😀日本", token("secret-", 30));
@@ -756,7 +906,7 @@ mod tests {
         let folded = secret.to_ascii_lowercase();
         let watched = watched_windows(secret.as_bytes(), folded.as_bytes());
         let events = [
-          DesktopEvent::SidecarFailed { reason: Opaque::of(secret.as_bytes(), None) },
+          DesktopEvent::SidecarFailed { reason: Opaque::bucketed(secret.as_bytes(), None) },
           DesktopEvent::DaemonText { stream: Stream::Out, class: DaemonTextClass::Other, text: Opaque::of(secret.as_bytes(), None) },
         ];
 
@@ -802,7 +952,7 @@ mod tests {
 
     #[test]
     fn a_secret_lookalike_error_code_is_reduced_to_other() {
-      let event = DesktopEvent::DaemonLine(DaemonLineFields { code: Some(KnownCode::from_name("AKIAIOSFODNN7EXAMPLE")), ..daemon_line("x") });
+      let event = DesktopEvent::DaemonLine(DaemonLineFields { code: Some(KnownCode::from_name(&aws_key_id())), ..daemon_line("x") });
 
       assert!(event.render(now()).as_str().contains(" code=other "));
     }

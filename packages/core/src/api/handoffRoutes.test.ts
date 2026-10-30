@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { HandoffContent, HandoffPreview, HandoffTarget, NoteSummary, Session } from '@openfleet/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { syntheticToken } from '../syntheticTokens.js';
 import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
@@ -28,7 +29,7 @@ import { startServer } from './server.js';
 
 const ADMIN = { authorization: 'Bearer admin' };
 const CLOCK = '2026-10-04T10:00:00.000Z';
-const SECRET = 'sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+const SECRET = syntheticToken({ shape: 'anthropic', bodyLength: 36 });
 const isRoot = process.getuid?.() === 0;
 
 let server: Awaited<ReturnType<typeof startServer>>;

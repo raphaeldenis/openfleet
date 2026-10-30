@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { E2E_FLAG_ENV, E2E_FLAG_ON, type CommandPolicyDocument } from '@openfleet/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from './config.js';
+import { syntheticToken } from './syntheticTokens.js';
 import { startDaemon, type Daemon, type DaemonOptions } from './daemon.js';
 import { DEFAULT_COMMAND_POLICY } from './policy/defaultCommandPolicy.js';
 import { defaultCommandPolicySettings, type CommandPolicySettings } from './policy/commandPolicySettings.js';
@@ -138,7 +139,7 @@ describe('an unattended child asks for a command the policy refuses', () => {
   it('never stores more than 200 characters of the command, secrets masked', async () => {
     await bootDaemon({ settings: enforcing() });
     const child = await createChildOf((await createSession()).id);
-    const secret = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    const secret = syntheticToken({ shape: 'anthropic', bodyLength: 36 });
 
     await preToolUse(child.id, bash(`rm -rf ${'y'.repeat(400)} && echo ${secret}`));
 

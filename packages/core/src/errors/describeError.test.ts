@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ZodError, z } from 'zod';
 import { ERROR_CODES, OpenFleetError, type ErrorCode } from '@openfleet/shared';
+import { syntheticToken } from '../syntheticTokens.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InvalidJsonBodyError, PayloadTooLargeError } from './requestBodyErrors.js';
 import { expectBestCpuUnder, expectLinearGrowth, cpuMillisecondsToRun } from '../__testing__/linearGrowth.js';
@@ -420,7 +421,8 @@ describe('describeError: hostile case 1, secrets and paths in every field', () =
   );
 
   it('masks a list of tokens under authTokens', () => {
-    const { detail } = describeError(detailCarrying({ authTokens: ['ghp_realtoken1', 'ghp_realtoken2'], kept: 'visible' }));
+    const authTokens = [1, 2].map((seed) => syntheticToken({ shape: 'github', bodyLength: 10, seed }));
+    const { detail } = describeError(detailCarrying({ authTokens, kept: 'visible' }));
 
     expect(detail).toEqual({ authTokens: '***', kept: 'visible' });
   });

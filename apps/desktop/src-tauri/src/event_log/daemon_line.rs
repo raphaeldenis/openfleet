@@ -1,7 +1,10 @@
 use super::event::{DaemonLineFields, DaemonTextClass, DesktopEvent};
 use super::field::{CatalogueId, Count, DaemonMessage, KnownCode, KnownErrorName, Level, Opaque, SessionId, ShortId, StackFrames, Stream, Ts};
+use super::grammar::SanitizedLine;
 use super::salt::Salt;
+use serde::Serialize;
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 const MAX_LINE_BYTES: usize = 64 * 1024;
 const BOOT_REFUSAL_PREFIX: &str = "openfleet: refusing to boot";
@@ -71,10 +74,16 @@ fn unstructured_text(stream: Stream, line: &[u8], salt: Option<&Salt>) -> Deskto
   DesktopEvent::DaemonText { stream, class: text_class_of(line), text: Opaque::of(line, salt) }
 }
 
+/// True when `line`, ignoring leading whitespace, opens like a Node.js fatal error report.
+pub fn is_node_fatal_line(line: &str) -> bool {
+  let text = line.trim_start();
+  NODE_FATAL_PREFIXES.iter().any(|prefix| text.starts_with(prefix))
+}
+
 fn text_class_of(line: &[u8]) -> DaemonTextClass {
   let Some(text) = std::str::from_utf8(line).ok().map(str::trim_start) else { return DaemonTextClass::Other };
   let is_boot_refusal = text.starts_with(BOOT_REFUSAL_PREFIX);
-  let is_node_fatal = NODE_FATAL_PREFIXES.iter().any(|prefix| text.starts_with(prefix));
+  let is_node_fatal = is_node_fatal_line(text);
   match (is_boot_refusal, is_node_fatal) {
     (true, _) => DaemonTextClass::BootRefusal,
     (false, true) => DaemonTextClass::NodeFatal,
@@ -87,6 +96,44 @@ fn default_level_of(stream: Stream) -> Level {
     Stream::Out => Level::Info,
     Stream::Err => Level::Warn,
   }
+}
+
+/// A record of the daemon's diagnostics ring buffer as `desktop.log` would hold it, split into its header and its `key=value` pairs.
+/// It is cut from a `SanitizedLine`, so every value passed the typed field registry.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProjectedRecord {
+  pub ts: String,
+  pub level: String,
+  pub event: String,
+  pub fields: BTreeMap<String, String>,
+}
+
+impl ProjectedRecord {
+  fn of(line: &SanitizedLine) -> Self {
+    let mut tokens = line.as_str().split(' ');
+    let mut next_header_token = || tokens.next().unwrap_or_default().to_string();
+    let (ts, level, event) = (next_header_token(), next_header_token(), next_header_token());
+    let fields = tokens.filter_map(|pair| pair.split_once('=')).map(|(key, value)| (key.to_string(), value.to_string())).collect();
+    Self { ts, level, event, fields }
+  }
+}
+
+/// Projects each record of the daemon's diagnostics ring buffer onto the allowlist of `desktop.log`:
+/// an object is a `daemon_line`, any other value (a line that was not JSON) a `daemon_text` of its first 64 KiB.
+pub fn project_daemon_records(records: &[Value], salt: Option<&Salt>, now: Ts) -> Vec<ProjectedRecord> {
+  records.iter().map(|record| ProjectedRecord::of(&ring_buffer_event_of(record, salt).render(now))).collect()
+}
+
+fn ring_buffer_event_of(record: &Value, salt: Option<&Salt>) -> DesktopEvent {
+  match record {
+    Value::Object(fields) => DesktopEvent::DaemonLine(project_record(fields, Stream::Out, salt)),
+    Value::String(text) => unstructured_text(Stream::Out, first_line_bytes_of(text.as_bytes()), salt),
+    other => unstructured_text(Stream::Out, first_line_bytes_of(other.to_string().as_bytes()), salt),
+  }
+}
+
+fn first_line_bytes_of(text: &[u8]) -> &[u8] {
+  &text[..text.len().min(MAX_LINE_BYTES)]
 }
 
 fn project_record(record: &Map<String, Value>, stream: Stream, salt: Option<&Salt>) -> DaemonLineFields {
@@ -112,7 +159,7 @@ fn project_record(record: &Map<String, Value>, stream: Stream, salt: Option<&Sal
     message,
     error_name: error.and_then(|error| error.get("name")).map(|name| KnownErrorName::from_name(name.as_str().unwrap_or(""))),
     error_code: error.and_then(|error| error.get("code")).map(known_code_of),
-    error_message: error.and_then(|error| error.get("message")).map(|message| opaque_of(message, salt)),
+    error_message: error.and_then(|error| error.get("message")).map(|message| bucketed_opaque_of(message, salt)),
     frames: error.and_then(|error| error.get("stack")).and_then(Value::as_str).map(bundle_frames_of).filter(|frames| !frames.is_empty()),
     extra_fields,
   }
@@ -122,10 +169,11 @@ fn known_code_of(value: &Value) -> KnownCode {
   KnownCode::from_name(value.as_str().unwrap_or(""))
 }
 
-fn opaque_of(value: &Value, salt: Option<&Salt>) -> Opaque {
+/// Buckets the first 64 KiB of a daemon value, so the length field stays within the grammar for any size.
+fn bucketed_opaque_of(value: &Value, salt: Option<&Salt>) -> Opaque {
   match value.as_str() {
-    Some(text) => Opaque::of(text.as_bytes(), salt),
-    None => Opaque::of(value.to_string().as_bytes(), salt),
+    Some(text) => Opaque::bucketed(first_line_bytes_of(text.as_bytes()), salt),
+    None => Opaque::bucketed(first_line_bytes_of(value.to_string().as_bytes()), salt),
   }
 }
 
@@ -133,15 +181,23 @@ fn message_of(value: &Value, salt: Option<&Salt>) -> DaemonMessage {
   let catalogue_id = value.as_str().and_then(catalogue_id_of);
   match catalogue_id {
     Some(id) => DaemonMessage::Catalogued(id),
-    None => DaemonMessage::Unlisted(opaque_of(value, salt)),
+    None => DaemonMessage::Unlisted(bucketed_opaque_of(value, salt)),
   }
 }
 
 /// Each catalogue line is `<id> <literal>`: the id has no space, the literal is the rest of the line.
+fn catalogue_entries() -> impl Iterator<Item = (&'static str, &'static str)> {
+  MESSAGE_CATALOGUE.lines().filter_map(|entry| entry.split_once(' '))
+}
+
 fn catalogue_id_of(literal: &str) -> Option<CatalogueId> {
-  let entries = MESSAGE_CATALOGUE.lines().filter_map(|entry| entry.split_once(' '));
-  let (id, _) = entries.into_iter().find(|(_, listed_literal)| *listed_literal == literal)?;
+  let (id, _) = catalogue_entries().find(|(_, listed_literal)| *listed_literal == literal)?;
   Some(CatalogueId::new(id))
+}
+
+/// True when `candidate` is the id of a catalogued daemon message.
+pub(super) fn is_catalogue_id(candidate: &str) -> bool {
+  catalogue_entries().any(|(id, _)| id == candidate)
 }
 
 fn bundle_frames_of(stack: &str) -> StackFrames {
@@ -172,10 +228,40 @@ mod tests {
   use super::*;
   use crate::event_log::grammar::validate;
   use crate::event_log::salt::SALT_LEN;
+  use crate::event_log::synthetic_tokens::{anthropic_key, aws_key_id, github_token};
   use crate::linear_growth::{assert_linear_growth, cpu_time_to_run_on_repeated, LinearGrowthBudget};
 
   const NOW: &str = "2026-10-04T12:00:00Z";
-  const SECRET: &str = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+
+  #[test]
+  fn tells_a_node_fatal_report_from_other_text_ignoring_leading_whitespace() {
+    for fatal in ["node:internal/errors:1", "  Node.js v22.11.0", "FATAL ERROR: heap", "<--- Last few GCs --->", "\tat run (daemon.mjs:1:1)"] {
+      assert!(is_node_fatal_line(fatal), "{fatal}");
+      assert_eq!(text_class_of(fatal.as_bytes()), DaemonTextClass::NodeFatal, "{fatal}");
+    }
+    for other in ["Error: boom", "x node: not at the start", "attention", ""] {
+      assert!(!is_node_fatal_line(other), "{other}");
+    }
+  }
+
+  #[test]
+  fn caps_a_message_and_an_error_message_at_the_line_limit_before_bucketing_them() {
+    let one_byte_past_the_eight_digit_bucket = (1 << 26) + 1;
+    let oversized = "x".repeat(one_byte_past_the_eight_digit_bucket);
+    let record = serde_json::json!({ "level": "info", "msg": oversized, "err": { "message": oversized } });
+    let capped_tag = Opaque::bucketed(&oversized.as_bytes()[..MAX_LINE_BYTES], Some(&salt())).to_string();
+
+    let projection = project_daemon_records(&[record], Some(&salt()), Ts::parse(NOW).unwrap());
+
+    assert_eq!(projection[0].event, "daemon_line");
+    assert_eq!(projection[0].fields.get("msg"), Some(&capped_tag));
+    assert_eq!(projection[0].fields.get("err_msg"), Some(&capped_tag));
+    assert!(capped_tag.starts_with("[text:65536:"), "{capped_tag}");
+  }
+
+  fn secret() -> String {
+    format!("{}AB", github_token())
+  }
 
   fn salt() -> Salt {
     Salt::from_bytes([7; SALT_LEN])
@@ -183,6 +269,10 @@ mod tests {
 
   fn tag_of(text: &str) -> String {
     Opaque::of(text.as_bytes(), Some(&salt())).to_string()
+  }
+
+  fn bucketed_tag_of(text: &str) -> String {
+    Opaque::bucketed(text.as_bytes(), Some(&salt())).to_string()
   }
 
   fn rendered(events: Vec<DesktopEvent>) -> Vec<String> {
@@ -221,24 +311,36 @@ mod tests {
 
       let expected = format!(
         "2026-10-04T11:59:58Z warn daemon_line id=0a1b2c3d session=123e4567-e89b-42d3-a456-426614174000 code=session_not_found msg=ws_write_failed err_name=TypeError err_code=ENOENT err_msg={} frames=120:5/88:13 extra_fields=0",
-        tag_of("boom")
+        bucketed_tag_of("boom")
       );
+      assert!(line.contains(" err_msg=[text:16:"), "{line}");
       assert_eq!(line, expected);
     }
 
     #[test]
     fn hashes_a_message_that_is_not_in_the_catalogue() {
-      let message = format!("session abc failed with {SECRET}");
+      let secret = secret();
+      let message = format!("session abc failed with {secret}");
 
       let line = line_of(&serde_json::json!({ "level": "error", "msg": message }).to_string());
 
-      assert!(line.ends_with(&format!("msg={} extra_fields=0", tag_of(&message))), "{line}");
+      assert!(line.ends_with(&format!("msg={} extra_fields=0", bucketed_tag_of(&message))), "{line}");
       assert!(!line.contains("ghp_"), "{line}");
     }
 
     #[test]
+    fn renders_the_bucket_of_a_message_and_an_error_message_length_not_the_exact_length() {
+      let record = serde_json::json!({ "level": "error", "msg": github_token(), "err": { "name": "Error", "message": anthropic_key() } });
+
+      let line = line_of(&record.to_string());
+
+      assert!(line.contains(" msg=[text:64:") && line.contains(" err_msg=[text:64:"), "{line}");
+    }
+
+    #[test]
     fn counts_every_other_key_and_copies_none_of_them() {
-      let record = serde_json::json!({ "level": "info", "msg": "ws: send failed", SECRET: "x", "step": SECRET, "detail": { "token": SECRET } });
+      let secret = secret();
+      let record = serde_json::json!({ "level": "info", "msg": "ws: send failed", (secret.clone()): "x", "step": secret, "detail": { "token": secret } });
 
       let line = line_of(&record.to_string());
 
@@ -248,7 +350,8 @@ mod tests {
 
     #[test]
     fn drops_the_error_cause_and_the_stack_text() {
-      let record = serde_json::json!({ "level": "error", "msg": "x", "err": { "name": "Error", "message": "m", "stack": format!("Error: {SECRET}\n    at a (/Users/me/{SECRET}.js:1:1)"), "cause": { "message": SECRET } } });
+      let secret = secret();
+      let record = serde_json::json!({ "level": "error", "msg": "x", "err": { "name": "Error", "message": "m", "stack": format!("Error: {secret}\n    at a (/Users/me/{secret}.js:1:1)"), "cause": { "message": secret } } });
 
       let line = line_of(&record.to_string());
 
@@ -258,7 +361,7 @@ mod tests {
 
     #[test]
     fn maps_an_error_name_outside_the_closed_list_to_other() {
-      let record = serde_json::json!({ "level": "error", "msg": "x", "err": { "name": SECRET, "message": "", "code": "AKIAIOSFODNN7EXAMPLE" } });
+      let record = serde_json::json!({ "level": "error", "msg": "x", "err": { "name": secret(), "message": "", "code": aws_key_id() } });
 
       let line = line_of(&record.to_string());
 
@@ -308,7 +411,7 @@ mod tests {
 
     #[test]
     fn counts_a_malformed_id_and_session_id_instead_of_copying_them() {
-      let record = serde_json::json!({ "level": "info", "msg": "ws: write failed", "id": SECRET, "sessionId": "not-a-uuid" });
+      let record = serde_json::json!({ "level": "info", "msg": "ws: write failed", "id": secret(), "sessionId": "not-a-uuid" });
 
       let line = line_of(&record.to_string());
 
@@ -319,7 +422,7 @@ mod tests {
     fn hashes_a_message_that_is_not_a_string() {
       let line = line_of(r#"{"level":"info","msg":{"a":1}}"#);
 
-      assert!(line.contains(&format!("msg={}", tag_of(r#"{"a":1}"#))), "{line}");
+      assert!(line.contains(&format!("msg={}", bucketed_tag_of(r#"{"a":1}"#))), "{line}");
     }
 
     #[test]
@@ -328,7 +431,7 @@ mod tests {
 
       let lines = rendered(assembler.push_chunk(b"{\"level\":\"info\",\"msg\":\"hello\"}\n", None));
 
-      assert_eq!(lines, vec![format!("{NOW} info daemon_line msg=[text:5] extra_fields=0")]);
+      assert_eq!(lines, vec![format!("{NOW} info daemon_line msg=[text:16] extra_fields=0")]);
     }
 
     #[test]
@@ -360,7 +463,7 @@ mod tests {
 
     #[test]
     fn becomes_a_length_and_a_tag() {
-      let text = format!("plain {SECRET}");
+      let text = format!("plain {}", secret());
 
       let lines = lines_of_chunks(Stream::Out, &[format!("{text}\n").as_bytes()]);
 
@@ -490,7 +593,7 @@ mod tests {
 
     #[test]
     fn never_prints_a_secret_that_straddles_a_chunk_boundary() {
-      let text = format!("noise {SECRET} noise\n");
+      let text = format!("noise {} noise\n", secret());
       let (first, second) = text.as_bytes().split_at(12);
 
       let lines = lines_of_chunks(Stream::Out, &[first, second]);
@@ -521,6 +624,122 @@ mod tests {
       });
 
       assert_linear_growth(measure, &LinearGrowthBudget::between(16 * 1024, 64 * 1024));
+    }
+  }
+
+  mod a_diagnostics_ring_buffer {
+    use super::*;
+    use crate::event_log::synthetic_tokens::jwt;
+    use crate::event_log::EventName;
+
+    const SIXTEEN_KIB: usize = 16 * 1024;
+    const WINDOW_BYTES: usize = 12;
+
+    fn now() -> Ts {
+      Ts::parse(NOW).expect("a valid timestamp")
+    }
+
+    fn projected(records: &[Value]) -> Vec<ProjectedRecord> {
+      project_daemon_records(records, Some(&salt()), now())
+    }
+
+    fn line_text_of(record: &ProjectedRecord) -> String {
+      let pairs: Vec<String> = record.fields.iter().map(|(key, value)| format!("{key}={value}")).collect();
+      [vec![record.ts.clone(), record.level.clone(), record.event.clone()], pairs].concat().join(" ")
+    }
+
+    fn hostile_tokens() -> Vec<String> {
+      vec![github_token(), anthropic_key(), aws_key_id(), jwt(24, 3)]
+    }
+
+    /// Tokens in free text, in nested fields, as keys, just past the 16 KiB and 64 KiB bounds and in an element after the cut.
+    fn hostile_ring_buffer(tokens: &[String]) -> Vec<Value> {
+      let [first, second, third, fourth] = [&tokens[0], &tokens[1], &tokens[2], &tokens[3]];
+      vec![
+        serde_json::json!({ "level": "error", "msg": format!("login failed with {first}"), "err": { "name": "Error", "message": second, "code": third, "stack": format!("Error: {fourth}\n    at x (/Users/me/{first}.js:1:1)"), "cause": { "message": second } } }),
+        serde_json::json!({ "level": "info", "msg": "x", "id": third, "sessionId": fourth, "detail": { "token": first, "nested": [{ "deeper": second }] }, (third.clone()): fourth }),
+        Value::String(format!("{}{first}", " ".repeat(SIXTEEN_KIB - 1))),
+        serde_json::json!({ "level": "info", "msg": format!("{} Authorization: Bearer {second}", "a".repeat(SIXTEEN_KIB)) }),
+        Value::String(format!("{}{third}", "b".repeat(MAX_LINE_BYTES))),
+        serde_json::json!({ "level": "info", "msg": "x", "items": ["c".repeat(MAX_LINE_BYTES), fourth] }),
+        Value::String(format!("plain text {fourth}")),
+        serde_json::json!([first, { "k": second }]),
+        serde_json::json!(null),
+        serde_json::json!(42),
+      ]
+    }
+
+    #[test]
+    fn copies_no_window_of_a_token_from_a_hostile_ring_buffer() {
+      let tokens = hostile_tokens();
+      let records = hostile_ring_buffer(&tokens);
+
+      let projection = projected(&records);
+
+      let projection_text = serde_json::to_string(&projection).expect("a serializable projection");
+      let leaked_windows: Vec<&str> = tokens.iter().flat_map(|token| token.as_bytes().windows(WINDOW_BYTES)).filter_map(|window| std::str::from_utf8(window).ok()).filter(|window| projection_text.contains(window)).collect();
+      assert_eq!(leaked_windows, Vec::<&str>::new());
+      assert_eq!(projection.len(), records.len());
+    }
+
+    #[test]
+    fn projects_every_record_through_the_typed_validator() {
+      let projection = projected(&hostile_ring_buffer(&hostile_tokens()));
+
+      for record in &projection {
+        let event = EventName::ALL.into_iter().find(|name| name.as_str() == record.event).expect("a known event");
+        assert_eq!(validate(event, &line_text_of(record)), Ok(()), "{record:?}");
+      }
+      let events: Vec<&str> = projection.iter().map(|record| record.event.as_str()).collect();
+      assert_eq!(events, ["daemon_line", "daemon_line", "daemon_text", "daemon_line", "daemon_text", "daemon_line", "daemon_text", "daemon_text", "daemon_text", "daemon_text"]);
+    }
+
+    #[test]
+    fn projects_an_object_to_the_pairs_of_its_desktop_log_line() {
+      let record = r#"{"ts":"2026-10-04T11:59:58.123Z","level":"warn","msg":"ws: write failed","id":"0a1b2c3d","err":{"name":"TypeError","message":"boom","code":"ENOENT"}}"#;
+
+      let projection = projected(&[serde_json::from_str(record).expect("a JSON record")]);
+
+      assert_eq!(projection.len(), 1);
+      assert_eq!((projection[0].ts.as_str(), projection[0].level.as_str(), projection[0].event.as_str()), ("2026-10-04T11:59:58Z", "warn", "daemon_line"));
+      assert_eq!(projection[0].fields.get("err_msg"), Some(&bucketed_tag_of("boom")));
+      let desktop_log_line = line_of(record);
+      let mut line_pairs: Vec<&str> = desktop_log_line.split(' ').skip(3).collect();
+      line_pairs.sort_unstable();
+      let projected_line = line_text_of(&projection[0]);
+      let mut projected_pairs: Vec<&str> = projected_line.split(' ').skip(3).collect();
+      projected_pairs.sort_unstable();
+      assert_eq!(projected_pairs, line_pairs);
+    }
+
+    #[test]
+    fn projects_a_string_to_a_daemon_text_of_its_exact_length_stamped_now() {
+      let projection = projected(&[Value::String("plain text".to_string())]);
+
+      assert_eq!(line_text_of(&projection[0]), format!("{NOW} info daemon_text class=other stream=out text={}", tag_of("plain text")));
+    }
+
+    #[test]
+    fn projects_a_value_that_is_neither_an_object_nor_a_string_from_its_json_text() {
+      let projection = projected(&[serde_json::json!([1, 2])]);
+
+      assert_eq!(projection[0].fields.get("text"), Some(&tag_of("[1,2]")));
+    }
+
+    #[test]
+    fn tags_only_the_first_64_kib_of_a_longer_string() {
+      let long_text = "d".repeat(MAX_LINE_BYTES + 10);
+
+      let projection = projected(&[Value::String(long_text.clone())]);
+
+      assert_eq!(projection[0].fields.get("text"), Some(&tag_of(&long_text[..MAX_LINE_BYTES])));
+    }
+
+    #[test]
+    fn classifies_a_boot_refusal_string_by_its_prefix() {
+      let projection = projected(&[Value::String("openfleet: refusing to boot: port in use".to_string())]);
+
+      assert_eq!(projection[0].fields.get("class").map(String::as_str), Some("boot_refusal"));
     }
   }
 

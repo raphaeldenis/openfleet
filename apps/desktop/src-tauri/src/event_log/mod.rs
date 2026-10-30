@@ -11,16 +11,18 @@ mod foreign;
 mod grammar;
 mod hash;
 #[cfg(test)]
-mod hostile_corpus;
+pub(crate) mod hostile_corpus;
 mod salt;
+#[cfg(test)]
+pub(crate) mod synthetic_tokens;
 
-pub use daemon_line::DaemonLineAssembler;
-pub use event::{DaemonLineFields, DaemonTextClass, DesktopEvent, ForeignTarget, SpawnFailure};
+pub use daemon_line::{is_node_fatal_line, project_daemon_records, DaemonLineAssembler, ProjectedRecord};
+pub use event::{DaemonLineFields, DaemonTextClass, DesktopEvent, ForeignTarget, LineBuilder, SpawnFailure};
 pub use field::{
-  Bool, Bytes, CatalogueId, Count, DaemonMessage, DaemonPhase, DurationMs, EventName, ExitCode, IoFailure, IoKind, JsonFailure, KnownCode, KnownErrorName,
-  KnownPaths, Level, Opaque, PathClass, PathSource, Pid, SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
+  Bool, CatalogueId, Count, DaemonMessage, DaemonPhase, DurationMs, EventName, ExitCode, IoFailure, IoKind, JsonFailure, KnownCode, KnownErrorName,
+  KnownPaths, Level, Literal, LogValue, Opaque, PathClass, PathSource, Pid, SessionId, ShortId, StackFrames, StopOutcome, Stream, Ts,
 };
 pub use foreign::{install_foreign_logger, AllowlistLogger, FOREIGN_RECORDS};
-pub use grammar::{allowed_keys_of, validate, GrammarViolation, SanitizedLine};
+pub use grammar::{fields_of, validate, FieldKind, FieldSpec, GrammarViolation, SanitizedLine, MAX_LINE_BYTES, MAX_VALUE_BYTES};
 pub use hash::Hash8;
 pub use salt::{Salt, SALT_FILE_NAME};
