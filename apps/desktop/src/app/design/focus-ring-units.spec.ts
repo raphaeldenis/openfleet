@@ -51,7 +51,11 @@ function stylesShippedBy(component: Type<unknown>): string {
   return styles.join('\n');
 }
 
-const ACTIVE_ROW_ACCENT_BAR = /^box-shadow:\s*inset 2px 0 0 var\(--[^)]*accent\)$/;
+function withoutEncapsulationMarkers(stylesheet: string): string {
+  return stylesheet.replaceAll('[_ngcontent-%COMP%]', '').replaceAll('%NS%', '').replace(/\s+/g, ' ');
+}
+
+const ACTIVE_ROW_ACCENT_BAR =/^box-shadow:\s*inset 2px 0 0 var\(--[^)]*accent\)$/;
 
 function pixelDeclarationsBeyondHairline(stylesheet: string): string[] {
   const declarations = stylesheet.match(RING_AND_SHADOW_DECLARATION) ?? [];
@@ -77,7 +81,15 @@ describe('focus rings and shadows follow the root font size', () => {
   });
 });
 
-const designAndSettingsComponents: [string, Type<unknown>][] = [
+describe('the attended checkbox of the manager fields', () => {
+  it('shows the app accent ring in rem when focused from the keyboard', () => {
+    const attendedCheckboxRule = /\.attended-label input:focus-visible\s*\{[^}]*outline:\s*0?\.125rem solid var\(--accent\)/;
+
+    expect(withoutEncapsulationMarkers(stylesShippedBy(ManagerFieldsComponent))).toMatch(attendedCheckboxRule);
+  });
+});
+
+const designAndSettingsComponents:[string, Type<unknown>][] = [
   ['the popover', PopoverComponent],
   ['the theme toggle', ThemeToggleButtonComponent],
   ['the models settings', ModelsSettingsComponent],
