@@ -9,11 +9,15 @@ import { log } from '../logger.js';
 import type { ManagerService } from '../managers/managerService.js';
 import type { DegradedRegistry } from '../process/degradedRegistry.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import { OncePerWindowPerKey } from '../usage/oncePerWindowPerKey.js';
 import { PerSessionCoalescer } from '../usage/perSessionCoalescer.js';
 import type { TranscriptUsageIngestion } from '../usage/transcriptUsageIngestion.js';
 import { handoverReminder, type HandoverLedger } from '../workingState/handoverLedger.js';
 import type { StopRefusal } from '../workingState/stopRefusal.js';
 import { json, type Handler } from './router.js';
+
+/** A session whose usage ingestion keeps failing adds one failure to the degraded count per window, not one per Stop. */
+const USAGE_FAILURE_COUNT_WINDOW_MS = 60_000;
 
 /** Runs `work`; a throw is logged, counted toward the degraded state, and answered as if the feature were absent (undefined). */
 function failingOpen<T>(degraded: DegradedRegistry | undefined, failure: string, work: () => T): T | undefined {
@@ -74,11 +78,23 @@ export function hooksHandler(deps: { managers?: Pick<ManagerService, 'forgetBase
 
   const stopIngestions = new PerSessionCoalescer();
 
-  const ingestUsageAfterAnswering =(sessionId: string, event: ClaudeHookEvent): void => {
+  const degradedCountsOfUsageFailures = new OncePerWindowPerKey(USAGE_FAILURE_COUNT_WINDOW_MS);
+
+  const ingestUsageFailingOpen = (usageIngestion: Pick<TranscriptUsageIngestion, 'ingestAtStop'>, sessionId: string): void => {
+    try {
+      usageIngestion.ingestAtStop(sessionId);
+    } catch (error) {
+      log('warn', `usage ingestion failed, recording nothing: ${error instanceof Error ? error.message : String(error)}`, undefined, { code: 'usage_ingestion_failed', sessionId });
+      const countsTowardDegraded = degradedCountsOfUsageFailures.admits(sessionId);
+      if (countsTowardDegraded) deps.degraded?.recordHookFailOpen();
+    }
+  };
+
+  const ingestUsageAfterAnswering = (sessionId: string, event: ClaudeHookEvent): void => {
     const endsTurn = event.hook_event_name === 'Stop';
     if (!endsTurn || !deps.usageIngestion) return;
     const { usageIngestion } = deps;
-    stopIngestions.request(sessionId, () => failingOpen(deps.degraded, 'usage ingestion failed, recording nothing', () => usageIngestion.ingestAtStop(sessionId)));
+    stopIngestions.request(sessionId, () => ingestUsageFailingOpen(usageIngestion, sessionId));
   };
 
   return async ({ res, params, body }) => {

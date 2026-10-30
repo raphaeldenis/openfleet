@@ -3,6 +3,7 @@ import { openDatabase } from '../db/database.js';
 import { EventBus } from '../events/eventBus.js';
 import { ApprovalService } from '../governance/approvalService.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import { recentLogLines } from '../logger.js';
 import { ManagerRepository } from '../managers/managerRepository.js';
 import { ManagerService } from '../managers/managerService.js';
 import { PulseScheduler } from '../managers/pulseScheduler.js';
@@ -15,6 +16,7 @@ import { startServer } from './server.js';
 let server: Awaited<ReturnType<typeof startServer>>;
 let hookToken: string;
 let sessionId: string;
+let degraded: ReturnType<typeof createDegradedRegistry>;
 
 async function startWith(usageIngestion?: Pick<TranscriptUsageIngestion, 'ingestAtStop'>) {
   const db = openDatabase(':memory:');
@@ -24,7 +26,8 @@ async function startWith(usageIngestion?: Pick<TranscriptUsageIngestion, 'ingest
   const managerRepo = new ManagerRepository(db);
   const pulseScheduler = new PulseScheduler({ managers: managerRepo, sessions, bus });
   const managers = new ManagerService({ managers: managerRepo, sessions, bus, scheduler: pulseScheduler });
-  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', degraded: createDegradedRegistry(), usageIngestion });
+  degraded = createDegradedRegistry();
+  server = await startServer({ host: '127.0.0.1', port: 0, adminToken: 'admin', sessions, approvals, managers, pulseScheduler, bus, modelTable: DEFAULT_MODEL_TABLE, modelConfigPath: '/tmp/of-unused/config.json', degraded, usageIngestion });
   const session = await sessions.create({ directory: '/tmp', name: 'G', harness: 'fake', emoji: '🤖' });
   sessionId = session.id;
   hookToken = (db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(session.id) as { hook_token: string }).hook_token;
@@ -71,6 +74,27 @@ describe('usage ingestion on the Stop hook', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({});
     await expect.poll(() => ingestAtStop.mock.calls.length).toBe(1);
+  });
+
+  it('logs the session and a code with the fixed message when the ingestion throws', async () => {
+    const ingestAtStop = vi.fn(() => { throw new Error('ledger bug'); });
+    await startWith({ ingestAtStop });
+
+    await hook('Stop');
+
+    await expect.poll(() => recentLogLines().filter((line) => line.includes('usage ingestion failed, recording nothing') && line.includes(sessionId) && line.includes('usage_ingestion_failed'))).toHaveLength(1);
+  });
+
+  it('counts a session that keeps failing once toward the degraded state, not once per Stop', async () => {
+    const ingestAtStop = vi.fn(() => { throw new Error('unreadable transcript'); });
+    await startWith({ ingestAtStop });
+
+    for (let stop = 1; stop <= 5; stop += 1) {
+      await hook('Stop');
+      await expect.poll(() => ingestAtStop.mock.calls.length).toBe(stop);
+    }
+
+    expect(degraded.list()).toEqual([]);
   });
 
   it('does nothing when the daemon was not given an ingestion', async () => {

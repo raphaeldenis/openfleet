@@ -57,7 +57,7 @@ import { registerHandoffPickerRoutes } from './handoffPickerRoutes.js';
 import { HandoffSeed } from '../notes/handoffSeed.js';
 import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { registerRestRoutes } from './restHandlers.js';
-import { decodeParams, json, readJson, redactedRequestPath, Router } from './router.js';
+import { decodeParams, json, readJson, redactedRequestPath, Router, type Handler } from './router.js';
 import { createWsHandler } from './wsHandler.js';
 import { createWsTicketStore, type WsTicketStore } from './wsTicketStore.js';
 
@@ -127,12 +127,12 @@ function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
 }
 
-async function handleHookRequest(req: IncomingMessage, res: ServerResponse, hookToken: string, deps: ServerDeps): Promise<void> {
+async function handleHookRequest(req: IncomingMessage, res: ServerResponse, hookToken: string, deps: ServerDeps, handleHook: Handler): Promise<void> {
   const session = deps.sessions.byHookToken(hookToken);
   if (!session) return json(res, 200, {});
   const warnAboutTheIgnoredBody = (bytes: number) => log('warn', 'hook body over 1 MiB ignored', undefined, { code: 'hook_body_too_large', sessionId: session.id, bytes });
   const body = await readJson(req, undefined, { skipOversized: true, onSkipped: warnAboutTheIgnoredBody });
-  await hooksHandler(deps)({ req, res, params: { hookToken }, body });
+  await handleHook({ req, res, params: { hookToken }, body });
 }
 
 async function handleMcpRequest(
@@ -194,6 +194,8 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.handoff) registerHandoffRoutes(router, deps.handoff);
   if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });
 
+  const handleHook = hooksHandler(deps);
+
   const server = createServer(async (req, res) => {
     applyCorsHeaders(req, res);
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
@@ -206,7 +208,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
       if (hookMatch) {
         const hookParams = decodeParams(['hookToken'], hookMatch);
         if (!hookParams) throw new OpenFleetError('not_found', 'the route does not exist.');
-        return await handleHookRequest(req, res, hookParams.hookToken!, deps);
+        return await handleHookRequest(req, res, hookParams.hookToken!, deps, handleHook);
       }
       if (url.pathname === '/mcp' && deps.mcp) return await handleMcpRequest(req, res, deps.mcp, deps.sessions);
 
