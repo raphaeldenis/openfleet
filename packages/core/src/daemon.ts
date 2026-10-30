@@ -59,6 +59,7 @@ import { IdleChildWatcher } from './managers/idleChildWatcher.js';
 import { PulseScheduler } from './managers/pulseScheduler.js';
 import { ScheduledEventRepository } from './managers/scheduledEventRepository.js';
 import { ScheduledEventService } from './managers/scheduledEventService.js';
+import { ChildSilenceWatch, DEFAULT_SILENCE_CHECK_DELAY_MS } from './managers/childSilenceWatch.js';
 import { CiWatchService } from './managers/ciWatchService.js';
 import { WatchedPrRepository } from './managers/watchedPrRepository.js';
 import { createGhPullRequestPort, type GhPullRequestPort } from './github/ghPullRequestPort.js';
@@ -153,6 +154,12 @@ export interface DaemonOptions {
   approvalTimeoutMs?: number;
   /** Replaces the clock and the timer of the automatic child restarts, so a test does not wait their delays. */
   childRestart?: {
+    clock?: () => number;
+    schedule?: (callback: () => void, delayMs: number) => () => void;
+  };
+  /** Replaces the delay, the clock and the timer of the silence check armed when a manager messages a child, so a test does not wait ten minutes. */
+  childSilence?: {
+    delayMs?: number;
     clock?: () => number;
     schedule?: (callback: () => void, delayMs: number) => () => void;
   };
@@ -342,8 +349,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const diagnostics = () => buildDiagnosticsDocument({ db, degraded, listSessions: () => sessions.list(), port: config.port, e2eEnabled: config.e2eEnabled });
   const worktrees = new WorktreeService({ projects, sessions, worktreesRoot: config.worktreesRoot });
   const scheduledEvents = new ScheduledEventService({ repository: new ScheduledEventRepository(db), sessions, managers: managerRepository, bus });
+  const childSilence = new ChildSilenceWatch({
+    sessions, bus, delayMs: options.childSilence?.delayMs ?? DEFAULT_SILENCE_CHECK_DELAY_MS,
+    clock: options.childSilence?.clock ?? Date.now, schedule: options.childSilence?.schedule ?? scheduleOnRealClock,
+  });
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, mcp: createMcpHandler({ askUserGate, criteria, escalations, arbiters, scheduledEvents, childSilence, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -356,6 +367,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     unwatchDatabase();
     pulseScheduler.stop();
     scheduledEvents.stop();
+    childSilence.stop();
     arbiters.stop();
     await ciWatch.stop();
     childAutoRestarter.stop();

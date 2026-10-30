@@ -13,7 +13,7 @@ export const OTHER_PROJECT_ID = 'project-other';
 const MANAGER_SPEC = { childrenCap: 2, mission: 'Lead the fleet', pulseSeconds: 3600 };
 
 /** A daemon booted the way production boots it (its own wiring, no hand-built services), with two managers and a plain session in one project. */
-export async function startGovernanceFixture(options: Pick<DaemonOptions, 'gh'> = {}) {
+export async function startGovernanceFixture(options: Pick<DaemonOptions, 'gh' | 'childSilence'> = {}) {
   const directories = createTempDirTracker();
   const home = directories.make('governance-queue-');
   const config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', OPENFLEET_E2E: '1' });

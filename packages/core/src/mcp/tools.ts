@@ -36,6 +36,7 @@ import { maskedSecrets } from '../redact.js';
 import type { ManagerDenials } from '../policy/managerDenials.js';
 import type { ReviewFindingsRepository } from '../review/reviewFindingsRepository.js';
 import type { ScheduledEventService } from '../managers/scheduledEventService.js';
+import type { ChildSilenceWatch } from '../managers/childSilenceWatch.js';
 import { scheduledEventView } from './scheduledEventTools.js';
 
 const isArbiter = (session: Session): boolean => session.role === ARBITER_ROLE;
@@ -82,6 +83,8 @@ export interface RegisterToolsDeps {
   managerDenials?: Pick<ManagerDenials, 'countsOf'>;
   /** The pending scheduled events get_argus_status lists; absent, it lists none. */
   scheduledEvents?: Pick<ScheduledEventService, 'pendingOf'>;
+  /** Arms the silence check of a child a manager messages and cancels it when the child answers; absent, no check is armed. */
+  childSilence?: Pick<ChildSilenceWatch, 'observeAgentMessage'>;
   /** The review findings the ship gate reads; absent, get_argus_status lists no blocked ticket. */
   reviewFindings?: Pick<ReviewFindingsRepository, 'latestAdversarialLinePerTicketOf'>;
   /** The manager base this daemon ships. Absent, spawning is not checked against it and the manager view reports no base. */
@@ -130,7 +133,13 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       const { status, messageId, heldFor } = send();
       return { status, message_id: messageId, ...(heldFor && { reason: HELD_REASON_TEXT[heldFor] }) };
     });
-  const realPathOrSelf = (directory: string) => (existsSync(directory) ? realpathSync.native(directory) : directory);
+  const sendAgentMessage = ({ targetId, body, messageId }: { targetId: string; body: string; messageId: string | undefined }) =>
+    sendMessage(() => {
+      const delivery = sessions.sendMessage({ sessionId: targetId, body, fromSessionId: caller.id, messageId });
+      deps.childSilence?.observeAgentMessage({ fromSessionId: caller.id, toSessionId: targetId });
+      return delivery;
+    });
+  const realPathOrSelf =(directory: string) => (existsSync(directory) ? realpathSync.native(directory) : directory);
   const isSameDirectory = (first: string, second: string): boolean => {
     if (first === second) return true;
     try {
@@ -209,14 +218,14 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
     const target = sessions.get(target_uuid);
     if (!target || !isInLineage(target) || target.id === caller.id) return refuse('outside_lineage', 'target not found or outside your lineage');
     if (isArbiter(target)) return refuseArbiterLifecycle();
-    return sendMessage(() => sessions.sendMessage({ sessionId: target.id, body, fromSessionId: caller.id, messageId: message_id }));
+    return sendAgentMessage({ targetId: target.id, body, messageId: message_id });
   });
 
   server.registerTool('message_parent', { description: 'Report to the manager that spawned you. Pass back a previous message_id to retry idempotently.', inputSchema: { body: z.string().min(1), message_id: z.uuid().optional() } }, async ({ body, message_id }) => {
     const tooLong = tooLongMessage(body);
     if (tooLong) return refuse('message_too_long', tooLong);
     if (!caller.parentId) return refuse('no_parent', 'this session has no parent');
-    return sendMessage(() => sessions.sendMessage({ sessionId: caller.parentId!, body, fromSessionId: caller.id, messageId: message_id }));
+    return sendAgentMessage({ targetId: caller.parentId, body, messageId: message_id });
   });
 
   const normalizedManagerName = (name: string) => name.trim().normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -241,7 +250,7 @@ export function registerTools(server: McpServer, deps: RegisterToolsDeps): void 
       return refuse('invalid_body', managerAmbiguityMessage(matches));
     }
     const manager = matches[0]!;
-    return sendMessage(() => sessions.sendMessage({ sessionId: manager.id, body: message, fromSessionId: caller.id, messageId: message_id }));
+    return sendAgentMessage({ targetId: manager.id, body: message, messageId: message_id });
   });
 
   server.registerTool('create_worktree', { description: 'Create an isolated git worktree for a task. If your project configures a post-create script it runs in the new worktree; a failing script never fails the call, it adds a warnings entry (reason timeout, exit_nonzero, not_executable, not_found, unsafe_permissions or spawn_failed)', inputSchema: { repo_path: z.string(), branch_name: z.string(), base_ref: z.string().optional().describe('Existing branch, tag or commit sha of the repository the new branch starts from; defaults to the current HEAD of repo_path') } }, async ({ repo_path, branch_name, base_ref }) => {
