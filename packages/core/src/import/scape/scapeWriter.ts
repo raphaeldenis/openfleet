@@ -103,6 +103,11 @@ function writeNotes(input: { db: DatabaseSync; ledger: ImportLedger; plan: Impor
   for (const note of plan.notes) {
     for (const type of note.extra.unconvertedTypes) report.unconvertedNodeTypes[type] = (report.unconvertedNodeTypes[type] ?? 0) + 1;
   }
+  const noteTitleById = new Map(plan.notes.map((note) => [note.id, String(note.record.title)]));
+  for (const version of plan.noteVersions.filter((planned) => hasUnconvertedTypes(planned.extra))) {
+    const noteTitle = noteTitleById.get(String(version.record.note_id)) ?? '';
+    report.unconvertedNoteVersions.push({ noteTitle, rev: Number(version.record.rev), nodeTypes: version.extra.unconvertedTypes });
+  }
 }
 
 /** The stores whose own record or one of whose columns is missing from OpenFleet: nothing may hang on them. */

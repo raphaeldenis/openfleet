@@ -1,5 +1,5 @@
 import { MENTION_KINDS, type MentionKind } from '@openfleet/shared';
-import { numberField, stringField, type LexicalNode, type NodeVisitor } from './lexicalNode.js';
+import { childrenOf, numberField, stringField, type LexicalNode, type NodeVisitor } from './lexicalNode.js';
 import { delimiterLongerThanAnyBacktickRunIn } from './markdownFences.js';
 
 export const HARD_BREAK = '  \n';
@@ -57,6 +57,19 @@ export const visitText: NodeVisitor = (node, context) => {
 };
 
 export const visitLinebreak: NodeVisitor = () => HARD_BREAK;
+
+export const visitTab: NodeVisitor = (node) => stringField(node, 'text') || '\t';
+
+const LINK_URL_THAT_RENDERS_SAFELY = /^(?:https?:\/\/|mailto:)[^\s()<>]+$/i;
+const LINK_TEXT_THAT_BREAKS_A_MARKDOWN_LINK = /[[\]\r\n]/;
+
+export const visitLink: NodeVisitor = (node, context) => {
+  const linkText = context.renderInline(childrenOf(node));
+  const hasSafeUrl = LINK_URL_THAT_RENDERS_SAFELY.test(stringField(node, 'url'));
+  const hasSafeText = linkText.trim() !== '' && !LINK_TEXT_THAT_BREAKS_A_MARKDOWN_LINK.test(linkText);
+  if (!hasSafeUrl || !hasSafeText) return context.renderUnconverted(node.type) + linkText;
+  return `[${linkText}](${stringField(node, 'url')})`;
+};
 
 const mentionedIdOf = (node: LexicalNode, scapeKind: string): string => {
   const genericId = stringField(node, 'mentionId');

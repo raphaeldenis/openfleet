@@ -66,6 +66,10 @@ separately from an empty table. Supported rich column formats and kanban title,
 card fields, column order and showUngrouped are preserved. Unsupported or invalid
 view properties remain listed as losses, including partially preserved lists.
 Re-import enriches intact views imported by older versions; local edits remain conflicts.
+
+View sort: `sortColumnID` and `sortDescending` become `orderBy: [{ columnId, dir }]` on grid and kanban views (ascending when `sortDescending` is absent). A `sortColumnID` that names no imported column creates no `orderBy`; the view is listed under « View settings not converted » with `sortColumnID`. A `sortDescending` that is not a boolean is listed and read as ascending. `sortMode` is never converted: sémantique non établie côté Scape, no value is guessed. Each view holding one is listed with its raw value (`sortMode = <value>`, neutralized).
+
+Lexical conversion: links (`http(s):`, `mailto:` without space or parenthesis, and text without brackets or line break), autolinks, horizontal rules, tabs and checklist items (`- [x]` / `- [ ]`) are converted. The report section « Note versions with unconverted lexical nodes » names each note (title) and version number (rev) holding a node without a markdown form, with the node types. An unknown node leaves a `[non converti: type]` marker followed by its children or its own text, so no text is lost. Lost on purpose: the style of a run with an underline, subscript, superscript or highlight bit (`text-format:8`, `32`, `64`, `128`), a link that fails the rule above (marker plus text, the URL is lost), and every node type with no markdown form (the marker and the type name remain).
 Without showUngrouped, core omits ungrouped rows and desktop displays them,
 preserving each surface's historical default. Explicit true/false overrides both.
 

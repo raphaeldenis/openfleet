@@ -1,7 +1,7 @@
-import { visitCode, visitHeading, visitList, visitParagraph, visitQuote, visitTable } from './blockVisitors.js';
+import { visitCode, visitHeading, visitHorizontalRule, visitList, visitParagraph, visitQuote, visitTable } from './blockVisitors.js';
 import { joinInlinePieces } from './inlineJoin.js';
-import { visitLinebreak, visitMention, visitMissionLawBound, visitText } from './inlineVisitors.js';
-import { BLOCK_SEPARATOR, childrenOf, type LexicalNode, type NodeVisitor, type RenderContext } from './lexicalNode.js';
+import { visitLinebreak, visitLink, visitMention, visitMissionLawBound, visitTab, visitText } from './inlineVisitors.js';
+import { BLOCK_SEPARATOR, childrenOf, stringField, type LexicalNode, type NodeVisitor, type RenderContext } from './lexicalNode.js';
 import {
   visitMissionBody,
   visitMissionLaws,
@@ -22,7 +22,11 @@ const VISITOR_BY_NODE_TYPE: Record<string, NodeVisitor> = {
   code: visitCode,
   list: visitList,
   table: visitTable,
+  horizontalrule: visitHorizontalRule,
   text: visitText,
+  tab: visitTab,
+  link: visitLink,
+  autolink: visitLink,
   linebreak: visitLinebreak,
   mention: visitMention,
   'mission-profile': visitMissionProfile,
@@ -33,7 +37,7 @@ const VISITOR_BY_NODE_TYPE: Record<string, NodeVisitor> = {
   'mission-resources': visitMissionResources,
 };
 
-const INLINE_NODE_TYPES = new Set(['text', 'linebreak', 'mention', 'mission-law-bound']);
+const INLINE_NODE_TYPES = new Set(['text', 'tab', 'link', 'autolink', 'linebreak', 'mention', 'mission-law-bound']);
 const LEADING_LINE_BREAK = /^(?: {2})?\n+/;
 
 const parseRoot = (input: string | object): LexicalNode => {
@@ -57,7 +61,7 @@ export function convertLexicalToMarkdown(input: string | object): LexicalConvers
     const marker = renderUnconverted(node.type);
     const children = childrenOf(node);
     const hasChildren = children.length > 0;
-    if (!hasChildren) return marker;
+    if (!hasChildren) return marker + stringField(node, 'text');
 
     const hasOnlyInlineChildren = children.every((child) => INLINE_NODE_TYPES.has(child.type));
     if (hasOnlyInlineChildren) return marker + context.renderInline(children);

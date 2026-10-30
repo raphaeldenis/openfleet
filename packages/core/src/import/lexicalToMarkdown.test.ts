@@ -406,13 +406,70 @@ describe('convertLexicalToMarkdown', () => {
     });
   });
 
+  describe('links, rules, tabs and checklists', () => {
+    const link = (type: string, url: string, ...children: Node[]): Node => ({ type, url, children });
+
+    it('converts a link to a markdown link', () => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph(text('see '), link('link', 'https://example.test/a', text('docs')))));
+
+      expect(result).toEqual({ markdown: 'see [docs](https://example.test/a)', unconvertedTypes: [] });
+    });
+
+    it('converts an autolink and a mailto link', () => {
+      const markdown = markdownOf(paragraph(link('autolink', 'https://example.test', text('example')), text(' '), link('link', 'mailto:a@example.test', text('mail'))));
+
+      expect(markdown).toBe('[example](https://example.test) [mail](mailto:a@example.test)');
+    });
+
+    it.each(['javascript:alert(1)', 'javascript:void0','https://example.test/a b', 'https://example.test/a)b', '', 'relative/path'])('keeps the marker and the text of a link to %j', (url) => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph(link('link', url, text('docs')))));
+
+      expect(result).toEqual({ markdown: '[non converti: link]docs', unconvertedTypes: ['link'] });
+    });
+
+    it('keeps the marker and the text of a link whose text would break the markdown link', () => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph(link('link', 'https://example.test', text('a]b')))));
+
+      expect(result.unconvertedTypes).toEqual(['link']);
+      expect(result.markdown).toContain('a]b');
+    });
+
+    it('converts a horizontal rule to a markdown rule', () => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph(text('a')), { type: 'horizontalrule' }, paragraph(text('b'))));
+
+      expect(result).toEqual({ markdown: 'a\n\n---\n\nb', unconvertedTypes: [] });
+    });
+
+    it('converts a tab node to a tab', () => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph(text('a'), { type: 'tab', text: '\t' }, text('b'))));
+
+      expect(result).toEqual({ markdown: 'a\tb', unconvertedTypes: [] });
+    });
+
+    it('renders the checked state of a checklist item', () => {
+      const checklist: Node = { type: 'list', listType: 'check', children: [
+        { type: 'listitem', checked: true, children: [text('done')] },
+        { type: 'listitem', checked: false, children: [text('todo')] },
+        { type: 'listitem', children: [text('unset')] },
+      ] };
+
+      expect(markdownOf(checklist)).toBe('- [x] done\n- [ ] todo\n- [ ] unset');
+    });
+  });
+
   describe('unknown nodes', () => {
     it('keeps the inline children of an unknown node after its marker', () => {
-      const link = { type: 'link', url: 'https://example.test', children: [text('docs')] };
+      const badge = { type: 'badge', children: [text('docs')] };
 
-      const result = convertLexicalToMarkdown(documentOf(paragraph(text('see '), link)));
+      const result = convertLexicalToMarkdown(documentOf(paragraph(text('see '), badge)));
 
-      expect(result).toEqual({ markdown: 'see [non converti: link]docs', unconvertedTypes: ['link'] });
+      expect(result).toEqual({ markdown: 'see [non converti: badge]docs', unconvertedTypes: ['badge'] });
+    });
+
+    it('keeps the text of an unknown leaf node after its marker', () => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph({ type: 'sticker', text: 'kept words' })));
+
+      expect(result).toEqual({ markdown: '[non converti: sticker]kept words', unconvertedTypes: ['sticker'] });
     });
 
     it('keeps the block children of an unknown node after its marker', () => {
