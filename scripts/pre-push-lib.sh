@@ -8,28 +8,42 @@ TEST_INPUT_DIRS='packages apps scripts'
 E2E_TRIGGER_PATTERN='^(apps/desktop/src/|packages/core/src/api/|packages/shared/src/)'
 
 # Reads git's pre-push stdin (<local ref> <local sha> <remote ref> <remote sha>) and prints the files each ref would publish.
+# Fails closed: when the files of one ref cannot be listed, prints nothing and returns 1, so no step is skipped on a guess.
 pushed_files() {
+  all_pushed_files=""
   while read -r _local_ref local_sha _remote_ref remote_sha; do
     [ -n "$local_sha" ] || continue
     [ "$local_sha" != "$ZERO_SHA" ] || continue
     if [ "$remote_sha" != "$ZERO_SHA" ] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
-      changed_file_names "$remote_sha" "$local_sha"
+      ref_files=$(changed_file_names "$remote_sha" "$local_sha")
     else
-      files_since_origin_main "$local_sha"
-    fi
-  done | sort -u
+      ref_files=$(files_since_origin_main "$local_sha")
+    fi || { echo "pre-push: cannot list the files of $local_sha: push aborted rather than guessing which checks to run" >&2; return 1; }
+    all_pushed_files="$all_pushed_files
+$ref_files"
+  done
+  printf '%s\n' "$all_pushed_files" | grep -v '^$' | sort -u
+  return 0
 }
 
-# Prints the paths changed between two revisions: old paths of renames included, never quoted (-z, since quotePath=false still quotes tabs).
+# Prints the paths changed between two revisions: old paths of renames included, never quoted (-z, since quotePath=false still quotes tabs). Returns git's status.
 changed_file_names() {
-  git diff -z --name-only --no-renames "$@" | tr '\0' '\n'
+  changed_names_file=$(mktemp) || return 1
+  git diff -z --name-only --no-renames "$@" >"$changed_names_file" && tr '\0' '\n' <"$changed_names_file"
+  changed_names_status=$?
+  rm -f "$changed_names_file"
+  return $changed_names_status
 }
 
 files_since_origin_main() {
   if git rev-parse --verify --quiet origin/main >/dev/null; then
     changed_file_names origin/main..."$1"
   else
-    git ls-tree -r -z --name-only "$1" | tr '\0' '\n'
+    tree_names_file=$(mktemp) || return 1
+    git ls-tree -r -z --name-only "$1" >"$tree_names_file" && tr '\0' '\n' <"$tree_names_file"
+    tree_names_status=$?
+    rm -f "$tree_names_file"
+    return $tree_names_status
   fi
 }
 
@@ -52,6 +66,13 @@ uncommitted_test_inputs() {
   git diff -z --name-only HEAD -- $TEST_INPUT_DIRS | tr '\0' '\n'
 }
 
+# Fails with a message when cargo is absent: a push that touches src-tauri must not reach CI's Rust job unchecked.
+require_cargo() {
+  command -v cargo >/dev/null 2>&1 && return 0
+  echo "pre-push: cargo is not installed but the push touches apps/desktop/src-tauri: install Rust (rustup) to run the CI Rust checks" >&2
+  return 1
+}
+
 # Prints the caller's TMPDIR, else the OS per-user temp dir (macOS), else /tmp.
 default_tmpdir() {
   [ -n "$TMPDIR" ] && { echo "$TMPDIR"; return 0; }
@@ -61,6 +82,7 @@ default_tmpdir() {
 # Runs the core tests the way CI does: node and pnpm on PATH, no claude, empty HOME, a real TMPDIR (some core tests size paths from it). Needs node, pnpm and mktemp; removes its temp dir on exit.
 # Skips (returns 0) when pnpm cannot run in that minimal environment or would need the network: a false failure must not block a push.
 claude_free_core_tests() {
+  command -v pnpm >/dev/null 2>&1 || { echo "pre-push: pnpm is not installed: the core tests cannot run (install pnpm, as CI does)" >&2; return 1; }
   claude_free_workdir=$(mktemp -d) || return 1
   trap 'rm -rf "$claude_free_workdir"' EXIT
   trap 'exit 130' INT TERM
