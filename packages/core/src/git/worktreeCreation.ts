@@ -3,7 +3,8 @@ import { DEFAULT_POST_CREATE_HOOK_TIMEOUT_SECONDS, type WorktreeWarning } from '
 import type { ProjectRecord } from '../projects/projectRepository.js';
 import { provideHooksDirectory } from './hooksPathProvision.js';
 import { provideOverlay } from './overlayProvision.js';
-import { runPostCreateHook } from './postCreateHook.js';import { createWorktree } from './worktrees.js';
+import { runPostCreateHook } from './postCreateHook.js';
+import { createWorktree } from './worktrees.js';
 
 export interface PostCreateHook {
   script: string;

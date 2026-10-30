@@ -170,6 +170,22 @@ describe('runPostCreateHook', () => {
     }
   });
 
+  it('skips the owner check where the platform has no process.getuid', async () => {
+    const marker = join(tempDirs.make('of-hook-out-'), 'ran.txt');
+    const script = aScript(`touch "${marker}"`);
+    const originalGetuid = process.getuid;
+    Object.defineProperty(process, 'getuid', { value: undefined, configurable: true });
+
+    try {
+      const warning = await runPostCreateHook(hookInput(script));
+
+      expect(warning).toBeUndefined();
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      Object.defineProperty(process, 'getuid', { value: originalGetuid, configurable: true });
+    }
+  });
+
   it('masks credentials in the captured output', async () => {
     const script = aScript('echo "password: hunter2-secret-value" >&2\nexit 1');
 

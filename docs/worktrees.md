@@ -66,7 +66,7 @@ A project can name one script that runs in every worktree created for one of its
   { "path": "...", "branch": "task/x", "warnings": [{ "type": "post_create_hook_failed", "reason": "exit_nonzero", "exitCode": 3, "outputTail": "..." }] }
   ```
 
-  `reason` is `timeout`, `exit_nonzero`, `not_executable`, `not_found`, `unsafe_permissions` or `spawn_failed`. `outputTail` is the last 8 KB of the script's output with credentials masked. For `POST /api/sessions` the `warnings` are added to the response only; the stored session does not carry them.
+  `reason` is `timeout`, `exit_nonzero`, `not_executable`, `not_found`, `unsafe_permissions` (the script is not owned by the daemon user, or is writable by group or others) or `spawn_failed`. `outputTail` is the last 8 KB of the script's output with credentials masked. For `POST /api/sessions` the `warnings` are added to the response only; the stored session does not carry them.
 
 ## Listing
 

@@ -38,6 +38,24 @@ describe('createWorktreeWithHook never runs a script found in a repository', () 
     expect(created).not.toHaveProperty('warnings');
   });
 
+  it('runs the script the project configures and still not the one of the repository', async () => {
+    const outputDirectory = tempDirs.make('of-noauto-out-');
+    const repositoryWitness = join(outputDirectory, 'repository-script-ran.txt');
+    const projectWitness = join(outputDirectory, 'project-hook-ran.txt');
+    const projectScript = join(tempDirs.make('of-noauto-hook-'), 'hook.sh');
+    writeFileSync(projectScript, `#!/bin/sh\ntouch "${projectWitness}"\n`);
+    chmodSync(projectScript, 0o700);
+    const repo = realpathSync(makeRepo());
+    repos.push(repo);
+    plantExecutableSetupScript(repo, repositoryWitness);
+
+    const created = await createIn(repo, 'task/configured', { hook: { script: projectScript, timeoutSeconds: 30, projectId: 'project-1' } });
+
+    expect(existsSync(projectWitness)).toBe(true);
+    expect(existsSync(repositoryWitness)).toBe(false);
+    expect(created).not.toHaveProperty('warnings');
+  });
+
   it('runs nothing when the caller names its own linked worktree, holding such a script, as the repository', async () => {
     const witness = join(tempDirs.make('of-noauto-out-'), 'ran.txt');
     const repo = realpathSync(makeRepo());
