@@ -2172,7 +2172,9 @@ export class SessionService {
     const hookToken = newToken();
     const mcpToken = newToken();
     this.repo.setTokens(session.id, hookToken, mcpToken);
-    if (this.startFailureDetails.delete(session.id)) this.repo.clearReadiness(session.id);
+    this.startFailureDetails.delete(session.id);
+    const hasFailedReadiness = this.repo.get(session.id)?.readiness === 'failed';
+    if (hasFailedReadiness) this.repo.clearReadiness(session.id);
     this.startPendingRecording(session.id, session.model);
     let handle: HarnessHandle;
     let isNewConversationAnnounced = false;
@@ -2460,10 +2462,21 @@ export class SessionService {
     this.armStartTimeout(sessionId, handle, this.deps.resumeTimeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS);
   }
 
-  private armFirstStartTimeout(sessionId: string, handle: HarnessHandle): void {
+  private armFirstStartTimeout(sessionId: string, handle: HarnessHandle, { isExtension = false }: { isExtension?: boolean } = {}): void {
     const harnessTimeoutMs = this.harnessFor(this.require(sessionId).harness).startSignalTimeoutMs;
-    const timeoutMs = harnessTimeoutMs ?? this.deps.firstStartTimeoutMs ?? DEFAULT_FIRST_START_TIMEOUT_MS;
-    this.armStartTimeout(sessionId, handle, timeoutMs, () => this.failStartSignal(sessionId));
+    const timeoutMs = this.deps.firstStartTimeoutMs ?? harnessTimeoutMs ?? DEFAULT_FIRST_START_TIMEOUT_MS;
+    this.armStartTimeout(sessionId, handle, timeoutMs, () => this.judgeMissingStartSignal(sessionId, handle, { isExtension }));
+  }
+
+  // A slow CLI (a large resume) can be reading its transcript before it reports its start: it gets one more delay, once.
+  private judgeMissingStartSignal(sessionId: string, handle: HarnessHandle, { isExtension }: { isExtension: boolean }): 'extended' | 'failed' {
+    const isTranscriptMoving = handle.probeTranscriptProgress?.() !== undefined;
+    if (isTranscriptMoving && !isExtension) {
+      this.armFirstStartTimeout(sessionId, handle, { isExtension: true });
+      return 'extended';
+    }
+    this.failStartSignal(sessionId);
+    return 'failed';
   }
 
   private failStartSignal(sessionId: string): void {
@@ -2478,15 +2491,16 @@ export class SessionService {
 
   private startFailureDetailOf(sessionId: string): string {
     const drawnText = textDrawnBy(this.outputBuffers.get(sessionId) ?? '');
-    const tail = trimToTail(drawnText, START_FAILURE_DETAIL_LIMIT).trim();
-    return trimToTail(maskedSecrets(tail), START_FAILURE_DETAIL_LIMIT);
+    const maskedText = maskedSecrets(drawnText);
+    return trimToTail(maskedText, START_FAILURE_DETAIL_LIMIT).trim();
   }
 
-  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number, onTimedOut?: () => void): void {
+  private armStartTimeout(sessionId: string, handle: HarnessHandle, timeoutMs: number, onTimedOut?: () => 'extended' | 'failed'): void {
     this.clearResumeTimer(sessionId);
     const timer = setTimeout(() => {
       if (activeHandleBySessionId.get(sessionId) !== handle) return; // already replaced or closed by something else
-      onTimedOut?.();
+      const isWaitingLonger = onTimedOut?.() === 'extended';
+      if (isWaitingLonger) return;
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
       // timeout's own resume_timeout closure with whatever exit code the harness happens to report.
       activeHandleBySessionId.delete(sessionId);
@@ -2496,7 +2510,9 @@ export class SessionService {
         // under a new handle. Our own deletion above already left this slot empty — that's the expected,
         // common case and must still proceed to markClosed; only a handle claimed by someone else means skip.
         if (activeHandleBySessionId.has(sessionId)) return;
-        this.markClosed(sessionId, { reason: 'resume_timeout' });
+        const isClosedOnRequest = this.isCloseRequested(sessionId) && this.closeCauses.get(sessionId) !== 'shutdown';
+        const reason = isClosedOnRequest ? this.reasonOfRequestedClose(sessionId) : 'resume_timeout';
+        this.markClosed(sessionId, { reason });
       });
     }, timeoutMs);
     this.resumeTimers.set(sessionId, timer);

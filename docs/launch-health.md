@@ -7,18 +7,18 @@ Two checks keep a spawn from leaving a session that never starts.
 
 ## Start signal timeout
 
-A new session waits for the harness's start signal (the `SessionStart` hook). The wait is `startSignalTimeoutMs` of the harness, else `firstStartTimeoutMs` of the daemon, else 60 seconds. A harness with no start signal of its own keeps that default and is judged like any other (the `fake` harness included: its tests report `SessionStart` themselves).
+A new session waits for the harness's start signal (the `SessionStart` hook). The wait is `firstStartTimeoutMs` of the daemon when it is set, else `startSignalTimeoutMs` of the harness, else 60 seconds. When the delay passes while the transcript of the session is moving (a slow resume), the wait is extended once by the same delay. A harness with no start signal of its own keeps that default and is judged like any other (the `fake` harness included: its tests report `SessionStart` themselves).
 
 When the delay passes with no signal:
 
 - the readiness becomes `failed` with the reason `no_start_signal`, whatever it was before (a PTY byte alone no longer keeps it `ready`);
 - the daemon sends `session.failed` (`sessionId`, `reason`, `detail`) on the WebSocket and `session.updated`;
 - `detail` is the last 2 KiB of the harness output, without terminal escape sequences and with secrets masked. It is also the `readinessDetail` of the session in REST, WebSocket and the compact MCP view, where a "hook failed" line of the harness shows up;
-- the process is stopped and the session is closed with the close reason `resume_timeout`;
-- the session no longer counts against the `children_cap` of its manager, from the moment the readiness fails, so the next `create_session` is accepted;
+- the process is stopped and the session is closed with the close reason `resume_timeout` (the reason of the close when somebody requested one meanwhile);
+- the session counts against the `children_cap` of its manager until the process is gone and the session is closed, which takes up to 5 seconds when the process ignores the first kill; during that window two processes of the manager can be alive. Then the next `create_session` is accepted;
 - a `SessionStart` or a PTY byte arriving later changes nothing: the session stays `failed` and closed.
 
-The timer is cancelled when the session closes or reports its start. `readinessDetail` lives in the daemon's memory: a daemon restart forgets it, the `failed` readiness and the close reason stay in the database.
+The timer is cancelled by any real state transition out of `starting` (the `SessionStart` is the usual one) and when the session closes. `readinessDetail` lives in the daemon's memory: a daemon restart forgets it, the `failed` readiness and the close reason stay in the database. Resuming the session at boot or reopening it clears a `failed` readiness.
 
 ## Known limits
 

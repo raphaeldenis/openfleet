@@ -15,12 +15,15 @@ class HarnessWithOwnStartDelay extends FakeHarness {
   constructor(readonly startSignalTimeoutMs: number) { super(); }
 }
 
-function bootDaemon({ harness = new FakeHarness(), firstStartTimeoutMs = START_SIGNAL_TIMEOUT_MS }: { harness?: FakeHarness; firstStartTimeoutMs?: number } = {}) {
+type Database = ReturnType<typeof openDatabase>;
+interface DaemonOptions { harness?: FakeHarness; firstStartTimeoutMs?: number; launchOutputTimeoutMs?: number; db?: Database }
+
+function bootDaemon({ harness = new FakeHarness(), firstStartTimeoutMs, launchOutputTimeoutMs = 600_000, db = openDatabase(':memory:') }: DaemonOptions = {}) {
   const bus = new EventBus();
   const events: ServerEvent[] = [];
   bus.subscribe((event) => events.push(event));
-  const service = new SessionService({ db: openDatabase(':memory:'), bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', describeError, firstStartTimeoutMs, launchOutputTimeoutMs: 600_000 });
-  return { service, harness, events };
+  const service = new SessionService({ db, bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', describeError, firstStartTimeoutMs, launchOutputTimeoutMs });
+  return { service, harness, events, db };
 }
 
 const reportSessionStart = (service: SessionService, sessionId: string) =>
@@ -77,16 +80,124 @@ describe('the start signal timeout of a new session', () => {
     expect(service.get(session.id)?.readiness).toBe('failed');
   });
 
-  it('does not count the failed session against the children cap, even before its process is gone', async () => {
+  it('counts the failed session against the children cap until its process is gone, then stops counting it', async () => {
     const { service, harness } = bootDaemon();
     const session = await service.create(spec);
     harness.handles[0]!.ignoresGracefulKill = true;
 
     await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS);
+    const whileProcessIsStopping = service.get(session.id)!;
+    await vi.advanceTimersByTimeAsync(ESCALATION_GRACE_MS);
+    const afterClose = service.get(session.id)!;
 
-    const failed = service.get(session.id)!;
-    expect(failed.state).not.toBe('closed');
-    expect(countsAgainstChildrenCap(failed)).toBe(false);
+    expect(whileProcessIsStopping).toMatchObject({ state: 'starting', readiness: 'failed' });
+    expect(countsAgainstChildrenCap(whileProcessIsStopping)).toBe(true);
+    expect(countsAgainstChildrenCap(afterClose)).toBe(false);
+  });
+
+  it('keeps counting a live session whose launch produced no output, with no retry left', async () => {
+    const { service } = bootDaemon({ launchOutputTimeoutMs: 30_000, firstStartTimeoutMs: 600_000 });
+    const session = await service.create(spec);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const stalled = service.get(session.id)!;
+    expect(stalled).toMatchObject({ state: 'starting', readiness: 'failed', readinessReason: 'no_output_at_launch' });
+    expect(countsAgainstChildrenCap(stalled)).toBe(true);
+  });
+
+  it('masks the output before cutting it, so a token across the 2 KiB cut leaves no readable part', async () => {
+    const { service, harness } = bootDaemon();
+    const session = await service.create(spec);
+    const runtimeToken = `sk-${'a'.repeat(40)}`;
+    const charactersOfTheTokenBeforeTheCut = 20;
+    const separatorLength = 1;
+    const textAfterTheToken = 'y'.repeat(2048 - (runtimeToken.length - charactersOfTheTokenBeforeTheCut) - separatorLength);
+    harness.handles[0]!.emitData(`${'x'.repeat(5_000)} ${runtimeToken} ${textAfterTheToken}`);
+
+    await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS);
+
+    expect(service.get(session.id)!.readinessDetail).not.toContain('aaaaa');
+  });
+
+  it('prefers the daemon\'s explicit start delay over the one its harness declares', async () => {
+    const { service } = bootDaemon({ harness: new HarnessWithOwnStartDelay(5_000), firstStartTimeoutMs: 20_000 });
+    const session = await service.create(spec);
+
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(service.get(session.id)?.readiness).not.toBe('failed');
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(service.get(session.id)?.readiness).toBe('failed');
+  });
+
+  it('closes with the reason of a close requested while the process is being stopped, not resume_timeout', async () => {
+    const { service, harness } = bootDaemon();
+    const session = await service.create(spec);
+    harness.handles[0]!.ignoresGracefulKill = true;
+    await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS);
+
+    void service.close(session.id);
+    await vi.advanceTimersByTimeAsync(ESCALATION_GRACE_MS);
+
+    expect(service.get(session.id)).toMatchObject({ state: 'closed', closeReason: 'closed_by_user' });
+  });
+
+  it('waits once more when the transcript is moving, then fails if the signal still does not come', async () => {
+    const { service, harness } = bootDaemon();
+    const session = await service.create(spec);
+    harness.handles[0]!.transcriptCursor = { identity: 'transcript-1', offset: 120 };
+
+    await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS);
+    expect(service.get(session.id)?.readiness).not.toBe('failed');
+    await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS);
+
+    expect(service.get(session.id)?.readiness).toBe('failed');
+  });
+
+  it('does not extend the wait when the signal comes during the extension', async () => {
+    const { service, harness } = bootDaemon();
+    const session = await service.create(spec);
+    harness.handles[0]!.transcriptCursor = { identity: 'transcript-1', offset: 120 };
+    await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS);
+
+    reportSessionStart(service, session.id);
+    await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS * 3);
+
+    expect(service.get(session.id)).toMatchObject({ state: 'idle' });
+  });
+
+  describe('a session found failed by a daemon that did not fail it', () => {
+    const failedInADaemonThatDiesDuringTheEscalation = async () => {
+      const first = bootDaemon();
+      const session = await first.service.create(spec);
+      first.harness.handles[0]!.ignoresGracefulKill = true;
+      await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS);
+      return { db: first.db, sessionId: session.id };
+    };
+
+    it('clears the failed readiness when a new daemon resumes it at boot, so the child counts against the cap again', async () => {
+      const { db, sessionId } = await failedInADaemonThatDiesDuringTheEscalation();
+      const restarted = bootDaemon({ db });
+
+      await restarted.service.resumeAll();
+
+      const resumed = restarted.service.get(sessionId)!;
+      expect(resumed.readiness).toBeUndefined();
+      expect(countsAgainstChildrenCap(resumed)).toBe(true);
+    });
+
+    it('clears the failed readiness when a new daemon reopens the closed session', async () => {
+      const { db, sessionId } = await failedInADaemonThatDiesDuringTheEscalation();
+      await vi.advanceTimersByTimeAsync(ESCALATION_GRACE_MS);
+      const restarted = bootDaemon({ db });
+
+      restarted.service.reopen(sessionId);
+
+      const reopened = restarted.service.get(sessionId)!;
+      expect(reopened.readiness).toBeUndefined();
+      expect(countsAgainstChildrenCap(reopened)).toBe(true);
+    });
   });
 
   it('touches nothing when the harness signals its start in time', async () => {

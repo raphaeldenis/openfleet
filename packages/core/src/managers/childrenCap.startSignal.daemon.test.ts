@@ -6,7 +6,6 @@ import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
-import type { FakeHarness } from '../harness/fakeHarness.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 
 const START_SIGNAL_TIMEOUT_MS = 400;
@@ -38,10 +37,11 @@ const waitUntil = async (condition: () => boolean) => {
 
 beforeAll(async () => {
   config = loadConfig({ OPENFLEET_HOME: tempDirs.make('of-start-signal-'), OPENFLEET_PORT: '0', [E2E_FLAG_ENV]: E2E_FLAG_ON });
-  daemon = await startDaemon(config, {});
+  daemon = await startDaemon(config, { firstStartTimeoutMs: START_SIGNAL_TIMEOUT_MS });
   const created = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', harness: 'fake', emoji: '🧭', name: 'Capped', manager: { pulseSeconds: 3600, childrenCap: 1, mission: 'Ship the fleet' } }) });
   managerId = ((await created.json()) as { id: string }).id;
-  const { mcp_token } = daemon.db.prepare('SELECT mcp_token FROM sessions WHERE id = ?').get(managerId) as { mcp_token: string };
+  const { mcp_token, hook_token } = daemon.db.prepare('SELECT mcp_token, hook_token FROM sessions WHERE id = ?').get(managerId) as { mcp_token: string; hook_token: string };
+  await fetch(`${daemon.server.url}/hooks/${hook_token}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: managerId, hook_event_name: 'SessionStart', source: 'startup' }) });
   manager = new Client({ name: 'start-signal', version: '0.0.0' });
   await manager.connect(new StreamableHTTPClientTransport(new URL(`${daemon.server.url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${mcp_token}` } } }));
   await manager.callTool({ name: 'get_manager_base', arguments: {} });
@@ -49,8 +49,6 @@ beforeAll(async () => {
   const socket = new WebSocket(`${daemon.server.url.replace('http', 'ws')}/ws?ticket=${ticket}`);
   socket.addEventListener('message', (message) => frames.push(JSON.parse(String(message.data))));
   await new Promise((resolve) => socket.addEventListener('open', resolve, { once: true }));
-  const fakeHarness = daemon.harnesses.find((harness) => harness.id === 'fake') as { startSignalTimeoutMs?: number } & FakeHarness;
-  fakeHarness.startSignalTimeoutMs = START_SIGNAL_TIMEOUT_MS;
 });
 afterAll(async () => {
   await manager.close();
