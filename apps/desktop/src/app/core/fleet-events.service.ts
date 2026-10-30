@@ -66,6 +66,8 @@ const REQUIRED_PAYLOAD_FIELDS: Record<PayloadCarryingEventType, readonly string[
   'governance.proposed': ['proposal'],
   'governance.resolved': ['proposal'],
   'governance.queue_changed': ['managerId', 'queuedCount'],
+  'escalation.raised': ['escalation'],
+  'escalation.resolved': ['escalation'],
   'law.created': ['law'],
   'law.updated': ['law'],
   'law.withdrawn': ['law'],
