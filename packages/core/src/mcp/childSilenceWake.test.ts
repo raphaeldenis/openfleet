@@ -223,6 +223,91 @@ describe('the silence check the runtime arms when a manager messages a child', (
   });
 });
 
+describe('what arms, keeps and delivers a silence check', () => {
+  const adoptSecondChildOfSibling = async () => {
+    const created = await fixture.api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory: '/tmp', name: 'Second', harness: 'fake', emoji: '🤖' }) });
+    const { id } = await created.json() as { id: string };
+    fixture.db.prepare('UPDATE sessions SET parent_id = ? WHERE id = ?').run(fixture.siblingLead.id, id);
+    return { secondChildId: id, secondChild: await fixture.connect(id), sibling: await fixture.connect(fixture.siblingLead.id) };
+  };
+  const checkOfSecondChild = () => armedTimers[1]!;
+
+  it('cancels the check of the manager that was closed, with its child detached from the cascade', async () => {
+    const { lead } = await bootFleetWhereWorkerIsChildOfLead();
+    await messageChild(lead);
+    fixture.db.prepare('UPDATE sessions SET parent_id = NULL WHERE id = ?').run(fixture.worker.id);
+
+    await fixture.api(`/api/sessions/${fixture.lead.id}/close`, { method: 'POST', body: JSON.stringify({}) });
+
+    expect(livingTimers()).toEqual([]);
+  });
+
+  it('arms nothing for a message the human types to the child', async () => {
+    await bootFleetWhereWorkerIsChildOfLead();
+
+    await fixture.api(`/api/sessions/${fixture.worker.id}/messages`, { method: 'POST', body: JSON.stringify({ body: 'hello from the human' }) });
+
+    expect(armedTimers).toEqual([]);
+  });
+
+  it('arms nothing for an arbiter, which a manager cannot message', async () => {
+    const { lead } = await bootFleetWhereWorkerIsChildOfLead();
+    fixture.db.prepare("UPDATE sessions SET role = 'arbiter' WHERE id = ?").run(fixture.worker.id);
+
+    const refusal = await messageChild(lead);
+
+    expect(refusal).toMatch(/^error outside_lineage: /);
+    expect(armedTimers).toEqual([]);
+  });
+
+  it('keeps the check of the other child when one child of another manager answers', async () => {
+    const { lead } = await bootFleetWhereWorkerIsChildOfLead();
+    const { secondChildId, secondChild, sibling } = await adoptSecondChildOfSibling();
+    await messageChild(lead);
+    await callTool(sibling, 'send_session_message', { target_uuid: secondChildId, body: 'status?' });
+
+    await callTool(secondChild, 'message_parent', { body: 'on it' });
+
+    expect(armedTimers).toHaveLength(2);
+    expect(checkOfSecondChild().isCancelled).toBe(true);
+    expect(armedTimers[0]!.isCancelled).toBe(false);
+  });
+
+  it('keeps the check of its first manager when the child answers a manager that did not arm it', async () => {
+    const { lead, worker } = await bootFleetWhereWorkerIsChildOfLead();
+    await messageChild(lead);
+    fixture.db.prepare('UPDATE sessions SET parent_id = ? WHERE id = ?').run(fixture.siblingLead.id, fixture.worker.id);
+
+    await callTool(worker, 'message_parent', { body: 'reporting to my new manager' });
+
+    expect(armedTimers[0]!.isCancelled).toBe(false);
+  });
+
+  it('delivers the line to a sleeping manager', async () => {
+    const { lead } = await bootFleetWhereWorkerIsChildOfLead();
+    await messageChild(lead);
+    await fixture.api(`/api/managers/${fixture.lead.id}`, { method: 'PATCH', body: JSON.stringify({ mode: 'sleeping' }) });
+    letTimePass(TEN_MINUTES_MS);
+
+    fireLivingTimers();
+
+    expect(silenceLinesToLead()).toHaveLength(1);
+  });
+
+  it('queues the line behind the unsent draft of the human in the manager prompt', async () => {
+    const { lead } = await bootFleetWhereWorkerIsChildOfLead();
+    await messageChild(lead);
+    await fixture.api(`/api/sessions/${fixture.lead.id}/input`, { method: 'POST', body: JSON.stringify({ data: 'half a sentence' }) });
+    letTimePass(TEN_MINUTES_MS);
+
+    fireLivingTimers();
+
+    const held = await (await fixture.api(`/api/sessions/${fixture.lead.id}/held-messages`)).json() as { body: string }[];
+    expect(silenceLinesToLead()).toHaveLength(1);
+    expect(held.map((message) => message.body).some((body) => body.startsWith(SILENCE_LINE_PREFIX))).toBe(true);
+  });
+});
+
 describe('a reviewer that reports a no-go verdict to its manager', () => {
   const git = (cwd: string, ...args: string[]) =>
     execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, env: childEnvironmentForGit(process.env), encoding: 'utf8' }).trim();
