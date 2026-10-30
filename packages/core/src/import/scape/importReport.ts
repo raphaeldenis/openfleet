@@ -63,7 +63,7 @@ export function addManagerFinding(report: ImportReport, finding: { managerName: 
   report.managerFindings.push(`${inlineMarkdownText(finding.managerName)} — ${finding.text}`);
 }
 
-export const emptyCounts =(): EntityCounts => ({ expected: 0, written: 0, updated: 0, alreadyPresent: 0, conflict: 0, deletedInOpenFleet: 0, removedInScape: 0, notConverted: 0 });
+export const emptyCounts = ():EntityCounts => ({ expected: 0, written: 0, updated: 0, alreadyPresent: 0, conflict: 0, deletedInOpenFleet: 0, removedInScape: 0, notConverted: 0 });
 
 /** What a record write came to; a record deleted in OpenFleet is a conflict of its own kind. */
 export type RecordOutcome = 'written' | 'updated' | 'alreadyPresent' | 'conflict' | 'deletedInOpenFleet';

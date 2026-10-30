@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { loadManagerBase } from '../../managers/managerBase.js';
 import { addManagerFinding, emptyReport, hasChanges, inlineMarkdownText, renderImportReport, type ImportReport } from './importReport.js';
@@ -90,12 +90,15 @@ function folderChoicesOfManagersKept(input: { plan: ImportPlan; outcomes: Map<st
   }));
 }
 
-/** A stored folder moved out of the managers root by hand is not the import's to prepare. */
-const isDirectChildOf = (managersRoot: string) => (directory: string): boolean => dirname(resolve(directory)) === resolve(managersRoot);
+/** A stored folder that is relative or was moved out of the managers root by hand is not the import's to prepare. */
+const isFolderOfManagersRoot = (managersRoot: string) => (directory: string): boolean => isAbsolute(directory) && dirname(resolve(directory)) === resolve(managersRoot);
 
-function reportFoldersKeptUnderAnotherName(report: ImportReport, choices: ManagerFolderChoice[]): void {
-  for (const choice of choices.filter(({ directory, plannedDirectory }) => directory !== plannedDirectory)) {
-    addManagerFinding(report, { managerName: choice.managerName, text: `folder kept as ${inlineMarkdownText(basename(choice.directory))}, its name now maps to ${inlineMarkdownText(basename(choice.plannedDirectory))}` });
+function reportFoldersNeedingALook(report: ImportReport, input: { choices: ManagerFolderChoice[]; isFolderOfRoot: (directory: string) => boolean }): void {
+  for (const { managerName, directory, plannedDirectory } of input.choices) {
+    const isLeftAsItIs = !input.isFolderOfRoot(directory);
+    const isKeptUnderAnotherName = !isLeftAsItIs && directory !== plannedDirectory;
+    if (isLeftAsItIs) addManagerFinding(report, { managerName, text: 'stored folder is outside managers/, left as it is' });
+    if (isKeptUnderAnotherName) addManagerFinding(report, { managerName, text: `folder kept as ${inlineMarkdownText(basename(directory))}, its name now maps to ${inlineMarkdownText(basename(plannedDirectory))}` });
   }
 }
 
@@ -116,9 +119,11 @@ function writeToTarget(plan: ImportPlan, options: ImportScapeOptions): ImportRep
   let preparedFolders: PreparedManagerFolders | undefined;
   const prepareFoldersBeforeCommit = (managerOutcomes: Map<string, UpsertOutcome>) => {
     const folderChoices = folderChoicesOfManagersKept({ plan, outcomes: managerOutcomes, db: target!.db });
-    reportFoldersKeptUnderAnotherName(report, folderChoices);
+    const isFolderOfRoot = isFolderOfManagersRoot(managersRootOf(options));
+    reportFoldersNeedingALook(report, { choices: folderChoices, isFolderOfRoot });
     if (dryRun) return;
-    preparedFolders = prepareManagerFolders({ managersRoot: managersRootOf(options), directories: folderChoices.map((choice) => choice.directory).filter(isDirectChildOf(managersRootOf(options))), forbiddenRoot: options.scapeDir });
+    const directoriesToPrepare = folderChoices.map((choice) => choice.directory).filter(isFolderOfRoot);
+    preparedFolders = prepareManagerFolders({ managersRoot: managersRootOf(options), directories: directoriesToPrepare, forbiddenRoot: options.scapeDir });
     mustBackUpBeforeCommit();
   };
   const memoryFilesJournal = new MemoryFilesJournal();

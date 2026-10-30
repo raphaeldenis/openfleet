@@ -339,6 +339,23 @@ describe('importScape: working states of the managers', () => {
       expect(stateRead(CAPTAIN_ARGUS_ID)?.plan).toContain('ship the synthetic thing');
     });
 
+    it('does not read the state file of a manager the import leaves out', () => {
+      writeArguses(fixture, [anArgus({ name: 'Émile' }), anArgus({ id: CAPTAIN_ARGUS_ID, name: 'Mile', noteId: 'a-note-outside-the-import' })]);
+      writeStateFile('mile.md');
+
+      const report = run();
+
+      expect(report.counts.managers.expected).toBe(2);
+      expect(report.counts.workingStates.expected).toBe(0);
+    });
+
+    it('reads no former-stem file when two managers share the former stem', () => {
+      writeArguses(fixture, [anArgus({ name: 'Émile' }), anArgus({ id: CAPTAIN_ARGUS_ID, name: 'Ömile', noteId: OPENFLEET_NOTE_ID })]);
+      writeStateFile('mile.md');
+
+      expect(run().counts.workingStates.expected).toBe(0);
+    });
+
     it('does not take a longer file name that merely starts with the former stem', () => {
       writeArguses(fixture, [anArgus({ name: 'Été' })]);
       writeStateFile('t-lead.md');

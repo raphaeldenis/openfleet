@@ -36,7 +36,7 @@ const REIMPORT_NOTE =
 const USAGE = [
   'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--state-dir <dir>] [--claude-dir <dir>] [--scape-claude-dir <dir>] [--allow-reimport] [--json]',
   '',
-  '  --home           the OpenFleet home holding openfleet.db (defaults to $OPENFLEET_HOME)',
+  '  --home            the OpenFleet home holding openfleet.db (defaults to $OPENFLEET_HOME)',
   '  --dry-run         prints what would be written; writes nothing',
   '  --project         imports only the Scape project of that name',
   '  --scape-dir       the Scape home to read (default ~/.scape; only snapshots of it are opened)',

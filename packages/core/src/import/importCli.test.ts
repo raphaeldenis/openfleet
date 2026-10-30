@@ -1,13 +1,20 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { runImportCli } from './importCli.js';
 import { claudeMemoryFolderOf } from './scape/claudeProjectDirectory.js';
-import { anArgus, LEAD_ARGUS_ID, writeArguses } from './scape/scapeArguses.testkit.js';
-import { buildScapeFixture, type ScapeFixture } from './scape/scapeFixture.testkit.js';
+import { anArgus, CAPTAIN_ARGUS_ID, LEAD_ARGUS_ID, writeArguses } from './scape/scapeArguses.testkit.js';
+import { buildScapeFixture, OPENFLEET_NOTE_ID, type ScapeFixture } from './scape/scapeFixture.testkit.js';
 
-const sha256Of = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+const JOURNAL_FILE_NAMES = ['openfleet.db', 'openfleet.db-wal'];
+
+/** A hash of the database file and of its write-ahead log when it has one. */
+function databaseFingerprintOf(home: string): string {
+  const hash = createHash('sha256');
+  for (const fileName of JOURNAL_FILE_NAMES.filter((name) => existsSync(join(home, name)))) hash.update(fileName).update(readFileSync(join(home, fileName)));
+  return hash.digest('hex');
+}
 
 describe('runImportCli', () => {
   let fixture: ScapeFixture;
@@ -47,18 +54,38 @@ describe('runImportCli', () => {
       expect(existsSync(home)).toBe(false);
     });
 
-    it('leaves an existing database, the managers folder and the report untouched', () => {
-      writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
-      runImportCli(argv(), { homeDirectory, env: {} });
-      const databaseHashBefore = sha256Of(join(home, 'openfleet.db'));
-      const reportBefore = readFileSync(join(home, 'import-report.md'), 'utf8');
-      const managersFoldersBefore = readdirSync(join(home, 'managers'));
+    describe('on a home whose Scape source has a new manager', () => {
+      const environment = () => ({ homeDirectory, env: {} });
+      const argvFor = (targetHome: string, ...flags: string[]) => ['scape', '--home', targetHome, '--scape-dir', fixture.scapeDir, ...flags];
 
-      runImportCli(argv('--json', '--allow-reimport'), { homeDirectory, env: {} });
+      beforeEach(() => {
+        writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
+        runImportCli(argv(), environment());
+        writeArguses(fixture, [anArgus({ name: 'Alpha' }), anArgus({ id: CAPTAIN_ARGUS_ID, name: 'Beta', noteId: OPENFLEET_NOTE_ID })]);
+      });
 
-      expect(sha256Of(join(home, 'openfleet.db'))).toBe(databaseHashBefore);
-      expect(readFileSync(join(home, 'import-report.md'), 'utf8')).toBe(reportBefore);
-      expect(readdirSync(join(home, 'managers'))).toEqual(managersFoldersBefore);
+      it('changes the database when the import is real (the witness that the new manager is a real write)', () => {
+        const copiedHome = join(fixture.workDir, 'copied-home');
+        cpSync(home, copiedHome, { recursive: true });
+        const databaseBefore = databaseFingerprintOf(copiedHome);
+
+        runImportCli(argvFor(copiedHome, '--allow-reimport'), environment());
+
+        expect(databaseFingerprintOf(copiedHome)).not.toBe(databaseBefore);
+        expect(readdirSync(join(copiedHome, 'managers')).sort()).toEqual(['Alpha', 'Beta']);
+      });
+
+      it('leaves the database, its journal, the managers folder and the report untouched, and prints the dry-run JSON', () => {
+        const databaseBefore = databaseFingerprintOf(home);
+        const reportBefore = readFileSync(join(home, 'import-report.md'), 'utf8');
+
+        const result = runImportCli(argv('--json', '--allow-reimport'), environment());
+
+        expect(databaseFingerprintOf(home)).toBe(databaseBefore);
+        expect(readFileSync(join(home, 'import-report.md'), 'utf8')).toBe(reportBefore);
+        expect(readdirSync(join(home, 'managers'))).toEqual(['Alpha']);
+        expect(JSON.parse(result.output)).toMatchObject({ dryRun: true, counts: { managers: { expected: 2, written: 1, alreadyPresent: 1 } } });
+      });
     });
   });
 

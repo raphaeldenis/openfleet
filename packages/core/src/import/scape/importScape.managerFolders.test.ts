@@ -95,12 +95,53 @@ describe('importScape: manager folders', () => {
         expect(directoriesOf(LEAD_ARGUS_ID)).toEqual([join(managersRoot, 'Mn-mosyne')]);
       });
 
+      it('names the manager again on every re-import while the folder differs', () => {
+        importThenRenameFolderToFormerName();
+        const expectedFinding = 'Mnémosyne — folder kept as Mn-mosyne, its name now maps to Mnemosyne';
+
+        const firstReimport = run({ refuseReimport: false });
+        const secondReimport = run({ refuseReimport: false });
+
+        expect(firstReimport.managerFindings).toEqual([expectedFinding]);
+        expect(secondReimport.managerFindings).toEqual([expectedFinding]);
+      });
+
       it('names the manager whose stored folder differs from the folder its name now maps to', () => {
         importThenRenameFolderToFormerName();
 
         const report = run({ refuseReimport: false });
 
         expect(report.managerFindings).toEqual(['Mnémosyne — folder kept as Mn-mosyne, its name now maps to Mnemosyne']);
+      });
+    });
+
+    describe('a stored folder the import does not own', () => {
+      const RELATIVE_STORED_FOLDER = 'relative-stored-folder-for-the-test/Alpha';
+      const importThenStoreDirectory = (directory: (workDir: string) => string) => {
+        writeArguses(fixture, [anArgus({ name: 'Alpha' })]);
+        run();
+        const db = new DatabaseSync(join(home, 'openfleet.db'));
+        db.prepare('UPDATE sessions SET directory = ? WHERE id = ?').run(directory(fixture.workDir), LEAD_ARGUS_ID);
+        db.close();
+        renameSync(join(managersRoot, 'Alpha'), join(fixture.workDir, 'moved-alpha'));
+      };
+
+      it('is left as it is, named in the report, and no folder is created for it', () => {
+        importThenStoreDirectory((workDir) => join(workDir, 'elsewhere', 'Alpha'));
+
+        const report = run({ refuseReimport: false });
+
+        expect(report.managerFindings).toEqual(['Alpha — stored folder is outside managers/, left as it is']);
+        expect(readdirSync(managersRoot)).toEqual([]);
+      });
+
+      it('is refused when it is a relative path, so nothing is created against the working directory', () => {
+        importThenStoreDirectory(() => RELATIVE_STORED_FOLDER);
+
+        const report = run({ refuseReimport: false });
+
+        expect(report.managerFindings).toEqual(['Alpha — stored folder is outside managers/, left as it is']);
+        expect(existsSync(RELATIVE_STORED_FOLDER)).toBe(false);
       });
     });
 

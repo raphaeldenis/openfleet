@@ -35,13 +35,19 @@ const exactStateFileNameOf = (stem: string, fileNames: string[]): string | undef
   return stem !== '' && fileNames.includes(exactName) ? exactName : undefined;
 };
 
-/** The file named exactly after the former stem, unless the former stem is the current one or the current stem of another manager. */
-function formerStateFileNameOf(input: { managerName: string; fileNames: string[]; stemsOfAllManagers: string[] }): string | undefined {
+/**
+ * The file named exactly after the former stem, unless the former stem is the current one, the current stem of another Scape manager
+ * (imported or not), or the former stem of another Scape manager.
+ */
+function formerStateFileNameOf(input: { managerName: string; fileNames: string[]; allManagerNames: string[] }): string | undefined {
   const currentStem = stateFileStemOf(input.managerName);
   const formerStem = formerStateFileStemOf(input.managerName);
   const isFormerStemTheCurrentOne = formerStem === currentStem;
-  const isFormerStemAnotherManagersStem = input.stemsOfAllManagers.some((stem) => stem === formerStem);
-  if (isFormerStemTheCurrentOne || isFormerStemAnotherManagersStem) return undefined;
+  const currentStemsOfAllManagers = input.allManagerNames.map(stateFileStemOf);
+  const formerStemsOfAllManagers = input.allManagerNames.map(formerStateFileStemOf);
+  const isFormerStemAnotherManagersCurrentStem = currentStemsOfAllManagers.includes(formerStem);
+  const isFormerStemSharedByManagers = formerStemsOfAllManagers.filter((stem) => stem === formerStem).length > 1;
+  if (isFormerStemTheCurrentOne || isFormerStemAnotherManagersCurrentStem || isFormerStemSharedByManagers) return undefined;
   return exactStateFileNameOf(formerStem, input.fileNames);
 }
 
@@ -76,6 +82,8 @@ export interface PlanWorkingStatesInput {
   stateDir: string | undefined;
   stateRoot: string | undefined;
   managers: PlannedManager[];
+  /** The name of every Scape manager read, whether the import keeps it or not. */
+  allManagerNames: string[];
 }
 
 /** Plans the working state of each manager whose state file exists in the folder; a manager without a file gets none. A folder reached through a link is refused. */
@@ -85,10 +93,9 @@ export function planWorkingStates(input: PlanWorkingStatesInput): PlannedWorking
   if (folder === undefined) return [];
 
   const fileNames = stateFileNamesIn(folder);
-  const stemsOfAllManagers = input.managers.map((manager) => stateFileStemOf(manager.session.name));
   const planned: PlannedWorkingState[] = [];
   for (const manager of input.managers) {
-    const fileName = stateFileNameOf(stateFileStemOf(manager.session.name), fileNames) ?? formerStateFileNameOf({ managerName: manager.session.name, fileNames, stemsOfAllManagers });
+    const fileName = stateFileNameOf(stateFileStemOf(manager.session.name), fileNames) ?? formerStateFileNameOf({ managerName: manager.session.name, fileNames, allManagerNames: input.allManagerNames });
     const file = fileName === undefined ? undefined : readStateFile(folder, fileName);
     if (file === undefined) continue;
     const parsed = parseWorkingStateFile(file.text);
