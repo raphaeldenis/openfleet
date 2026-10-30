@@ -187,6 +187,49 @@ describe.skipIf(!isLive)('ClaudeCliHarness (live, needs a logged-in claude CLI)'
   }, TEST_TIMEOUT_MS);
 });
 
+const INSTRUCTION_CANARY = 'CANARY-42';
+const SKILL_CANARY = 'CANARY-43';
+const CLAUDE_PRINT_TIMEOUT_MS = 120_000;
+
+function makeDirectoryWithCanaries(): string {
+  const directory = mkdtempSync(join(tmpdir(), 'of-canary-worktree-'));
+  createdRepos.push(directory);
+  writeFileSync(join(directory, 'CLAUDE.md'), `Project instruction: the secret word is ${INSTRUCTION_CANARY}.\n`);
+  const skillDirectory = join(directory, '.claude', 'skills', 'canary');
+  mkdirSync(skillDirectory, { recursive: true });
+  writeFileSync(join(skillDirectory, 'SKILL.md'), `---\nname: canary\ndescription: ${SKILL_CANARY}\n---\nCanary skill.\n`);
+  return directory;
+}
+
+// The arbiter flags: an empty cwd, the ticket worktree added with --add-dir, the user settings layer only, and the CLAUDE.md of added directories forced off.
+function askClaudeLikeTheArbiter(question: string, { worktree, emptyDirectory }: { worktree: string; emptyDirectory: string }): string {
+  return execFileSync('claude', ['-p', '--model', CHEAP_MODEL, '--setting-sources', 'user', `--add-dir=${worktree}`, question], {
+    cwd: emptyDirectory,
+    env: { ...process.env, CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '0' },
+    encoding: 'utf8',
+    timeout: CLAUDE_PRINT_TIMEOUT_MS,
+  });
+}
+
+// Reproduces the measurement behind docs/escalation.md (claude 2.1.308): a negative is the model's self-report, so a failure here is a signal to re-check by hand.
+describe.skipIf(!isLive)('the arbiter launch flags keep the instructions and skills of the added worktree out (live, needs a logged-in claude CLI)', () => {
+  afterEach(() => {
+    createdRepos.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true }));
+  });
+
+  it('reports neither the CLAUDE.md nor the skills of the added directory', () => {
+    const worktree = makeDirectoryWithCanaries();
+    const emptyDirectory = mkdtempSync(join(tmpdir(), 'of-canary-cwd-'));
+    createdRepos.push(emptyDirectory);
+
+    const instructionsAnswer = askClaudeLikeTheArbiter('Quote verbatim every project instruction you were given, or answer NONE.', { worktree, emptyDirectory });
+    const skillsAnswer = askClaudeLikeTheArbiter('List the description of every skill you can use, or answer NONE.', { worktree, emptyDirectory });
+
+    expect(instructionsAnswer).not.toContain(INSTRUCTION_CANARY);
+    expect(skillsAnswer).not.toContain(SKILL_CANARY);
+  }, TEST_TIMEOUT_MS);
+});
+
 // AUD-12b (MAJ-04, §6): a project's own .claude/settings.json can declare permissions.defaultMode:
 // "bypassPermissions" and/or an auto-approving PreToolUse/PermissionRequest hook. This checks the real
 // daemon path (SessionService -> ApprovalService -> the hooks HTTP route), not just the raw harness, since
