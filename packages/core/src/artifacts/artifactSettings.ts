@@ -4,11 +4,13 @@ import { readableConfigReason } from '../configReason.js';
 import { log } from '../logger.js';
 import type { ArtifactSettings } from './artifactDirectory.js';
 
-const MEBIBYTE = 1024 * 1024;
-const MAX_ALLOWED_FILE_BYTES = 16 * MEBIBYTE;
+const KIBIBYTE = 1024;
+const MEBIBYTE = 1024 * KIBIBYTE;
+/** The hook body is read up to 1 MiB and JSON escaping grows the content, so a bigger Write never reaches the judge. */
+const MAX_ALLOWED_FILE_BYTES = 512 * KIBIBYTE;
 const MAX_ALLOWED_PROJECT_BYTES = 1024 * MEBIBYTE;
 
-export const DEFAULT_ARTIFACT_SETTINGS: ArtifactSettings = { maxFileBytes: MEBIBYTE, maxProjectBytes: 50 * MEBIBYTE };
+export const DEFAULT_ARTIFACT_SETTINGS: ArtifactSettings = { maxFileBytes: 256 * KIBIBYTE, maxProjectBytes: 50 * MEBIBYTE };
 
 const ArtifactsSchema = z.object({
   maxFileBytes: z.number().int().min(1).max(MAX_ALLOWED_FILE_BYTES).optional(),

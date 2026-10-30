@@ -1,6 +1,6 @@
 # Artifact directory
 
-A project with a docs folder has `<docs folder>/artifacts/<manager>/`, created by the daemon. A manager, its children and their sub-agents write there with the `Write` tool without a prompt. This is the only write the daemon vouches for.
+A project with a docs folder has `<docs folder>/artifacts/<manager>/`, created by the daemon. The root manager of a session's lineage, its children and their sub-agents write there with the `Write` tool without a prompt. This is the only write the daemon vouches for.
 
 ## Where the permission is granted
 
@@ -8,10 +8,13 @@ A project with a docs folder has `<docs folder>/artifacts/<manager>/`, created b
 
 | Call | Answer |
 | --- | --- |
-| `Write` inside the directory of the manager that runs the session, within the limits | `allow`, journaled `artifact_write` |
+| `Write` inside the directory of the root manager of the session's lineage, within the limits, when the policy allows the call without observing a refusal | `allow`, journaled `artifact_write` |
 | `Write` inside that directory that breaks a limit or a path rule | `deny`, journaled `artifact_write_refused` |
 | `Write` anywhere else, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`, `Read`, any `PermissionRequest` | no answer: the policy and the approval flow decide, as before |
-| `Write` the policy refuses (for example into a `.git` directory) | the policy refusal; the artifact directory is not asked |
+| `Write` the policy refuses, asks about, or only observes a refusal for (for example into a `.git` directory) | the policy answer; the artifact directory is not asked, and an observed refusal is journaled as usual |
+| `Write` whose hook body exceeds 1 MiB (see the limits below) | never reaches the judge: the normal approval flow decides |
+
+If the lineage root is not a manager, nothing is granted.
 
 A judge that throws (the docs folder is gone, a read fails) gives no answer, never an `allow`.
 
@@ -20,7 +23,8 @@ A judge that throws (the docs folder is gone, a read fails) gives no answer, nev
 - The session descends from a manager (`parentId` chain) and the manager's project has a docs folder.
 - The manager name becomes one directory name: ASCII letters, digits, `.`, `_`, `-`, at most 64 characters, no leading `.` or `-`, `manager` when nothing is left.
 - The path is absolute and canonical: no `..`, `.`, `//` or NUL.
-- The real path of the nearest existing ancestor stays inside the manager's directory, and the target is not a symbolic link or a directory.
+- The real path of the nearest existing ancestor stays inside the manager's directory, and the target is not a symbolic link, a directory, or an existing file with several hard links.
+- A path outside `<docs folder>/artifacts/` is not judged and creates no folder.
 - The content is a string of at most `artifacts.maxFileBytes` bytes, and the artifacts of the whole project, all managers counted and an overwrite counted as a replacement, stay within `artifacts.maxProjectBytes`.
 
 ## Configuration
@@ -28,10 +32,12 @@ A judge that throws (the docs folder is gone, a read fails) gives no answer, nev
 `config.json`, key `artifacts`:
 
 ```json
-{ "artifacts": { "maxFileBytes": 1048576, "maxProjectBytes": 52428800 } }
+{ "artifacts": { "maxFileBytes": 262144, "maxProjectBytes": 52428800 } }
 ```
 
-Defaults are 1 MiB and 50 MiB; the ceilings are 16 MiB and 1 GiB. A value that fails the schema is ignored with a warning and the defaults apply. A per-file maximum above the quota is lowered to the quota.
+Defaults are 256 KiB and 50 MiB; the ceilings are 512 KiB and 1 GiB. A value that fails the schema is ignored with a warning and the defaults apply. A per-file maximum above the quota is lowered to the quota.
+
+The per-file ceiling stays under what a hook body can carry: the daemon reads a hook body up to 1 MiB, and JSON escaping makes the body bigger than the content. A `Write` whose body is larger than that never reaches the judge and follows the normal approval flow.
 
 ## Journal
 
@@ -39,7 +45,8 @@ One `session_events` row per judged write: `kind` is `artifact_write` or `artifa
 
 ## Limits
 
-- The judgement and the write are not atomic: a link planted between them is not caught.
-- A hard link made by a shell inside the directory is not detected.
+- The judgement and the write are not atomic: a link planted between them is not caught. A child that has `Bash` can already do the same in plain shell.
+- A hard link to an existing file is refused; one created between the judgement and the write is not caught.
+- A folder the quota walk cannot read (permission denied) gives no opinion: the write follows the normal approval flow, never an `allow`.
 - A write through `Bash` is not covered.
 - Two manager names that differ only by characters outside the allowed set share a directory.
