@@ -98,6 +98,22 @@ describe('POST /api/sessions with repoPath and branchName: the project post-crea
     expect(stored).not.toHaveProperty('warnings');
   });
 
+  it('runs the repository setup script in the new worktree, and answers worktree_setup_failed without storing it when it fails', async () => {
+    mkdirSync(join(repoPath, 'scripts'));
+    const script = join(repoPath, 'scripts', 'worktree-setup.sh');
+    writeFileSync(script, '#!/bin/sh\necho "no network" >&2\nexit 7\n');
+    chmodSync(script, 0o755);
+
+    const res = await createInWorktree('task/setup-failing');
+
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as Session & { warnings: unknown[] };
+    expect(created.warnings).toEqual([{ type: 'worktree_setup_failed', reason: 'exit_nonzero', exitCode: 7, outputTail: expect.stringContaining('no network') }]);
+    expect(existsSync(join(created.directory, '.git'))).toBe(true);
+    const stored = (await (await call('GET', `/api/sessions/${created.id}`)).json()) as Session;
+    expect(stored).not.toHaveProperty('warnings');
+  });
+
   it('runs the hook in the new worktree before the session starts and adds no warning when it succeeds', async () => {
     const marker = join(tempDirs.make('of-session-out-'), 'cwd.txt');
     configureHook(aHookScript(`pwd -P > "${marker}"`));

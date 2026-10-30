@@ -29,6 +29,22 @@ Right after creating the worktree, before the post-create hook, OpenFleet copies
 - In a project whose repository is shared (`docs/shared-repo.md`), the warning `{ "type": "overlay_unavailable" }` means the fleet overlay could not be linked as `.openfleet-overlay`: the overlay directory or the git exclude could not be written, or `.openfleet-overlay` already exists and does not point to the overlay.
 - Worktrees that OpenFleet did not create (Scape, `git worktree add`) are not covered: check with `test -f .husky/_/pre-push` or run `pnpm install` in them.
 
+## Repository setup script
+
+When the repository has `scripts/worktree-setup.sh` at its root, OpenFleet runs it in every worktree it creates, after the hooks directory and the overlay and before the project's post-create hook. The OpenFleet repository's own script runs `pnpm install --frozen-lockfile` then `pnpm exec husky`, so the worktree has `.husky/_` and the first push runs the pre-push gate (`.husky/_` is also copied when the repository has it, see above; the script covers a repository that has none).
+
+- The script is the repository's copy, not the worktree's. Its real path must stay inside the repository (a symbolic link leaving it is refused with `outside_repository`), and it must be an executable file writable by its owner only. A repository without the script is not an error: nothing runs and nothing is reported.
+- It runs as the daemon's user, with the new worktree as working directory, no shell and no argument. The environment is the daemon's basic one (`PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_*`, `TMPDIR`, `SHELL`) plus `OPENFLEET_WORKTREE_PATH`, `OPENFLEET_BRANCH` and `OPENFLEET_REPO_PATH`.
+- Hard timeout of 300 seconds; the script and every process it started are killed.
+- A failing script never fails the creation. Only a failure is reported, in the same `warnings` list as the other post-creation warnings (create_worktree and `POST /api/sessions`); a success and a missing script add nothing. The warning is not stored: the session and the worktree do not carry it afterwards.
+
+  ```json
+  { "type": "worktree_setup_failed", "reason": "exit_nonzero", "exitCode": 1, "outputTail": "..." }
+  ```
+
+  `reason` is `timeout`, `exit_nonzero`, `not_executable`, `unsafe_permissions`, `not_found` (the path is not a regular file), `outside_repository` or `spawn_failed`. `outputTail` is the last 16 KiB of the output with credentials masked.
+- Worktrees that OpenFleet did not create (Scape, `git worktree add`) never run it. For those, run `pnpm install --frozen-lockfile` and check `ls .husky/_` before the first push.
+
 ## Post-create hook
 
 A project can name one script that runs in every worktree created for one of its sessions.
