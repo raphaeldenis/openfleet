@@ -5,6 +5,7 @@ import { readUtf8Prefix } from './boundedUtf8File.js';
 import type { PlannedManager } from './scapeManagers.js';
 import { resolveStateFolder } from './scapeStateFolder.js';
 import { parseWorkingStateFile } from './scapeWorkingStateFile.js';
+import { withoutAccents } from './withoutAccents.js';
 
 const STATE_FILE_EXTENSION = '.md';
 const MAX_STATE_FILE_BYTES = 256 * 1024;
@@ -13,6 +14,7 @@ const EDGE_DASHES = /^-+|-+$/g;
 
 export interface PlannedWorkingState {
   managerId: string;
+  managerName: string;
   sections: WorkingStateSections;
   /** The modification time of the state file: the moment the state was last true in Scape. */
   updatedAt: string;
@@ -20,8 +22,34 @@ export interface PlannedWorkingState {
   isNotFullyConverted: boolean;
 }
 
-/** The file name stem of a manager: its name in lower case with every run of other characters as one dash ("Lead (CCM)" is "lead-ccm"). */
-export const stateFileStemOf = (managerName: string): string => managerName.toLowerCase().replace(NOT_A_FILE_NAME_CHARACTER, '-').replace(EDGE_DASHES, '');
+const dashedStemOf = (text: string): string => text.toLowerCase().replace(NOT_A_FILE_NAME_CHARACTER, '-').replace(EDGE_DASHES, '');
+
+/** The file name stem of a manager: its name unaccented, in lower case, with every run of other characters as one dash ("Lead (CCM)" is "lead-ccm", "Mnémosyne" is "mnemosyne"). */
+export const stateFileStemOf = (managerName: string): string => dashedStemOf(withoutAccents(managerName));
+
+/** The stem with each accented letter as a dash ("Mnémosyne" is "mn-mosyne"), as Scape state files may still be named. */
+const formerStateFileStemOf = (managerName: string): string => dashedStemOf(managerName);
+
+const exactStateFileNameOf = (stem: string, fileNames: string[]): string | undefined => {
+  const exactName = `${stem}${STATE_FILE_EXTENSION}`;
+  return stem !== '' && fileNames.includes(exactName) ? exactName : undefined;
+};
+
+interface StemsOfAllManagers { current: string[]; former: string[] }
+
+/**
+ * The file named exactly after the former stem, unless the former stem is the current one, the current stem of another Scape manager
+ * (imported or not), or the former stem of another Scape manager.
+ */
+function formerStateFileNameOf(input: { managerName: string; fileNames: string[]; stemsOfAllManagers: StemsOfAllManagers }): string | undefined {
+  const currentStem = stateFileStemOf(input.managerName);
+  const formerStem = formerStateFileStemOf(input.managerName);
+  const isFormerStemTheCurrentOne = formerStem === currentStem;
+  const isFormerStemAnotherManagersCurrentStem = input.stemsOfAllManagers.current.includes(formerStem);
+  const isFormerStemSharedByManagers = input.stemsOfAllManagers.former.filter((stem) => stem === formerStem).length > 1;
+  if (isFormerStemTheCurrentOne || isFormerStemAnotherManagersCurrentStem || isFormerStemSharedByManagers) return undefined;
+  return exactStateFileNameOf(formerStem, input.fileNames);
+}
 
 function stateFileNamesIn(folder: string): string[] {
   try {
@@ -33,9 +61,8 @@ function stateFileNamesIn(folder: string): string[] {
 
 /** The file named exactly after the manager, else the only file whose name starts with the manager's followed by a dash; two candidates are no match. */
 function stateFileNameOf(stem: string, fileNames: string[]): string | undefined {
-  if (stem === '') return undefined;
-  const exactName = `${stem}${STATE_FILE_EXTENSION}`;
-  if (fileNames.includes(exactName)) return exactName;
+  const exactName = exactStateFileNameOf(stem, fileNames);
+  if (exactName !== undefined || stem === '') return exactName;
   const longerNames = fileNames.filter((fileName) => fileName.startsWith(`${stem}-`));
   return longerNames.length === 1 ? longerNames[0] : undefined;
 }
@@ -55,6 +82,8 @@ export interface PlanWorkingStatesInput {
   stateDir: string | undefined;
   stateRoot: string | undefined;
   managers: PlannedManager[];
+  /** The name of every Scape manager read, whether the import keeps it or not. */
+  allManagerNames: string[];
 }
 
 /** Plans the working state of each manager whose state file exists in the folder; a manager without a file gets none. A folder reached through a link is refused. */
@@ -64,14 +93,15 @@ export function planWorkingStates(input: PlanWorkingStatesInput): PlannedWorking
   if (folder === undefined) return [];
 
   const fileNames = stateFileNamesIn(folder);
+  const stemsOfAllManagers: StemsOfAllManagers = { current: input.allManagerNames.map(stateFileStemOf), former: input.allManagerNames.map(formerStateFileStemOf) };
   const planned: PlannedWorkingState[] = [];
   for (const manager of input.managers) {
-    const fileName = stateFileNameOf(stateFileStemOf(manager.session.name), fileNames);
+    const fileName = stateFileNameOf(stateFileStemOf(manager.session.name), fileNames) ?? formerStateFileNameOf({ managerName: manager.session.name, fileNames, stemsOfAllManagers });
     const file = fileName === undefined ? undefined : readStateFile(folder, fileName);
     if (file === undefined) continue;
     const parsed = parseWorkingStateFile(file.text);
     planned.push({
-      managerId: manager.id, sections: parsed.sections, updatedAt: file.modifiedAt,
+      managerId: manager.id, managerName: manager.session.name, sections: parsed.sections, updatedAt: file.modifiedAt,
       mergedSectionCount: parsed.mergedSectionCount, isNotFullyConverted: parsed.isNotFullyConverted || file.isTruncated,
     });
   }

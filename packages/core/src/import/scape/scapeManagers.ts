@@ -1,13 +1,16 @@
 import { join } from 'node:path';
 import { ManagerSpecSchema, type HarnessId, type MentionKind } from '@openfleet/shared';
+import { inlineMarkdownText } from './importReport.js';
 import type { ScapeArgus } from './scapeArguses.js';
 import { ScapeImportError } from './scapeImportError.js';
 import { composeMission, type MissionToolReferences, type ResourceAvailability } from './scapeManagerMission.js';
 import type { RecordValues } from './scapeTarget.js';
 import { appleReferenceToIso } from './scapeTime.js';
+import { withoutAccents } from './withoutAccents.js';
 
 const OPENFLEET_HARNESS_BY_SCAPE_HARNESS: Record<string, HarnessId> = { 'claude-code': 'claude-cli' };
 const MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku', 'fable']);
+const DEFAULT_MODEL_ALIAS = 'sonnet';
 const CLAUDE_MODEL_ID_WITH_FAMILY = /^claude-(opus|sonnet|haiku|fable)-/;
 const SAFE_FOLDER_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 const UNSAFE_FOLDER_NAME_CHARACTERS = /[^A-Za-z0-9._-]+/g;
@@ -21,6 +24,9 @@ export interface PlannedManager {
   session: { name: string; directory: string; model: string | null; harness: HarnessId; projectId: string; createdAt: string };
   manager: { pulseSeconds: number; childrenCap: number; missionText: string };
   isNotFullyConverted: boolean;
+  modelFinding: string | undefined;
+  /** The Scape card named no model and the default alias is planned instead. */
+  isModelDefaulted: boolean;
   pendingPlaybookMentionCount: number;
   toolReferences: MissionToolReferences;
 }
@@ -35,13 +41,22 @@ export interface AvailableResources { noteIds: Set<string>; tableIds: Set<string
 
 const unreadable = (message: string, cause?: unknown) => new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message, cause });
 
-/** An exact Claude model id becomes the alias of its family; a model that is no known alias is not stored and is reported. */
-export function modelOf(scapeModel: string | undefined): { model: string | null; isRecognized: boolean } {
+export interface ModelMapping {
+  model: string | null;
+  isRecognized: boolean;
+  /** What the report says about this model; none when the model maps to its alias unchanged. */
+  finding: string | undefined;
+  isDefaulted: boolean;
+}
+
+/** An exact Claude model id becomes the alias of its family; no model becomes the default alias; a model that is no known alias is not stored and is reported with its id. */
+export function modelOf(scapeModel: string | undefined): ModelMapping {
   const namesNoModel = scapeModel === undefined || scapeModel === '';
-  if (namesNoModel) return { model: null, isRecognized: true };
+  if (namesNoModel) return { model: DEFAULT_MODEL_ALIAS, isRecognized: true, isDefaulted: true, finding: `model defaulted to ${DEFAULT_MODEL_ALIAS} (Scape card had none)` };
   const alias = CLAUDE_MODEL_ID_WITH_FAMILY.exec(scapeModel)?.[1] ?? scapeModel;
   const isKnownAlias = MODEL_ALIASES.has(alias);
-  return isKnownAlias ? { model: alias, isRecognized: true } : { model: null, isRecognized: false };
+  if (isKnownAlias) return { model: alias, isRecognized: true, isDefaulted: false, finding: undefined };
+  return { model: null, isRecognized: false, isDefaulted: false, finding: `model not converted: "${inlineMarkdownText(scapeModel)}" is no known alias` };
 }
 
 function harnessOf(argus: ScapeArgus): HarnessId {
@@ -58,7 +73,7 @@ function assertPulseAndCapWithinBounds(argus: ScapeArgus): void {
 const isUsableMission = (text: string) => ManagerSpecSchema.shape.mission.safeParse(text).success;
 
 function safeFolderNameOf(name: string): string {
-  return name.replace(UNSAFE_FOLDER_NAME_CHARACTERS, '-').replace(DOT_RUN, '.').replace(LEADING_DOTS_AND_DASHES, '').slice(0, MAX_FOLDER_NAME_LENGTH);
+  return withoutAccents(name).replace(UNSAFE_FOLDER_NAME_CHARACTERS, '-').replace(DOT_RUN, '.').replace(LEADING_DOTS_AND_DASHES, '').slice(0, MAX_FOLDER_NAME_LENGTH);
 }
 
 /** One safe, single-component folder per manager, unique case-insensitively: the name, else the name with the start of the id, else the id, else the id numbered. */
@@ -107,7 +122,7 @@ export function planManagers(input: PlanManagersInput): ManagersPlan {
 
     const harness = harnessOf(argus);
     assertPulseAndCapWithinBounds(argus);
-    const { model, isRecognized: isModelRecognized } = modelOf(argus.model);
+    const { model, isRecognized: isModelRecognized, isDefaulted: isModelDefaulted, finding: modelFinding } = modelOf(argus.model);
     const mission = composeMission({ noteBody: String(missionNote.body_md), governanceRequests: argus.governanceRequests, resourceGrants: argus.resourceGrants, availabilityOf });
     if (!isUsableMission(mission.text)) { skippedCount++; continue; }
 
@@ -116,6 +131,8 @@ export function planManagers(input: PlanManagersInput): ManagersPlan {
       session: { name: argus.name, directory: join(input.managersRoot, folderNames.get(argus.id)!), model, harness, projectId: String(missionNote.project_id), createdAt: appleReferenceToIso(argus.createdAt) },
       manager: { pulseSeconds: argus.pulseInterval, childrenCap: argus.childrenCap, missionText: mission.text },
       isNotFullyConverted: mission.hasUnconvertedGrant || !isModelRecognized,
+      modelFinding,
+      isModelDefaulted,
       pendingPlaybookMentionCount: mission.pendingPlaybookMentionCount,
       toolReferences: mission.toolReferences,
     });

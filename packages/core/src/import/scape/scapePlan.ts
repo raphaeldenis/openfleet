@@ -160,7 +160,7 @@ export function buildImportPlan(source: ScapeSource, options: PlanOptions): Impo
   const lawsPlan = planLaws({ arguses, managers: plan.managers });
   plan.laws = lawsPlan.laws;
   plan.lawsReport = lawsPlan.report;
-  plan.workingStates = planWorkingStates({ stateDir: options.stateDir, stateRoot: options.stateRoot, managers: plan.managers });
+  plan.workingStates = planWorkingStates({ stateDir: options.stateDir, stateRoot: options.stateRoot, managers: plan.managers, allManagerNames: arguses.map((argus) => argus.name) });
   if (options.memorySource !== undefined) plan.memories = planMemories({ managers: plan.managers, source: options.memorySource });
   return plan;
 }

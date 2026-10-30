@@ -87,12 +87,60 @@ describe('importScape: managers', () => {
       expect(sessionOf(LEAD_ARGUS_ID)!.model).toBe(alias);
     });
 
-    it('stores no model when the Argus names none', () => {
-      writeArguses(fixture, [anArgus({ model: undefined })]);
+    it.each([
+      ['absent', undefined],
+      ['empty', ''],
+    ])('stores the default alias sonnet when the Argus model is %s, and the report says so', (_label, scapeModel) => {
+      writeArguses(fixture, [anArgus({ name: 'Alpha', model: scapeModel })]);
 
+      const report = run();
+
+      expect(sessionOf(LEAD_ARGUS_ID)!.model).toBe('sonnet');
+      expect(report.managerFindings).toContain('Alpha — model defaulted to sonnet (Scape card had none)');
+      expect(report.counts.managers.notConverted).toBe(0);
+    });
+
+    it('does not repeat the defaulted-model line on an unchanged re-import', () => {
+      writeArguses(fixture, [anArgus({ model: undefined })]);
       run();
 
+      const secondReport = run({ refuseReimport: false });
+
+      expect(secondReport.managerFindings).toEqual([]);
+    });
+
+    it('does not report a defaulted model for a manager left as it is because OpenFleet edited it', () => {
+      writeArguses(fixture, [anArgus({ model: undefined })]);
+      run();
+      openTarget().prepare('UPDATE managers SET mission_text = ? WHERE session_id = ?').run('edited in OpenFleet', LEAD_ARGUS_ID);
+
+      const secondReport = run({ refuseReimport: false });
+
+      expect(secondReport.counts.managers.conflict).toBe(1);
+      expect(secondReport.managerFindings).toEqual([]);
+    });
+
+    it('writes a model id holding a line break as one line of the report', () => {
+      writeArguses(fixture, [anArgus({ name: 'Alpha', model: 'bad\n## Injected' })]);
+
+      const report = run();
+
+      expect(report.managerFindings).toEqual(['Alpha — model not converted: "bad \\#\\# Injected" is no known alias']);
+    });
+
+    it('keeps an exact model id with no alias unstored and names the manager and the id in the report', () => {
+      writeArguses(fixture, [anArgus({ name: 'Alpha', model: 'unknown-model' })]);
+
+      const report = run();
+
       expect(sessionOf(LEAD_ARGUS_ID)!.model).toBeNull();
+      expect(report.managerFindings).toContain('Alpha — model not converted: "unknown-model" is no known alias');
+    });
+
+    it('adds no model finding for a model it recognizes', () => {
+      writeArguses(fixture, [anArgus({ model: 'claude-opus-4-1-20250805' })]);
+
+      expect(run().managerFindings).toEqual([]);
     });
 
     it('refuses an Argus on a harness OpenFleet does not know with SCAPE_SOURCE_UNREADABLE and writes nothing', () => {

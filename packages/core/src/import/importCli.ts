@@ -34,13 +34,13 @@ const REIMPORT_NOTE =
   'A re-import compares each record with what the last import wrote: a Scape change is applied to a record OpenFleet left alone; a record edited or deleted in OpenFleet is a conflict and is kept (a deleted one is never written again); a record removed in Scape is reported and kept. The approved Scape laws are written to the laws table the same way: a law edited, withdrawn or deleted in OpenFleet is never overwritten, reactivated or written again. The laws are no longer copied into the manager mission, so an imported manager whose mission is intact has it rewritten without them (updated) and one edited in OpenFleet is a conflict and keeps its text. Run --dry-run first to see the outcome per entity.';
 
 const USAGE = [
-  'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--state-dir <dir>] [--claude-dir <dir>] [--scape-claude-dir <dir>] [--allow-reimport]',
+  'usage: import scape --home <OPENFLEET_HOME> [--dry-run] [--project <name>] [--scape-dir <dir>] [--report-dir <dir>] [--state-dir <dir>] [--claude-dir <dir>] [--scape-claude-dir <dir>] [--allow-reimport] [--json]',
   '',
   '  --home            the OpenFleet home holding openfleet.db (defaults to $OPENFLEET_HOME)',
   '  --dry-run         prints what would be written; writes nothing',
   '  --project         imports only the Scape project of that name',
   '  --scape-dir       the Scape home to read (default ~/.scape; only snapshots of it are opened)',
-  '  --report-dir      where import-report.md goes (default: the home)',
+  '  --report-dir      where import-report.md goes (default: the home); a dry run writes no report file',
   '  --state-dir       the folder of the Scape manager state files <manager name>.md that seed the working states (default ~/Documents/scape-team/state)',
   '  --claude-dir      the Claude config folder that receives each manager\'s auto-memory, under projects/<manager folder>/memory (default ~/.claude)',
   '  --scape-claude-dir  the Claude config folder that holds the Scape managers\' memory (default: --claude-dir)',
@@ -80,7 +80,7 @@ function stateFolderOptionsOf(stateDirFlag: string | undefined, homeDirectory: s
 function homeFrom({ values }: ParsedFlags, environment: CliEnvironment): string {
   const home = values.home ?? environment.env.OPENFLEET_HOME;
   if (home === undefined || home === '') throw invalidArguments('--home <OPENFLEET_HOME> is required (or set OPENFLEET_HOME)');
-  return home;
+  return resolve(home);
 }
 
 function cleanLawsRequestFrom(flags: ParsedFlags, environment: CliEnvironment): CleanLawsRequest {
@@ -100,7 +100,7 @@ function importOptionsFrom(flags: ParsedFlags, environment: CliEnvironment) {
     home,
     scapeDir: values['scape-dir'] ?? join(environment.homeDirectory, '.scape'),
     superpowersRoot: join(environment.homeDirectory, 'Documents', 'superpowers'),
-    dryRun: values['dry-run'] ?? false,
+    dryRun: (values['dry-run'] ?? false) || (values.json ?? false),
     projectName: values.project,
     reportDir: values['report-dir'],
     ...stateFolderOptionsOf(values['state-dir'], environment.homeDirectory),
