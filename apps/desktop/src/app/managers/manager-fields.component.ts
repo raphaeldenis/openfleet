@@ -144,6 +144,7 @@ function kilobytesLabelOf(bytes: number): string {
     .step:disabled { color: var(--mut); cursor: not-allowed }
     .hint { font-size: .6875rem; color: var(--mut); white-space: nowrap }
     .attended-label { display: flex; align-items: center; gap: .5rem; font-size: .875rem; cursor: pointer }
+    .attended-label input:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
     .hint--wrap { display: block; white-space: normal }
     .mission-size { align-self: flex-end }
     .maximum { font-size: .75rem; color: var(--fg) }

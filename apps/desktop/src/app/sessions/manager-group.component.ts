@@ -72,7 +72,7 @@ const NO_PULSE_LABEL = '—';
     .detail-line { display: flex; align-items: center; justify-content: space-between; gap: .375rem; --chip-height: 1.125rem; --chip-font-size: .6875rem }
     .pulse-meta { display: flex; gap: .375rem; font-size: .6875rem; color: var(--mut); font-family: var(--mono) }
     .row:hover { background: var(--hover) }
-    .row[aria-current='true'] { background: var(--active); box-shadow: inset 2px 0 0 var(--accent); font-weight: 500 }
+    .row[aria-current='true'] { background: var(--active); box-shadow: inset .125rem 0 0 var(--accent); font-weight: 500 }
     .row.closed { opacity: .5 }
     .row:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
