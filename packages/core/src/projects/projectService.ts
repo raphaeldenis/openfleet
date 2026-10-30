@@ -10,7 +10,7 @@ import type { ProjectPatch, ProjectRecord, ProjectRepository } from './projectRe
 const UNRUNNABLE_SCRIPT_MESSAGE = {
   not_found: 'the post-create script must be an absolute path to an existing file.',
   not_executable: 'the post-create script is not executable.',
-  unsafe_permissions: 'the post-create script must not be writable by group or others.',
+  unsafe_permissions: 'the post-create script must be owned by the daemon user and must not be writable by group or others.',
 } as const;
 
 // The docs folder import scans only the four docs subfolders; `specs` is the closest to a project card.
