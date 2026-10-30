@@ -4,6 +4,7 @@ import { Router, provideRouter } from '@angular/router';
 import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
+import { FleetApiService } from '../../core/fleet-api.service';
 import { InMemorySessionTodosSource, SESSION_TODOS_SOURCE, type ChildProgress } from './session-todos-source';
 import { TodosTabComponent } from './todos-tab.component';
 
@@ -17,7 +18,10 @@ function child(id: string, completed: number | null, total = 0, extra: Partial<C
   return { id, name: id.toUpperCase(), emoji: '⛏️', state: 'idle', isManager: false, counts, ...extra };
 }
 
-async function renderManagerTab(children: ChildProgress[] | 'unsupported', options: { sessionId?: string | undefined } = {}) {
+type UsageByChild = Record<string, { inputTokens: number; outputTokens: number } | null>;
+
+async function renderManagerTab(children: ChildProgress[] | 'unsupported', options: { sessionId?: string | undefined; usageOf?: UsageByChild } = {}) {
+  const usageOf = options.usageOf ?? {};
   const source = new InMemorySessionTodosSource();
   source.publishChildren(MANAGER_ID, children === 'unsupported' ? { kind: 'unsupported' } : { kind: 'ready', children });
   const sessionId = 'sessionId' in options ? options.sessionId : MANAGER_ID;
@@ -25,6 +29,7 @@ async function renderManagerTab(children: ChildProgress[] | 'unsupported', optio
     bindings: [inputBinding('sessionId', () => sessionId)],
     providers: [
       { provide: SESSION_TODOS_SOURCE, useValue: source },
+      { provide: FleetApiService, useValue: { getSessionUsage: (sessionId: string) => Promise.resolve(usageOf[sessionId] ?? null) } },
       provideRouter([{ path: 'session/:id', component: StubPage }, { path: 'manager/:id', component: StubPage }]),
     ],
   });
@@ -294,6 +299,16 @@ describe('manager children progress', () => {
 
       expect(screen.getByTestId('todos-empty')).not.toBeNull();
       expect(rows()).toHaveLength(1);
+    });
+  });
+
+  describe('token usage', () => {
+    it('shows each child its own tokens, and n/a for a child with no usage', async () => {
+      const usageOf: Record<string, { inputTokens: number; outputTokens: number } | null> = { gimli: { inputTokens: 12_300, outputTokens: 4_100 }, balin: null };
+      await renderManagerTab([child('gimli', 2, 5), child('balin', 1, 2)], { usageOf });
+
+      expect(await within(rowOf('GIMLI')).findByText('12.3k in / 4.1k out')).toBeInTheDocument();
+      expect(await within(rowOf('BALIN')).findByText('n/a')).toBeInTheDocument();
     });
   });
 
