@@ -26,7 +26,9 @@ describe('the operator sets the handover patterns in config.json', () => {
   });
 
   it('refuses to boot on a pattern that is not a valid regular expression, naming the pattern', () => {
-    expect(() => loadDaemonSettings(configWithPatterns(['ok\\d', '(unclosed']))).toThrow(/handoverPatterns.*\(unclosed/);
+    const handoverPatternBudgetMs = 10_000;
+
+    expect(() => loadDaemonSettings(configWithPatterns(['ok\\d', '(unclosed']), { handoverPatternBudgetMs })).toThrow(/handoverPatterns.*\(unclosed/);
   });
 
   it.each(['(a+)+$', '(.*)*x', '([a-z]+)*z', '(\\d{2,})+'])('refuses to boot on the catastrophic backtracking pattern %s', (unsafePattern) => {
