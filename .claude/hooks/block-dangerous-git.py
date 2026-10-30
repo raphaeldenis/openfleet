@@ -63,6 +63,14 @@ def refuse_unless_delimiter_is_a_whole_word(command, delimiter_end):
         refuse("unanalysable", "a heredoc delimiter followed by quotes or other text hides which lines are commands, write a bare delimiter.")
 
 
+def is_inside_arithmetic(text_before):
+    """Returns True when `<<` after `text_before` is a shift: inside an open $(( )), (( )) or $[ ], or after `let`."""
+    has_open_double_parenthesis = text_before.count("((") > text_before.count("))")
+    has_open_bracket_arithmetic = text_before.count("$[") > text_before.count("]")
+    is_let_command = re.match(r"\s*let\b", text_before) is not None
+    return has_open_double_parenthesis or has_open_bracket_arithmetic or is_let_command
+
+
 def starts_a_comment(command, index):
     previous_char = command[index - 1] if index > 0 else "\n"
     return command[index] == "#" and (previous_char.isspace() or previous_char in ";|&(")
@@ -88,7 +96,7 @@ def split_outside_quotes(command):
             continue
         elif command.startswith("<<", index):
             heredoc_start = HEREDOC_START.match(command, index)
-            if heredoc_start:
+            if heredoc_start and not is_inside_arithmetic("".join(current)):
                 refuse_unless_delimiter_is_a_whole_word(command, heredoc_start.end())
                 strips_tabs, delimiter_quote, delimiter = heredoc_start.groups()
                 heredocs.append(Heredoc(delimiter, bool(strips_tabs), bool(delimiter_quote)))

@@ -175,9 +175,17 @@ const BLOCKED_WHEN_A_HEREDOC_LOOKALIKE_SWALLOWS_THE_NEXT_COMMANDS = [
   "cat <<'EOF'x\nx\nEOFx\ngit push -f\nEOF",
   'cat <<"EOF"x\nx\nEOFx\ngit push -f\nEOF',
   'cat <<EOF"x"\nx\nEOFx\ngit push -f\nEOF',
+  'echo $((a<<b))\ngit push -f\nb',
+  'x=$(( 1<<n ))\ngit push -f\nn',
+  'echo $[a<<b]\ngit push -f\nb',
+  'let x=1<<b\ngit push -f\nb',
+  '(( x<<y ))\ngit push -f\ny',
+  '$((a<<b))\ngit push -f\nb',
 ];
 
 const ALLOWED_AROUND_COMMENTS = [
+  'x=$((1<<2))\ngit status',
+  'echo $((1<<2)) <<EOF\ngit push -f is documented\nEOF',
   "pnpm test # it's fine <<EOF\ngit status",
   'cat <<EOF > notes.txt\ngit push -f is documented\nEOF',
 ];
