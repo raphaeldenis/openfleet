@@ -225,7 +225,7 @@ function rememberLastVisitedProjectId(projectId: string): void {
     .home { display: flex; flex-direction: column; gap: 1rem; max-width: 52rem; margin: 0 auto; padding: 1.5rem 1.5rem 3rem; font-size: .8125rem; }
     h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
     .header { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
-    .header h1 { flex: 1; min-width: 0; }
+    .header h1 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .switcher-current { font-family: var(--sans, inherit); font-size: .75rem; font-weight: 500; }
     .switcher-prefix { color: var(--mut); font-weight: 400; }
     .project-option { display: flex; align-items: center; gap: .5rem; width: 100%; height: 1.75rem; padding: 0 .5rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg); font: inherit; font-size: .75rem; text-align: left; cursor: pointer; }
