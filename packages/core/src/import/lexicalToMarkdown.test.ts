@@ -455,6 +455,92 @@ describe('convertLexicalToMarkdown', () => {
 
       expect(markdownOf(checklist)).toBe('- [x] done\n- [ ] todo\n- [ ] unset');
     });
+
+    it('escapes an exclamation mark right before a link so it cannot become an image', () => {
+      const markdown = markdownOf(paragraph(text('Hi!'), link('link', 'https://example.test/x.png', text('texte'))));
+
+      expect(markdown).not.toMatch(/(?<!\\)!\[/);
+      expect(markdown).toBe('Hi\\![texte](https://example.test/x.png)');
+    });
+
+    it('turns a tab node into one tab whatever its text field holds', () => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph(text('a'), { type: 'tab', text: '\n# H' }, text('b'))));
+
+      expect(result.markdown).toBe('a\tb');
+    });
+
+    it.each([
+      ['a backslash at the end', 'https://a.test/x\\'],
+      ['a closing bracket', 'https://a.test/x]'],
+      ['an opening bracket', 'https://a.test/[x'],
+      ['a backtick', 'https://a.test/`x'],
+      ['a double quote', 'https://a.test/"x'],
+      ['a bidirectional control', 'https://a.test/‮x'],
+      ['a zero-width space', 'https://a.test/​x'],
+      ['a control character', 'https://a.test/\u0007x'],
+      ['an uppercase javascript scheme', 'JAVASCRIPT:void0'],
+      ['a 64 KiB length', `https://a.test/${'a'.repeat(64 * 1024)}`],
+    ])('keeps the marker of a link to a URL with %s', (_reason, url) => {
+      const startedAt = performance.now();
+
+      const result = convertLexicalToMarkdown(documentOf(paragraph(link('link', url, text('t')))));
+
+      expect(result).toEqual({ markdown: '[non converti: link]t', unconvertedTypes: ['link'] });
+      expect(performance.now() - startedAt).toBeLessThan(500);
+    });
+
+    it('converts a link whose scheme is in uppercase', () => {
+      expect(markdownOf(paragraph(link('link', 'HTTP://A.TEST/x', text('t'))))).toBe('[t](HTTP://A.TEST/x)');
+    });
+
+    it('keeps the URL of a safe link whose text holds an unconverted marker', () => {
+      const underlined = convertLexicalToMarkdown(documentOf(paragraph(link('link', 'https://example.test', text('u', 8)))));
+      const withUnknownMention = convertLexicalToMarkdown(documentOf(paragraph(link('link', 'https://example.test', mention({ mentionKind: 'calendar', text: '@x' })))));
+
+      expect(underlined).toEqual({ markdown: '[u[non converti: text-format:8]](https://example.test)', unconvertedTypes: ['text-format:8'] });
+      expect(withUnknownMention.markdown).toBe('[[non converti: mention:calendar]](https://example.test)');
+    });
+
+    it('keeps the marker of a link whose text holds a line break', () => {
+      const result = convertLexicalToMarkdown(documentOf(paragraph(link('link', 'https://example.test', text('a'), { type: 'linebreak' }, text('b')))));
+
+      expect(result.unconvertedTypes).toEqual(['link']);
+    });
+  });
+
+  describe('node types that are not strings', () => {
+    it('labels a numeric type with its digits', () => {
+      const result = convertLexicalToMarkdown(documentOf({ type: 5 } as unknown as Node));
+
+      expect(result).toEqual({ markdown: '[non converti: 5]', unconvertedTypes: ['5'] });
+    });
+
+    it.each([[{}], [{ type: '' }], [{ type: null }], [{ type: { nested: true } }]])('labels the node %j as having no type', (node) => {
+      const result = convertLexicalToMarkdown(documentOf(node as Node));
+
+      expect(result).toEqual({ markdown: '[non converti: (sans type)]', unconvertedTypes: ['(sans type)'] });
+    });
+  });
+
+  describe('deeply nested documents', () => {
+    const NESTING_DEPTH = 10_000;
+    const nest = (wrap: (inner: Node) => Node): Node => {
+      let node: Node = text('core');
+      for (let level = 0; level < NESTING_DEPTH; level++) node = wrap(node);
+      return node;
+    };
+
+    it.each([
+      ['unknown blocks', (inner: Node): Node => ({ type: 'callout', children: [inner] })],
+      ['quotes', (inner: Node): Node => ({ type: 'quote', children: [inner] })],
+      ['lists', (inner: Node): Node => ({ type: 'list', listType: 'bullet', children: [{ type: 'listitem', children: [inner] }] })],
+      ['links', (inner: Node): Node => ({ type: 'link', url: 'https://example.test', children: [inner] })],
+    ])('marks the nesting limit instead of failing on %s', (_kind, wrap) => {
+      const result = convertLexicalToMarkdown(documentOf(nest(wrap)));
+
+      expect(result.unconvertedTypes).toContain('nesting-too-deep');
+      expect(result.markdown).toContain('[non converti: nesting-too-deep]');
+    });
   });
 
   describe('unknown nodes', () => {

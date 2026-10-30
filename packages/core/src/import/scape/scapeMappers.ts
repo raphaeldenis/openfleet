@@ -219,16 +219,26 @@ const SORT_FIELDS = ['sortColumnID', 'sortDescending', 'sortMode'];
 const isNotSortField = (key: string) => !SORT_FIELDS.includes(key);
 
 /** Maps the sort column and direction to orderBy; sortMode has no known meaning in Scape, so it is always listed with its raw value. */
+function neutralLabelOfRawValue(value: unknown): string {
+  if (typeof value === 'string') return inlineMarkdownText(value);
+  if (Array.isArray(value)) return '(array)';
+  if (typeof value === 'object' && value !== null) return '(object)';
+  return String(value);
+}
+
+const isNullOrEmpty = (value: unknown) => value === null || value === undefined || value === '';
+
 function mapSort(source: Record<string, unknown>, columnIds: Set<string>): { orderBy?: OrderTerm[]; droppedFields: string[] } {
   const droppedFields: string[] = [];
-  if (Object.hasOwn(source, 'sortMode')) droppedFields.push(`sortMode = ${inlineMarkdownText(String(source.sortMode))}`);
-  const sortColumnId = source.sortColumnID;
-  const hasSortColumn = Object.hasOwn(source, 'sortColumnID');
-  const isKnownSortColumn = typeof sortColumnId === 'string' && columnIds.has(sortColumnId);
-  if (hasSortColumn && !isKnownSortColumn) return { droppedFields: ['sortColumnID', ...droppedFields] };
-  if (!isKnownSortColumn) return { droppedFields };
-
+  if (Object.hasOwn(source, 'sortMode')) droppedFields.push(`sortMode = ${neutralLabelOfRawValue(source.sortMode)}`);
   const hasDirection = Object.hasOwn(source, 'sortDescending');
+  const sortColumnId = source.sortColumnID;
+  const hasSortColumn = !isNullOrEmpty(sortColumnId);
+  if (!hasSortColumn) return { droppedFields: hasDirection ? ['sortDescending', ...droppedFields] : droppedFields };
+
+  const isKnownSortColumn = typeof sortColumnId === 'string' && columnIds.has(sortColumnId);
+  if (!isKnownSortColumn) return { droppedFields: ['sortColumnID', ...droppedFields] };
+
   const hasValidDirection = typeof source.sortDescending === 'boolean';
   if (hasDirection && !hasValidDirection) droppedFields.unshift('sortDescending');
   const dir = source.sortDescending === true ? 'desc' : 'asc';

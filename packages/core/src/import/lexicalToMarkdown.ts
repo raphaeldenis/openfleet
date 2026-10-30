@@ -39,6 +39,16 @@ const VISITOR_BY_NODE_TYPE: Record<string, NodeVisitor> = {
 
 const INLINE_NODE_TYPES = new Set(['text', 'tab', 'link', 'autolink', 'linebreak', 'mention', 'mission-law-bound']);
 const LEADING_LINE_BREAK = /^(?: {2})?\n+/;
+const MAX_NESTING_DEPTH = 100;
+const NESTING_TOO_DEEP_LABEL = 'nesting-too-deep';
+const NO_TYPE_LABEL = '(sans type)';
+
+const typeLabelOf = (node: LexicalNode): string => {
+  const type: unknown = node.type;
+  if (typeof type === 'string' && type !== '') return type;
+  if (typeof type === 'number' || typeof type === 'boolean') return String(type);
+  return NO_TYPE_LABEL;
+};
 
 const parseRoot = (input: string | object): LexicalNode => {
   const document = typeof input === 'string' ? (JSON.parse(input) as unknown) : input;
@@ -58,7 +68,7 @@ export function convertLexicalToMarkdown(input: string | object): LexicalConvers
   };
 
   const renderUnknownNode = (node: LexicalNode): string => {
-    const marker = renderUnconverted(node.type);
+    const marker = renderUnconverted(typeLabelOf(node));
     const children = childrenOf(node);
     const hasChildren = children.length > 0;
     if (!hasChildren) return marker + stringField(node, 'text');
@@ -68,11 +78,23 @@ export function convertLexicalToMarkdown(input: string | object): LexicalConvers
     return marker + BLOCK_SEPARATOR + context.renderBlocks(children);
   };
 
-  const renderNode = (node: LexicalNode): string => {
-    const isKnownType = Object.hasOwn(VISITOR_BY_NODE_TYPE, node.type);
+  const renderKnownOrUnknownNode = (node: LexicalNode): string => {
+    const isKnownType = typeof node.type === 'string' && Object.hasOwn(VISITOR_BY_NODE_TYPE, node.type);
     if (!isKnownType) return renderUnknownNode(node);
     const visitor = VISITOR_BY_NODE_TYPE[node.type] as NodeVisitor;
     return visitor(node, context);
+  };
+
+  let nestingDepth = 0;
+  const renderNode = (node: LexicalNode): string => {
+    const isTooDeep = nestingDepth >= MAX_NESTING_DEPTH;
+    if (isTooDeep) return renderUnconverted(NESTING_TOO_DEEP_LABEL);
+    nestingDepth += 1;
+    try {
+      return renderKnownOrUnknownNode(node);
+    } finally {
+      nestingDepth -= 1;
+    }
   };
 
   const context: RenderContext = {

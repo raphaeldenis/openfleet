@@ -58,17 +58,22 @@ export const visitText: NodeVisitor = (node, context) => {
 
 export const visitLinebreak: NodeVisitor = () => HARD_BREAK;
 
-export const visitTab: NodeVisitor = (node) => stringField(node, 'text') || '\t';
+export const visitTab: NodeVisitor = () => '\t';
 
-const LINK_URL_THAT_RENDERS_SAFELY = /^(?:https?:\/\/|mailto:)[^\s()<>]+$/i;
-const LINK_TEXT_THAT_BREAKS_A_MARKDOWN_LINK = /[[\]\r\n]/;
+const MAX_LINK_URL_LENGTH = 2048;
+const LINK_URL_THAT_RENDERS_SAFELY = /^(?:https?:\/\/|mailto:)[A-Za-z0-9\-._~:/?#@!$&'*+,;=%]+$/i;
+const UNCONVERTED_MARKER = /\[non converti: [^\]]*\]/g;
+const BRACKET = /[[\]]/;
+const LINE_BREAK = /[\r\n]/;
 
 export const visitLink: NodeVisitor = (node, context) => {
+  const url = stringField(node, 'url');
   const linkText = context.renderInline(childrenOf(node));
-  const hasSafeUrl = LINK_URL_THAT_RENDERS_SAFELY.test(stringField(node, 'url'));
-  const hasSafeText = linkText.trim() !== '' && !LINK_TEXT_THAT_BREAKS_A_MARKDOWN_LINK.test(linkText);
+  const hasSafeUrl = url.length <= MAX_LINK_URL_LENGTH && LINK_URL_THAT_RENDERS_SAFELY.test(url);
+  const textWithoutMarkers = linkText.replace(UNCONVERTED_MARKER, '');
+  const hasSafeText = linkText.trim() !== '' && !LINE_BREAK.test(linkText) && !BRACKET.test(textWithoutMarkers);
   if (!hasSafeUrl || !hasSafeText) return context.renderUnconverted(node.type) + linkText;
-  return `[${linkText}](${stringField(node, 'url')})`;
+  return `[${linkText}](${url})`;
 };
 
 const mentionedIdOf = (node: LexicalNode, scapeKind: string): string => {

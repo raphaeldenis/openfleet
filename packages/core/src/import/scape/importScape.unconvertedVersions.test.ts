@@ -19,7 +19,7 @@ function setup() {
     db.prepare('UPDATE notes SET content = ?, title = ? WHERE id = ?')
       .run(lexicalDocumentOf(textBlock('now'), { type: 'gizmo' }), input.title ?? 'Mission', LEXICAL_NOTE_ID);
   });
-  return { home, run, giveMissionNoteUnknownNodes };
+  return { fixture, home, run, giveMissionNoteUnknownNodes };
 }
 
 it('names each note version holding an unconverted node, with its note title, version number and node types', () => {
@@ -35,6 +35,16 @@ it('names each note version holding an unconverted node, with its note title, ve
 
 it('names no version for notes that convert fully', () => {
   expect(setup().run().unconvertedNoteVersions).toEqual([]);
+});
+
+it('writes a report for a note holding nodes without a string type', () => {
+  const context = setup();
+  editScapeNotes(context.fixture, (db) => {
+    db.prepare('UPDATE notes SET content = ? WHERE id = ?').run(lexicalDocumentOf({ type: 5 }, {}), LEXICAL_NOTE_ID);
+  });
+  const report = context.run();
+  expect(report.unconvertedNoteVersions).toContainEqual({ noteTitle: 'Mission', rev: 2, nodeTypes: ['5', '(sans type)'] });
+  expect(readFileSync(join(context.home, 'import-report.md'), 'utf8')).toContain('Mission — version 2: 5, (sans type)');
 });
 
 it('writes the versions and node types in the report, neutralized', () => {
