@@ -100,7 +100,7 @@ const MODES_WITH_BYPASS_LAST: readonly PermissionMode[] = [
       background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer;
     }
     .mode-row[aria-selected='true'], .mode-row:hover { background: var(--hover); }
-    .mode-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .mode-row:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem; }
     .mode-head { display: flex; align-items: center; gap: .5rem; font-family: var(--mono); font-size: .75rem; }
     .mode-explanation { padding-left: 1.25rem; font-size: .75rem; color: var(--mut); text-wrap: pretty; }
     .danger-mark { font-weight: 700; color: var(--state-error); }

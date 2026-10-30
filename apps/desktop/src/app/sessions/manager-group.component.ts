@@ -74,7 +74,7 @@ const NO_PULSE_LABEL = '—';
     .row:hover { background: var(--hover) }
     .row[aria-current='true'] { background: var(--active); box-shadow: inset 2px 0 0 var(--accent); font-weight: 500 }
     .row.closed { opacity: .5 }
-    .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+    .row:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     .row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
   `,
 })

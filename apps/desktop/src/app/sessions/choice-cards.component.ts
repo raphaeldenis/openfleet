@@ -29,7 +29,7 @@ let nextGroupNumber = 0;
     .card { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: .125rem; min-height: 2rem; padding: .375rem .625rem; border: 1px solid var(--line); border-radius: .375rem; cursor: pointer }
     .card[data-selected='1'] { border-color: var(--accent); background: var(--accent-bg) }
     .card[data-unavailable='1'] { color: var(--mut); cursor: not-allowed }
-    .card:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px }
+    .card:has(input:focus-visible) { outline: .125rem solid var(--accent); outline-offset: -.125rem }
     input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: inherit }
     .name { font-size: .75rem }
     .hint { font-size: .6875rem; color: var(--mut) }
