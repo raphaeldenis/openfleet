@@ -5,7 +5,7 @@ import type { EventBus } from '../events/eventBus.js';
 import { BLANK_CLAIM_MESSAGE, hasBlankClaim, lacksExecutedEvidence, sanitizedReproClaim } from '../review/sanitizedReproClaim.js';
 import type { WorkingStateService } from '../workingState/workingStateService.js';
 import type { AuditWriter, AuditedDecision } from './auditWriter.js';
-import { UNCLASSIFIED_LABEL, escalationItemOf, humanReadableText, renderEscalationBody } from './escalationBody.js';
+import { ESCALATION_ITEM_PREFIX, UNCLASSIFIED_LABEL, escalationItemOf, humanReadableText, renderEscalationBody } from './escalationBody.js';
 import type { EscalationRepository, NewQuestion, StoredBatch, StoredEscalation, StoredQuestion, QuestionStatus } from './escalationRepository.js';
 import { routeQuestion, type QuestionRoute, type QuestionRouting } from './questionRouting.js';
 
@@ -320,6 +320,7 @@ export class EscalationService {
       repository.answerEscalationIfPending({ id: escalationId, resolvedAt: answeredAt });
     });
     const resolved = this.viewOf(escalationId);
+    this.removeItemFromQuestionsForHuman({ managerId: resolved.managerId, escalationId });
     this.deps.bus?.emit({ type: 'escalation.resolved', escalation: resolved });
     this.deps.notifyAnswer?.(resolved);
     return resolved;
@@ -415,6 +416,19 @@ export class EscalationService {
     const id = this.deps.newId();
     this.deps.repository.insertEscalation({ id, managerId, ticket, body: '', createdAt: this.deps.clock() });
     return this.deps.repository.findEscalation(id)!;
+  }
+
+  /** Removes only the items of this escalation; the read and the write run in the same tick, so no edit of the manager falls between them. */
+  private removeItemFromQuestionsForHuman({ managerId, escalationId }: { managerId: string; escalationId: string }): void {
+    const { workingStates } = this.deps;
+    const state = workingStates.get(managerId);
+    if (!state) return;
+
+    const itemPrefix = `${ESCALATION_ITEM_PREFIX}${escalationId}]`;
+    const questionsForHuman = state.questionsForHuman.filter((item) => !item.startsWith(itemPrefix));
+    const isItemAbsent = questionsForHuman.length === state.questionsForHuman.length;
+    if (isItemAbsent) return;
+    workingStates.update(managerId, { ...sectionsOf(state), questionsForHuman });
   }
 
   /** The item is written once and never edited: its text does not change when the escalation grows, so the human is notified once. */

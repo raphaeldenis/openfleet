@@ -88,6 +88,15 @@ const queuedBodiesOf = (sessionId: string): string[] =>
   (daemon.db.prepare('SELECT body FROM message_queue WHERE session_id = ? ORDER BY created_at').all(sessionId) as { body: string }[]).map(({ body }) => body);
 const questionStatuses = () => (daemon.db.prepare('SELECT question_id, status, human_answer FROM plan_questions ORDER BY rowid').all() as { question_id: string; status: string; human_answer: string | null }[]);
 
+const questionsForHumanOf = (managerId: string): string[] => {
+  const row = daemon.db.prepare('SELECT sections_json FROM session_working_states WHERE session_id = ?').get(managerId) as { sections_json: string } | undefined;
+  return row ? (JSON.parse(row.sections_json) as { questionsForHuman: string[] }).questionsForHuman : [];
+};
+const escalationItemOf = (managerId: string, escalationId: string): string | undefined =>
+  questionsForHumanOf(managerId).find((item) => item.startsWith(`[esc:${escalationId}]`));
+const rewriteQuestionsForHuman = (manager: Booted['manager'], questions: string[]) =>
+  manager.client.callTool({ name: 'update_working_state', arguments: { plan: [], todo: [], remaining: [], questions_for_human: questions, internal_questions: [], blockers: [] } });
+
 beforeEach(async () => {
   clients = [];
   sockets = [];
@@ -189,6 +198,66 @@ describe('QE — the escalation routes on a booted daemon', () => {
         questions: [{ questionId: 'q1', status: 'answered', humanAnswer: 'no, keep version 13' }, { questionId: 'q2', status: 'answered', humanAnswer: 'yes, one migration' }],
       });
       expect(questionStatuses()).toEqual([{ question_id: 'q1', status: 'answered', human_answer: 'no, keep version 13' }, { question_id: 'q2', status: 'answered', human_answer: 'yes, one migration' }]);
+    });
+
+    describe('the [esc:<id>] item in the questions_for_human of the manager', () => {
+      const answerQ1 = (escalationId: string) => answerWith(escalationId, [{ question_id: 'q1', answer: 'no, keep version 13' }]);
+
+      it('removes the item of the answered escalation and leaves the other items untouched', async () => {
+        const booted = await bootManager();
+        const escalationId = await submitAndReadEscalationId(booted, [contractQuestion('q1')]);
+        const itemOfOtherEscalation = '[esc:other] Escalation on CCM-9: a human answer is needed, see the Inbox';
+        await rewriteQuestionsForHuman(booted.manager, [...questionsForHumanOf(booted.manager.id), 'A free question', itemOfOtherEscalation]);
+
+        await answerQ1(escalationId);
+
+        expect(escalationItemOf(booted.manager.id, escalationId)).toBeUndefined();
+        expect(questionsForHumanOf(booted.manager.id)).toEqual(['A free question', itemOfOtherEscalation]);
+      });
+
+      it('is safe when the answer is sent twice: the second answer is refused and the other items stay', async () => {
+        const booted = await bootManager();
+        const escalationId = await submitAndReadEscalationId(booted, [contractQuestion('q1')]);
+        await rewriteQuestionsForHuman(booted.manager, [...questionsForHumanOf(booted.manager.id), 'A free question']);
+        await answerQ1(escalationId);
+
+        const secondAnswer = await answerQ1(escalationId);
+
+        expect(secondAnswer.status).toBe(409);
+        expect(questionsForHumanOf(booted.manager.id)).toEqual(['A free question']);
+      });
+
+      it('answers without error when the manager already removed the item, and keeps what the manager wrote', async () => {
+        const booted = await bootManager();
+        const escalationId = await submitAndReadEscalationId(booted, [contractQuestion('q1')]);
+        await rewriteQuestionsForHuman(booted.manager, ['A free question']);
+
+        const response = await answerQ1(escalationId);
+
+        expect(response.status).toBe(200);
+        expect(questionsForHumanOf(booted.manager.id)).toEqual(['A free question']);
+      });
+
+      it('answers without error when the manager has no working state anymore', async () => {
+        const booted = await bootManager();
+        const escalationId = await submitAndReadEscalationId(booted, [contractQuestion('q1')]);
+        daemon.db.prepare('DELETE FROM session_working_states WHERE session_id = ?').run(booted.manager.id);
+
+        const response = await answerQ1(escalationId);
+
+        expect(response.status).toBe(200);
+        expect(questionsForHumanOf(booted.manager.id)).toEqual([]);
+      });
+
+      it('leaves the item of an escalation whose answer is refused', async () => {
+        const booted = await bootManager();
+        const escalationId = await submitAndReadEscalationId(booted, [contractQuestion('q1')]);
+
+        const response = await answerWith(escalationId, [{ question_id: 'unknown', answer: 'x' }]);
+
+        expect(response.status).toBeGreaterThanOrEqual(400);
+        expect(escalationItemOf(booted.manager.id, escalationId)).toBeDefined();
+      });
     });
 
     it('A13: refuses the MCP token of the manager with 401 unauthorized and leaves the escalation pending', async () => {
