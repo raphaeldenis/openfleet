@@ -4,6 +4,7 @@ import {
   type ClaudeHookEvent, type PermissionRequestHookOutput, type PolicyActor, type PolicyPresence, type PolicyRequest, type PolicySource, type PolicyVerdict,
   type PreToolUseHookOutput, type ServerEvent, type Session,
 } from '@openfleet/shared';
+import type { ArtifactDirectory, ArtifactWriteJudgement } from '../../artifacts/artifactDirectory.js';
 import { isAttendedManager, managerAskUserRefusalOf } from '../../escalation/managerAskUserGuard.js';
 import { log } from '../../logger.js';
 import type { DegradedRegistry } from '../../process/degradedRegistry.js';
@@ -25,6 +26,8 @@ const ASK_REFUSAL = {
   alternative: 'Rephrase with read-only commands inside your working directory, or ask your manager with `message_parent`.',
 };
 const MAX_LINEAGE_DEPTH = 32;
+const WRITE_TOOL = 'Write';
+const ARTIFACT_DIRECTORY_HINT = 'your manager\'s artifact directory (<docs folder>/artifacts/<manager>/)';
 const FILE_PATH_FIELDS = ['file_path', 'notebook_path'];
 
 export interface ClaudePolicyHooksDeps {
@@ -41,7 +44,11 @@ export interface ClaudePolicyHooksDeps {
   afterAnswer?: (work: () => void) => void;
   /** Absent, a call matched by the findings gate rule is judged by the policy alone. */
   findingsGate?: { gate: Pick<FindingsGate, 'check'>; enforcement: FindingsGateEnforcement };
+  /** Absent, no write is vouched for: every `Write` goes through the policy and the approval flow alone. */
+  artifacts?: ArtifactWriteJudge;
 }
+
+type ArtifactWriteJudge = Pick<ArtifactDirectory, 'judgeWrite'>;
 
 interface Refusal { ruleId: string; reason: string; alternative: string; source: DenialDraft['decisionSource'] }
 
@@ -117,6 +124,9 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
     if (verdict === undefined) return undefined;
     const waitsOnFindingsGate = this.deps.findingsGate !== undefined && isFindingsGateVerdict(verdict);
     if (waitsOnFindingsGate) return this.answerFindingsGate(session, event);
+    const isCleanlyAllowedByThePolicy = verdict.decision === 'allow' && verdict.observed === undefined;
+    const artifactAnswer = isCleanlyAllowedByThePolicy ? this.answerArtifactWrite(session, event) : undefined;
+    if (artifactAnswer !== undefined) return artifactAnswer;
     if (verdict.decision === 'allow') return this.answerAllowed(session, event, verdict);
     const refusal = this.refusalOf(session, verdict);
     if (refusal === undefined) return undefined;
@@ -183,6 +193,39 @@ export class ClaudePolicyHooks implements CommandPolicyHooks {
     this.recordAfterAnswering(session, event, { ...refusal, outcome: isObserving ? 'observed' : 'denied' });
     if (isObserving) return undefined;
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: this.textOf(session, refusal) } };
+  }
+
+  /**
+   * Vouches for a `Write` into the artifact directory of the manager that runs the session, and refuses one that breaks
+   * the directory's limits. Any other tool, path or session gets no answer; a judge that fails never allows.
+   */
+  private answerArtifactWrite(session: Session, event: Extract<ToolHookEvent, { hook_event_name: 'PreToolUse' }>): PreToolUseHookOutput | undefined {
+    const { artifacts } = this.deps;
+    const toolInput = event.tool_input;
+    const isWriteWithInput = event.tool_name === WRITE_TOOL && isRecord(toolInput);
+    if (artifacts === undefined || !isWriteWithInput) return undefined;
+    const manager = this.deps.sessions.get(this.lineageRootOf(session));
+    const isRunByManager = manager !== undefined && this.deps.isManager(manager.id);
+    if (!isRunByManager || manager.projectId === undefined) return undefined;
+    const judgement = this.judgeArtifactWrite(artifacts, {
+      projectId: manager.projectId,
+      managerName: manager.name,
+      actor: { sessionId: session.id, role: session.id === manager.id ? 'manager' : 'child', ...(event.agent_id === undefined ? {} : { agentId: event.agent_id }) },
+      filePath: toolInput.file_path,
+      content: toolInput.content,
+    });
+    if (judgement?.kind === 'allow') return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'Allowed: write into the artifact directory of the manager.' } };
+    if (judgement?.kind === 'deny') return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `Refused: ${judgement.reason}. Write inside ${ARTIFACT_DIRECTORY_HINT}.` } };
+    return undefined;
+  }
+
+  private judgeArtifactWrite(artifacts: ArtifactWriteJudge, request: Parameters<ArtifactWriteJudge['judgeWrite']>[0]): ArtifactWriteJudgement | undefined {
+    try {
+      return artifacts.judgeWrite(request);
+    } catch (error) {
+      log('warn', `artifact write could not be judged, left to the approval flow: ${error instanceof Error ? error.message : String(error)}`, request.actor.sessionId);
+      return undefined;
+    }
   }
 
   private async checkFailingOpen(session: Session, check: () => Promise<GateAnswer>): Promise<GateAnswer | undefined> {

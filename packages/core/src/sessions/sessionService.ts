@@ -196,6 +196,11 @@ export const DRAFT_IDLE_EXPIRY_MS = 10 * 60_000;
 // it types, so a turn the Enter started is seen first. Same bound as a late turn-start hook.
 const DRAFT_CLEARED_SETTLE_MS = TURN_START_TIMEOUT_MS;
 export type HeldFor = 'human_draft';
+
+export interface AgentMessageSent {
+  fromSessionId: string;
+  toSessionId: string;
+}
 interface HumanDraftWatch { handle: HarnessHandle; draft: HumanDraft; timer?: ReturnType<typeof setTimeout> }
 // ponytail: fixed retry for a throwing delivery step, then a slow parked retry so a wedged-not-exited pty
 // (which may never produce a state transition) is still retried without a tight loop; add exponential
@@ -503,6 +508,7 @@ export class SessionService {
   // Children their own parent asked to close, until the close lands: the parent already knows they ended.
   private readonly idsClosingByParent = new Set<string>();
   private readonly closeRequestListeners = new Set<(sessionId: string) => void>();
+  private readonly agentMessageListeners = new Set<(message: AgentMessageSent) => void>();
   // The prompt the daemon handed each session at launch (a brief or a mission), for the process lifetime: a resume never replays it.
   private readonly seededPromptBySessionId = new Map<string, string>();
 
@@ -669,12 +675,29 @@ export class SessionService {
       && this.queue.countPendingFromSender({ sessionId: session.id, fromSessionId }) >= MAX_PENDING_AGENT_MESSAGES_PER_SENDER;
     if (isSenderAtPendingLimit) throw new TooManyPendingMessagesError(session.id);
     const message = this.queue.enqueue({ id: messageId, sessionId: session.id, fromSessionId: input.fromSessionId, body });
+    if (fromSessionId !== undefined) this.notifyAgentMessageSent({ fromSessionId, toSessionId: session.id });
     this.guarded(session.id, () => this.advance(session.id));
     const { phase } = this.deliveryOf(session.id);
     const isHandedToTerminal = phase.name === 'typing' && phase.messageId === message.id;
     if (isHandedToTerminal) return { status: 'delivered', messageId: message.id };
     this.deps.bus.emit({ type: 'message.queued', sessionId: session.id, messageId: message.id });
     return { status: 'queued', messageId: message.id, ...this.heldForOf(session.id, 'queued') };
+  }
+
+  /** Calls the listener for each new agent-to-agent message, never for the idempotent replay of one already queued. */
+  onAgentMessageSent(listener: (message: AgentMessageSent) => void): () => void {
+    this.agentMessageListeners.add(listener);
+    return () => { this.agentMessageListeners.delete(listener); };
+  }
+
+  private notifyAgentMessageSent(message: AgentMessageSent): void {
+    for (const listener of this.agentMessageListeners) {
+      try {
+        listener(message);
+      } catch (error) {
+        log('warn', `an agent message listener failed for ${message.fromSessionId} -> ${message.toSessionId}`, error);
+      }
+    }
   }
 
   private heldForOf(sessionId: string, status: 'delivered' | 'queued'): { heldFor?: HeldFor } {
