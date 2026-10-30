@@ -69,7 +69,7 @@ const NUMBER_COLUMN_WIDTH_REM = 3;
     .number { flex: 0 0 3rem; min-width: 0; font-family: var(--mono); color: var(--mut) }
     .header .number { font-family: inherit }
     button { flex: none }
-    button:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem }
+    button:focus-visible { outline: .125rem solid var(--accent); outline-offset: -.125rem }
   `,
 })
 export class TableGridComponent {
