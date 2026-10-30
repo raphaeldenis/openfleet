@@ -321,9 +321,9 @@ describe('an unattended child receives a permission dialog it could never answer
     expect(journalRows()[0]).toMatchObject({ session_id: subLead.id, rule_id: 'manager-ask-user-via-ladder', tool_name: 'AskUserQuestion', outcome: 'denied', role: 'manager' });
   });
 
-  it('lets a root manager ask the human with AskUserQuestion and journals the question as an observed escalation event', async () => {
+  it('lets an attended manager ask the human with AskUserQuestion and journals the question as an observed escalation event', async () => {
     await bootDaemon({ settings: enforcing() });
-    const lead = await createSession({ name: 'Lead', manager: { childrenCap: 1, mission: 'x' } });
+    const lead = await createSession({ name: 'Lead', attended: true, manager: { childrenCap: 1, mission: 'x' } });
 
     const answer = await preToolUse(lead.id, { tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
 

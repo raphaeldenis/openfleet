@@ -62,6 +62,10 @@ export const SessionSpecSchema = z.object({
   permissionMode: z.enum(PERMISSION_MODES).optional(),
   effort: z.string().optional(),
   manager: ManagerSpecSchema.optional(),
+  /** Set only by a human creating a manager they accompany; fixed at creation. */
+  attended: z.boolean().optional(),
+}).refine((spec) => spec.attended !== true || (spec.manager !== undefined && spec.parentId === undefined), {
+  message: 'attended applies only to a manager created without a parent', path: ['attended'],
 }).refine((spec) => spec.handoffFile === undefined || spec.projectId !== undefined, {
   message: 'a handoff requires a project', path: ['handoffFile'],
 }).superRefine((spec, context) => {
@@ -90,6 +94,8 @@ export interface Session {
   parentId?: string;
   projectId?: string;
   role?: string;
+  /** True for a manager a human created as accompanied by them, which keeps AskUserQuestion; fixed at creation, absent otherwise. */
+  attended?: true;
   permissionMode?: PermissionMode;
   /** The effort level the session launches with; absent when none was chosen. */
   effort?: string;

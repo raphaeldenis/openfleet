@@ -59,7 +59,7 @@ const noHumanQuestionsUnattended: PolicyRule = {
 
 export const ASK_USER_QUESTION_TOOL = 'AskUserQuestion';
 export const MANAGER_ASK_USER_RULE_ID = 'manager-ask-user-via-ladder';
-/** The journal id of a root manager's question to the human: observed, never refused. */
+/** The journal id of an attended manager's question to the human: observed, never refused. */
 export const ROOT_MANAGER_ASK_USER_EVENT_ID = 'root-manager-ask-user';
 
 const managerAskUserViaLadder: PolicyRule = {
