@@ -4,6 +4,7 @@ import { openDatabase } from '../db/database.js';
 import { describeError } from '../errors/describeError.js';
 import { EventBus } from '../events/eventBus.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import { recentLogLines } from '../logger.js';
 import { countsAgainstChildrenCap } from '../managers/managerView.js';
 import { SessionService } from './sessionService.js';
 
@@ -147,13 +148,16 @@ describe('the start signal timeout of a new session', () => {
     const FORCE_KILL_GRACE_MS = 2_000;
     const GRACEFUL_KILL_WAIT_MS = 5_000;
 
-    const bootWithUndyingProcess = async () => {
+    const bootWithUndyingProcess = async ({ injectsGrace = true } = {}) => {
+      const forceKillGraceMs = injectsGrace ? FORCE_KILL_GRACE_MS : undefined;
       const harness = new FakeHarness();
       const bus = new EventBus();
-      const service = new SessionService({ db: openDatabase(':memory:'), bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', describeError, forceKillGraceMs: FORCE_KILL_GRACE_MS });
+      const events: ServerEvent[] = [];
+      bus.subscribe((event) => events.push(event));
+      const service = new SessionService({ db: openDatabase(':memory:'), bus, harnesses: [harness], baseUrl: 'http://127.0.0.1:0', worktreesRoot: '/tmp/of-wt', describeError, forceKillGraceMs });
       const session = await service.create(spec);
       harness.handles[0]!.neverDies = true;
-      return { service, session, handle: harness.handles[0]! };
+      return { service, session, harness, events, handle: harness.handles[0]! };
     };
 
     it('closes the session once the grace after the force kill has passed, and frees its slot', async () => {
@@ -176,6 +180,93 @@ describe('the start signal timeout of a new session', () => {
       await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_WAIT_MS + FORCE_KILL_GRACE_MS);
 
       expect(service.get(session.id)).toMatchObject({ state: 'closed', closeReason: 'closed_by_user' });
+    });
+
+    it('keeps a user-closed session open until the grace after the force kill has passed', async () => {
+      const { service, session } = await bootWithUndyingProcess();
+
+      void service.close(session.id);
+      await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_WAIT_MS + FORCE_KILL_GRACE_MS - 1);
+
+      expect(service.get(session.id)?.state).not.toBe('closed');
+    });
+
+    it('waits 10 seconds after the force kill when no grace is injected', async () => {
+      const { service, session } = await bootWithUndyingProcess({ injectsGrace: false });
+      const DEFAULT_FORCE_KILL_GRACE_MS = 10_000;
+
+      void service.close(session.id);
+      await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_WAIT_MS + DEFAULT_FORCE_KILL_GRACE_MS - 1);
+      expect(service.get(session.id)?.state).not.toBe('closed');
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(service.get(session.id)?.state).toBe('closed');
+    });
+
+    it('logs a kill_failed warning that names the session', async () => {
+      const { service, session } = await bootWithUndyingProcess();
+      const logLinesBefore = recentLogLines().length;
+
+      void service.close(session.id);
+      await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_WAIT_MS + FORCE_KILL_GRACE_MS);
+
+      const warning = recentLogLines().slice(logLinesBefore).find((line) => line.includes('kill_failed'));
+      expect(warning).toContain(session.id);
+    });
+
+    it('records nothing more when the process finally exits after the forced close', async () => {
+      const { service, session, events, handle } = await bootWithUndyingProcess();
+      await vi.advanceTimersByTimeAsync(START_SIGNAL_TIMEOUT_MS + GRACEFUL_KILL_WAIT_MS + FORCE_KILL_GRACE_MS);
+      const closedBeforeTheExit = service.get(session.id);
+      const closedEventsBeforeTheExit = events.filter((event) => event.type === 'session.closed').length;
+
+      handle.emitExit(137);
+
+      expect(service.get(session.id)).toEqual(closedBeforeTheExit);
+      expect(events.filter((event) => event.type === 'session.closed')).toHaveLength(closedEventsBeforeTheExit);
+    });
+
+    it('closes the session instead of relaunching it over a process that survives a model change', async () => {
+      const { service, session, harness } = await bootWithUndyingProcess();
+      harness.markPrompted(session.id);
+      reportSessionStart(service, session.id);
+
+      service.updateModel(session.id, 'claude-opus-5-5');
+      await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_WAIT_MS + FORCE_KILL_GRACE_MS);
+
+      expect(harness.launches).toHaveLength(1);
+      expect(service.get(session.id)).toMatchObject({ state: 'closed', closeReason: 'launch_failed' });
+    });
+
+    it('drops the output of the surviving process once the session is reopened', async () => {
+      const { service, session, harness, handle } = await bootWithUndyingProcess();
+      void service.close(session.id);
+      await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_WAIT_MS + FORCE_KILL_GRACE_MS);
+      service.reopen(session.id);
+
+      handle.emitData('stale bytes of the old process');
+      harness.handles[1]!.emitData('bytes of the new process');
+
+      expect(service.recentOutput(session.id)).toContain('bytes of the new process');
+      expect(service.recentOutput(session.id)).not.toContain('stale bytes');
+    });
+
+    it('drops the output of a reopened launch that a second reopen replaced', async () => {
+      const { service, session, harness } = await bootWithUndyingProcess();
+      void service.close(session.id);
+      await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_WAIT_MS + FORCE_KILL_GRACE_MS);
+      service.reopen(session.id);
+      const firstReopenedHandle = harness.handles[1]!;
+      firstReopenedHandle.neverDies = true;
+      void service.close(session.id);
+      await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_WAIT_MS + FORCE_KILL_GRACE_MS);
+      service.reopen(session.id);
+
+      firstReopenedHandle.emitData('stale bytes of the first reopened process');
+      harness.handles[2]!.emitData('bytes of the second reopened process');
+
+      expect(service.recentOutput(session.id)).toContain('bytes of the second reopened process');
+      expect(service.recentOutput(session.id)).not.toContain('stale bytes');
     });
   });
 

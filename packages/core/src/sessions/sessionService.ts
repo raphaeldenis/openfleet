@@ -569,6 +569,7 @@ export class SessionService {
     this.handles.set(id, handle);
     activeHandleBySessionId.set(id, handle);
     handle.onData((data) => {
+      if (activeHandleBySessionId.get(id) !== handle) return;
       this.noteOutputReceived(id);
       this.appendOutput(id, data);
       this.deps.bus.emit({ type: 'session.output', sessionId: id, data });
@@ -921,12 +922,17 @@ export class SessionService {
 
   private async performRelaunch(sessionId: string): Promise<void> {
     try {
-      await this.retireForRelaunch(sessionId);
+      const hasOldProcessExited = await this.retireForRelaunch(sessionId);
       const session = this.repo.get(sessionId);
       if (!session || session.state === 'closed') return; // closed by something else while the relaunch was in flight
       const isCloseRequested = this.deliveryOf(sessionId).phase.name === 'closing';
       if (isCloseRequested) {
         this.markClosed(sessionId, { reason: this.reasonOfRequestedClose(sessionId) });
+        return;
+      }
+      // A second process resuming the same conversation next to a survivor would double the session: it is closed instead.
+      if (!hasOldProcessExited) {
+        this.markClosed(sessionId, { reason: 'launch_failed' });
         return;
       }
       if (this.modelSwitchesAwaitingRelaunch.delete(sessionId)) {
@@ -946,7 +952,8 @@ export class SessionService {
 
   // Revokes the old tokens first so the dying process's late hooks and MCP calls reach no session, then
   // forgets its handle before killing it: its exit must not trip markClosed, and nothing may kill it twice.
-  private async retireForRelaunch(sessionId: string): Promise<void> {
+  // Resolves false when the old process outlived the force kill: it may still be running.
+  private async retireForRelaunch(sessionId: string): Promise<boolean> {
     this.disarmInterruptWatch(sessionId);
     this.transcriptPaths.delete(sessionId);
     // Any approval still gating this session belonged to the process about to die: ApprovalService
@@ -955,10 +962,10 @@ export class SessionService {
     this.deps.bus.emit({ type: 'session.relaunching', sessionId });
     this.repo.setTokens(sessionId, newToken(), newToken());
     const handle = this.handles.get(sessionId);
-    if (!handle) return;
+    if (!handle) return true;
     this.handles.delete(sessionId);
     activeHandleBySessionId.delete(sessionId);
-    await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
+    return this.killWithEscalation({ handle, escalateAfterMs: DEFAULT_CLOSE_ESCALATE_MS, sessionId });
   }
 
   applyInput(sessionId: string, input: SessionInput): void {
@@ -1456,7 +1463,7 @@ export class SessionService {
       // The CLI ended its session but never exited: this kill is the daemon's own, so its exit is no failure.
       this.forgetSessionEndCause(sessionId);
     }
-    const hasExited = await this.killWithEscalation(handle, options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS);
+    const hasExited = await this.killWithEscalation({ handle, escalateAfterMs: options?.escalateAfterMs ?? DEFAULT_CLOSE_ESCALATE_MS, sessionId });
     if (!hasExited) this.markClosed(sessionId, { reason: this.reasonOfRequestedClose(sessionId) });
   }
 
@@ -1496,7 +1503,7 @@ export class SessionService {
   }
 
   // Resolves true when the process exited, false when it outlived the force kill by the grace: the caller closes the session itself.
-  private async killWithEscalation(handle: HarnessHandle, escalateAfterMs: number): Promise<boolean> {
+  private async killWithEscalation({ handle, escalateAfterMs, sessionId }: { handle: HarnessHandle; escalateAfterMs: number; sessionId: string }): Promise<boolean> {
     const exited = waitForExit(handle);
     handle.kill();
     const exitedGracefully = await this.exitedWithin(exited, escalateAfterMs);
@@ -1505,7 +1512,7 @@ export class SessionService {
     handle.kill({ force: true });
     const forceKillGraceMs = this.deps.forceKillGraceMs ?? DEFAULT_FORCE_KILL_GRACE_MS;
     const hasExited = await this.exitedWithin(exitedAfterForce, forceKillGraceMs);
-    if (!hasExited) log('warn', `a process survived the force kill for ${forceKillGraceMs} ms: its session is closed without its exit`, undefined, { code: 'kill_failed' });
+    if (!hasExited) log('warn', `session ${sessionId}: a process survived the force kill for ${forceKillGraceMs} ms, the session is closed without its exit`, undefined, { code: 'kill_failed', sessionId });
     return hasExited;
   }
 
@@ -1607,7 +1614,7 @@ export class SessionService {
       // whatever exit code the harness reports over the launch_failed closure below.
       activeHandleBySessionId.delete(sessionId);
       try {
-        await this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS);
+        await this.killWithEscalation({ handle, escalateAfterMs: DEFAULT_CLOSE_ESCALATE_MS, sessionId });
       } catch (err) {
         // A kill that throws must not leave the session wedged: it is closed below all the same.
         log('error', `resume: session ${sessionId} could not kill its process after a resume error`, err);
@@ -2229,6 +2236,7 @@ export class SessionService {
     this.handles.set(session.id, handle);
     activeHandleBySessionId.set(session.id, handle);
     handle.onData((data) => {
+      if (activeHandleBySessionId.get(session.id) !== handle) return;
       this.appendOutput(session.id, data);
       this.deps.bus.emit({ type: 'session.output', sessionId: session.id, data });
     });
@@ -2437,7 +2445,7 @@ export class SessionService {
   private relaunchStalledLaunch(session: Session, stalledHandle: HarnessHandle): void {
     this.repo.incrementLaunchRetries(session.id);
     activeHandleBySessionId.delete(session.id); // detached first: the stalled process's exit must not close the session
-    void this.killWithEscalation(stalledHandle, DEFAULT_CLOSE_ESCALATE_MS);
+    void this.killWithEscalation({ handle: stalledHandle, escalateAfterMs: DEFAULT_CLOSE_ESCALATE_MS, sessionId: session.id });
     this.clearResumeTimer(session.id);
     const harness = this.harnessFor(session.harness);
     const hookToken = newToken();
@@ -2459,6 +2467,7 @@ export class SessionService {
     this.handles.set(session.id, handle);
     activeHandleBySessionId.set(session.id, handle);
     handle.onData((data) => {
+      if (activeHandleBySessionId.get(session.id) !== handle) return;
       this.noteOutputReceived(session.id);
       this.appendOutput(session.id, data);
       this.deps.bus.emit({ type: 'session.output', sessionId: session.id, data });
@@ -2504,7 +2513,7 @@ export class SessionService {
       // Detach first so the handle's own onExit (fired by killWithEscalation below) can't race this
       // timeout's own resume_timeout closure with whatever exit code the harness happens to report.
       activeHandleBySessionId.delete(sessionId);
-      void this.killWithEscalation(handle, DEFAULT_CLOSE_ESCALATE_MS).then(() => {
+      void this.killWithEscalation({ handle, escalateAfterMs: DEFAULT_CLOSE_ESCALATE_MS, sessionId }).then(() => {
         // Re-check: killWithEscalation can run for up to DEFAULT_CLOSE_ESCALATE_MS, long enough for another
         // instance sharing this db (a second daemon restart mid-escalation) to resume this same session
         // under a new handle. Our own deletion above already left this slot empty — that's the expected,
