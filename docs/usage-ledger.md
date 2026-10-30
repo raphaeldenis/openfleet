@@ -38,6 +38,9 @@ Migration `046_usage_daily.sql` adds two tables. Its down script is `packages/co
 - `dailyUsage({ fromDayUtc, toDayUtc, sessionId, billingCode, model })` returns the buckets.
 - `GET /api/usage/daily?from=&to=&sessionId=&billingCode=&model=` (admin token) answers `{ items }`. `from` and `to` are `YYYY-MM-DD`.
 
+- `GET /api/sessions/:id/usage` (admin token) answers `{ inputTokens, outputTokens }`, the sums of the session over every day and model, or `null` when the ledger holds no row for it. `null` means "no data", never zero. An unknown session answers 404. `GET /api/sessions/:id/tokens` is unrelated: it still answers the session's hook token.
+- `GET /api/projects/:id/usage/today` (admin token) answers `{ dayUtc, inputTokens, outputTokens }` for the sessions of the project on the current UTC day, or `null` when none of them has a row today. An unknown project answers 404.
+
 Known limits of the storage:
 
 - **The same message under two sessions is counted twice.** The idempotency key is the session id plus the message id. When a resume or a fork writes the same assistant message (same message id) into the transcripts of two sessions, both are ingested and both are billed in the totals. Nothing deduplicates across sessions.

@@ -184,7 +184,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.escalations) registerEscalationRoutes(router, { escalations: deps.escalations, isManager: (sessionId) => deps.managers.get(sessionId) !== undefined });
   if (deps.commandPolicyAdmin) registerCommandPolicyRoutes(router, deps.commandPolicyAdmin);
   if (deps.reviewFindings) registerReviewFindingsRoutes(router, { findings: deps.reviewFindings });
-  if (deps.usageLedger) registerUsageRoutes(router, { usageLedger: deps.usageLedger });
+  if (deps.usageLedger) registerUsageRoutes(router, { usageLedger: deps.usageLedger, sessions: deps.sessions, projects: deps.projects });
   if (deps.governanceQueue && deps.e2eRoutes) registerGovernanceE2eRoutes(router, { governanceQueue: deps.governanceQueue });
   if (deps.projects && deps.noteRepo) registerHandoffPickerRoutes(router, new HandoffSeed({ projects: deps.projects, notes: deps.noteRepo, files: nodeHandoffFileReader }));
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
