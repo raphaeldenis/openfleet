@@ -32,3 +32,19 @@ describe('the artifact file size limit', () => {
     expect(settings).toEqual(DEFAULT_ARTIFACT_SETTINGS);
   });
 });
+
+describe('a config where only one artifact field is invalid', () => {
+  const MEBIBYTE = 1024 * KIBIBYTE;
+
+  it('keeps the valid stricter project quota when the file maximum is the old 1 MiB default', () => {
+    const settings = loadArtifactSettings(configWith({ maxFileBytes: MEBIBYTE, maxProjectBytes: 5 * MEBIBYTE }));
+
+    expect(settings).toEqual({ maxFileBytes: DEFAULT_ARTIFACT_SETTINGS.maxFileBytes, maxProjectBytes: 5 * MEBIBYTE });
+  });
+
+  it('keeps the valid file maximum when the project quota is invalid', () => {
+    const settings = loadArtifactSettings(configWith({ maxFileBytes: 64 * KIBIBYTE, maxProjectBytes: -1 }));
+
+    expect(settings).toEqual({ maxFileBytes: 64 * KIBIBYTE, maxProjectBytes: DEFAULT_ARTIFACT_SETTINGS.maxProjectBytes });
+  });
+});

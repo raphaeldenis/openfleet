@@ -12,32 +12,43 @@ const MAX_ALLOWED_PROJECT_BYTES = 1024 * MEBIBYTE;
 
 export const DEFAULT_ARTIFACT_SETTINGS: ArtifactSettings = { maxFileBytes: 256 * KIBIBYTE, maxProjectBytes: 50 * MEBIBYTE };
 
-const ArtifactsSchema = z.object({
-  maxFileBytes: z.number().int().min(1).max(MAX_ALLOWED_FILE_BYTES).optional(),
-  maxProjectBytes: z.number().int().min(1).max(MAX_ALLOWED_PROJECT_BYTES).optional(),
-}).strict();
+const ArtifactsObjectSchema = z.record(z.string(), z.unknown());
+
+const FIELD_SCHEMAS: Record<keyof ArtifactSettings, z.ZodType<number>> = {
+  maxFileBytes: z.number().int().min(1).max(MAX_ALLOWED_FILE_BYTES),
+  maxProjectBytes: z.number().int().min(1).max(MAX_ALLOWED_PROJECT_BYTES),
+};
 
 /**
- * Reads the `artifacts` key of config.json: the per-file maximum and the per-project quota, in bytes. An unreadable
- * file or a malformed value falls back to the defaults with a warning, so a typo never widens the limits.
+ * Reads the `artifacts` key of config.json: the per-file maximum and the per-project quota, in bytes. Each field is
+ * validated on its own: an invalid field takes its default with a warning and the other field keeps its valid value.
+ * An unreadable file or an `artifacts` value that is not an object falls back to both defaults with a warning.
  */
 export function loadArtifactSettings(configPath: string): ArtifactSettings {
   if (!existsSync(configPath)) return DEFAULT_ARTIFACT_SETTINGS;
   try {
     const rawArtifacts = JSON.parse(readFileSync(configPath, 'utf8'))?.artifacts;
     if (rawArtifacts === undefined) return DEFAULT_ARTIFACT_SETTINGS;
-    const parsed = ArtifactsSchema.safeParse(rawArtifacts);
-    if (parsed.success) return settingsFrom(parsed.data);
-    log('warn', `artifacts config at ${configPath} is ignored, the defaults apply: ${readableConfigReason(parsed.error)}`);
+    const artifactsObject = ArtifactsObjectSchema.safeParse(rawArtifacts);
+    if (artifactsObject.success) return settingsFrom(artifactsObject.data, configPath);
+    log('warn', `artifacts config at ${configPath} is ignored, the defaults apply: ${readableConfigReason(artifactsObject.error)}`);
   } catch (error) {
     log('warn', `artifacts config at ${configPath} is ignored, the defaults apply: ${readableConfigReason(error)}`);
   }
   return DEFAULT_ARTIFACT_SETTINGS;
 }
 
-function settingsFrom(parsed: z.infer<typeof ArtifactsSchema>): ArtifactSettings {
-  const maxFileBytes = parsed.maxFileBytes ?? DEFAULT_ARTIFACT_SETTINGS.maxFileBytes;
-  const maxProjectBytes = parsed.maxProjectBytes ?? DEFAULT_ARTIFACT_SETTINGS.maxProjectBytes;
+function validFieldOrDefault(field: keyof ArtifactSettings, rawValue: unknown, configPath: string): number {
+  if (rawValue === undefined) return DEFAULT_ARTIFACT_SETTINGS[field];
+  const parsed = FIELD_SCHEMAS[field].safeParse(rawValue);
+  if (parsed.success) return parsed.data;
+  log('warn', `artifacts.${field} at ${configPath} is ignored, the default applies: ${readableConfigReason(parsed.error)}`);
+  return DEFAULT_ARTIFACT_SETTINGS[field];
+}
+
+function settingsFrom(rawArtifacts: Record<string, unknown>, configPath: string): ArtifactSettings {
+  const maxFileBytes = validFieldOrDefault('maxFileBytes', rawArtifacts.maxFileBytes, configPath);
+  const maxProjectBytes = validFieldOrDefault('maxProjectBytes', rawArtifacts.maxProjectBytes, configPath);
   const isFileLargerThanQuota = maxFileBytes > maxProjectBytes;
   return isFileLargerThanQuota ? { maxFileBytes: maxProjectBytes, maxProjectBytes } : { maxFileBytes, maxProjectBytes };
 }

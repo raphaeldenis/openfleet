@@ -57,7 +57,7 @@ interface RefusalRequest {
   projectId: string;
 }
 
-const NOT_IN_ARTIFACTS:ArtifactWriteJudgement = { kind: 'not_in_artifacts' };
+const NOT_IN_ARTIFACTS: ArtifactWriteJudgement = { kind: 'not_in_artifacts' };
 const UNREADABLE = Symbol('unreadable');
 
 /** Turns a manager name into one safe path segment: ASCII letters, digits, dot, dash and underscore only, no leading dot or dash. */
@@ -140,7 +140,7 @@ export class ArtifactDirectory {
   }
 
   /** A folder the quota walk cannot read gives no opinion: the write is left to the approval flow, never allowed. */
-  private refusalOrUnreadable(request: RefusalRequest):string | undefined | typeof UNREADABLE {
+  private refusalOrUnreadable(request: RefusalRequest): string | undefined | typeof UNREADABLE {
     try {
       return this.refusalOf(request);
     } catch (error) {
