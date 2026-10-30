@@ -33,7 +33,7 @@ function fenceThatTextCannotClose(text: string): string {
 }
 
 const truncationMarker = (totalBytes: number) =>
-  `[truncated, ${totalBytes} bytes in total: this is only the start of your mission, not all of it. Read the whole mission with get_argus_status: manager.missionText.]`;
+  `[truncated, ${totalBytes} bytes in total: this is only the start of your mission, not all of it. Read the whole mission with get_manager_mission.]`;
 
 /**
  * Builds the `# Mission` block of a manager: the mission, or its first bytes, between two fence lines that the mission cannot close,

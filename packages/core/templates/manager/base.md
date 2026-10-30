@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 ## §1 Precedence [invariant]
@@ -28,7 +28,7 @@ Each pulse, in order:
 
 After a compaction, a resume or a clear, before any spawn:
 1. Read this base again with `get_manager_base`, whole.
-2. Read your mission: `manager.missionText` of `get_argus_status`.
+2. Read your mission with `get_manager_mission`.
 3. Read your working state with `get_working_state`.
 4. Read the journal tail.
 Then continue where the state says.

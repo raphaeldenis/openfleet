@@ -6,7 +6,7 @@ A manager session receives a context on each `SessionStart` (`startup`, `resume`
 
 1. State line (what happened, age of the working state, staleness).
 2. Base line (manager base version and sha).
-3. `# Mission`: the first 3 000 bytes of the stored mission text, with a marker that points to `get_argus_status: manager.missionText` when it is cut.
+3. `# Mission`: the first 3 000 bytes of the stored mission text, with a marker that points to `get_manager_mission` when it is cut.
 4. `# Process`: the `## Process` section of the linked mission note (below).
 5. Precedence and data-statement lines, `# Live children`, `# Working state`, previous transcript path, end line.
 
