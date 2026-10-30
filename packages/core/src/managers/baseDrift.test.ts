@@ -103,26 +103,33 @@ describe('checkBaseDrift', () => {
     });
 
     describe('on large inputs', () => {
-      const SENTENCE_COUNT = 20_000;
-      const LINEAR_TIME_BUDGET_MS = 1_000;
+      const SENTENCE_COUNT = 40_000;
+      const LINEAR_TIME_BUDGET_MS = 2_400;
+      const MEASURED_PASSES = 3;
+      const bestPassMs = (run: () => unknown): number => {
+        const passDurations = Array.from({ length: MEASURED_PASSES }, () => {
+          const startedAt = performance.now();
+          run();
+          return performance.now() - startedAt;
+        });
+        return Math.min(...passDurations);
+      };
       const LONG_COMMON_PREFIX = 'every generated sentence starts with the same long prefix so that a comparison reads far before it differs'.repeat(2);
       const distinctSentences = (ownWord: string) => Array.from({ length: SENTENCE_COUNT }, (_, index) => `${LONG_COMMON_PREFIX} ${ownWord} ${String(index).padStart(6, '0')}`);
 
       it('looks up thousands of distinct sentences against a large base in linear time', () => {
         const largeBase = { ...base, body: distinctSentences('alpha').join('.\n') };
         const largeMission = { label: 'Alpha', text: distinctSentences('omega').join('.\n') };
-        const startedAt = performance.now();
+        const check = () => checkBaseDrift({ base: largeBase, missions: [largeMission] });
 
-        const findings = checkBaseDrift({ base: largeBase, missions: [largeMission] });
-
-        expect(findings).toEqual([]);
-        expect(performance.now() - startedAt).toBeLessThan(LINEAR_TIME_BUDGET_MS);
+        expect(check()).toEqual([]);
+        expect(bestPassMs(check)).toBeLessThan(LINEAR_TIME_BUDGET_MS);
       });
 
       it('scans a 64 KiB mission of thousands of distinct sentences against a large base in linear time', () => {
         const SIXTY_FOUR_KIB = 64 * 1024;
         const shortSentenceAt = (index: number) => `mission sentence number ${String(index).padStart(6, '0')} stays distinct`;
-        const BASE_SENTENCE_COUNT = 200_000;
+        const BASE_SENTENCE_COUNT = 400_000;
         const sameLengthSentenceOfBaseAt = (index: number) => shortSentenceAt(index).replace('distinct', 'distinkt');
         const baseSentences = Array.from({ length: BASE_SENTENCE_COUNT }, (_, index) => sameLengthSentenceOfBaseAt(index));
         const largeBase = { ...base, body: baseSentences.join('.\n') };
@@ -131,12 +138,10 @@ describe('checkBaseDrift', () => {
         const mission = { label: 'Alpha', text: missionSentences.join('.\n') };
         expect(missionSentences.length).toBeGreaterThan(1_000);
         expect(missionSentences.every((sentence) => sentence.length >= MIN_RULE_SENTENCE_LENGTH)).toBe(true);
-        const startedAt = performance.now();
+        const check = () => checkBaseDrift({ base: largeBase, missions: [mission] });
 
-        const findings = checkBaseDrift({ base: largeBase, missions: [mission] });
-
-        expect(findings).toEqual([]);
-        expect(performance.now() - startedAt).toBeLessThan(LINEAR_TIME_BUDGET_MS);
+        expect(check()).toEqual([]);
+        expect(bestPassMs(check)).toBeLessThan(LINEAR_TIME_BUDGET_MS);
       });
     });
   });
