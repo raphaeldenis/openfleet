@@ -119,12 +119,23 @@ describe('checkBaseDrift', () => {
         expect(performance.now() - startedAt).toBeLessThan(LINEAR_TIME_BUDGET_MS);
       });
 
-      it('scans a 64 KiB block without any separator in linear time', () => {
-        const block = 'word '.repeat(13_200);
+      it('scans a 64 KiB mission of thousands of distinct sentences against a large base in linear time', () => {
+        const SIXTY_FOUR_KIB = 64 * 1024;
+        const shortSentenceAt = (index: number) => `mission sentence number ${String(index).padStart(6, '0')} stays distinct`;
+        const BASE_SENTENCE_COUNT = 200_000;
+        const sameLengthSentenceOfBaseAt = (index: number) => shortSentenceAt(index).replace('distinct', 'distinkt');
+        const baseSentences = Array.from({ length: BASE_SENTENCE_COUNT }, (_, index) => sameLengthSentenceOfBaseAt(index));
+        const largeBase = { ...base, body: baseSentences.join('.\n') };
+        const sentenceWithSeparatorLength = shortSentenceAt(0).length + '.\n'.length;
+        const missionSentences = Array.from({ length: Math.ceil(SIXTY_FOUR_KIB / sentenceWithSeparatorLength) }, (_, index) => shortSentenceAt(index));
+        const mission = { label: 'Alpha', text: missionSentences.join('.\n') };
+        expect(missionSentences.length).toBeGreaterThan(1_000);
+        expect(missionSentences.every((sentence) => sentence.length >= MIN_RULE_SENTENCE_LENGTH)).toBe(true);
         const startedAt = performance.now();
 
-        checkBaseDrift({ base, missions: [{ label: 'Alpha', text: block }] });
+        const findings = checkBaseDrift({ base: largeBase, missions: [mission] });
 
+        expect(findings).toEqual([]);
         expect(performance.now() - startedAt).toBeLessThan(LINEAR_TIME_BUDGET_MS);
       });
     });
