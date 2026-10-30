@@ -35,6 +35,8 @@ Migrations: `054_project_shared_repo`: `projects.shared_repo`. `058_session_atte
 
 ## 15 — 2026-10-30
 
+One page gathers the changes of contract 15, the BREAKING entries vs 14, the new variables and the migrations: [docs/contract-15.md](docs/contract-15.md). Several contract 15 entries sit in the section "Unreleased" above; the entries below and above stay the record.
+
 ESCALATION-LADDER01, the escalation ladder: a manager sends its questions to the daemon, which answers the ones it can, asks an arbiter for the ones that need a second opinion and puts only the ones that need a human on the human list.
 
 - `submit_plan_questions` (manager): sends the questions of a plan note, each with a class; the daemon routes every question to the manager itself, to the arbiter or to the human. Answers the batch id and the route of each question.
