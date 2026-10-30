@@ -49,7 +49,7 @@ export interface ArbiterRunnerDeps {
   managers: Pick<ManagerService, 'get'>;
   projects: Pick<ProjectRepository, 'get'>;
   repository: Pick<EscalationRepository, 'findBatch' | 'questionsOfBatch' | 'decisionsOfBatch' | 'addArbiterRun' | 'arbiterRunsOfTicket' | 'batchIdsWithOpenArbiterQuestions'>;
-  escalations: Pick<EscalationService, 'escalateBatchToHuman'>;
+  escalations: Pick<EscalationService, 'escalateBatchToHuman' | 'journalMissingEarlierDecision'>;
   modelTable: ModelTable;
   /** Where each arbiter starts: an empty directory of its own, away from any repository. */
   workspaces: ArbiterWorkspaces;
@@ -73,6 +73,7 @@ export const expiryMsOf = (manager: Pick<ManagerRecord, 'mode' | 'pulseEnabled' 
 export class ArbiterRunner {
   private readonly runBySessionId = new Map<string, Run>();
   private readonly failuresByBatchId = new Map<string, number>();
+  private readonly journaledMissingDecisions = new Set<string>();
   private readonly workspaceBySessionId = new Map<string, string>();
   private readonly cancelCloseRetries = new Set<() => void>();
   private isStopped = false;
@@ -153,7 +154,7 @@ export class ArbiterRunner {
         directory: workspace, readDirectories: [directoryToRead],
         name: `Arbiter ${batch.ticket} ${batchTagOf(batchId)}`, emoji: ARBITER_EMOJI, model, role: ARBITER_ROLE, parentId: batch.managerId,
         harness: managerSession.harness, permissionMode: 'plan', ...(managerSession.projectId && { projectId: managerSession.projectId }),
-        seededPrompt: arbiterPromptOf({ batch, questions: waitingQuestions, earlierDecisions: this.earlierDecisionsOf(waitingQuestions) }),
+        seededPrompt: arbiterPromptOf({ batch, questions: waitingQuestions, earlierDecisions: this.earlierDecisionsOf({ batchId, questions: waitingQuestions }) }),
       });
     } catch (error) {
       this.deps.workspaces.remove(workspace);
@@ -170,15 +171,25 @@ export class ArbiterRunner {
   }
 
   /** The latest arbiter decision on each question that the given reopening questions contest, keyed by the id of the reopening question. */
-  private earlierDecisionsOf(questions: readonly StoredQuestion[]): Map<string, EarlierDecision> {
+  private earlierDecisionsOf({ batchId, questions }: { batchId: string; questions: readonly StoredQuestion[] }): Map<string, EarlierDecision> {
     const earlierDecisions = new Map<string, EarlierDecision>();
     for (const { questionId, reopensBatchId, reopensQuestionId } of questions) {
       const isReopening = reopensBatchId !== undefined && reopensQuestionId !== undefined;
       if (!isReopening) continue;
       const earlier = this.deps.repository.decisionsOfBatch(reopensBatchId).filter((decision) => decision.questionId === reopensQuestionId).at(-1);
-      if (earlier !== undefined) earlierDecisions.set(questionId, { decision: earlier.decision, rationale: earlier.rationale });
+      const hasNoEarlierDecision = earlier === undefined;
+      if (hasNoEarlierDecision) { this.journalMissingEarlierDecisionOnce({ batchId, questionId }); continue; }
+      earlierDecisions.set(questionId, { decision: earlier.decision, rationale: earlier.rationale });
     }
     return earlierDecisions;
+  }
+
+  private journalMissingEarlierDecisionOnce({ batchId, questionId }: { batchId: string; questionId: string }): void {
+    const journalKey = `${batchId}:${questionId}`;
+    const isAlreadyJournaled = this.journaledMissingDecisions.has(journalKey);
+    if (isAlreadyJournaled) return;
+    this.journaledMissingDecisions.add(journalKey);
+    this.deps.escalations.journalMissingEarlierDecision({ batchId, questionId });
   }
 
   private track({ arbiterSessionId, batchId, manager }: { arbiterSessionId: string; batchId: string; manager: ManagerRecord }): void {

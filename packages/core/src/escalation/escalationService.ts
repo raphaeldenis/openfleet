@@ -119,6 +119,24 @@ const questionViewOf = (question: StoredQuestion): EscalationQuestionView => {
   };
 };
 
+/** A resolution is data the manager wrote: it is cleaned before routing, storage, the arbiter prompt and the journal, and one that says nothing once cleaned is refused. */
+const cleanResolutionOf = (question: PlanQuestion): ReproClaim | undefined => {
+  if (question.resolution === undefined) return undefined;
+  const cleanResolution = sanitizedReproClaim(question.resolution);
+  if (hasBlankClaim(cleanResolution)) throw new OpenFleetError('invalid_body', `${question.id}: ${BLANK_CLAIM_MESSAGE}`);
+  if (lacksExecutedEvidence(cleanResolution)) throw new OpenFleetError('invalid_body', `${question.id}: ${EVIDENCE_MESSAGE}`);
+  return cleanResolution;
+};
+
+const withCleanResolutions = (batch: PlanQuestionBatch): PlanQuestionBatch => ({
+  ...batch,
+  questions: batch.questions.map((question) => {
+    const resolution = cleanResolutionOf(question);
+    const { resolution: _raw, ...withoutResolution } = question;
+    return resolution === undefined ? withoutResolution : { ...withoutResolution, resolution };
+  }),
+});
+
 const readableOptional =(text: string | undefined) => (text === undefined ? undefined : humanReadableText(text));
 
 /** Routes the questions a manager submits, stores the batch, and keeps the single open escalation of a ticket in step with the questions that need a human. */
@@ -126,7 +144,7 @@ export class EscalationService {
   constructor(private readonly deps: EscalationServiceDeps) {}
 
   submitBatch(batch: PlanQuestionBatch): SubmittedPlanQuestions {
-    const submitted = this.storeBatch(batch);
+    const submitted = this.storeBatch(withCleanResolutions(batch));
     this.journalSelfResolved({ managerId: batch.managerId, ticket: batch.ticket, submitted });
     this.journalReopened({ managerId: batch.managerId, ticket: batch.ticket, submitted });
     if (submitted.human) this.emitRaised(submitted.human.escalationId);
@@ -187,6 +205,13 @@ export class EscalationService {
     this.deps.audit.journal({ managerId, entries: [line] });
     this.deps.audit.tellManager({ managerId, body: `[arbiter] ${line}. The card waits in the Inbox; a human can answer it or retry the listing.` });
     return escalated;
+  }
+
+  /** Journals that a reopening question reaches the arbiter without the decision it contests, because no stored decision was found. */
+  journalMissingEarlierDecision({ batchId, questionId }: { batchId: string; questionId: string }): void {
+    const batch = this.deps.repository.findBatch(batchId);
+    if (batch === undefined) return;
+    this.deps.audit.journal({ managerId: batch.managerId, entries: [`${batch.ticket} ${questionId} reopens an arbiter decision that is no longer stored: the arbiter reviews it without the earlier decision`] });
   }
 
   /** A human retries the listing of an escalation card in the questions_for_human of its manager; it fails visibly, the card unchanged, while the list is still full. */
@@ -451,7 +476,7 @@ export class EscalationService {
     const paths = question.paths?.map(humanReadableText);
     const resolution = reopen?.evidence ?? question.resolution;
     return {
-      batchId, questionId: question.id, text: humanReadableText(question.text), declaredClass: question.class,
+      batchId, questionId: question.id, text: humanReadableText(question.text), declaredClass: humanReadableText(question.class),
       computedClasses: routing.computed, effectiveClasses: routing.effective, route: routing.route, status: STATUS_OF_ROUTE[routing.route],
       ...(reason !== undefined && { reason }), ...(options && { options }), ...(recommendation && { recommendation }), ...(paths && { paths }),
       ...(resolution && { resolution }),

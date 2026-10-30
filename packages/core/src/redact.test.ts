@@ -218,6 +218,32 @@ describe('maskedSecrets: a URL password holding a raw at-sign', () => {
   });
 });
 
+describe('maskedSecrets: webhook URLs and SendGrid keys', () => {
+  const secretPart = (length: number) => 'aB3dE6gH9j'.repeat(Math.ceil(length / 10)).slice(0, length);
+  const slackWebhook = `hooks.slack.com/services/T${secretPart(8)}/B${secretPart(8)}/${secretPart(24)}`;
+  const discordWebhook = `discord.com/api/webhooks/${'1234567890'.repeat(2)}/${secretPart(68)}`;
+  const sendGridKey = ['S', 'G'].join('') + `.${secretPart(22)}.${secretPart(43)}`;
+
+  it.each([
+    ['a Slack incoming webhook', slackWebhook],
+    ['a Discord webhook', discordWebhook],
+    ['a legacy Discord webhook host', discordWebhook.replace('discord.com', 'discordapp.com')],
+    ['a versioned Discord webhook', discordWebhook.replace('/api/', '/api/v10/')],
+    ['a SendGrid key', sendGridKey],
+  ])('masks %s', (_name, credential) => {
+    expect(maskedSecrets(`call https://${credential} now`)).not.toContain(secretPart(22));
+    expect(maskedSecrets(`use ${credential} now`)).toContain(MASK);
+  });
+
+  it.each([
+    ['a Slack services path without ids', 'hooks.slack.com/services/docs'],
+    ['a Discord webhooks doc path', 'discord.com/api/webhooks/overview'],
+    ['an SG prefix in prose', 'SG.short.value and SGX'],
+  ])('leaves %s alone', (_name, plain) => {
+    expect(maskedSecrets(plain)).toBe(plain);
+  });
+});
+
 describe('maskedSecrets: provider key formats added after the first round', () => {
   const credentials = [
     ['a Slack rotation token', `xoxe-1-${'1234567890'.repeat(2)}`],

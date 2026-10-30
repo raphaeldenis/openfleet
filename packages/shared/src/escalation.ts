@@ -22,6 +22,10 @@ export const isEscalatingClass = (value: string): value is EscalatingClass => (E
 
 export const MAX_QUESTIONS_PER_BATCH = 20;
 const MAX_QUESTION_ID_CHARS = 20;
+const QUESTION_IDENTIFIER_PATTERN = /^[A-Za-z0-9_.:-]+$/;
+export const isQuestionIdentifier = (value: string): boolean => QUESTION_IDENTIFIER_PATTERN.test(value);
+const QUESTION_IDENTIFIER_MESSAGE = 'must be an identifier of letters, digits, hyphens, underscores, dots and colons, such as q1';
+const MAX_QUESTION_CLASS_CHARS = 64;
 const MAX_QUESTION_TEXT_CHARS = 300;
 const MAX_QUESTION_OPTIONS = 4;
 const MAX_QUESTION_PATHS = 20;
@@ -35,14 +39,14 @@ const MAX_CRITERIA_REASON_CHARS = 300;
  * `reopens` names the question whose arbiter decision the manager contests; the daemon checks it against the stored decisions.
  */
 export const PlanQuestionSchema = z.strictObject({
-  id: z.string().min(1).max(MAX_QUESTION_ID_CHARS),
+  id: z.string().min(1).max(MAX_QUESTION_ID_CHARS).regex(QUESTION_IDENTIFIER_PATTERN, QUESTION_IDENTIFIER_MESSAGE),
   text: z.string().min(1).max(MAX_QUESTION_TEXT_CHARS),
-  class: z.string(),
+  class: z.string().max(MAX_QUESTION_CLASS_CHARS),
   options: z.array(z.string().min(1).max(MAX_QUESTION_TEXT_CHARS)).max(MAX_QUESTION_OPTIONS).optional(),
   recommendation: z.string().min(1).max(MAX_QUESTION_TEXT_CHARS).optional(),
   paths: z.array(z.string().min(1).max(MAX_QUESTION_PATH_CHARS)).max(MAX_QUESTION_PATHS).optional(),
   resolution: ReproClaimSchema.optional(),
-  reopens: z.string().min(1).max(MAX_QUESTION_ID_CHARS).optional(),
+  reopens: z.string().min(1).max(MAX_QUESTION_ID_CHARS).regex(QUESTION_IDENTIFIER_PATTERN, QUESTION_IDENTIFIER_MESSAGE).optional(),
 });
 export type PlanQuestion = z.infer<typeof PlanQuestionSchema>;
 

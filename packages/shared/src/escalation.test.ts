@@ -66,6 +66,47 @@ describe('PlanQuestionSchema', () => {
   ])('refuses %s', (_label, reopens) => {
     expect(PlanQuestionSchema.safeParse({ ...minimalQuestion, reopens }).success).toBe(false);
   });
+
+  describe('identifiers', () => {
+    const unsafeIdentifiers = [
+      ['a newline', 'q\n1'],
+      ['a carriage return', 'q\r1'],
+      ['a line separator', `q${String.fromCharCode(0x2028)}1`],
+      ['a paragraph separator', `q${String.fromCharCode(0x2029)}1`],
+      ['a right-to-left override', `q${String.fromCharCode(0x202e)}1`],
+      ['a zero-width space', `q${String.fromCharCode(0x200b)}1`],
+      ['a control character', `q${String.fromCharCode(0x07)}1`],
+      ['a space', 'q 1'],
+      ['a bracket', '[esc:1]'],
+    ] as const;
+
+    it.each(['q1', 'Q-1', 'f_2', 'n1.2', 'a:b', 'CCM-123.q4'])('accepts the identifier %s for the id and for reopens', (identifier) => {
+      expect(PlanQuestionSchema.safeParse({ ...minimalQuestion, id: identifier, reopens: identifier }).success).toBe(true);
+    });
+
+    it.each(unsafeIdentifiers)('refuses an id with %s', (_label, id) => {
+      expect(PlanQuestionSchema.safeParse({ ...minimalQuestion, id }).success).toBe(false);
+    });
+
+    it.each(unsafeIdentifiers)('refuses a reopens with %s', (_label, reopens) => {
+      expect(PlanQuestionSchema.safeParse({ ...minimalQuestion, reopens }).success).toBe(false);
+    });
+
+    it('refuses an unsafe id with a constant message that does not echo the value', () => {
+      const id = `q${String.fromCharCode(0x2028)}ZZZ`;
+
+      const result = PlanQuestionSchema.safeParse({ ...minimalQuestion, id });
+
+      expect(JSON.stringify(result.error?.issues)).not.toContain('ZZZ');
+    });
+  });
+
+  describe('class', () => {
+    it('accepts a class of 64 characters and refuses one of 65', () => {
+      expect(PlanQuestionSchema.safeParse({ ...minimalQuestion, class: 'c'.repeat(64) }).success).toBe(true);
+      expect(PlanQuestionSchema.safeParse({ ...minimalQuestion, class: 'c'.repeat(65) }).success).toBe(false);
+    });
+  });
 });
 
 describe('ArbiterOpinionSchema', () => {
