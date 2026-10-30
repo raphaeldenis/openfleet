@@ -15,6 +15,22 @@ Paths in this document are generic: `<home>` is the target OpenFleet home,
 `<report-dir>` is a scratch directory, `<scape-dir>` is the Scape home. Never put
 the content of real databases, tokens or `.env` files in a report.
 
+## State of the evidence (État de la preuve)
+
+| Label | What it covers |
+| --- | --- |
+| **VERIFIED** | Import and re-import on a fresh home (reports of 2026-10-28 and 2026-10-30), 7 managers and 39 laws imported, long missions kept as they are, import flags, PR #381 merged. |
+| **UNVERIFIED** | The rehearsal log (B7 and B1 come from the manager's brief), which report belongs to the rehearsal, the 23 residual QA managers, ticket statuses other than PR #381, pulse and cap of the 7 managers, which 5 working states are not converted. |
+| **PLANNED** | Scape freeze, Scape backup, manager start, hand-over of work in flight, 14-day rollback, B5, B8. |
+| **OWNER** | Branch protection on `main`, release, decisions D1 to D5, Scape freeze window, `~/.claude.json`, setting aside the residual managers, reading the missions. |
+
+Two facts to keep in mind:
+
+- The cutover plan of 2026-10-04 counts **3 managers** (Lead, Forge, Capitaine).
+  The import reports count **7**. This runbook follows the reports.
+- `get_manager_mission` arrives with PR #382, which is in CI and not merged. Until
+  it is merged, the imported missions still point to `get_argus_status`.
+
 ## 1. What the rehearsal established
 
 Rehearsal CUTOVER-REHEARSAL01 ran on a fresh target home with the daemon started
@@ -122,7 +138,7 @@ stop at the first unexpected result.
 | IMPORT-STATE-ACCENT01 | merged (PR #381) | accented manager names find their state file |
 | IMPORT-MANAGER-MODEL-DEFAULT01 | merged (PR #381) | a missing model defaults to `sonnet` |
 | MISSION-SIZE-IMPORT01 | closed: decision D4 lifted | long missions are imported as they are |
-| STATUS-NO-MISSION-BODY01 | in progress | imported missions must point to `get_manager_mission`; **UNVERIFIED**: the tool does not exist in the sources at `c9f537d4` |
+| STATUS-NO-MISSION-BODY01 | in progress | imported missions must point to `get_manager_mission`; the tool arrives with PR #382 (in CI, not merged); until then the missions still point to `get_argus_status`; the tool is absent from the sources at `c9f537d4` |
 | IMPORT-VIEW-SORT01 | in progress | view sort settings are lost (6 views in the report) |
 | IMPORT-LEXICAL-LEFTOVERS01 | in progress | lexical nodes without a markdown form |
 
