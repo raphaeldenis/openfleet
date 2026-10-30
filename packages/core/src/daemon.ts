@@ -153,6 +153,10 @@ export interface DaemonOptions {
     clock?: () => number;
     schedule?: (callback: () => void, delayMs: number) => () => void;
   };
+  /** Replaces the timer of the silent block threshold, so a test raises the block when it chooses. */
+  silentBlocks?: {
+    schedule?: (callback: () => void, delayMs: number) => () => void;
+  };
   /** Replaces the timer of the arbiter expiry, so a test does not wait the two pulses of the manager. */
   arbiter?: {
     schedule?: (callback: () => void, delayMs: number) => () => void;
@@ -285,7 +289,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const silentBlocks = new SilentBlockDetector({
     thresholdMinutes: silentBlockMinutes,
     unattended: { thresholdSeconds: unattendedSilentBlockSeconds, appliesTo: isChildNobodyWatches },
-    schedule: scheduleOnRealClock,
+    schedule: options.silentBlocks?.schedule ?? scheduleOnRealClock,
     onChange: (blocks) => bus.emit({ type: 'permission.silent_blocks', blocks }),
     onRaised: tellManagerOfSilentBlock,
   });

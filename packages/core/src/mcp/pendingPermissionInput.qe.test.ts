@@ -79,11 +79,28 @@ const pendingPermissionSeenByManager = async (client: Client) => {
   return statusText;
 };
 
+const UNATTENDED_SILENT_BLOCK_SECONDS = 3;
+let armedSilentBlockTimers: { callback: () => void; delayMs: number }[];
+
+/** Holds every silent block timer instead of running it, so the test raises the block once the approval is pending. */
+const holdSilentBlockTimer = (callback: () => void, delayMs: number) => {
+  const timer = { callback, delayMs };
+  armedSilentBlockTimers.push(timer);
+  return () => { armedSilentBlockTimers = armedSilentBlockTimers.filter((armed) => armed !== timer); };
+};
+
+const raiseUnattendedSilentBlock = () => {
+  const unattendedTimers = armedSilentBlockTimers.filter(({ delayMs }) => delayMs === UNATTENDED_SILENT_BLOCK_SECONDS * 1000);
+  expect(unattendedTimers).toHaveLength(1);
+  unattendedTimers[0]!.callback();
+};
+
 beforeEach(async () => {
+  armedSilentBlockTimers = [];
   const home = tempDirs.make('of-qe-pending01-');
-  writeFileSync(join(home, 'config.json'), JSON.stringify({ permissions: { unattendedSilentBlockSeconds: 3 } }));
+  writeFileSync(join(home, 'config.json'), JSON.stringify({ permissions: { unattendedSilentBlockSeconds: UNATTENDED_SILENT_BLOCK_SECONDS } }));
   config = loadConfig({ OPENFLEET_HOME: home, OPENFLEET_PORT: '0', [E2E_FLAG_ENV]: E2E_FLAG_ON });
-  daemon = await startDaemon(config);
+  daemon = await startDaemon(config, { silentBlocks: { schedule: holdSilentBlockTimer } });
 });
 afterEach(async () => { await daemon.close(); tempDirs.removeAll(); });
 
@@ -114,7 +131,8 @@ describe('QE — the pending permission a manager reads carries a masked, capped
 
     const argusStatus = await pendingPermissionSeenByManager(client);
     const sessionStatus = rawText(await client.callTool({ name: 'get_session_status', arguments: { session_id: childId } }));
-    const queued = await eventually(() => messagesQueuedFor(managerId), (bodies) => bodies.length > 0);
+    raiseUnattendedSilentBlock();
+    const queued = messagesQueuedFor(managerId);
 
     const everythingTheManagerReads = JSON.stringify({ argusStatus, sessionStatus, queued });
     for (const secret of secrets) expect(everythingTheManagerReads).not.toContain(secret);
@@ -129,7 +147,8 @@ describe('QE — the pending permission a manager reads carries a masked, capped
 
     const argusStatus = await pendingPermissionSeenByManager(client);
     const sessionStatus = rawText(await client.callTool({ name: 'get_session_status', arguments: { session_id: childId } }));
-    const queued = await eventually(() => messagesQueuedFor(managerId), (bodies) => bodies.length > 0);
+    raiseUnattendedSilentBlock();
+    const queued = messagesQueuedFor(managerId);
 
     const everythingTheManagerReads = JSON.stringify({ argusStatus, sessionStatus, queued });
     expect(everythingTheManagerReads).not.toContain('hunter2');
