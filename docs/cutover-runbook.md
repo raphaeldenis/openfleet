@@ -72,7 +72,7 @@ counts below rest on REH step 4 alone, not on a report file.
 | rows | 12 222 | 12 217 present, 5 written, 5 updated | 10 839 |
 | history | 5 382 | 5 366 present, 11 written, 13 removed in Scape (kept) | 4 924 |
 | managers | 7 (2 not converted) | 7 present | 7 |
-| workingStates | 6 | 6 present, 1 written | 0 |
+| workingStates | 6 | 6 present, 1 written, 5 not converted (of 7) | 0 |
 | memories | 99 | 99 present | 0 |
 | laws | 39 | 39 present | 39 |
 
@@ -122,18 +122,21 @@ Run one command at a time and stop at the first unexpected result.
 | --- | --- | --- | --- | --- |
 | 1 | Open the freeze window on Scape: no new spawn from T-2 h; children report and close. | none | no Scape session is spawned after T-2 h | **OWNER**, **PLANNED** |
 | 2 | Disable the Scape manager cards, quit Scape. | none | Scape has no live session | **OWNER**, **PLANNED** |
-| 3 | Back up the Scape home. | `cp -a <scape-dir> <scape-dir>-backup-<date>` | backup exists, same size as the source | **PLANNED** |
-| 4a | Inspect the old target home before moving it. On the day it can hold real work, notably the OpenFleet backlog. Stop the daemon and the app, check ports 7331 and 7332 are free, and check the disk has room for the step 3 backup. | `ls <home>`; check for listeners on 7331 and 7332 | nothing runs on the home; ports free; enough disk space | **VERIFIED** for the rehearsal (REH 1: `lsof` on the folder empty, no listener); exact commands **UNVERIFIED**; the day-J checks are **PLANNED** |
+| 3a | Check the disk has room for the Scape backup, before copying. | `du -sh <scape-dir>` and `df -h <backup-parent>` | free space exceeds the Scape home size | **PLANNED** |
+| 3b | Back up the Scape home. | `cp -a <scape-dir> <scape-dir>-backup-<date>` | backup exists, same size as the source | **PLANNED** |
+| 4a | Inspect the old target home before moving it. On the day it can hold real work, notably the OpenFleet backlog. Stop the daemon and the app, and check ports 7331 and 7332 are free. | `ls <home>`; check for listeners on 7331 and 7332 | nothing runs on the home; ports free | **VERIFIED** for the rehearsal (REH 1: `lsof` on the folder empty, no listener); exact commands **UNVERIFIED**; the day-J checks are **PLANNED** |
 | 4b | Set the old target home aside. | `mv <home> <residue-home>` | `<home>` absent; nothing deleted | **VERIFIED** (REH 1) |
-| 5 | From the repository checkout used for the import, update `main` and install dependencies. | `git checkout main && git pull`, then `pnpm install --frozen-lockfile` | "Lockfile is up to date" | `pnpm install` **VERIFIED** (REH 2, worktree at `875fc1e0`); the `main` update is **PLANNED** |
-| 6 | Dry run, text report. Pass `--state-dir` and `--claude-dir` explicitly (P4b). | `OPENFLEET_HOME=<home> pnpm --filter @openfleet/core import:scape --home <home> --dry-run --report-dir <report-dir> --state-dir <state-dir> --claude-dir <claude-dir>` | exit 0, no error, no conflict; **no file** in `<report-dir>` | **VERIFIED** (REH 3, run twice; CLI) |
+| 5a | From the repository checkout used for the import, switch to `main`. `git checkout main` fails when `main` is already checked out in another worktree; then run `git fetch` and work from that checkout, or run `git switch --detach origin/main`. | `git checkout main` | on `main` | **PLANNED** |
+| 5b | Update `main`. | `git pull` | up to date with `origin/main` | **PLANNED** |
+| 5c | Install dependencies. | `pnpm install --frozen-lockfile` | "Lockfile is up to date" | **VERIFIED** (REH 2, worktree at `875fc1e0`) |
+| 6 | Dry run, text report. Pass `--state-dir` and `--claude-dir` explicitly (P4b). | `OPENFLEET_HOME=<home> pnpm --filter @openfleet/core import:scape --home <home> --dry-run --report-dir <report-dir> --state-dir <state-dir> --claude-dir <claude-dir>` | exit 0, no error, no conflict; **no file** in `<report-dir>` | **VERIFIED** (REH 3, run twice; CLI) without `--state-dir` and `--claude-dir` (the defaults); with these flags passed explicitly, **UNVERIFIED** |
 | 7 | Real import. | same command without `--dry-run` | exit 0; `import-report.md` in `<report-dir>`; `written` equals `expected` for every entity | **VERIFIED** (REH 4) with the old `--json` trigger; the command without `--json` is **UNVERIFIED** until rerun on `main` |
 | 8 | Read the report. | read `<report-dir>/import-report.md` | `conflict = 0`; managers 7 | **VERIFIED** (REP2) |
 | 9 | Boot the daemon from sources, with `nohup` or in a second terminal; note the pid. | `OPENFLEET_HOME=<home> pnpm --filter @openfleet/core exec tsx src/main.ts` | one line "listening on http://127.0.0.1:7331", 0 errors; migrations applied | **VERIFIED** at `875fc1e0` (REH 5: 001 to 060); `main` expects 001 to 061 (`061_plan_question_reopens_index.sql`), **UNVERIFIED** |
 | 10 | Check health (B7). | `GET http://127.0.0.1:7331/health` | HTTP 200 on a first and a second start | **VERIFIED** at `875fc1e0` (REH 5); on `main` with migration 061, **UNVERIFIED** |
 | 11 | Stop the daemon. | `kill -TERM <pid>` (the pid noted at step 9) | port 7331 free afterwards | **VERIFIED** (REH 5) |
-| 12 | Check counts with a read-only query, after the daemon is stopped. The database is in WAL mode: `immutable=1` ignores the WAL, so a query while the daemon runs returns stale counts. | `sqlite3 "file:<home>/openfleet.db?immutable=1"` with count queries | managers 7, projects 6, data_stores 27, ds_rows 12 222 (before the re-import) | the counts **VERIFIED** (REH 5); the order after the stop is a correction of this runbook, **UNVERIFIED** |
-| 13 | Re-import to prove idempotence (B1). Copy the first report out of `<report-dir>` first. | the step 7 command with `--allow-reimport` (dry run first, then real) | 0 conflict; managers 7/7, projects 6/6, notes 147/147, stores 27/27 present. At `875fc1e0` only records changed in Scape were written. On `main` an intact imported manager is rewritten (reported `updated`, the laws are no longer copied into the mission, CLI `REIMPORT_NOTE`) | **VERIFIED** at `875fc1e0` (REH 6, REP2); behaviour on `main` **UNVERIFIED**. `import scape clean-laws --home <home>` prints a cleanup plan for the laws copies in the missions; `--apply --confirm <fingerprint>` is refused while the daemon runs (CLI usage). Not played |
+| 12 | Check counts with a read-only query, after the daemon is stopped. The database is in WAL mode: `immutable=1` ignores the WAL, so a query while the daemon runs returns stale counts. Before the query, check that no non-empty `-wal` file remains next to the database (`ls -l <home>/openfleet.db-wal`); otherwise the counts ignore it. | `sqlite3 "file:<home>/openfleet.db?immutable=1"` with count queries | managers 7, projects 6, data_stores 27, ds_rows 12 222 (before the re-import) | the counts **VERIFIED** (REH 5); the order after the stop is a correction of this runbook, **UNVERIFIED** |
+| 13 | Re-import to prove idempotence (B1). Copy the first report out of `<report-dir>` first. The importer creates a `backups/` folder in the home (REH 7); it is the restore point after a bad re-import. | the step 7 command with `--allow-reimport` (dry run first, then real) | 0 conflict; managers 7/7, projects 6/6, notes 147/147, stores 27/27 present. At `875fc1e0` only records changed in Scape were written. On `main` an intact imported manager is rewritten (reported `updated`, the laws are no longer copied into the mission, CLI `REIMPORT_NOTE`) | **VERIFIED** at `875fc1e0` (REH 6, REP2); behaviour on `main` **UNVERIFIED**. `import scape clean-laws --home <home>` prints a cleanup plan for the laws copies in the missions; `--apply --confirm <fingerprint>` is refused while the daemon runs (CLI usage). Not played |
 | 14 | Read the 7 missions in the app, started from sources. | open each manager | missions complete | **OWNER** (REH 7: pending) |
 | 15 | Remove `notify.sh` from the global hooks; register the external MCP servers (`docs/mcp-servers-at-cutover.md`). | `claude mcp list` | `repowise`, `playwright-qa`, `scape-postgres` listed | **OWNER**, **PLANNED** |
 | 16 | Start the managers. The way to start an imported manager (session start from the app, then a first pulse) is not recorded in any source. Then read the status and write a first log row with the OpenFleet tools `get_argus_status` and `insert_data_store_rows`, and read the data with `query_data_store` (OpenFleet tool, `packages/core/src/mcp/tableTools.ts`). | MCP `get_argus_status`, `insert_data_store_rows`, `query_data_store` | managers listed; one new log row | start procedure **UNVERIFIED**; the rest **PLANNED** |
@@ -186,8 +189,10 @@ Rules from the rehearsal:
 3. Rows written in OpenFleet since the cutover are exported with
    `query_data_store` (OpenFleet tool) and re-entered by hand. No OpenFleet to
    Scape export exists.
-4. `<residue-home>` stays on disk until the owner decides. Restoring it is a
-   move back to `<home>`; nothing in this runbook deletes it.
+4. `<residue-home>` stays on disk until the owner decides. To restore it, first
+   set the new home aside (`mv <home> <new-home-aside>`), then restore the old one
+   (`mv <residue-home> <home>`); moving it onto an existing `<home>` would nest it
+   inside. Nothing in this runbook deletes either folder.
 5. The import wrote manager memories into `<claude-dir>` (P4b). Rolling back does
    not remove them, and this runbook never advises removing them: the owner
    decides.
