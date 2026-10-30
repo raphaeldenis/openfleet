@@ -1,4 +1,6 @@
-import { test, type APIRequestContext, type Page, type Route } from '@playwright/test';
+import { test, type APIRequestContext, type Page, type Route, type TestInfo } from '@playwright/test';
+import { DIAGNOSTICS_PATH } from '../../../../packages/shared/src/diagnostics';
+import { describeDaemonIssues, describeUnreadableDaemonIssues } from '../../../../scripts/e2e/daemonIssuesReport';
 import { E2E_API_ENV } from '../../../../scripts/e2e/e2ePorts';
 import { readE2eAdminToken } from '../../../../scripts/e2e/e2eHome';
 
@@ -35,12 +37,30 @@ export interface SessionHooks {
 
 export interface FakeSession { id: string; hooks: SessionHooks }
 
+/** A hung daemon (the db_stuck case) must not hold every failed test for Playwright's default request timeout. */
+const DIAGNOSTICS_TIMEOUT_MS = 2_000;
+
+/** Attaches the degraded issues the daemon reports to a failed test, so a flake under load names the DegradedCode behind the shell's degraded strip. */
+async function attachDaemonIssues(request: APIRequestContext, testInfo: TestInfo): Promise<void> {
+  const issues = await request
+    .get(`${api}${DIAGNOSTICS_PATH}`, { headers: adminHeaders, timeout: DIAGNOSTICS_TIMEOUT_MS })
+    .then((response) => response.json())
+    .then(describeDaemonIssues)
+    .catch(describeUnreadableDaemonIssues);
+  if (issues) await testInfo.attach('daemon-issues', { body: issues, contentType: 'text/plain' });
+}
+
 /** Creates fake-harness sessions and closes every one of them after each test. */
 export function useFakeSessions() {
   const createdIds: string[] = [];
 
-  test.afterEach(async ({ request }) => {
-    for (const id of createdIds.splice(0)) await request.post(`${api}/api/sessions/${id}/close`, { headers: adminHeaders });
+  test.afterEach(async ({ request }, testInfo) => {
+    const hasFailed = testInfo.status !== testInfo.expectedStatus;
+    try {
+      if (hasFailed) await attachDaemonIssues(request, testInfo);
+    } finally {
+      for (const id of createdIds.splice(0)) await request.post(`${api}/api/sessions/${id}/close`, { headers: adminHeaders });
+    }
   });
 
   return {

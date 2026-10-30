@@ -38,7 +38,7 @@ const commitFiles = (...paths: string[]): string => {
 };
 
 const runLibCapturingAll = (script: string, { stdin = '', env = {} }: { stdin?: string; env?: Record<string, string> } = {}) => {
-  const result = spawnSync('sh', ['-c', `. "${LIB}"; ${script}`], { cwd: repo, input: stdin, encoding: 'utf8', env: cleanEnv(env) });
+  const result = spawnSync('/bin/sh', ['-c', `. "${LIB}"; ${script}`], { cwd: repo, input: stdin, encoding: 'utf8', env: cleanEnv(env) });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 };
 
@@ -150,6 +150,57 @@ describe('pushed_files', () => {
 
   it('prints nothing for an empty stdin', () => {
     expect(runLib('pushed_files')).toEqual([]);
+  });
+
+  it.each([
+    { label: 'a new branch whose local sha is unknown', remoteSha: ZEROS },
+    { label: 'an existing branch whose local sha is unknown', remoteSha: 'REMOTE_HEAD' },
+  ])('fails closed instead of listing nothing for $label', ({ remoteSha }) => {
+    const knownRemoteSha = remoteSha === 'REMOTE_HEAD' ? git('rev-parse', 'HEAD') : remoteSha;
+
+    const { status, stdout, stderr } = runLibCapturingAll('pushed_files', { stdin: pushLine({ localSha: 'f'.repeat(40), remoteSha: knownRemoteSha }) });
+
+    expect(status).not.toBe(0);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('pre-push: cannot list the files of');
+  });
+
+  it('fails closed when a later ref cannot be listed, without printing the files of the earlier ones', () => {
+    const localSha = commitFiles('docs/a.md');
+
+    const { status, stdout } = runLibCapturingAll('pushed_files', { stdin: pushLine({ localSha }) + pushLine({ localRef: 'refs/heads/broken', localSha: 'f'.repeat(40) }) });
+
+    expect(status).not.toBe(0);
+    expect(stdout).toBe('');
+  });
+});
+
+describe('require_cargo', () => {
+  let emptyBin: string;
+
+  beforeEach(() => {
+    emptyBin = mkdtempSync(join(tmpdir(), 'pre-push-nocargo-'));
+  });
+
+  afterEach(() => {
+    removeFixtureTree(emptyBin);
+  });
+
+  it('fails with a message naming src-tauri when cargo is not on the PATH', () => {
+    const { status, stderr } = runLibCapturingAll('require_cargo', { env: { PATH: emptyBin } });
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('cargo is not installed but the push touches apps/desktop/src-tauri');
+  });
+
+  it('succeeds silently when cargo is on the PATH', () => {
+    writeFileSync(join(emptyBin, 'cargo'), '#!/bin/sh\nexit 0\n');
+    chmodSync(join(emptyBin, 'cargo'), 0o755);
+
+    const { status, stderr } = runLibCapturingAll('require_cargo', { env: { PATH: emptyBin } });
+
+    expect(status).toBe(0);
+    expect(stderr).toBe('');
   });
 });
 
@@ -310,6 +361,16 @@ describe('claude_free_core_tests', () => {
     expect(stdout).toContain('suite args=--filter @openfleet/core test');
     expect(stdout).toContain('corepack=0');
     expect(stdout).toContain('claude=\n');
+  });
+
+  it('fails with a clear message when pnpm is not installed at all', () => {
+    installFakeTool('node', 'exit 0');
+
+    const { status, stdout, stderr } = runClaudeFreeCoreTests();
+
+    expect(status).toBe(1);
+    expect(stdout).not.toContain('suite args');
+    expect(stderr).toContain('pre-push: pnpm is not installed: the core tests cannot run');
   });
 
   it('skips with a warning instead of failing when pnpm cannot run in the minimal environment', () => {

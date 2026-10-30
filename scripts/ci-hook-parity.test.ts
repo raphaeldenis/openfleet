@@ -136,6 +136,15 @@ describe('CI and pre-push hook parity', () => {
     expect(readRepoFile('scripts/pre-push.sh')).toContain(`TAURI_RUST_VERSION=$(awk -F '"' '/^rust-version = / { print $2 }' "$TAURI_MANIFEST")`);
   });
 
+  it('wires the hook to fail, not skip, on a missing cargo or an unreadable pushed-files list', () => {
+    const hookSource = readRepoFile('scripts/pre-push.sh');
+
+    expect(hookSource).toContain('require_cargo || fail');
+    expect(hookSource).not.toMatch(/cargo skipped — cargo is not installed/);
+    expect(hookSource).toMatch(/pushed_file_names=\$\(.*\| pushed_files\) \|\| fail/);
+    expect(hookSource).toContain('cargo skipped (no src-tauri change)');
+  });
+
   it('uses the same bundle-free Tauri configuration in CI and the hook', () => {
     const bundleFreeConfiguration = JSON.stringify({ bundle: { externalBin: [], resources: [] } });
 

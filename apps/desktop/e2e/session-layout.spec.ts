@@ -87,6 +87,25 @@ for (const viewport of viewports) {
   }
 }
 
+for (const viewport of viewports) {
+  test(`the permission gate card stays inside the viewport under the terminal at ${viewport.width}×${viewport.height}`, async ({ page, request }) => {
+    await page.setViewportSize(viewport);
+    await signInAsAdmin(page);
+    const session = await fakeSessions.create(request, { name: 'Gate in view' });
+    await session.hooks.announceIdle();
+    await openSessionWithPanel(page, { sessionId: session.id, isPanelOpen: false });
+
+    const decision = session.hooks.requestPermission({ command: 'rm -rf dist' });
+
+    const gateCard = page.getByTestId('permission-gate-card');
+    await expect(gateCard).toBeInViewport({ ratio: 1 });
+    await expect(gateCard.getByTestId('gate-approve')).toBeInViewport({ ratio: 1 });
+
+    await gateCard.getByTestId('gate-deny').click();
+    expect(await decision).toBe('deny');
+  });
+}
+
 test('the shell stays unscrolled after the terminal takes focus', async ({ page, request }) => {
   await page.setViewportSize(viewports[0]!);
   await signInAsAdmin(page);
