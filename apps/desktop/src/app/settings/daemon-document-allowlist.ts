@@ -19,7 +19,8 @@ export type AllowlistEntry<Value> = Value extends readonly (infer Item)[]
 export type AllowlistShape<Value> = { [Key in keyof Value]-?: AllowlistEntry<NonNullable<Value[Key]>> };
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
-const SHORT_SEMVER = /^\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9a-z.]{1,24})?(\+[0-9a-f]{1,12}(\.[0-9a-f]{1,12})?)?$/;
+const BUILD_METADATA_SEGMENT = '([0-9a-f]{7,12}|\\d{1,8})';
+const SHORT_SEMVER = new RegExp(`^\\d{1,4}\\.\\d{1,4}\\.\\d{1,4}(-(alpha|beta|rc|dev|next)(\\.\\d{1,4})?)?(\\+${BUILD_METADATA_SEGMENT}(\\.${BUILD_METADATA_SEGMENT})?)?$`);
 const LOCAL_DEV_BUILD = /^dev(-[0-9a-f]{8})?$/;
 const DAEMON_VERSION = new RegExp(`${SHORT_SEMVER.source}|${LOCAL_DEV_BUILD.source}`);
 const NODE_VERSION = /^v\d{1,4}\.\d{1,4}\.\d{1,4}$/;

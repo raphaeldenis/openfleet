@@ -114,6 +114,18 @@ describe('the daemon document allowlist', () => {
       expect(versionKeptAs(version)).toBe(version);
     });
 
+    it.each(['0.2.0-beta.1', '1.0.0-alpha', '1.0.0-next.12', '1.0.0-beta.1234', '1.0.0-rc', '0.2.0-dev'])('keeps the release channel %s, as the desktop does', (version) => {
+      expect(versionKeptAs(version)).toBe(version);
+    });
+
+    it.each(['1.0.0-0.3.7', '1.0.0-1', '1.2.3-rc1', '1.0.0-beta.1.2', '1.2.3-snapshot', '1.2.3-abcdefghijklmnopqrstuvwx', '1.2.3-rc.12345', '1.2.3-rc.', '1.2.3-rc.x', '1.2.3-Rc.1', '1.2.3-betas'])('reduces the pre-release %s, outside the release channels, to unrecognised', (version) => {
+      expect(versionKeptAs(version)).toBe(UNRECOGNISED);
+    });
+
+    it.each(['1.0.0+abc', '1.2.3+a1b2c3', '1.2.3+abcdef', '1.2.3+abc1234.abc'])('reduces the short hex build metadata %s to unrecognised', (version) => {
+      expect(versionKeptAs(version)).toBe(UNRECOGNISED);
+    });
+
     it.each(['dev', 'dev-0123abcd', 'dev-ffffffff'])('keeps the local dev build %s, as the desktop does', (version) => {
       expect(versionKeptAs(version)).toBe(version);
     });

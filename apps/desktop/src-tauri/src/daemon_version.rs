@@ -2,8 +2,9 @@ use serde::Serialize;
 
 const UNRECOGNISED: &str = "unrecognised";
 const MAX_NUMBER_DIGITS: usize = 4;
-const MAX_PRE_RELEASE_BYTES: usize = 24;
+const RELEASE_CHANNELS: [&str; 5] = ["alpha", "beta", "rc", "dev", "next"];
 const MAX_BUILD_METADATA_SEGMENTS: usize = 2;
+const MIN_SHORT_SHA_DIGITS: usize = 7;
 const MAX_SHORT_SHA_DIGITS: usize = 12;
 const MAX_BUILD_NUMBER_DIGITS: usize = 8;
 const DEV_BUILD: &str = "dev";
@@ -11,6 +12,7 @@ const DEV_BUILD_SHA_PREFIX: &str = "dev-";
 const DEV_BUILD_SHA_DIGITS: usize = 8;
 
 /// The version a daemon reports on `/health`, kept only when it reads `1.2.3`, `1.2.3-rc.1`, `1.2.3+abc1234.7`, `dev` or `dev-0a1b2c3d`; anything else is `unrecognised`.
+/// A pre-release is a release channel (`alpha`, `beta`, `rc`, `dev`, `next`) with an optional `.<1 to 4 digits>`; a build metadata segment is 7 to 12 lowercase hex digits or 1 to 8 digits.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(transparent)]
 pub struct DaemonVersion(String);
@@ -40,7 +42,7 @@ fn is_short_semver(reported: &str) -> bool {
     None => (release, None),
   };
   let has_valid_numbers = has_three_short_numbers(numbers);
-  let has_valid_pre_release = pre_release.is_none_or(is_short_pre_release);
+  let has_valid_pre_release = pre_release.is_none_or(is_release_channel_pre_release);
   let has_valid_build_metadata = build_metadata.is_none_or(is_short_build_metadata);
   has_valid_numbers && has_valid_pre_release && has_valid_build_metadata
 }
@@ -57,12 +59,18 @@ fn has_three_short_numbers(numbers: &str) -> bool {
   parts.len() == 3 && parts.iter().all(is_short_number)
 }
 
-fn is_short_pre_release(pre_release: &str) -> bool {
-  let is_allowed_byte = |byte: u8| byte.is_ascii_digit() || byte.is_ascii_lowercase() || byte == b'.';
-  (1..=MAX_PRE_RELEASE_BYTES).contains(&pre_release.len()) && pre_release.bytes().all(is_allowed_byte)
+/// A release channel (`alpha`, `beta`, `rc`, `dev`, `next`) alone or followed by `.` and one to four digits.
+fn is_release_channel_pre_release(pre_release: &str) -> bool {
+  let (channel, iteration) = match pre_release.split_once('.') {
+    Some((channel, iteration)) => (channel, Some(iteration)),
+    None => (pre_release, None),
+  };
+  let is_release_channel = RELEASE_CHANNELS.contains(&channel);
+  let has_valid_iteration = iteration.is_none_or(|digits| (1..=MAX_NUMBER_DIGITS).contains(&digits.len()) && digits.bytes().all(|byte| byte.is_ascii_digit()));
+  is_release_channel && has_valid_iteration
 }
 
-/// One or two dot-separated segments, each a short git sha or a build number: no uppercase, hyphen or underscore, so no key shape fits.
+/// One or two dot-separated segments, each 7 to 12 lowercase hex digits or 1 to 8 digits. The capacity is 24 characters of `0-9a-f` at most: it fits a git sha or a build number, not a provider key (those carry uppercase, a prefix with a hyphen or underscore, or more than 12 characters per segment).
 fn is_short_build_metadata(build_metadata: &str) -> bool {
   let segments: Vec<&str> = build_metadata.split('.').collect();
   (1..=MAX_BUILD_METADATA_SEGMENTS).contains(&segments.len()) && segments.iter().all(|segment| is_short_sha(segment) || is_build_number(segment))
@@ -70,7 +78,7 @@ fn is_short_build_metadata(build_metadata: &str) -> bool {
 
 fn is_short_sha(segment: &str) -> bool {
   let is_lowercase_hex = |byte: u8| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte);
-  (1..=MAX_SHORT_SHA_DIGITS).contains(&segment.len()) && segment.bytes().all(is_lowercase_hex)
+  (MIN_SHORT_SHA_DIGITS..=MAX_SHORT_SHA_DIGITS).contains(&segment.len()) && segment.bytes().all(is_lowercase_hex)
 }
 
 fn is_build_number(segment: &str) -> bool {
@@ -84,8 +92,36 @@ mod tests {
 
   #[test]
   fn keeps_a_plain_or_pre_release_semver() {
-    for version in ["0.4.2", "1.2.3", "9999.9999.9999", "0.2.0-dev", "1.2.3-rc.1", "1.2.3-abcdefghijklmnopqrstuvwx"] {
+    for version in ["0.4.2", "1.2.3", "9999.9999.9999", "0.2.0-dev", "1.2.3-rc.1", "0.2.0-beta.1", "1.0.0-alpha", "1.0.0-next.12", "1.0.0-beta.1234", "1.0.0-rc"] {
       assert_eq!(DaemonVersion::parse(version).as_str(), version);
+    }
+  }
+
+  #[test]
+  fn reduces_a_pre_release_outside_the_release_channels_to_unrecognised() {
+    let not_release_channels = [
+      "1.0.0-0.3.7",
+      "1.0.0-1",
+      "1.2.3-rc1",
+      "1.0.0-beta.1.2",
+      "1.2.3-snapshot",
+      "1.2.3-abcdefghijklmnopqrstuvwx",
+      "1.2.3-rc.12345",
+      "1.2.3-rc.",
+      "1.2.3-rc.x",
+      "1.2.3-Rc.1",
+      "1.2.3-betas",
+      "1.2.3-rc.1+abc",
+    ];
+    for hostile in not_release_channels {
+      assert_eq!(DaemonVersion::parse(hostile).as_str(), "unrecognised", "{hostile:?}");
+    }
+  }
+
+  #[test]
+  fn reduces_a_short_hex_build_metadata_to_unrecognised() {
+    for hostile in ["1.0.0+abc", "1.2.3+a1b2c3", "1.2.3+abcdef", "1.2.3+abc1234.abc"] {
+      assert_eq!(DaemonVersion::parse(hostile).as_str(), "unrecognised", "{hostile:?}");
     }
   }
 
