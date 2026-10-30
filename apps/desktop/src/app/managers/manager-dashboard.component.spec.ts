@@ -21,6 +21,8 @@ function fakeEvents(overrides: { sessions?: unknown[]; managers?: unknown[]; sna
     sessions: signal(overrides.sessions ?? []),
     approvals: signal([]),
     proposals: signal([]),
+    escalations: signal([]),
+    knownEscalationIds: signal<ReadonlySet<string>>(new Set()),
     queuedCountOf: () => 0,
     reconnectCount: signal(0),
     lawChanges: EMPTY,
