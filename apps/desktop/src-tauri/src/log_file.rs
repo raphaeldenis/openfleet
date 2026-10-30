@@ -688,6 +688,17 @@ mod tests {
   }
 
   #[test]
+  fn a_sidecar_reason_past_the_largest_bucket_is_stored_with_a_bucket_inside_the_grammar() {
+    let fs = Arc::new(FakeFs::default());
+    let log = writer_over(&fs, 100_000, None, 16);
+
+    log.record_event(DesktopEvent::SidecarFailed { reason: log.opaque(&vec![b'a'; (1 << 26) + 1]) });
+
+    wait_until(|| fs.lines(LOG).len() == 1);
+    assert_eq!(fs.lines(LOG)[0], format!("{EPOCH_PREFIX} error sidecar_failed reason=[text:67108864]"));
+  }
+
+  #[test]
   fn a_typed_event_is_stored_with_the_writer_clock() {
     let fs = Arc::new(FakeFs::default());
     let log = DesktopLog::start_with_capacity(rotating(&fs, 100_000), None, || 1_700_000_000, 16);

@@ -821,6 +821,8 @@ closed_enum_names!(PathClass {
 });
 
 pub(super) const SMALLEST_LENGTH_BUCKET: usize = 16;
+/// The largest bucket a length renders as: 2^26 (64 MiB), the last power of two within the 8 digits a log value allows.
+pub(super) const LARGEST_LENGTH_BUCKET: usize = 1 << 26;
 
 /// Free text reduced to its byte length and, when the install has a salt, a 4-byte keyed tag.
 /// The source text is dropped inside `of`: the value holds no text, so no `Debug` or `Display` can print it.
@@ -835,9 +837,9 @@ impl Opaque {
     Self { length: text.len(), tag: salt.map(|salt| Hash8::of(salt, text)) }
   }
 
-  /// Like `of`, but the length is the upper bound of its power-of-two bucket (16 at least): a token's exact length fingerprints its provider.
+  /// Like `of`, but the length is the upper bound of its power-of-two bucket (16 at least, 2^26 at most): a token's exact length fingerprints its provider.
   pub fn bucketed(text: &[u8], salt: Option<&Salt>) -> Self {
-    let bucket_upper_bound = text.len().max(SMALLEST_LENGTH_BUCKET).next_power_of_two();
+    let bucket_upper_bound = text.len().clamp(SMALLEST_LENGTH_BUCKET, LARGEST_LENGTH_BUCKET).next_power_of_two();
     Self { length: bucket_upper_bound, ..Self::of(text, salt) }
   }
 }
@@ -859,6 +861,7 @@ log_values!(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::event_log::event::DesktopEvent;
   use crate::event_log::salt::SALT_LEN;
   use crate::event_log::synthetic_tokens::{anthropic_key, aws_key_id, aws_session_key_id, github_token, openai_key};
   use crate::linear_growth::{assert_linear_growth, cpu_time_to_run_on_repeated, LinearGrowthBudget};
@@ -1380,6 +1383,24 @@ mod tests {
       for (length, bucket) in lengths_and_buckets {
         assert_eq!(Opaque::bucketed(&vec![b'a'; length], None).to_string(), format!("[text:{bucket}]"), "{length}");
       }
+    }
+
+    #[test]
+    fn a_bucketed_text_past_the_largest_bucket_renders_the_largest_bucket() {
+      let past_the_largest_bucket = vec![b'a'; LARGEST_LENGTH_BUCKET + 1];
+
+      assert_eq!(Opaque::bucketed(&past_the_largest_bucket, None).to_string(), "[text:67108864]");
+      assert_eq!(Opaque::bucketed(&vec![b'a'; LARGEST_LENGTH_BUCKET], None).to_string(), "[text:67108864]");
+    }
+
+    #[test]
+    fn a_bucketed_text_past_the_largest_bucket_is_accepted_by_the_grammar() {
+      let past_the_largest_bucket = vec![b'a'; LARGEST_LENGTH_BUCKET + 1];
+      let reason = Opaque::bucketed(&past_the_largest_bucket, Some(&salt_of(1)));
+
+      let line = DesktopEvent::SidecarFailed { reason }.render(Ts::from_unix_seconds(0).unwrap());
+
+      assert!(!line.is_rejection(), "{line}");
     }
 
     #[test]
