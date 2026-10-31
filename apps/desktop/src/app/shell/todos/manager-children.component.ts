@@ -82,10 +82,10 @@ function keepPriorityOf(row: ChildRow): number {
     .note, .more { margin: 0; color: var(--mut); font-size: .8125rem; }
     .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .25rem; }
     .row { display: flex; align-items: center; flex-wrap: wrap; gap: .375rem; padding: .375rem .5rem; border-radius: .375rem; background: var(--panel); border: 1px solid var(--line); }
-    .name { flex: 1 1 6rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 600; }
+    .name { flex: 1 1 0; min-width: 4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 600; }
     .name:focus-visible { outline: .125rem solid var(--accent); outline-offset: .125rem; }
-    .progress-text { color: var(--mut); font-size: .75rem; }
-    .unfinished { color: var(--fg); font-size: .75rem; font-weight: 600; }
+    .progress-text { color: var(--mut); font-size: .75rem; white-space: nowrap; }
+    .unfinished { color: var(--fg); font-size: .75rem; font-weight: 600; white-space: nowrap; }
     .bar { flex-basis: 100%; }
   `,
 })
