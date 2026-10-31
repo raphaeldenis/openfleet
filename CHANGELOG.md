@@ -35,12 +35,14 @@ Migrations: `054_project_shared_repo`: `projects.shared_repo`. `058_session_atte
 
 ## 15 — 2026-10-30
 
+One page gathers the changes of contract 15, the BREAKING entries vs 14, the new variables and the migrations: [docs/contract-15.md](docs/contract-15.md). Several contract 15 entries sit in the section "Unreleased" above; the entries below and above stay the record.
+
 ESCALATION-LADDER01, the escalation ladder: a manager sends its questions to the daemon, which answers the ones it can, asks an arbiter for the ones that need a second opinion and puts only the ones that need a human on the human list.
 
 - `submit_plan_questions` (manager): sends the questions of a plan note, each with a class; the daemon routes every question to the manager itself, to the arbiter or to the human. Answers the batch id and the route of each question.
 - `report_arbiter_opinion` (arbiter only): reports a decision per question of the batch and an opinion on the criteria (`favourable`, `unfavourable`, `not_asked`). The daemon writes the decisions, the plan note sections and the journal and tells the manager.
 - `approve_plan_criteria` (manager): asks the daemon to approve the criteria of a ticket; the daemon writes the `criteria_status` column itself.
-- Behaviour change, a call that succeeded before now fails: the harness tool `AskUserQuestion` is refused to a manager session, attended or not (command policy rule `manager-ask-user-via-ladder`, profile `manager`); the refusal points to `submit_plan_questions`.
+- Behaviour change, a call that succeeded before now fails: the harness tool `AskUserQuestion` is refused to a supervised manager session; a manager a human created with `attended` keeps it (see ESCALATION-ATTENDED-FLAG01 in the section "Unreleased"; command policy rule `manager-ask-user-via-ladder`, profile `manager`); the refusal points to `submit_plan_questions`.
 - Escalation setting: a project can set its escalation policy (`escalation`, `PATCH /api/projects/:id`, admin token; `null` clears it). `contract` and `security` always stay on the human list.
 - `get_argus_status`: `manager` gains one field, `escalationPolicy`, the policy of the manager's project (the defaults when the project sets none). Read only.
 - BREAKING vs 14 (STATUS-NO-MISSION-BODY01): `get_argus_status` no longer returns `manager.missionText` (up to 64 KiB on every call). `manager` carries `missionBytes` (size of the stored mission in UTF-8 bytes) and `missionSha256` (hex sha256 of the stored mission) in its place; a client that read `manager.missionText` from this tool now calls `get_manager_mission`. The REST `GET /api/managers/:id` view and the desktop are unchanged: they still carry `missionText`. What the change guarantees is that the mission adds only its digest (two small fields) to the answer: the whole answer stays under 2 KB for a manager with a 30 KB mission, no child and no scheduled event (the test's setup); children, `blockedTickets` and `scheduled_events` still add their own bytes. The description of `get_argus_status` now names `get_manager_mission`; a tool description is not in the contract pin, so the pin did not move for it.
