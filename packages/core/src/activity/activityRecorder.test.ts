@@ -98,7 +98,7 @@ describe('what the row keeps of the arguments, the result and the detail', () =>
     recorder.record(aDraft({ detail: 'ok‮evil\u0000\u0007 text', actorLabel: 'Wor⁦ker' }));
 
     const [row] = listAll();
-    expect(row?.detail).toMatch(/^\[text len=14 sha=[0-9a-f]{8}\]$/);
+    expect(row?.detail).toBe('[text len=14]');
     expect(row?.actorLabel).toBe('Worker');
   });
 });

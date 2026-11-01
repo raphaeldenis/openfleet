@@ -7,6 +7,7 @@ const MAX_WALK_ITEMS = 64;
 const MAX_WALK_NODES = 256;
 const MAX_PARSED_RESULT_CHARS = 256 * 1024;
 const FINGERPRINT_HEX_CHARS = 8;
+const MIN_FINGERPRINTED_CHARS = 24;
 
 const CUT_MARK = '[cut]';
 const SECRET_MARK = '[secret]';
@@ -32,8 +33,14 @@ const NO_KEY: KeyMeaning = { isSecret: false, namesIdentifier: false, namesEnume
 const UNREADABLE_KEY: KeyMeaning = { isSecret: true, namesIdentifier: false, namesEnumerationMember: false };
 
 const fingerprintOf = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, FINGERPRINT_HEX_CHARS);
-const textMark = (text: string): string => `[text len=${text.length} sha=${fingerprintOf(text)}]`;
-const keyMark = (key: string): string => `[key len=${key.length} sha=${fingerprintOf(key)}]`;
+
+/** A fingerprint of a short text could be confirmed against a dictionary, so a text under the bound is stood for by its length alone. */
+const markOf = (kind: 'text' | 'key', text: string): string => {
+  const isTooShortToFingerprint = text.length < MIN_FINGERPRINTED_CHARS;
+  return isTooShortToFingerprint ? `[${kind} len=${text.length}]` : `[${kind} len=${text.length} sha=${fingerprintOf(text)}]`;
+};
+const textMark = (text: string): string => markOf('text', text);
+const keyMark = (key: string): string => markOf('key', key);
 
 const isReadableKey = (key: string): boolean => key.length <= MAX_KEPT_SCALAR_CHARS && KEPT_KEY.test(key);
 
@@ -96,7 +103,7 @@ function keptObject(value: object, depth: number, walk: Walk): Record<string, un
 /**
  * Returns the JSON of the arguments with only what the Audit needs to read: a number, a boolean, a UUID,
  * an identifier under a key that names one (`note_id`, `ticket`), or a member of an enumeration under its key (`status`, `model`),
- * each of at most 64 characters and under a key that names no secret. Every other text stands as `[text len=N sha=<8 hex>]`;
+ * each of at most 64 characters and under a key that names no secret. Every other text stands as `[text len=N sha=<8 hex>]`, or `[text len=N]` under 24 characters;
  * a secret key hides its whole value; past depth 4, 64 items or 256 values, `[cut]` stands for the rest.
  * Known limit: a secret shaped as a UUID, or as an identifier given under an identifier key, reads as the identifier it looks like.
  */

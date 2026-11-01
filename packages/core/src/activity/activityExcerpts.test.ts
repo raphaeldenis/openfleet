@@ -27,7 +27,16 @@ describe('the arguments kept in the activity log', () => {
 
     const kept = parsedArguments({ title: 'Plan', body_md: body });
 
-    expect(kept).toEqual({ title: `[text len=4 sha=${fingerprintOf('Plan')}]`, body_md: `[text len=${body.length} sha=${fingerprintOf(body)}]` });
+    expect(kept).toEqual({ title: '[text len=4]', body_md: `[text len=${body.length} sha=${fingerprintOf(body)}]` });
+  });
+
+  it('gives no fingerprint for a text under 24 characters, which a dictionary could confirm', () => {
+    const [shortText, longText] = ['p'.repeat(23), 'p'.repeat(24)];
+
+    const kept = parsedArguments({ title: shortText, comment: longText, values: { [`${shortText}!`]: 1 } });
+
+    expect(kept).toEqual({ title: '[text len=23]', comment: `[text len=24 sha=${fingerprintOf(longText)}]`, values: { [`[key len=24 sha=${fingerprintOf(`${shortText}!`)}]`]: '[secret]' } });
+    expect(argumentsExcerpt({ values: { 'Due date': 1 } })).toBe('{"values":{"[key len=8]":"[secret]"}}');
   });
 
   it('stands an identifier-shaped text as its mark when its key names no identifier', () => {
@@ -99,7 +108,7 @@ describe('arguments made of shell-significant text, generated at random', () => 
     if (value === null || typeof value !== 'object') return [];
     return Object.entries(value).flatMap(([key, entry]) => [key, ...stringLeavesOf(entry)]);
   };
-  const isMark = (text: string) => /^\[(text|key) len=\d+ sha=[0-9a-f]{8}\]$|^\[(cut|secret)\]$/.test(text);
+  const isMark = (text: string) => /^\[(text|key) len=\d+(?: sha=[0-9a-f]{8})?\]$|^\[(cut|secret)\]$/.test(text);
 
   it('never lets one of 200 texts out as it was given, and keeps only marks or short safe strings', () => {
     const texts = Array.from({ length: 200 }, randomText);
