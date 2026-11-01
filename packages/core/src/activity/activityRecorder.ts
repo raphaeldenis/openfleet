@@ -1,6 +1,5 @@
 import type { ActivityRow } from '@openfleet/shared';
-import { redactedText } from '../logger.js';
-import { maskedCommandSecrets } from '../policy/commandSecrets.js';
+import { maskedActivityText } from './activityMasking.js';
 import type { ActivityRepository, ActivityRowToStore } from './activityRepository.js';
 
 export const ACTIVITY_RETENTION = { maxRows: 100_000, maxAgeDays: 90 };
@@ -31,13 +30,13 @@ export interface ActivityDraft {
   outcome: ActivityRow['outcome'];
   durationMs?: number;
   detail?: string;
-  /** The arguments as text, unmasked: the recorder keeps a masked excerpt. */
+  /** The arguments as text, serialized from values already masked one by one: the recorder masks the whole text again and keeps an excerpt. */
   argsText?: string;
-  /** The result as text, unmasked: the recorder keeps a masked excerpt. */
+  /** The result as text, with its JSON values already masked one by one: the recorder masks the whole text again and keeps an excerpt. */
   resultText?: string;
 }
 
-const maskedExcerpt = (text: string, maxChars: number): string => redactedText(maskedCommandSecrets(text)).slice(0, maxChars);
+const maskedExcerpt = (text: string, maxChars: number): string => maskedActivityText(text).slice(0, maxChars);
 
 const maskedWhenGiven = (text: string | undefined, maxChars: number) => (text === undefined ? undefined : maskedExcerpt(text, maxChars));
 

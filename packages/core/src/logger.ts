@@ -81,6 +81,9 @@ function redactString(value: string, { keepNewlines = false } = {}): string {
   return shortenPaths(maskedSecrets(printable));
 }
 
+/** Returns the text without control, format (bidirectional included) and line or paragraph separator characters. */
+export const withoutUnrenderableCharacters = (text: string): string => text.replace(UNRENDERABLE, '');
+
 /** Runs the logger's own redaction on a text that did not come through `log`: masked secrets, shortened home paths, no control characters. */
 export function redactedText(text: string, options: { keepNewlines?: boolean } = {}): string {
   return redactString(text, options);

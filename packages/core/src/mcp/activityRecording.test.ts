@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startGovernanceFixture, type GovernanceFixture } from '../governance/governanceQueue.testkit.js';
 import { ActivityRepository } from '../activity/activityRepository.js';
@@ -64,6 +65,39 @@ describe('recording the MCP calls of the daemon booted with its own wiring', () 
     const stored = JSON.stringify(recordedActivity());
     expect(stored).not.toContain('abc123xyz');
     expect(stored).not.toContain('hunter2');
+  });
+
+  describe('a secret that survives a mask applied to serialized text', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const fakeSecret = (label: string) => `${label}-${randomBytes(8).toString('hex')}`;
+    const storedLog = async () => {
+      const response = await fixture.api('/api/activity?limit=200');
+      return JSON.stringify(recordedActivity()) + await response.text();
+    };
+
+    it('masks the whole quoted value of a secret flag whose quotes the JSON arguments escape', async () => {
+      const firstWord = fakeSecret('first');
+      const secondWord = fakeSecret('second');
+      const body = `deploy --token "${firstWord} ${secondWord}" --name keep-me`;
+
+      await callTool(fixture.worker.id, 'create_note', { title: 'Quoted secret', body_md: body });
+
+      const log = await storedLog();
+      expect(log).not.toContain(firstWord);
+      expect(log).not.toContain(secondWord);
+      expect(log).toContain('--name keep-me');
+    });
+
+    it('masks the value of a secret flag whose name is split by a bidirectional control character', async () => {
+      const secret = fakeSecret('bidi');
+      const body = `deploy --to‮ken ${secret} --name keep-me`;
+
+      await callTool(fixture.worker.id, 'create_note', { title: 'Bidi secret', body_md: body });
+
+      const log = await storedLog();
+      expect(log).not.toContain(secret);
+      expect(log).toContain('--name keep-me');
+    });
   });
 
   it('lets the call succeed and answer as usual when the log cannot be written', async () => {
