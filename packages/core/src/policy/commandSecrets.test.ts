@@ -19,6 +19,7 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     ['tool --auth=hunter2plain', 'tool --auth=***'],
     ['tool --db-password "hunter two"', 'tool --db-password ***'],
     ["tool --password 'hunter two' --force", 'tool --password *** --force'],
+    ['tool --password "" --force', 'tool --password *** --force'],
     ['PASSWORD=hunter2plain deploy.sh', 'PASSWORD=*** deploy.sh'],
     ['export TOKEN=hunter2plain', 'export TOKEN=***'],
     ['API_KEY="hunter two" run', 'API_KEY=*** run'],
@@ -129,6 +130,105 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
       const command = 'git commit -m "fix the parser" && sh -c "echo hello world"';
 
       expect(maskedCommandSecrets(command)).toBe(command);
+    });
+  });
+
+  describe('the text around a masked value', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = ['SEKR', 'ET', '42'].join('');
+
+    it.each([
+      ['an ANSI-C quoted header', `curl -H $'X-Api-Key: ${secret}' https://example.com`, "curl -H $'X-Api-Key: ***' https://example.com"],
+      ['a single-quoted header', `curl -H 'Authorization: Bearer ${secret}' https://example.com`, "curl -H 'Authorization: Bearer ***' https://example.com"],
+      ['a command given to sh -c', `sh -c "mysql -p'${secret}' db" --name keep`, 'sh -c "mysql -p*** db" --name keep'],
+      ['quoted URL credentials', `git clone "https://alice:${secret}@example.com/r.git"`, 'git clone "https://***@example.com/r.git"'],
+      ['an assignment inside a quoted sentence, masked to the end of the word', "echo 'API_KEY=example documentation'", "echo 'API_KEY=***'"],
+      ['a quoted assignment whose value holds a space', `docker run -e "DB_PASSWORD=${secret} two" image`, 'docker run -e "DB_PASSWORD=***" image'],
+      ['a command nested twice', `ssh host "sh -c \\"cmd --token '${secret}'\\"" --name keep`, 'ssh host "sh -c \\"cmd --token ***\\"" --name keep'],
+    ])('keeps the quotes and the words around %s', (_label, command, expected) => {
+      expect(maskedCommandSecrets(command)).toBe(expected);
+    });
+
+    it.each([
+      "git log --grep='mysql -pfeature'",
+      'git log --grep="sshpass -p feature"',
+      "grep -r 'curl -u alice' docs",
+    ])('leaves the text of %s readable when no program of its own takes the password', (command) => {
+      expect(maskedCommandSecrets(command)).toBe(command);
+    });
+  });
+
+  describe('a corpus of everyday commands', () => {
+    it.each([
+      'git status',
+      'git commit -m "fix: the parser keeps quotes"',
+      'git log --author alice --oneline -5',
+      'git config credential.helper osxkeychain',
+      'git push origin feat/x',
+      'gh pr create --title "feat: x" --body "body text"',
+      'gh pr checks 12',
+      'curl -s https://example.com/api',
+      'curl -H "Accept: application/json" https://example.com',
+      'curl -X POST -d \'{"a":1}\' https://example.com',
+      'ssh -p 2222 deploy@host uptime',
+      'ssh host "ls -la /var/log"',
+      'mysql -u root -h db shop',
+      'mysql -u root -p shop',
+      'docker login --username bob --password-stdin',
+      'docker run -e NODE_ENV=production -p 8080:80 image',
+      'docker compose up -d',
+      'npm run test -- --token-count',
+      'npm install --save-dev vitest',
+      'npm publish --access public',
+      'sshpass -f ./pw ssh host',
+      'redis-cli -h cache ping',
+      'redis-cli -n 2 keys "*"',
+      'mkdir -p a/b/c',
+      'ls -p /tmp',
+      'cp -p a b',
+      'git commit --author "Alice <a@example.com>" -m "x"',
+      'echo "hello world" | tr a-z A-Z',
+      'find . -name "*.ts" -exec grep -l token {} +',
+      'tool --token-count --json',
+    ])('leaves %s as it is', (command) => {
+      expect(maskedCommandSecrets(command)).toBe(command);
+    });
+  });
+
+  describe('the cost of masking an adversarial command, uncut', () => {
+    const ADVERSARIAL_LENGTH = 100_000;
+    const MAX_MILLISECONDS = 20;
+    const MEASURES = 3;
+    const repeatedTo = (unit: string, length: number) => unit.repeat(Math.ceil(length / unit.length)).slice(0, length);
+    const fastestMilliseconds = (mask: () => unknown) => {
+      let fastest = Number.POSITIVE_INFINITY;
+      for (let measure = 0; measure < MEASURES; measure += 1) {
+        const startedAt = performance.now();
+        mask();
+        fastest = Math.min(fastest, performance.now() - startedAt);
+      }
+      return fastest;
+    };
+
+    it.each([
+      ['curl', 'curl '],
+      ['mysql', 'mysql '],
+      ['sshpass', 'sshpass '],
+      ['redis-cli', 'redis-cli '],
+      ['double quotes', '"'],
+      ['single quotes', "'"],
+      ['escaped double quotes', '\\"'],
+      ['ANSI-C quotes', "$'"],
+      ['nested sh -c commands', 'sh -c "'],
+      ['escaped nested sh -c commands', 'sh -c \\"'],
+      ['secret flags', '--token '],
+      ['plain words', 'x '],
+    ])('masks %s repeated over 100000 characters in under 20 ms', (_label, unit) => {
+      const command = repeatedTo(unit, ADVERSARIAL_LENGTH);
+
+      const milliseconds = fastestMilliseconds(() => maskedCommandSecrets(command));
+
+      expect(milliseconds).toBeLessThan(MAX_MILLISECONDS);
     });
   });
 

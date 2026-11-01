@@ -1,85 +1,173 @@
 import { MASK, maskedSecrets, SECRET_KEY } from '../redact.js';
 
-/** One shell word: its text as written, the text the shell passes to the program once quotes and escapes are read, and the gap before it. */
-interface ShellWord {
-  raw: string;
-  text: string;
-  gapBefore: string;
-  startsACommand: boolean;
-  replacement?: string;
+/**
+ * For each character of a word, where the scanned source holds it: the character as written (`\"`, `x`)
+ * and the segment around it (a quoted segment, an escape, or the plain character itself).
+ */
+interface CharacterPositions {
+  charStarts: number[];
+  charEnds: number[];
+  segmentStarts: number[];
+  segmentEnds: number[];
 }
+
+/** One shell word: the text the shell passes to the program, and where the word sits in the scanned source. */
+interface ShellWord {
+  text: string;
+  source: string;
+  start: number;
+  end: number;
+  startsACommand: boolean;
+  isMasked: boolean;
+  positions?: CharacterPositions;
+}
+
+/** A stretch of a source, start included, end excluded. */
+interface SourceRange {
+  start: number;
+  end: number;
+}
+
+/** Turns a range of the scanned source into the range of the original command that holds it. */
+type ToCommandRange = (range: SourceRange) => SourceRange;
 
 const WORD_GAP = /[\s\u0085]/;
 const COMMAND_SEPARATORS = new Set([';', '&', '|', '(', ')', '\n', '\r']);
 const ESCAPABLE_INSIDE_DOUBLE_QUOTES = new Set(['$', '`', '"', '\\', '\n']);
 
-const endsTheWord = (character: string): boolean => WORD_GAP.test(character) || COMMAND_SEPARATORS.has(character);
+const ASCII_WORD_ENDS = Array.from({ length: 128 }, (_, code) => {
+  const character = String.fromCharCode(code);
+  return WORD_GAP.test(character) || COMMAND_SEPARATORS.has(character);
+});
 
-type ReadSegment = { text: string; end: number };
-
-/** `'…'`: no escape inside; one that never closes runs to the end of the command. */
-const singleQuotedFrom = (command: string, openingAt: number): ReadSegment => {
-  const closingAt = command.indexOf("'", openingAt + 1);
-  const contentEnd = closingAt === -1 ? command.length : closingAt;
-  return { text: command.slice(openingAt + 1, contentEnd), end: closingAt === -1 ? command.length : closingAt + 1 };
+const endsTheWord = (character: string): boolean => {
+  const code = character.charCodeAt(0);
+  return code < ASCII_WORD_ENDS.length ? ASCII_WORD_ENDS[code]! : WORD_GAP.test(character);
 };
 
-/** `"…"` (a backslash escapes `"`, `\`, `$`, a backtick and a line break) or `$'…'` (a backslash escapes any character); one that never closes runs to the end of the command. */
-const escapedQuotedFrom = (command: string, contentStart: number, quote: string, escapesAnyCharacter: boolean): ReadSegment => {
-  let text = '';
+/** Gathers the characters of a word, segment by segment; when asked, also where each one was written. */
+class ShellWordBuilder {
+  text = '';
+  private segmentStart = 0;
+  private segmentFirstChar = 0;
+
+  constructor(readonly positions?: CharacterPositions) {}
+
+  openSegment(start: number): void {
+    this.segmentStart = start;
+    this.segmentFirstChar = this.text.length;
+  }
+
+  add(characters: string, start: number, end: number): void {
+    this.text += characters;
+    if (!this.positions) return;
+    for (let unit = 0; unit < characters.length; unit += 1) {
+      this.positions.charStarts.push(start);
+      this.positions.charEnds.push(end);
+      this.positions.segmentStarts.push(this.segmentStart);
+    }
+  }
+
+  closeSegment(end: number): void {
+    if (!this.positions) return;
+    for (let index = this.segmentFirstChar; index < this.text.length; index += 1) this.positions.segmentEnds.push(end);
+  }
+}
+
+/** `'…'`: no escape inside; one that never closes runs to the end of the source. Returns where the segment ends. */
+const readSingleQuoted = (source: string, openingAt: number, word: ShellWordBuilder): number => {
+  const closingAt = source.indexOf("'", openingAt + 1);
+  const contentEnd = closingAt === -1 ? source.length : closingAt;
+  for (let at = openingAt + 1; at < contentEnd; at += 1) word.add(source.charAt(at), at, at + 1);
+  return closingAt === -1 ? source.length : closingAt + 1;
+};
+
+/** `"…"` (a backslash escapes `"`, `\`, `$`, a backtick and a line break) or `$'…'` (a backslash escapes any character); one that never closes runs to the end of the source. */
+const readEscapedQuoted = (source: string, contentStart: number, quote: string, escapesAnyCharacter: boolean, word: ShellWordBuilder): number => {
   let at = contentStart;
-  while (at < command.length) {
-    const character = command.charAt(at);
-    if (character === quote) return { text, end: at + 1 };
-    const nextCharacter = command.charAt(at + 1);
-    const isEscape = character === '\\' && at + 1 < command.length && (escapesAnyCharacter || ESCAPABLE_INSIDE_DOUBLE_QUOTES.has(nextCharacter));
-    text += isEscape ? nextCharacter : character;
-    at += isEscape ? 2 : 1;
+  while (at < source.length) {
+    const character = source.charAt(at);
+    if (character === quote) return at + 1;
+    const nextCharacter = source.charAt(at + 1);
+    const isEscape = character === '\\' && at + 1 < source.length && (escapesAnyCharacter || ESCAPABLE_INSIDE_DOUBLE_QUOTES.has(nextCharacter));
+    const width = isEscape ? 2 : 1;
+    word.add(isEscape ? nextCharacter : character, at, at + width);
+    at += width;
   }
-  return { text, end: command.length };
+  return source.length;
 };
 
-/** The piece of a word that starts at `at`: an escaped character, a quoted segment or one plain character. */
-const segmentAt = (command: string, at: number): ReadSegment => {
-  const character = command.charAt(at);
-  const nextCharacter = command.charAt(at + 1);
-  if (character === '\\') return { text: nextCharacter, end: Math.min(at + 2, command.length) };
-  if (character === "'") return singleQuotedFrom(command, at);
-  if (character === '"') return escapedQuotedFrom(command, at + 1, '"', false);
+/** Reads the segment of a word that starts at `at` (an escaped character, a quoted segment or one plain character) and returns where it ends. */
+const readSegment = (source: string, at: number, word: ShellWordBuilder): number => {
+  const character = source.charAt(at);
+  const nextCharacter = source.charAt(at + 1);
+  if (character === '\\') {
+    const end = Math.min(at + 2, source.length);
+    word.add(nextCharacter, at, end);
+    return end;
+  }
+  if (character === "'") return readSingleQuoted(source, at, word);
+  if (character === '"') return readEscapedQuoted(source, at + 1, '"', false, word);
   const opensAnsiCQuotes = character === '$' && nextCharacter === "'";
-  if (opensAnsiCQuotes) return escapedQuotedFrom(command, at + 2, "'", true);
-  return { text: character, end: at + 1 };
+  if (opensAnsiCQuotes) return readEscapedQuoted(source, at + 2, "'", true, word);
+  word.add(character, at, at + 1);
+  return at + 1;
 };
 
-/** Reads the word that starts at `start`: unquoted runs, quoted segments and escaped characters glued together, as the shell joins them. */
-const wordFrom = (command: string, start: number): ReadSegment => {
-  let text = '';
+/** Reads the word that starts at `start`: unquoted runs, quoted segments and escaped characters glued together, as the shell joins them. Returns where it ends. */
+const readWord = (source: string, start: number, word: ShellWordBuilder): number => {
   let at = start;
-  while (at < command.length && !endsTheWord(command.charAt(at))) {
-    const segment = segmentAt(command, at);
-    text += segment.text;
-    at = segment.end;
+  while (at < source.length && !endsTheWord(source.charAt(at))) {
+    word.openSegment(at);
+    at = readSegment(source, at, word);
+    word.closeSegment(at);
   }
-  return { text, end: at };
+  return at;
 };
 
-/** Splits a command into its words in one pass; a separator (`;`, `&`, `|`, a parenthesis, a line break) in the gap before a word starts a new command. */
-const shellWordsOf = (command: string): { words: ShellWord[]; trailingGap: string } => {
+/** Reads the word again, once, this time keeping where each of its characters was written; only a word that gets masked pays for it. */
+const positionsOf = (word: ShellWord): CharacterPositions => {
+  if (word.positions) return word.positions;
+  word.positions = { charStarts: [], charEnds: [], segmentStarts: [], segmentEnds: [] };
+  readWord(word.source, word.start, new ShellWordBuilder(word.positions));
+  return word.positions;
+};
+
+/** Splits a source into its words in one pass; a separator (`;`, `&`, `|`, a parenthesis, a line break) in the gap before a word starts a new command. */
+const shellWordsOf = (source: string): ShellWord[] => {
   const words: ShellWord[] = [];
   let at = 0;
-  while (at < command.length) {
-    const gapStart = at;
+  while (at < source.length) {
     let holdsASeparator = false;
-    while (at < command.length && endsTheWord(command.charAt(at))) {
-      holdsASeparator ||= COMMAND_SEPARATORS.has(command.charAt(at));
+    while (at < source.length && endsTheWord(source.charAt(at))) {
+      holdsASeparator ||= COMMAND_SEPARATORS.has(source.charAt(at));
       at += 1;
     }
-    if (at >= command.length) return { words, trailingGap: command.slice(gapStart) };
-    const word = wordFrom(command, at);
-    words.push({ raw: command.slice(at, word.end), text: word.text, gapBefore: command.slice(gapStart, at), startsACommand: words.length === 0 || holdsASeparator });
-    at = word.end;
+    if (at >= source.length) return words;
+    const builder = new ShellWordBuilder();
+    const start = at;
+    at = readWord(source, start, builder);
+    words.push({ text: builder.text, source, start, end: at, startsACommand: words.length === 0 || holdsASeparator, isMasked: false });
   }
-  return { words, trailingGap: '' };
+  return words;
+};
+
+/**
+ * Where the source holds the characters `from` to `to` of a word.
+ * A value that fills whole segments takes their quotes along (`--password "a b"` → `--password ***`);
+ * a value inside one segment leaves the quotes around it (`"Authorization: Bearer ***"`, `$'X-Api-Key: ***'`).
+ */
+const sourceRangeOf = (word: ShellWord, from: number, to: number): SourceRange => {
+  const isAnEmptyWord = word.text === '';
+  if (isAnEmptyWord) return { start: word.start, end: word.end };
+  const { charStarts, charEnds, segmentStarts, segmentEnds } = positionsOf(word);
+  const last = to - 1;
+  const isInsideOneSegment = segmentStarts[from] === segmentStarts[last];
+  const startsASegment = from === 0 || segmentStarts[from - 1] !== segmentStarts[from];
+  const endsASegment = to === word.text.length || segmentStarts[to] !== segmentStarts[last];
+  const fillsWholeSegments = startsASegment && endsASegment;
+  if (isInsideOneSegment && !fillsWholeSegments) return { start: charStarts[from]!, end: charEnds[last]! };
+  return { start: segmentStarts[from]!, end: segmentEnds[last]! };
 };
 
 const SECRET_FLAG_WORDS = new Set(['password', 'passwd', 'passphrase', 'secret', 'token', 'apikey', 'authorization', 'auth', 'bearer', 'credential', 'credentials']);
@@ -108,39 +196,45 @@ const HEADER_NAME_AND_COLON = /^[ \t]*([A-Za-z0-9_-]+)[ \t]*:[ \t]*/;
 const AUTHORIZATION_SCHEME_PREFIX = /^(?:bearer|basic|token)[ \t]+/i;
 const URL_AUTHORITY_END = /[\s/?#]/;
 const ALREADY_MASKED_VALUE = /^\*\*\*["'}\],]*$/;
+const NOT_FOUND = undefined;
 
 const isAlreadyMasked = (value: string): boolean => ALREADY_MASKED_VALUE.test(value);
 
-/** `API_KEY=…`, `-eDB_PASSWORD=…`, `user=x&token=…`: everything after the first `=` that closes a name holding a secret word is the secret. */
-const maskedAssignment = (text: string): string | undefined => {
+/**
+ * `API_KEY=…`, `-eDB_PASSWORD=…`, `user=x&token=…`: where the secret starts, after the first `=` that closes a name holding a secret word.
+ * The secret runs to the end of the word, spaces included: `-e "DB_PASSWORD=a b"` hides `a b`, and `echo 'API_KEY=example documentation'`
+ * hides `example documentation` too; a journal of refused commands masks a sentence rather than leave half a password readable.
+ */
+const assignedSecretStart = (text: string): number | undefined => {
   for (let equalsAt = text.indexOf('='); equalsAt !== -1; equalsAt = text.indexOf('=', equalsAt + 1)) {
     let nameStart = equalsAt;
     while (nameStart > 0 && VARIABLE_NAME_CHARACTER.test(text.charAt(nameStart - 1))) nameStart -= 1;
     const value = text.slice(equalsAt + 1);
     const namesASecret = SECRET_IN_VARIABLE_NAME.test(text.slice(nameStart, equalsAt));
-    if (namesASecret && value !== '' && !isAlreadyMasked(value)) return text.slice(0, equalsAt + 1) + MASK;
+    if (namesASecret && value !== '' && !isAlreadyMasked(value)) return equalsAt + 1;
   }
-  return undefined;
+  return NOT_FOUND;
 };
 
-/** `Authorization: Bearer …`, `X-Api-Key: …`: the value of a header named after a credential, its scheme word kept readable. */
-const maskedHeader = (text: string): string | undefined => {
-  const header = HEADER_NAME_AND_COLON.exec(text);
-  if (!header) return undefined;
+/** `Authorization: Bearer …`, `X-Api-Key: …`: where the value of a header named after a credential starts, its scheme word kept readable. */
+const headerCredentialStart = (text: string): number | undefined => {
+  const header = text.includes(':') ? HEADER_NAME_AND_COLON.exec(text) : null;
+  if (!header) return NOT_FOUND;
   const [prefix = '', name = ''] = header;
   const namesASecret = SECRET_KEY.test(name) || SECRET_IN_VARIABLE_NAME.test(name);
   const value = text.slice(prefix.length);
   const scheme = AUTHORIZATION_SCHEME_PREFIX.exec(value)?.[0] ?? '';
   const credential = value.slice(scheme.length);
-  if (!namesASecret || credential === '' || isAlreadyMasked(credential)) return undefined;
-  return prefix + scheme + MASK;
+  if (!namesASecret || credential === '' || isAlreadyMasked(credential)) return NOT_FOUND;
+  return prefix.length + scheme.length;
 };
 
 /** `scheme://user:password@host`: the credentials end at the last `@` before the host ends (a password may hold an `@`, never a `/`). */
-const maskedUrlCredentials = (text: string): string => {
-  let masked = '';
-  let copiedUpTo = 0;
-  for (let schemeEnd = text.indexOf('://'); schemeEnd !== -1; schemeEnd = text.indexOf('://', copiedUpTo)) {
+const urlCredentialRanges = (text: string): SourceRange[] => {
+  const firstSchemeEnd = text.indexOf('://');
+  if (firstSchemeEnd === -1) return [];
+  const ranges: SourceRange[] = [];
+  for (let schemeEnd = firstSchemeEnd; schemeEnd !== -1; ) {
     const authorityStart = schemeEnd + 3;
     let authorityEnd = authorityStart;
     let lastAtSign = -1;
@@ -149,106 +243,133 @@ const maskedUrlCredentials = (text: string): string => {
       authorityEnd += 1;
     }
     const credentials = lastAtSign === -1 ? '' : text.slice(authorityStart, lastAtSign);
-    const holdsCredentials = credentials !== '' && credentials !== MASK;
-    masked += holdsCredentials ? text.slice(copiedUpTo, authorityStart) + MASK : text.slice(copiedUpTo, authorityEnd);
-    copiedUpTo = holdsCredentials ? lastAtSign : authorityEnd;
+    if (credentials !== '' && credentials !== MASK) ranges.push({ start: authorityStart, end: lastAtSign });
+    schemeEnd = text.indexOf('://', Math.max(authorityEnd, authorityStart));
   }
-  return masked + text.slice(copiedUpTo);
+  return ranges;
 };
+
+/** `alice:password` → where `password` starts; a user without a password stays readable (the program prompts for it). */
+const userPasswordStart = (userAndPassword: string): number | undefined => {
+  const colonAt = userAndPassword.indexOf(':');
+  const password = colonAt === -1 ? '' : userAndPassword.slice(colonAt + 1);
+  if (password === '' || isAlreadyMasked(password)) return NOT_FOUND;
+  return colonAt + 1;
+};
+
+const attachedValueStart = (text: string, optionPrefix: RegExp): number | undefined => {
+  const prefix = optionPrefix.exec(text)?.[0];
+  if (prefix === undefined || isAlreadyMasked(text.slice(prefix.length))) return NOT_FOUND;
+  return prefix.length;
+};
+
+const WORD_GAP_OR_SEPARATOR = /[\s\u0085;&|()]/;
+
+const holdsSeveralWords = (text: string): boolean => WORD_GAP_OR_SEPARATOR.test(text);
 
 const MAX_NESTED_COMMAND_DEPTH = 3;
 const NAMES_A_SECRET_OR_A_PASSWORD_PROGRAM = /passw|passphrase|secret|token|api.?key|auth|bearer|credential|mysql|mariadb|sshpass|redis-cli|curl|wget|:\/\//i;
 
-/** A word holding a whole command (`sh -c "mysql -p…"`, a JSON string) is masked as a command of its own; past the depth limit, one that names a secret is masked whole. */
-const maskedWordText = (text: string, depth: number): string => {
-  const withoutUrlCredentials = maskedUrlCredentials(text);
-  const holdsSeveralWords = WORD_GAP.test(withoutUrlCredentials) || [...COMMAND_SEPARATORS].some((separator) => withoutUrlCredentials.includes(separator));
-  if (!holdsSeveralWords) return withoutUrlCredentials;
-  const isPastTheDepthLimit = depth >= MAX_NESTED_COMMAND_DEPTH;
-  if (!isPastTheDepthLimit) return maskedWords(withoutUrlCredentials, depth + 1);
-  return NAMES_A_SECRET_OR_A_PASSWORD_PROGRAM.test(withoutUrlCredentials) ? MASK : withoutUrlCredentials;
-};
-
 type PasswordProgram = 'mysql' | 'sshpass' | 'redis-cli' | 'curl';
 
+// A word names the program when it is the program, or its path (`/usr/bin/mysql`): `--grep=mysql` only mentions it.
 const PASSWORD_PROGRAMS: { kind: PasswordProgram; name: RegExp }[] = [
   // `-p` is a password only for these programs: `mkdir -p`, `cp -p` and `ls -p` are not.
-  { kind: 'mysql', name: /\b(?:mysql|mysqldump|mysqladmin|mariadb)\b/ },
-  { kind: 'sshpass', name: /\bsshpass\b/ },
-  { kind: 'redis-cli', name: /\bredis-cli\b/ },
-  { kind: 'curl', name: /\b(?:curl|wget)\b/ },
+  { kind: 'mysql', name: /^(?:.*\/)?(?:mysql|mysqldump|mysqladmin|mariadb(?:-dump|-admin)?)$/ },
+  { kind: 'sshpass', name: /^(?:.*\/)?sshpass$/ },
+  { kind: 'redis-cli', name: /^(?:.*\/)?redis-cli$/ },
+  { kind: 'curl', name: /^(?:.*\/)?(?:curl|wget)$/ },
 ];
+
+// Every rule needs one of these: an option's dash, an assignment's `=`, a header's or a URL's colon, or the gap of a nested command.
+const MAY_HOLD_A_SECRET = /^-|[=:\s\u0085;&|()]/;
+const MENTIONS_A_PASSWORD_PROGRAM = /(?:mysql|mysqldump|mysqladmin|mariadb|-dump|-admin|sshpass|redis-cli|curl|wget)$/;
 
 const ATTACHED_P_PASSWORD = /^-p(?=.)/s;
 const ATTACHED_A_PASSWORD = /^-a(?=.)/s;
 const CURL_USER_OPTIONS = new Set(['-u', '-U', '--user', '--proxy-user']);
 const ATTACHED_CURL_USER = /^(?:-u|-U|--user=|--proxy-user=)(?=.)/s;
 
-/** `alice:password` → `alice:***`; a user without a password stays readable (the program prompts for it). */
-const maskedUserPassword = (userAndPassword: string): string | undefined => {
-  const colonAt = userAndPassword.indexOf(':');
-  const password = colonAt === -1 ? '' : userAndPassword.slice(colonAt + 1);
-  if (password === '' || isAlreadyMasked(password)) return undefined;
-  return userAndPassword.slice(0, colonAt + 1) + MASK;
-};
-
-const attachedValueMasked = (text: string, optionPrefix: RegExp): string | undefined => {
-  const prefix = optionPrefix.exec(text)?.[0];
-  if (prefix === undefined) return undefined;
-  const value = text.slice(prefix.length);
-  return isAlreadyMasked(value) ? undefined : prefix + MASK;
-};
-
-/** The quotes of a word whose inside a rule rewrote: the opening quote it was written with, so `"Authorization: Bearer ***"` keeps its look. */
-const rewrittenWord = (word: ShellWord, text: string): string => {
-  const openingQuote = word.raw.startsWith('"') || word.raw.startsWith("'") ? word.raw.charAt(0) : '';
-  return `${openingQuote}${text}${openingQuote}`;
-};
-
+/** Masks the secrets of one command's words; a word holding a command of its own (`sh -c "…"`) is scanned as a command one level deeper. */
 class CommandMasking {
   private readonly programsInCommand = new Set<PasswordProgram>();
 
-  constructor(private readonly words: ShellWord[], private readonly depth: number) {}
+  constructor(
+    private readonly words: ShellWord[],
+    private readonly depth: number,
+    private readonly toCommandRange: ToCommandRange,
+    private readonly masks: SourceRange[],
+  ) {}
 
   run(): void {
     for (let index = 0; index < this.words.length; index += 1) {
       const word = this.words[index]!;
       if (word.startsACommand) this.programsInCommand.clear();
-      if (word.replacement !== undefined) continue;
-      this.maskWord(index);
+      if (word.isMasked) continue;
+      if (MAY_HOLD_A_SECRET.test(word.text)) this.maskWord(index);
+      if (!MENTIONS_A_PASSWORD_PROGRAM.test(word.text)) continue;
       for (const program of PASSWORD_PROGRAMS) if (program.name.test(word.text)) this.programsInCommand.add(program.kind);
     }
   }
 
-  private nextInCommand(index: number): ShellWord | undefined {
-    const next = this.words[index + 1];
-    return next === undefined || next.startsACommand || next.replacement !== undefined ? undefined : next;
+  private maskCharacters(word: ShellWord, from: number, to: number): void {
+    if (from >= to) return;
+    this.masks.push(this.toCommandRange(sourceRangeOf(word, from, to)));
   }
 
-  /** Masks the word that holds the value of the option at `index`; a lone scheme word (`Bearer`) takes the next word along with it. */
-  private maskValueAfter(index: number, masked: (value: string) => string | undefined = () => MASK): boolean {
+  /** Masks a word from `from` to its end; a value that is only a scheme word (`Bearer`) takes the next word along with it. */
+  private maskValue(index: number, from: number): void {
+    const word = this.words[index]!;
+    word.isMasked = true;
+    const valueRange = sourceRangeOf(word, from, word.text.length);
+    const isASchemeWordAlone = AUTHORIZATION_SCHEME_WORD.test(word.text.slice(from));
+    const credential = isASchemeWordAlone ? this.nextInCommand(index) : undefined;
+    if (credential === undefined) {
+      this.masks.push(this.toCommandRange(valueRange));
+      return;
+    }
+    credential.isMasked = true;
+    const credentialRange = sourceRangeOf(credential, 0, credential.text.length);
+    this.masks.push(this.toCommandRange({ start: valueRange.start, end: credentialRange.end }));
+  }
+
+  private nextInCommand(index: number): ShellWord | undefined {
+    const next = this.words[index + 1];
+    return next === undefined || next.startsACommand || next.isMasked ? undefined : next;
+  }
+
+  /** Masks the word that holds the value of the option at `index`. */
+  private maskValueAfter(index: number, secretStart: (value: string) => number | undefined = () => 0): boolean {
     const value = this.nextInCommand(index);
-    if (!value || value.raw.startsWith('-') || isAlreadyMasked(value.text)) return false;
-    const maskedValue = masked(value.text);
-    if (maskedValue === undefined) return false;
-    value.replacement = maskedValue === MASK ? MASK : rewrittenWord(value, maskedValue);
-    if (AUTHORIZATION_SCHEME_WORD.test(value.text)) this.swallowNextWord(index + 1);
+    if (!value || value.text.startsWith('-') || isAlreadyMasked(value.text)) return false;
+    const from = secretStart(value.text);
+    if (from === NOT_FOUND) return false;
+    this.maskValue(index + 1, from);
     return true;
   }
 
-  private swallowNextWord(index: number): void {
-    const credential = this.nextInCommand(index);
-    if (!credential) return;
-    credential.gapBefore = '';
-    credential.replacement = '';
+  private maskWord(index: number): void {
+    const word = this.words[index]!;
+    const isAnOption = word.text.startsWith('-');
+    if (isAnOption && (this.maskSecretFlag(index) || this.maskProgramPassword(index))) return;
+    const namedSecretStart = assignedSecretStart(word.text) ?? headerCredentialStart(word.text);
+    if (namedSecretStart !== NOT_FOUND) {
+      this.maskValue(index, namedSecretStart);
+      return;
+    }
+    for (const credentials of urlCredentialRanges(word.text)) this.maskCharacters(word, credentials.start, credentials.end);
+    if (holdsSeveralWords(word.text)) this.maskNestedCommand(word);
   }
 
-  private maskWord(index: number): void {
-    if (this.maskSecretFlag(index) || this.maskProgramPassword(index)) return;
-    const word = this.words[index]!;
-    const withoutNamedSecret = maskedAssignment(word.text) ?? maskedHeader(word.text) ?? word.text;
-    const fullyMasked = maskedWordText(withoutNamedSecret, this.depth);
-    if (fullyMasked !== word.text) word.replacement = rewrittenWord(word, fullyMasked);
+  /** A word holding a whole command (`sh -c "mysql -p…"`) is masked as a command of its own; past the depth limit, one that names a secret is masked whole. */
+  private maskNestedCommand(word: ShellWord): void {
+    const isPastTheDepthLimit = this.depth >= MAX_NESTED_COMMAND_DEPTH;
+    if (isPastTheDepthLimit) {
+      if (NAMES_A_SECRET_OR_A_PASSWORD_PROGRAM.test(word.text)) this.maskCharacters(word, 0, word.text.length);
+      return;
+    }
+    const toCommandRange: ToCommandRange = (range) => this.toCommandRange(sourceRangeOf(word, range.start, range.end));
+    new CommandMasking(shellWordsOf(word.text), this.depth + 1, toCommandRange, this.masks).run();
   }
 
   /** `--token VALUE` or `--token=VALUE`; `--authorization=Bearer VALUE` masks the scheme and the word after it. */
@@ -261,8 +382,7 @@ class CommandMasking {
     if (!isGivenWithEquals) return this.maskValueAfter(index);
     const value = word.text.slice(equalsAt + 1);
     if (value === '' || isAlreadyMasked(value)) return false;
-    word.replacement = rewrittenWord(word, word.text.slice(0, equalsAt + 1) + MASK);
-    if (AUTHORIZATION_SCHEME_WORD.test(value)) this.swallowNextWord(index);
+    this.maskValue(index, equalsAt + 1);
     return true;
   }
 
@@ -270,36 +390,52 @@ class CommandMasking {
     const word = this.words[index]!;
     const text = word.text;
     const isIn = (program: PasswordProgram) => this.programsInCommand.has(program);
-    const rewrite = (masked: string | undefined) => {
-      if (masked === undefined) return false;
-      word.replacement = rewrittenWord(word, masked);
+    const maskFrom = (secretStart: number | undefined) => {
+      if (secretStart === NOT_FOUND) return false;
+      this.maskValue(index, secretStart);
       return true;
     };
-    if (isIn('mysql') && rewrite(attachedValueMasked(text, ATTACHED_P_PASSWORD))) return true;
+    if (isIn('mysql') && maskFrom(attachedValueStart(text, ATTACHED_P_PASSWORD))) return true;
     if (isIn('sshpass') && text === '-p') return this.maskValueAfter(index);
-    if (isIn('sshpass') && rewrite(attachedValueMasked(text, ATTACHED_P_PASSWORD))) return true;
+    if (isIn('sshpass') && maskFrom(attachedValueStart(text, ATTACHED_P_PASSWORD))) return true;
     if (isIn('redis-cli') && text === '-a') return this.maskValueAfter(index);
-    if (isIn('redis-cli') && rewrite(attachedValueMasked(text, ATTACHED_A_PASSWORD))) return true;
-    if (isIn('curl') && CURL_USER_OPTIONS.has(text)) return this.maskValueAfter(index, maskedUserPassword);
+    if (isIn('redis-cli') && maskFrom(attachedValueStart(text, ATTACHED_A_PASSWORD))) return true;
+    if (isIn('curl') && CURL_USER_OPTIONS.has(text)) return this.maskValueAfter(index, userPasswordStart);
     const attachedUser = isIn('curl') ? ATTACHED_CURL_USER.exec(text)?.[0] : undefined;
     if (attachedUser === undefined) return false;
-    const maskedUser = maskedUserPassword(text.slice(attachedUser.length));
-    return rewrite(maskedUser === undefined ? undefined : attachedUser + maskedUser);
+    const passwordStart = userPasswordStart(text.slice(attachedUser.length));
+    return maskFrom(passwordStart === NOT_FOUND ? NOT_FOUND : attachedUser.length + passwordStart);
   }
 }
 
-function maskedWords(command: string, depth: number): string {
-  const { words, trailingGap } = shellWordsOf(command);
-  new CommandMasking(words, depth).run();
-  const isUnchanged = words.every((word) => word.replacement === undefined);
-  if (isUnchanged) return command;
-  return words.map((word) => word.gapBefore + (word.replacement ?? word.raw)).join('') + trailingGap;
+/** Replaces each masked range of the command by one mask; ranges that overlap or touch become a single mask. */
+const withMasksApplied = (command: string, masks: SourceRange[]): string => {
+  const ordered = [...masks].sort((first, second) => first.start - second.start);
+  let masked = '';
+  let copiedUpTo = 0;
+  let lastMaskEnd = -1;
+  for (const range of ordered) {
+    const continuesTheLastMask = range.start <= lastMaskEnd;
+    if (!continuesTheLastMask) masked += command.slice(copiedUpTo, range.start) + MASK;
+    copiedUpTo = Math.max(copiedUpTo, range.end);
+    lastMaskEnd = copiedUpTo;
+  }
+  return masked + command.slice(copiedUpTo);
+};
+
+const sameRange: ToCommandRange = (range) => range;
+
+function maskedWords(command: string): string {
+  const masks: SourceRange[] = [];
+  new CommandMasking(shellWordsOf(command), 0, sameRange, masks).run();
+  return masks.length === 0 ? command : withMasksApplied(command, masks);
 }
 
 /**
  * Returns the command with the value of every credential option, assignment, header and URL replaced by a mask.
- * The command is read word by word as the shell reads it (quotes, escaped quotes, glued segments, backslashes), so a value ends where the shell ends it; the scan is linear in the length of the command.
+ * The command is read word by word as the shell reads it (quotes, escaped quotes, glued segments, backslashes), so a value ends where the shell ends it;
+ * only the source of the value is replaced, the quotes and words around it stay as written. The scan is linear in the length of the command.
  */
 export function maskedCommandSecrets(command: string): string {
-  return maskedSecrets(maskedWords(command, 0));
+  return maskedSecrets(maskedWords(command));
 }
