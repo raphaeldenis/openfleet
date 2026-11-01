@@ -1,14 +1,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Session } from '@openfleet/shared';
 import type { ActivityRecorder } from '../activity/activityRecorder.js';
+import { outcomeOfErrorCode } from '../activity/refusalOutcome.js';
 import { isMutatingTool } from './toolCatalog.js';
 
-// A rule refused the caller (role, lineage, project boundary, governance gate); every other error code is a failure, a missing thing or a bad input.
-const DENIAL_ERROR_CODES: ReadonlySet<string> = new Set([
-  'unauthorized', 'outside_lineage', 'not_a_manager', 'backlog_write_refused', 'outside_own_repository', 'directory_not_in_project',
-  'base_not_read', 'note_not_read', 'findings_required', 'verdict_stale', 'criteria_stale', 'escalation_open', 'question_unclassified',
-  'manager_paused', 'row_guard_violation', 'message_held_for_review',
-]);
 const ERROR_TEXT_CODE = /^error ([a-z_]+):/;
 const UNSERIALIZABLE_ARGUMENTS = '[unserializable arguments]';
 
@@ -19,9 +14,7 @@ const firstTextOf = (result: ToolResult | undefined): string | undefined => resu
 
 const outcomeOf = (result: ToolResult | undefined): 'ok' | 'denied' | 'error' => {
   if (result?.isError !== true) return 'ok';
-  const errorCode = ERROR_TEXT_CODE.exec(firstTextOf(result) ?? '')?.[1];
-  const isDenial = errorCode !== undefined && DENIAL_ERROR_CODES.has(errorCode);
-  return isDenial ? 'denied' : 'error';
+  return outcomeOfErrorCode(ERROR_TEXT_CODE.exec(firstTextOf(result) ?? '')?.[1]);
 };
 
 const argumentsTextOf = (toolArguments: unknown): string => {

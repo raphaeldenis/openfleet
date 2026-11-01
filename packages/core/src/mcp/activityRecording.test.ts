@@ -3,7 +3,11 @@ import { startGovernanceFixture, type GovernanceFixture } from '../governance/go
 import { ActivityRepository } from '../activity/activityRepository.js';
 
 let fixture: GovernanceFixture;
-beforeEach(async () => { fixture = await startGovernanceFixture(); });
+// The fixture creates its sessions through the REST API, which the log records; each test starts from an empty log.
+beforeEach(async () => {
+  fixture = await startGovernanceFixture();
+  fixture.db.exec('DELETE FROM activity_log');
+});
 afterEach(async () => { await fixture.close(); });
 
 const recordedActivity = () => new ActivityRepository(fixture.db).list({ limit: 200 }).items;

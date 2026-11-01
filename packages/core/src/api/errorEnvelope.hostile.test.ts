@@ -63,7 +63,7 @@ afterEach(async () => {
 const concretePath = (pattern: string) => pattern.replace(/:[a-zA-Z]+/g, 'some-id');
 
 function makeEveryHandlerThrow(error: unknown) {
-  vi.spyOn(Router.prototype, 'match').mockReturnValue({ handler: () => { throw error; }, params: {} });
+  vi.spyOn(Router.prototype, 'match').mockReturnValue({ handler: () => { throw error; }, params: {}, template: '/api/stubbed' });
 }
 
 const callRoute = ({ method, path }: { method: string; path: string }) =>
