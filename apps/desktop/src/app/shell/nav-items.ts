@@ -6,28 +6,28 @@ export interface NavItem {
   readonly availability: string | null;
 }
 
-// Single source of truth for when a not-yet-built section unlocks — update this map only.
-const AVAILABILITY_BY_SECTION: Readonly<Record<string, string>> = {
-  toolkit: 'Available in phase 4',
-  audit: 'Available in phase 4',
-  mgrprofile: 'Available in phase 4',
-  profiles: 'Not yet available',
-  calendar: 'Available in phase 5',
-  triggers: 'Available in phase 5',
-  integrations: 'Available in phase 5',
-  usage: 'Available in phase 4',
-};
+export interface HelmNavContext {
+  readonly currentManagerId: string | null;
+}
+
+const COMING_SOON = 'Coming soon';
+const SELECT_A_MANAGER = 'Select a manager';
 
 // Order and labels mirror the Helm section of specs/design/OpenFleet.dc.html's `navDef` array.
 // Settings is deliberately absent: it opens from the sidebar footer gear and ⌘,.
-// A null route means the backend this section needs hasn't landed yet — it still renders,
-// disabled, with the phase text from AVAILABILITY_BY_SECTION explaining when it will.
-const HELM_SECTIONS: ReadonlyArray<{ key: string; glyph: string; label: string; route: string | null }> = [
+// A null route renders the section disabled, with its availability text.
+const helmSectionsFor = ({ currentManagerId }: HelmNavContext): ReadonlyArray<{ key: string; glyph: string; label: string; route: string | null; unroutedAvailability?: string }> => [
   { key: 'inbox', glyph: '◫', label: 'Inbox', route: '/inbox' },
   { key: 'project', glyph: '⌂', label: 'Project home', route: '/project' },
   { key: 'toolkit', glyph: '⚒', label: 'Toolkit', route: null },
   { key: 'audit', glyph: '≣', label: 'Audit', route: null },
-  { key: 'mgrprofile', glyph: '◎', label: 'Manager profile', route: null },
+  {
+    key: 'mgrprofile',
+    glyph: '◎',
+    label: 'Manager profile',
+    route: currentManagerId ? `/manager/${encodeURIComponent(currentManagerId)}` : null,
+    unroutedAvailability: SELECT_A_MANAGER,
+  },
   { key: 'profiles', glyph: '◉', label: 'Profiles', route: null },
   { key: 'calendar', glyph: '▤', label: 'Calendar', route: null },
   { key: 'notes', glyph: '¶', label: 'Notes', route: '/notes' },
@@ -38,7 +38,12 @@ const HELM_SECTIONS: ReadonlyArray<{ key: string; glyph: string; label: string; 
   { key: 'components', glyph: '◈', label: 'Component sheet', route: '/components' },
 ];
 
-export const HELM_NAV_ITEMS: readonly NavItem[] = HELM_SECTIONS.map((section) => ({
-  ...section,
-  availability: section.route ? null : (AVAILABILITY_BY_SECTION[section.key] ?? 'Not yet available'),
-}));
+/** The Helm sections; Manager profile links to the current manager and stays disabled without one. */
+export function helmNavItemsFor(context: HelmNavContext): readonly NavItem[] {
+  return helmSectionsFor(context).map(({ unroutedAvailability, ...section }) => ({
+    ...section,
+    availability: section.route ? null : (unroutedAvailability ?? COMING_SOON),
+  }));
+}
+
+export const HELM_NAV_ITEMS: readonly NavItem[] = helmNavItemsFor({ currentManagerId: null });
