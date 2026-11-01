@@ -88,6 +88,19 @@ describe('recording the MCP calls of the daemon booted with its own wiring', () 
       expect(log).toContain('--name keep-me');
     });
 
+    it.each([
+      ['an escaped double quote', (secret: string) => `cmd --password "safe\\" ${secret}" --name keep-me`],
+      ['glued single-quoted segments', (secret: string) => `cmd --password 'safe'\\'' ${secret}' --name keep-me`],
+    ])('masks the whole value of a secret flag that the shell reads past %s', async (_label, bodyHolding) => {
+      const secret = fakeSecret('probe');
+
+      await callTool(fixture.worker.id, 'create_note', { title: 'Shell quoted secret', body_md: bodyHolding(secret) });
+
+      const log = await storedLog();
+      expect(log).not.toContain(secret);
+      expect(log).toContain('--name keep-me');
+    });
+
     it('masks the value of a secret flag whose name is split by a bidirectional control character', async () => {
       const secret = fakeSecret('bidi');
       const body = `deploy --to‮ken ${secret} --name keep-me`;
