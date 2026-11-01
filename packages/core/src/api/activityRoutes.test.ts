@@ -71,6 +71,17 @@ describe('GET /api/activity', () => {
     expect(actionsOf(await activityPage(`?since=${BETWEEN_SEEDED_AND_NOW}`))).toEqual(['POST /api/data-stores']);
   });
 
+  it('compares the bounds as instants, whether or not they write the milliseconds', async () => {
+    const repository = new ActivityRepository(fixture.db);
+    for (const [at, action] of [['2026-11-01T10:00:00.000Z', 'on_the_second'], ['2026-11-01T10:00:00.500Z', 'half_a_second_later']] as const) {
+      repository.insert({ at, actorKind: 'agent', actorLabel: 'Seed', source: 'mcp', action, outcome: 'ok' });
+    }
+
+    expect(actionsOf(await activityPage('?since=2026-11-01T10:00:00Z'))).toEqual(['half_a_second_later', 'on_the_second']);
+    expect(actionsOf(await activityPage('?until=2026-11-01T10:00:00Z'))).toEqual(['on_the_second']);
+    expect(actionsOf(await activityPage('?since=2026-11-01T10:00:00.250Z'))).toEqual(['half_a_second_later']);
+  });
+
   it('returns the rows of the manager asked for and never those of another lineage', async () => {
     seed([{ managerId: 'manager-a', action: 'of_a' }, { managerId: 'manager-b', action: 'of_b' }]);
 

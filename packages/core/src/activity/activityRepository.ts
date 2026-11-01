@@ -11,9 +11,9 @@ export interface ActivityQuery {
   entityKind?: string;
   action?: string;
   outcome?: ActivityRow['outcome'];
-  /** Rows at or after this instant (ISO 8601). */
+  /** Rows at or after this instant (ISO 8601, with or without milliseconds). */
   since?: string;
-  /** Rows at or before this instant (ISO 8601). */
+  /** Rows at or before this instant (ISO 8601, with or without milliseconds). */
   until?: string;
   limit: number;
   /** The `nextCursor` of the previous page. */
@@ -39,7 +39,10 @@ interface StoredActivityRow {
   result_excerpt: string | null;
 }
 
-const presentWhenStored = <Key extends string, Value extends string | number>(key: Key, value: Value | null) =>
+/** Returns the instant as `YYYY-MM-DDTHH:mm:ss.sssZ`, the form stored in `at`, so that SQL text order is time order. */
+const canonicalInstant = (instant: string): string => new Date(instant).toISOString();
+
+const presentWhenStored =<Key extends string, Value extends string | number>(key: Key, value: Value | null) =>
   (value === null ? {} : { [key]: value }) as { [K in Key]?: Value };
 
 function activityRowOf(row: StoredActivityRow): ActivityRow {
@@ -89,8 +92,8 @@ export class ActivityRepository {
     narrowTo('entity_kind = ?', query.entityKind);
     narrowTo('action = ?', query.action);
     narrowTo('outcome = ?', query.outcome);
-    narrowTo('at >= ?', query.since);
-    narrowTo('at <= ?', query.until);
+    narrowTo('at >= ?', query.since === undefined ? undefined : canonicalInstant(query.since));
+    narrowTo('at <= ?', query.until === undefined ? undefined : canonicalInstant(query.until));
     narrowTo('id < ?', query.cursor === undefined ? undefined : Number(query.cursor));
     const where = conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
     const rows = this.db.prepare(`SELECT * FROM activity_log ${where} ORDER BY id DESC LIMIT ?`)
