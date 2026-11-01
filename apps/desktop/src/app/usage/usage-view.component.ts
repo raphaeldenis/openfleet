@@ -81,7 +81,7 @@ const formatCost = (costUsd: number | null): string => (costUsd === null ? NO_CO
   `,
   styles: `
     .usage { flex: 1; min-width: 0; max-width: 60rem; margin: 0 auto; padding: 1.25rem 1.5rem 3rem; display: flex; flex-direction: column; gap: 1rem; }
-    @media (max-width: 75rem) { .usage { margin: 0; max-width: calc(100vw - 17.5rem); } }
+    @media (max-width: 75rem) { .usage { margin: 0; max-width: calc(100vw - var(--sidebar-width)); } }
     .head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
     h1 { flex: 1 1 auto; margin: 0; font-size: 1.25rem; font-weight: 600; }
     .by-model { font-size: .75rem; color: var(--mut); margin-right: .5rem; }
