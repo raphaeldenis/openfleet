@@ -45,9 +45,10 @@ const formatCost = (costUsd: number | null): string => (costUsd === null ? NO_CO
         @if (shownDays.length === 0) {
           <div class="empty" data-testid="usage-empty">
             <span class="empty-title">No usage yet</span>
-            <span>Spend and tokens appear here once a session ends a turn. The daemon records them only when started with OPENFLEET_USAGE_INGESTION=1.</span>
+            <span>Spend and tokens appear here once a session ends a turn. Usage ingestion is off by default: start the daemon with OPENFLEET_USAGE_INGESTION=1 to record it.</span>
           </div>
         } @else {
+          <div class="ledger-scroll" tabindex="0" role="region" aria-label="Daily usage table">
           <table class="ledger">
             <thead>
               <tr><th scope="col">Day (UTC)</th><th scope="col" class="num">Input</th><th scope="col" class="num">Output</th><th scope="col" class="num">Cache read</th><th scope="col" class="num">Cache write</th><th scope="col" class="num">Cost</th></tr>
@@ -73,22 +74,26 @@ const formatCost = (costUsd: number | null): string => (costUsd === null ? NO_CO
               }
             </tbody>
           </table>
+          </div>
         }
       }
     </section>
   `,
   styles: `
     .usage { flex: 1; min-width: 0; max-width: 60rem; margin: 0 auto; padding: 1.25rem 1.5rem 3rem; display: flex; flex-direction: column; gap: 1rem; }
-    .head { display: flex; align-items: center; gap: .5rem; }
-    h1 { flex: 1; margin: 0; font-size: 1.25rem; font-weight: 600; }
+    @media (max-width: 75rem) { .usage { margin: 0; max-width: calc(100vw - 17.5rem); } }
+    .head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+    h1 { flex: 1 1 auto; margin: 0; font-size: 1.25rem; font-weight: 600; }
     .by-model { font-size: .75rem; color: var(--mut); margin-right: .5rem; }
     .range { height: 1.625rem; padding: 0 .625rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--fg); font-size: .75rem; cursor: pointer; }
     .range[aria-pressed='true'] { background: var(--active); }
     .loading { height: 12rem; border-radius: .625rem; background: var(--sunk); }
     .empty { padding: 4rem 1rem; display: flex; flex-direction: column; align-items: center; gap: .375rem; color: var(--mut); text-align: center; }
     .empty-title { color: var(--fg); font-weight: 500; }
-    .ledger { width: 100%; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); border-collapse: collapse; font-size: .75rem; }
-    th, td { padding: .5rem 1rem; border-bottom: 1px solid var(--line); text-align: left; font-weight: 400; }
+    .ledger-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel); }
+    .ledger { width: 100%; border-collapse: collapse; font-size: .75rem; }
+    .ledger th[scope='row'] { position: sticky; left: 0; background: var(--panel); white-space: nowrap; }
+    th, td { padding: .5rem 1rem; border-bottom: 1px solid var(--line); text-align: left; font-weight: 400; white-space: nowrap; }
     thead th { color: var(--mut); font-size: .6875rem; }
     .num { text-align: right; font-family: var(--mono); }
     .day th { font-family: var(--mono); font-weight: 500; }

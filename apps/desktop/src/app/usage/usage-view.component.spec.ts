@@ -70,6 +70,7 @@ describe('UsageViewComponent', () => {
 
     const empty = await screen.findByTestId('usage-empty');
     expect(empty).toHaveTextContent('No usage yet');
+    expect(empty).toHaveTextContent('Usage ingestion is off by default');
     expect(empty).toHaveTextContent('OPENFLEET_USAGE_INGESTION=1');
   });
 
