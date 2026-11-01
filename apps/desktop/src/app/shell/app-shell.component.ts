@@ -106,9 +106,9 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
     </div>
   `,
   styles: `
-    .shell { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: min(75rem, 1200px); position: relative; overflow: hidden; }
+    .shell { --sidebar-width: 17.5rem; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: min(75rem, 1200px); position: relative; overflow: hidden; }
     .body { flex: 1; min-height: 0; display: flex; }
-    .sidebar { width: 17.5rem; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; overflow-y: auto; }
+    .sidebar { width: var(--sidebar-width); flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-height: 0; overflow-y: auto; }
     .brand { height: 2.75rem; flex: none; display: flex; align-items: center; padding: 0 .875rem; font-weight: 600; letter-spacing: -.01em; border-bottom: 1px solid var(--line); }
     .groups { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     .group-action { flex: none; padding: 0 .25rem; color: var(--mut); font-size: .875rem; line-height: 1; text-decoration: none; }
