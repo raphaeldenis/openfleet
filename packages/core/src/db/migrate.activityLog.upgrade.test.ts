@@ -31,6 +31,7 @@ describe('the activity log migration', () => {
     ['actor kind', { actor_kind: 'robot' }],
     ['source', { source: 'carrier-pigeon' }],
     ['outcome', { outcome: 'maybe' }],
+    ['outcome the log never emits (gated)', { outcome: 'gated' }],
   ])('refuses a row with an unknown %s', (_name, overrides) => {
     const db = openMigratedDatabase();
 

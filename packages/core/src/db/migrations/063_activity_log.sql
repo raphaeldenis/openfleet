@@ -10,7 +10,7 @@ CREATE TABLE activity_log (
   entity_kind TEXT,
   entity_id TEXT,
   entity_label TEXT,
-  outcome TEXT NOT NULL CHECK(outcome IN ('ok', 'denied', 'gated', 'error')),
+  outcome TEXT NOT NULL CHECK(outcome IN ('ok', 'denied', 'error')),
   duration_ms INTEGER,
   detail TEXT,
   args_excerpt TEXT,

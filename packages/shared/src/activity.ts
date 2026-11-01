@@ -2,7 +2,7 @@ import * as z from 'zod';
 
 export const ACTIVITY_ACTOR_KINDS = ['human', 'agent', 'system'] as const;
 export const ACTIVITY_SOURCES = ['mcp', 'rest', 'hook', 'daemon'] as const;
-export const ACTIVITY_OUTCOMES = ['ok', 'denied', 'gated', 'error'] as const;
+export const ACTIVITY_OUTCOMES = ['ok', 'denied', 'error'] as const;
 
 export const DEFAULT_ACTIVITY_PAGE_LIMIT = 50;
 export const MAX_ACTIVITY_PAGE_LIMIT = 200;
