@@ -1,20 +1,32 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import type { ActivityRow } from '@openfleet/shared';
+import { RouterLink } from '@angular/router';
+import { FILE_DOWNLOAD } from '../core/file-download';
 import { FleetApiService } from '../core/fleet-api.service';
 import { BannerComponent } from '../design/banner.component';
+import { activityAsCsv, activityAsJson } from './audit-export';
 import {
   AUDIT_ACTORS, AUDIT_OUTCOMES, AUDIT_PERIODS, DEFAULT_AUDIT_FILTERS, activityQueryOf, choiceOf, hasNonDefaultFilter, periodOf, type AuditFilters,
 } from './audit-filters';
-import { detailFieldsOf, entityNameOf, inertText, utcTimeOf } from './audit-row-text';
+import { detailFieldsOf, entityNameOf, inertText, linkableSessionIdOf, utcTimeOf } from './audit-row-text';
 
 type AuditLoad = 'loading' | 'failed' | 'loaded';
 type MoreLoad = 'idle' | 'loading' | 'failed';
+type ExportLoad = 'idle' | 'running' | 'failed';
+type ExportFormat = 'csv' | 'json';
+
+const MAX_EXPORTED_ROWS = 10_000;
+
+const EXPORT_FORMATS: Record<ExportFormat, { mimeType: string; serialize: (rows: readonly ActivityRow[]) => string }> = {
+  csv: { mimeType: 'text/csv', serialize: activityAsCsv },
+  json: { mimeType: 'application/json', serialize: activityAsJson },
+};
 
 /** Every mutating action of the fleet, newest first, narrowed by actor, outcome, action and period; each row opens into its full record. */
 @Component({
   selector: 'of-audit-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BannerComponent],
+  imports: [BannerComponent, RouterLink],
   template: `
     <section class="audit" data-testid="audit-view">
       <header class="head">
@@ -70,6 +82,16 @@ type MoreLoad = 'idle' | 'loading' | 'failed';
               }
             </div>
           } @else {
+            <div class="export" role="group" aria-label="Export the current filter">
+              <button type="button" class="of-btn of-btn--compact" [disabled]="exportLoad() === 'running'" (click)="exportAs('csv')">Export CSV</button>
+              <button type="button" class="of-btn of-btn--compact" [disabled]="exportLoad() === 'running'" (click)="exportAs('json')">Export JSON</button>
+              @if (exportLoad() === 'running') {
+                <span class="export-note" role="status">Preparing the file…</span>
+              }
+            </div>
+            @if (exportLoad() === 'failed') {
+              <of-banner data-testid="audit-export-error" variant="error" glyph="✕" title="Export failed" description="The log could not be read to the end, so no file was saved." />
+            }
             <div class="table-scroll" tabindex="0" role="region" aria-label="Audit log table">
               <table class="log">
                 <thead>
@@ -83,7 +105,10 @@ type MoreLoad = 'idle' | 'loading' | 'failed';
                       <td class="action">{{ text(row.action) }}</td>
                       <td>@if (row.entityKind) {<span class="entity-kind">{{ text(row.entityKind) }}</span> }{{ entityName(row) }}</td>
                       <td class="outcome" [attr.data-outcome]="row.outcome">{{ row.outcome }}</td>
-                      <td>
+                      <td class="row-actions">
+                        @if (sessionIdOf(row); as sessionId) {
+                          <a class="session-link" [routerLink]="['/session', sessionId]" [attr.aria-label]="'Open session of ' + row.action">Session</a>
+                        }
                         <button type="button" class="of-btn of-btn--compact" [attr.aria-expanded]="isOpen(row)" [attr.aria-controls]="'audit-detail-' + row.id" [attr.aria-label]="'Details of ' + row.action" (click)="toggleDetail(row)">{{ isOpen(row) ? 'Hide' : 'Details' }}</button>
                       </td>
                     </tr>
@@ -138,6 +163,10 @@ type MoreLoad = 'idle' | 'loading' | 'failed';
     dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: 0; }
     dt { color: var(--mut); }
     dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+    .export { display: flex; align-items: center; gap: .5rem; }
+    .export-note { font-size: .75rem; color: var(--mut); }
+    .row-actions { display: flex; align-items: center; gap: .5rem; }
+    .session-link { color: var(--acc); font-size: .6875rem; }
     .more { align-self: center; }
     .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   `,
@@ -153,6 +182,9 @@ export class AuditViewComponent {
   protected readonly load = signal<AuditLoad>('loading');
   protected readonly moreLoad = signal<MoreLoad>('idle');
   protected readonly openRowId = signal<number | null>(null);
+  protected readonly exportLoad = signal<ExportLoad>('idle');
+  private readonly saveFile = inject(FILE_DOWNLOAD);
+  protected readonly sessionIdOf = linkableSessionIdOf;
   protected readonly text = inertText;
   protected readonly time = utcTimeOf;
   protected readonly entityName = entityNameOf;
@@ -217,6 +249,33 @@ export class AuditViewComponent {
     } catch {
       if (request === this.latestRequest) this.load.set('failed');
     }
+  }
+
+  protected async exportAs(format: ExportFormat): Promise<void> {
+    if (this.exportLoad() === 'running') return;
+    const request = this.latestRequest;
+    const now = new Date();
+    this.exportLoad.set('running');
+    try {
+      const exported = await this.readEveryPage({ filters: this.filters(), now });
+      if (request !== this.latestRequest) return this.exportLoad.set('idle');
+      const { mimeType, serialize } = EXPORT_FORMATS[format];
+      this.saveFile({ filename: `openfleet-audit-${now.toISOString().slice(0, 10)}.${format}`, mimeType, content: serialize(exported) });
+      this.exportLoad.set('idle');
+    } catch {
+      this.exportLoad.set('failed');
+    }
+  }
+
+  private async readEveryPage({ filters, now }: { filters: AuditFilters; now: Date }): Promise<ActivityRow[]> {
+    const exported: ActivityRow[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.api.listActivity(activityQueryOf({ filters, now, cursor }));
+      exported.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor !== undefined && exported.length < MAX_EXPORTED_ROWS);
+    return exported;
   }
 
   protected async loadMore(): Promise<void> {

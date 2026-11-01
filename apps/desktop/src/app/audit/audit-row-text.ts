@@ -12,6 +12,11 @@ export const utcTimeOf = (row: ActivityRow): string => row.at.slice(0, 19).repla
 /** What the row acted on: its label, else its id, else a dash. */
 export const entityNameOf = (row: ActivityRow): string => inertText(row.entityLabel ?? row.entityId ?? NO_VALUE);
 
+const SESSION_ID = /^[\w-]+$/;
+
+/** The id of the session that acted when the row carries a real one; undefined for no id and for a redaction mark. */
+export const linkableSessionIdOf = (row: ActivityRow): string | undefined => (row.sessionId !== undefined && SESSION_ID.test(row.sessionId) ? row.sessionId : undefined);
+
 export interface DetailField {
   readonly label: string;
   readonly value: string;

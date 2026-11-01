@@ -1,7 +1,9 @@
 import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import type { ActivityPage, ActivityRow } from '@openfleet/shared';
+import { provideRouter } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FILE_DOWNLOAD, type TextFile } from '../core/file-download';
 import type { ActivityQueryParams } from '../core/fleet-api.service';
 import { FleetApiService } from '../core/fleet-api.service';
 import { AuditViewComponent } from './audit-view.component';
@@ -21,9 +23,18 @@ const row = (overrides: Partial<ActivityRow> = {}): ActivityRow => ({
 
 type ListActivity = (query: ActivityQueryParams) => Promise<ActivityPage>;
 
+const downloads: TextFile[] = [];
+
 async function renderAudit(listActivity: ListActivity) {
+  downloads.length = 0;
   const api = { listActivity: vi.fn(listActivity) };
-  await render(AuditViewComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
+  await render(AuditViewComponent, {
+    providers: [
+      provideRouter([]),
+      { provide: FleetApiService, useValue: api },
+      { provide: FILE_DOWNLOAD, useValue: (file: TextFile) => downloads.push(file) },
+    ],
+  });
   return api;
 }
 
@@ -209,6 +220,83 @@ describe('AuditViewComponent', () => {
 
       expect(await screen.findByTestId('audit-row-7')).toBeInTheDocument();
       expect(api.listActivity).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('session link', () => {
+    it('links a row to the session that acted when the row carries its id', async () => {
+      await renderAudit(() => Promise.resolve({ items: [row({ sessionId: '3f2a9c1e-0000-4000-8000-000000000001' })] }));
+
+      const link = await screen.findByRole('link', { name: 'Open session of create_note' });
+
+      expect(link).toHaveAttribute('href', '/session/3f2a9c1e-0000-4000-8000-000000000001');
+    });
+
+    it('offers no link on a row without a session', async () => {
+      await renderAudit(() => Promise.resolve({ items: [row()] }));
+      await screen.findByTestId('audit-row-7');
+
+      expect(screen.queryByRole('link')).toBeNull();
+    });
+
+    it('does not turn a redaction mark into a link', async () => {
+      await renderAudit(() => Promise.resolve({ items: [row({ sessionId: '[text len=12]' })] }));
+      await screen.findByTestId('audit-row-7');
+
+      expect(screen.queryByRole('link')).toBeNull();
+    });
+  });
+
+  describe('export', () => {
+    const twoPages: ListActivity = (query) => Promise.resolve(query.cursor ? { items: [row({ id: 3 })] } : { items: [row({ id: 5 })], nextCursor: '5' });
+
+    it('saves every page of the current filter as a JSON file', async () => {
+      const api = await renderAudit(twoPages);
+      await screen.findByTestId('audit-row-5');
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Actor' }), 'human');
+      await screen.findByTestId('audit-row-5');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+
+      await vi.waitFor(() => expect(downloads).toHaveLength(1));
+      expect(downloads[0]!.filename).toBe('openfleet-audit-2026-11-01.json');
+      expect(downloads[0]!.mimeType).toBe('application/json');
+      expect(JSON.parse(downloads[0]!.content).map((exported: ActivityRow) => exported.id)).toEqual([5, 3]);
+      const exportQueries = api.listActivity.mock.calls.slice(-2).map(([query]) => query);
+      expect(exportQueries.map((query) => query.actor)).toEqual(['human', 'human']);
+      expect(exportQueries[1]!.cursor).toBe('5');
+    });
+
+    it('saves the current filter as a CSV file', async () => {
+      await renderAudit(twoPages);
+      await screen.findByTestId('audit-row-5');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+
+      await vi.waitFor(() => expect(downloads).toHaveLength(1));
+      expect(downloads[0]!.filename).toBe('openfleet-audit-2026-11-01.csv');
+      expect(downloads[0]!.mimeType).toBe('text/csv');
+      expect(downloads[0]!.content.split('\r\n')).toHaveLength(3);
+    });
+
+    it('saves nothing and says so when a page cannot be read', async () => {
+      let isExporting = false;
+      await renderAudit((query) => (isExporting && query.cursor ? Promise.reject(new Error('boom')) : twoPages(query)));
+      await screen.findByTestId('audit-row-5');
+      isExporting = true;
+
+      await userEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+
+      expect(await screen.findByTestId('audit-export-error')).toHaveTextContent('Export failed');
+      expect(downloads).toHaveLength(0);
+    });
+
+    it('offers no export while there is nothing to export', async () => {
+      await renderAudit(() => Promise.resolve({ items: [] }));
+      await screen.findByTestId('audit-empty');
+
+      expect(screen.queryByRole('button', { name: 'Export CSV' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Export JSON' })).toBeNull();
     });
   });
 
