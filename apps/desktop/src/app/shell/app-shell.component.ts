@@ -12,7 +12,7 @@ import { CopyDetailsButtonComponent } from '../design/copy-details-button.compon
 import { InboxNeedingYou } from '../inbox/inbox-needing-you';
 import { ManagerGroupComponent } from '../sessions/manager-group.component';
 import { SessionListComponent } from '../sessions/session-list.component';
-import { HELM_NAV_ITEMS } from './nav-items';
+import { helmNavItemsFor } from './nav-items';
 import { RightPanelComponent } from './right-panel.component';
 import { SidebarFooterComponent } from './sidebar-footer.component';
 import { SidebarGroupComponent } from './sidebar-group.component';
@@ -39,7 +39,7 @@ const RUNNING_STATES = new Set(['generating', 'starting']);
             </of-sidebar-group>
             <of-sidebar-group groupKey="helm" title="Helm" [growWhenOpen]="1.4">
               <ul class="helm-list">
-                @for (item of navItems; track item.key) {
+                @for (item of navItems(); track item.key) {
                   <li>
                     @if (item.route) {
                       <a class="nav-item" [routerLink]="item.route" routerLinkActive="active" ariaCurrentWhenActive="page" [attr.data-testid]="'nav-' + item.key">
@@ -134,8 +134,12 @@ export class AppShellComponent {
   protected readonly events = inject(FleetEventsService);
   protected readonly versions = inject(VersionsService);
   private readonly router = inject(Router);
-  protected readonly navItems = HELM_NAV_ITEMS;
   protected readonly daemonAddress = environment.daemonAddress;
+  private readonly currentManagerId = computed(() => {
+    const openManager = this.events.sessions().find((session) => session.role === MANAGER_ROLE && session.state !== 'closed');
+    return openManager?.id ?? null;
+  });
+  protected readonly navItems = computed(() => helmNavItemsFor({ currentManagerId: this.currentManagerId() }));
   protected readonly runningCount = computed(() => this.events.sessions().filter((s) => RUNNING_STATES.has(s.state)).length);
   protected readonly managerCount = computed(() => String(this.events.sessions().filter((s) => s.role === MANAGER_ROLE).length));
   protected readonly inboxBadge = inject(InboxNeedingYou).label;

@@ -11,6 +11,7 @@ import { parseManagerProfile } from './manager-profile-parser';
 import { parseProject } from './project-response-parser';
 import { parseSessionTodos } from './session-todos-parser';
 import { parseTokenUsage, type TokenUsage } from './token-usage';
+import { parseUsageDaily, type UsageDailyRow } from './usage-daily-parser';
 
 export type PageRequest = Partial<Pick<Page<unknown>, 'limit' | 'offset'>>;
 export type ProposalDecision = { decision: 'approve' } | { decision: 'deny'; reason: string };
@@ -158,6 +159,13 @@ export class FleetApiService {
   /** The input and output tokens the sessions of the project have used on the current UTC day; null when none has usage today. */
   async getProjectUsageToday(projectId: string): Promise<TokenUsage | null> {
     return parseTokenUsage(await this.call<unknown>(`/api/projects/${encodeURIComponent(projectId)}/usage/today`));
+  }
+  /** The usage buckets (day, model, session) of the ledger inside the UTC days given; empty while usage ingestion is off. */
+  async getDailyUsage({ fromDayUtc, toDayUtc }: { fromDayUtc?: string; toDayUtc?: string }): Promise<UsageDailyRow[]> {
+    const path = `/api/usage/daily${queryString({ from: fromDayUtc, to: toDayUtc })}`;
+    const rows = parseUsageDaily(await this.call<unknown>(path));
+    if (!rows) throw new ApiError(200, `GET ${path} → unreadable usage`);
+    return rows;
   }
   /** The last working state the session wrote, kept after it closes; undefined when it never wrote one. */
   async getWorkingState(id: string): Promise<WorkingState | undefined> {
