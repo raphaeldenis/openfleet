@@ -21,6 +21,8 @@ export interface EntityCounts {
 export interface SourceLosses {
   orphanDatastoreFiles: string[];
   storesWithoutTables: string[];
+  /** A source column whose type OpenFleet has no equivalent for: the column and its cell values are not imported. */
+  unconvertedColumns: { columnId: string; columnType: string; storeId: string }[];
   droppedColumnFormats: { columnId: string; format: string }[];
   droppedViewFields: { viewId: string; fields: string[] }[];
   /** A column field (required, config, display column, width, wrap) the source holds and OpenFleet cannot keep, with its source value. */
@@ -30,7 +32,7 @@ export interface SourceLosses {
 }
 
 export const emptySourceLosses = (): SourceLosses => ({
-  orphanDatastoreFiles: [], storesWithoutTables: [], droppedColumnFormats: [], droppedViewFields: [], droppedColumnMetadata: [], droppedOptionColors: [],
+  orphanDatastoreFiles: [], storesWithoutTables: [], unconvertedColumns: [], droppedColumnFormats: [], droppedViewFields: [], droppedColumnMetadata: [], droppedOptionColors: [],
 });
 
 export interface ImportReport extends SourceLosses {
@@ -144,6 +146,7 @@ export function renderImportReport(report: ImportReport): string {
   const unconvertedNodeTypes = Object.entries(report.unconvertedNodeTypes).map(([type, count]) => `${type}: ${count}`);
   const unconvertedNoteVersions = report.unconvertedNoteVersions.map(({ noteTitle, rev, nodeTypes }) => `${inlineMarkdownText(noteTitle)} — version ${rev}: ${nodeTypes.map(inlineMarkdownText).join(', ')}`);
   const toolsWithoutEquivalent = Object.entries(report.missionToolReferences.withoutEquivalent).map(([toolName, count]) => `${toolName}: ${count}`);
+  const unconvertedColumns = report.unconvertedColumns.map(({ columnId, columnType, storeId }) => `${columnId} (${columnType}) in table ${storeId}`);
   const droppedColumnFormats = report.droppedColumnFormats.map(({ columnId, format }) => `${columnId}: ${format}`);
   const droppedViewFields = report.droppedViewFields.map(({ viewId, fields }) => `${viewId}: ${fields.join(', ')}`);
   const droppedColumnMetadata = report.droppedColumnMetadata.map(({ columnId, field, value }) => `${columnId}: ${field} = ${value}`);
@@ -170,6 +173,10 @@ export function renderImportReport(report: ImportReport): string {
     '## Stores without a backing table',
     'The store definitions are imported; no rows can be read. An empty existing table is not listed here.',
     ...bulletList(report.storesWithoutTables),
+    '',
+    '## Columns of an unknown type not converted',
+    'The column and its values are not imported; the other columns of the table are.',
+    ...bulletList(unconvertedColumns),
     '',
     '## Column display formats not converted',
     'Values and column types are kept; the Scape display formats have no OpenFleet equivalent.',
