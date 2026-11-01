@@ -113,10 +113,21 @@ describe('AppShellComponent', () => {
     expect(projectHome.getAttribute('href')).toBe('/project');
   });
 
+  it('renders Audit as a real link to the audit screen', async () => {
+    const { root } = await setUp();
+
+    const audit = root.querySelector('[data-testid="nav-audit"]') as HTMLAnchorElement;
+
+    expect(audit.tagName).toBe('A');
+    expect(audit).not.toHaveAttribute('aria-disabled');
+    expect(audit.getAttribute('href')).toBe('/audit');
+    expect(audit).not.toHaveTextContent('Coming soon');
+  });
+
   it('says "Coming soon" on every section that has no screen yet', async () => {
     const { root } = await setUp();
 
-    for (const key of ['audit', 'toolkit', 'profiles', 'triggers', 'integrations']) {
+    for (const key of ['toolkit', 'profiles', 'triggers', 'integrations']) {
       expect(root.querySelector(`[data-testid="nav-${key}"]`), key).toHaveTextContent('Coming soon');
     }
   });

@@ -20,7 +20,7 @@ const helmSectionsFor = ({ currentManagerId }: HelmNavContext): ReadonlyArray<{ 
   { key: 'inbox', glyph: '◫', label: 'Inbox', route: '/inbox' },
   { key: 'project', glyph: '⌂', label: 'Project home', route: '/project' },
   { key: 'toolkit', glyph: '⚒', label: 'Toolkit', route: null },
-  { key: 'audit', glyph: '≣', label: 'Audit', route: null },
+  { key: 'audit', glyph: '≣', label: 'Audit', route: '/audit' },
   {
     key: 'mgrprofile',
     glyph: '◎',
