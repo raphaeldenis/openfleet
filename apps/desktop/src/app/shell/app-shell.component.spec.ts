@@ -90,7 +90,7 @@ describe('AppShellComponent', () => {
     expect(calendar.tagName).not.toBe('A');
     expect(calendar).toHaveAttribute('aria-disabled', 'true');
     expect(calendar).toHaveTextContent('Calendar');
-    expect(calendar).toHaveTextContent('Available in phase 5');
+    expect(calendar).toHaveTextContent('Coming soon');
   });
 
   it('renders Notes as a real link to the notes screen', async () => {
@@ -113,13 +113,55 @@ describe('AppShellComponent', () => {
     expect(projectHome.getAttribute('href')).toBe('/project');
   });
 
-  it('gives each disabled section the phase text from the backlog (Capitaine correction 2026-09-27)', async () => {
+  it('says "Coming soon" on every section that has no screen yet', async () => {
     const { root } = await setUp();
 
-    expect(root.querySelector('[data-testid="nav-audit"]')).toHaveTextContent('Available in phase 4');
-    expect(root.querySelector('[data-testid="nav-toolkit"]')).toHaveTextContent('Available in phase 4');
-    expect(root.querySelector('[data-testid="nav-mgrprofile"]')).toHaveTextContent('Available in phase 4');
-    expect(root.querySelector('[data-testid="nav-profiles"]')).toHaveTextContent('Not yet available');
+    for (const key of ['audit', 'toolkit', 'profiles', 'triggers', 'integrations']) {
+      expect(root.querySelector(`[data-testid="nav-${key}"]`), key).toHaveTextContent('Coming soon');
+    }
+  });
+
+  it('never shows a development phase in the navigation', async () => {
+    const { root } = await setUp();
+
+    expect(root.querySelector('[data-testid="app-nav"]')!.textContent).not.toMatch(/phase\s*\d/i);
+    expect(root.querySelector('[data-testid="app-nav"] [title*="phase" i]')).toBeNull();
+  });
+
+  describe('Manager profile nav item', () => {
+    const manager = (overrides: Record<string, unknown> = {}) => ({ id: 'm1', name: 'Argus', emoji: '🦉', state: 'idle', role: 'manager', ...overrides });
+
+    it('asks for a manager to be selected, disabled, while no manager is open', async () => {
+      const { root } = await setUp({ sessions: [{ id: 's1', name: 'Gimli', state: 'idle' }] });
+
+      const item = root.querySelector('[data-testid="nav-mgrprofile"]') as HTMLElement;
+      expect(item).toHaveAttribute('aria-disabled', 'true');
+      expect(item).toHaveTextContent('Select a manager');
+    });
+
+    it('stays disabled when the only manager is closed', async () => {
+      const { root } = await setUp({ sessions: [manager({ state: 'closed' })] });
+
+      expect(root.querySelector('[data-testid="nav-mgrprofile"]')).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('links to the profile of the open manager', async () => {
+      const { root } = await setUp({ sessions: [manager({ id: 'm1', state: 'closed' }), manager({ id: 'm2' })] });
+
+      const item = root.querySelector('[data-testid="nav-mgrprofile"]') as HTMLAnchorElement;
+      expect(item.tagName).toBe('A');
+      expect(item.getAttribute('href')).toBe('/manager/m2');
+    });
+
+    it('becomes a link once a manager opens', async () => {
+      const { harness, root } = await setUp({ sessions: [] });
+      const events = TestBed.inject(FleetEventsService) as unknown as { sessions: ReturnType<typeof signal<unknown[]>> };
+
+      events.sessions.set([manager()]);
+      harness.detectChanges();
+
+      expect(root.querySelector('[data-testid="nav-mgrprofile"]')!.getAttribute('href')).toBe('/manager/m1');
+    });
   });
 
   it('renders Inbox as a real link that routes to its own panel', async () => {
