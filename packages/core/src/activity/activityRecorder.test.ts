@@ -50,31 +50,36 @@ describe('recording an action', () => {
   });
 });
 
-describe('masking and bounds', () => {
-  it('never stores a secret given in the arguments, the result or the detail', () => {
+describe('what the row keeps of the arguments, the result and the detail', () => {
+  it('stores no free text: neither a command, nor a body, nor an error message', () => {
     const recorder = openRecorder();
 
     recorder.record(aDraft({
-      argsText: 'run --token abc123xyz --name ok',
+      args: { command: 'run --token abc123xyz --name ok', title: 'Plan' },
       resultText: 'Authorization: Bearer sekret-value-1',
       detail: 'fetched from https://user:hunter2@example.test/path',
+      entityId: 'x --password hunter3',
     }));
 
     const stored = JSON.stringify(listAll());
-    expect(stored).not.toContain('abc123xyz');
-    expect(stored).not.toContain('sekret-value-1');
-    expect(stored).not.toContain('hunter2');
-    expect(stored).toContain('--name ok');
+    expect(stored).not.toMatch(/abc123xyz|sekret-value-1|hunter2|hunter3|--name ok|Plan/);
   });
 
-  it('cuts the detail at 300 characters, the arguments at 400 and the result at 200', () => {
+  it('keeps the identifiers, the statuses, the error code and the entity id readable', () => {
     const recorder = openRecorder();
-    const long = 'x'.repeat(10_000);
 
-    recorder.record(aDraft({ detail: long, argsText: long, resultText: long }));
+    recorder.record(aDraft({ args: { note_id: 'n1', status: 'open' }, resultText: '{"id":"n1","title":"Plan"}', detail: 'note_not_found', entityId: 'n1' }));
 
-    const [row] = listAll();
-    expect([row?.detail?.length, row?.argsExcerpt?.length, row?.resultExcerpt?.length]).toEqual([300, 400, 200]);
+    expect(listAll()[0]).toMatchObject({ argsExcerpt: '{"note_id":"n1","status":"open"}', resultExcerpt: '[result len=26] {"id":"n1"}', detail: 'note_not_found', entityId: 'n1' });
+  });
+
+  it('bounds the arguments at 400 characters', () => {
+    const recorder = openRecorder();
+    const manyIds = Array.from({ length: 64 }, (_, index) => `identifier-${index}`);
+
+    recorder.record(aDraft({ args: { note_ids: manyIds } }));
+
+    expect(listAll()[0]?.argsExcerpt).toHaveLength(400);
   });
 
   it('cuts a label, an entity id and an action that run too long', () => {
@@ -93,7 +98,7 @@ describe('masking and bounds', () => {
     recorder.record(aDraft({ detail: 'ok‮evil\u0000\u0007 text', actorLabel: 'Wor⁦ker' }));
 
     const [row] = listAll();
-    expect(row?.detail).toBe('okevil text');
+    expect(row?.detail).toMatch(/^\[text len=14 sha=[0-9a-f]{8}\]$/);
     expect(row?.actorLabel).toBe('Worker');
   });
 });

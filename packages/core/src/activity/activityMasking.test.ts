@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { maskedActivityText, maskedStructureText, maskedTextOrJson } from './activityMasking.js';
+import { maskedActivityText } from './activityMasking.js';
 
 // Built at run time: no token-shaped literal sits in the source.
 const SECRET = ['plain', 'value', '0042'].join('-');
@@ -121,72 +121,5 @@ describe('the cost of masking an adversarial text', () => {
     const milliseconds = fastestMilliseconds(() => maskedActivityText(text));
 
     expect(milliseconds).toBeLessThan(MAX_MILLISECONDS);
-  });
-
-  it('masks a structure of many adversarial strings in under 20 ms', () => {
-    const structure = { items: Array.from({ length: 200 }, () => repeatedTo('curl ', ADVERSARIAL_LENGTH)) };
-
-    const milliseconds = fastestMilliseconds(() => maskedStructureText(structure));
-
-    expect(milliseconds).toBeLessThan(MAX_MILLISECONDS);
-  });
-
-  it('masks a large JSON result text in under 20 ms', () => {
-    const text = JSON.stringify({ items: Array.from({ length: 200 }, () => repeatedTo('mysql ', 10_000)) });
-
-    const milliseconds = fastestMilliseconds(() => maskedTextOrJson(text));
-
-    expect(milliseconds).toBeLessThan(MAX_MILLISECONDS);
-  });
-
-  it('marks the strings past the budget of one call instead of leaving them readable', () => {
-    const secret = ['late', 'secret', '77'].join('-');
-    const structure = { items: [...Array.from({ length: 200 }, () => repeatedTo('x', 10_000)), `--token ${secret}`] };
-
-    const masked = maskedStructureText(structure);
-
-    expect(masked).not.toContain(secret);
-  });
-});
-
-describe('masking a structure before it is serialized', () => {
-  it('hides the whole quoted value of a secret flag held in a string', () => {
-    const masked = maskedStructureText({ command: `deploy --token "first ${SECRET}" --name keep` });
-
-    expect(masked).not.toContain(SECRET);
-    expect(masked).toContain('--name keep');
-  });
-
-  it('hides the value of a key that names a credential, whatever it holds', () => {
-    const masked = maskedStructureText({ apiKey: SECRET, nested: { password: [SECRET] }, count: 3 });
-
-    expect(masked).not.toContain(SECRET);
-    expect(JSON.parse(masked)).toMatchObject({ count: 3 });
-  });
-
-  it('answers a mark for a structure it cannot serialize and for a circular one', () => {
-    const circular: Record<string, unknown> = { name: 'loop' };
-    circular.self = circular;
-
-    expect(maskedStructureText(circular)).toContain('[circular]');
-    expect(maskedStructureText({ big: 1n })).toBe('[unserializable]');
-  });
-
-  it('keeps a value that is not a secret as it was given', () => {
-    expect(maskedStructureText({ title: 'Plan', tags: ['a', 'b'], done: false })).toBe('{"title":"Plan","tags":["a","b"],"done":false}');
-  });
-});
-
-describe('masking a result text', () => {
-  it('masks the strings of a JSON text one by one', () => {
-    const masked = maskedTextOrJson(JSON.stringify({ body: `curl --token "first ${SECRET}"` }));
-
-    expect(masked).not.toContain(SECRET);
-  });
-
-  it('masks a text that is not JSON as a whole', () => {
-    const masked = maskedTextOrJson(`error invalid: --token ${SECRET}`);
-
-    expect(masked).not.toContain(SECRET);
   });
 });

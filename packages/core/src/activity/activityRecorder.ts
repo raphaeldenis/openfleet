@@ -1,4 +1,5 @@
 import type { ActivityRow } from '@openfleet/shared';
+import { argumentsExcerpt, keptTokenOrMark, resultExcerpt } from './activityExcerpts.js';
 import { maskedActivityText } from './activityMasking.js';
 import type { ActivityRepository, ActivityRowToStore } from './activityRepository.js';
 
@@ -16,7 +17,7 @@ export interface ActivityRetention {
   maxAgeDays: number;
 }
 
-/** What the caller knows about an action; the recorder adds the instant, masks the text and bounds it. */
+/** What the caller knows about an action; the recorder adds the instant, keeps only what the Audit reads and bounds it. */
 export interface ActivityDraft {
   actorKind: ActivityRow['actorKind'];
   actorLabel: string;
@@ -25,20 +26,23 @@ export interface ActivityDraft {
   source: ActivityRow['source'];
   action: string;
   entityKind?: string;
+  /** Kept when it is an identifier; any other text is stored as its length and fingerprint. */
   entityId?: string;
   entityLabel?: string;
   outcome: ActivityRow['outcome'];
   durationMs?: number;
+  /** An error code, a class name or a version; any other text is stored as its length and fingerprint. */
   detail?: string;
-  /** The arguments as text, serialized from values already masked one by one: the recorder masks the whole text again and keeps an excerpt. */
-  argsText?: string;
-  /** The result as text, with its JSON values already masked one by one: the recorder masks the whole text again and keeps an excerpt. */
+  /** The arguments as the call received them: only short identifiers, enumeration members, numbers and booleans are kept. */
+  args?: unknown;
+  /** The text the call answered: only its length and its short scalar fields are kept. */
   resultText?: string;
 }
 
 const maskedExcerpt = (text: string, maxChars: number): string => maskedActivityText(text).slice(0, maxChars);
 
-const maskedWhenGiven = (text: string | undefined, maxChars: number) => (text === undefined ? undefined : maskedExcerpt(text, maxChars));
+const excerptWhenGiven = <Value>(value: Value | undefined, excerptOf: (given: Value) => string, maxChars: number) =>
+  (value === undefined ? undefined : excerptOf(value).slice(0, maxChars));
 
 /** Writes the activity log without ever failing its caller: an audit failure is reported to `onFailure` and the call goes on. */
 export class ActivityRecorder {
@@ -79,10 +83,11 @@ export class ActivityRecorder {
   }
 
   private rowToStore(draft: ActivityDraft): ActivityRowToStore {
-    const optionalText = <Key extends keyof ActivityRowToStore>(key: Key, text: string | undefined, maxChars: number) => {
-      const masked = maskedWhenGiven(text, maxChars);
-      return (masked === undefined ? {} : { [key]: masked }) as Partial<ActivityRowToStore>;
+    const optionalField = <Value>(key: keyof ActivityRowToStore, value: Value | undefined, excerptOf: (given: Value) => string, maxChars: number) => {
+      const excerpt = excerptWhenGiven(value, excerptOf, maxChars);
+      return (excerpt === undefined ? {} : { [key]: excerpt }) as Partial<ActivityRowToStore>;
     };
+    const optionalText = (key: keyof ActivityRowToStore, text: string | undefined, maxChars: number) => optionalField(key, text, maskedActivityText, maxChars);
     return {
       at: this.deps.clock(),
       actorKind: draft.actorKind,
@@ -92,13 +97,13 @@ export class ActivityRecorder {
       source: draft.source,
       action: maskedExcerpt(draft.action, MAX_NAME_CHARS),
       ...optionalText('entityKind', draft.entityKind, MAX_NAME_CHARS),
-      ...optionalText('entityId', draft.entityId, MAX_NAME_CHARS),
+      ...optionalField('entityId', draft.entityId, keptTokenOrMark, MAX_NAME_CHARS),
       ...optionalText('entityLabel', draft.entityLabel, MAX_NAME_CHARS),
       outcome: draft.outcome,
       ...(draft.durationMs === undefined ? {} : { durationMs: draft.durationMs }),
-      ...optionalText('detail', draft.detail, MAX_DETAIL_CHARS),
-      ...optionalText('argsExcerpt', draft.argsText, MAX_ARGS_CHARS),
-      ...optionalText('resultExcerpt', draft.resultText, MAX_RESULT_CHARS),
+      ...optionalField('detail', draft.detail, keptTokenOrMark, MAX_DETAIL_CHARS),
+      ...optionalField('argsExcerpt', draft.args, argumentsExcerpt, MAX_ARGS_CHARS),
+      ...optionalField('resultExcerpt', draft.resultText, resultExcerpt, MAX_RESULT_CHARS),
     };
   }
 }

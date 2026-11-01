@@ -1,16 +1,11 @@
 import { OpenFleetError } from '@openfleet/shared';
 import type { ActivityRecorder } from '../activity/activityRecorder.js';
-import { outcomeOfErrorCode } from '../activity/refusalOutcome.js';
+import { failureDetailOf, outcomeOfErrorCode } from '../activity/refusalOutcome.js';
 import { restActionOf } from '../activity/restActionNames.js';
 
 const READ_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS']);
 // Asking for the ticket of the live connection is part of opening the app, not an action of the human.
 const ROUTES_THAT_ARE_NO_ACTION: ReadonlySet<string> = new Set(['POST /api/ws-ticket']);
-
-const failureDetailOf = (error: unknown): string => {
-  if (error instanceof OpenFleetError) return error.code;
-  return error instanceof Error ? error.name : 'unknown';
-};
 
 /** Runs a REST handler behind the admin token and records the mutation as an action of the human; a read passes through. The failure of the handler is recorded and thrown again. */
 export async function recordedAsHumanAction(

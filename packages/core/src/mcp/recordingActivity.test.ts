@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ErrorCode, Session } from '@openfleet/shared';
+import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ActivityRecorder } from '../activity/activityRecorder.js';
@@ -68,7 +69,18 @@ describe('a handler that throws', () => {
     );
 
     expect(textTheCallerSees).toContain('boom');
-    expect(repository.list({ limit: 1 }).items[0]).toMatchObject({ action: FAKE_MUTATING_TOOL, outcome: 'error', detail: 'boom' });
+    expect(repository.list({ limit: 1 }).items[0]).toMatchObject({ action: FAKE_MUTATING_TOOL, outcome: 'error', detail: 'Error' });
+  });
+
+  it('records the class of the error, never its message', async () => {
+    const secret = `thrown-${randomBytes(8).toString('hex')}`;
+    const client = await connectedClientWith(() => { throw new TypeError(`boom --password ${secret}`); });
+
+    await client.callTool({ name: FAKE_MUTATING_TOOL, arguments: {} }).catch(() => undefined);
+
+    const [row] = repository.list({ limit: 1 }).items;
+    expect(row?.detail).toBe('TypeError');
+    expect(JSON.stringify(row)).not.toContain(secret);
   });
 
   it('does not break the call when the log itself fails', async () => {

@@ -5,6 +5,7 @@ import { loadConfig } from '../config.js';
 import { startDaemon } from '../daemon.js';
 import { startGovernanceFixture } from '../governance/governanceQueue.testkit.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
+import { DAEMON_VERSION } from '../version.js';
 import { ActivityRepository } from './activityRepository.js';
 
 const rowsNamed = (db: ConstructorParameters<typeof ActivityRepository>[0], action: string) => new ActivityRepository(db).list({ limit: 50, action }).items;
@@ -17,7 +18,7 @@ describe('the actions of the daemon itself, booted with its own wiring', () => {
     await fixture.close();
 
     expect(rows).toEqual([expect.objectContaining({ actorKind: 'system', actorLabel: 'daemon', source: 'daemon', outcome: 'ok' })]);
-    expect(rows[0]?.detail).toMatch(/^version /);
+    expect(rows[0]?.detail).toBe(DAEMON_VERSION);
   });
 
   it('records a pulse sent to a manager as a system row of the scheduler, filed under that manager', async () => {

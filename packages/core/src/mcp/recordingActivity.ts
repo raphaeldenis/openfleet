@@ -1,8 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Session } from '@openfleet/shared';
 import type { ActivityRecorder } from '../activity/activityRecorder.js';
-import { maskedStructureText, maskedTextOrJson } from '../activity/activityMasking.js';
-import { outcomeOfErrorCode } from '../activity/refusalOutcome.js';
+import { failureDetailOf, outcomeOfErrorCode } from '../activity/refusalOutcome.js';
 import { isMutatingTool } from './toolCatalog.js';
 
 const ERROR_TEXT_CODE = /^error ([a-z_]+):/;
@@ -12,10 +11,10 @@ type ToolResult = { isError?: boolean; content?: { type: string; text?: string }
 
 const firstTextOf = (result: ToolResult | undefined): string | undefined => result?.content?.find((part) => part.type === 'text')?.text;
 
-const outcomeOf = (result: ToolResult | undefined): 'ok' | 'denied' | 'error' => {
-  if (result?.isError !== true) return 'ok';
-  return outcomeOfErrorCode(ERROR_TEXT_CODE.exec(firstTextOf(result) ?? '')?.[1]);
-};
+const errorCodeOf = (result: ToolResult | undefined): string | undefined =>
+  (result?.isError === true ? ERROR_TEXT_CODE.exec(firstTextOf(result) ?? '')?.[1] : undefined);
+
+const outcomeOf = (result: ToolResult | undefined): 'ok' | 'denied' | 'error' => (result?.isError === true ? outcomeOfErrorCode(errorCodeOf(result)) : 'ok');
 
 /** A view of the server whose mutating tools leave a row in the activity log; a read, an error and a throw all pass through unchanged. */
 export function recordingActivity(server: McpServer, { caller, recorder, managerId }: { caller: Session; recorder: ActivityRecorder; managerId: string }): McpServer {
@@ -28,16 +27,17 @@ export function recordingActivity(server: McpServer, { caller, recorder, manager
       const record = (outcome: 'ok' | 'denied' | 'error', extra: { resultText?: string; detail?: string }) => recorder.record({
         actorKind: 'agent', actorLabel: caller.name, sessionId: caller.id, managerId, source: 'mcp', action: name, outcome,
         durationMs: Math.round(performance.now() - startedAt),
-        ...(takesArguments ? { argsText: maskedStructureText(handlerArguments[0]) } : {}),
+        ...(takesArguments ? { args: handlerArguments[0] } : {}),
         ...extra,
       });
       try {
         const result = await handler(...handlerArguments) as ToolResult | undefined;
         const resultText = firstTextOf(result);
-        record(outcomeOf(result), resultText === undefined ? {} : { resultText: maskedTextOrJson(resultText) });
+        const errorCode = errorCodeOf(result);
+        record(outcomeOf(result), { ...(resultText === undefined ? {} : { resultText }), ...(errorCode === undefined ? {} : { detail: errorCode }) });
         return result;
       } catch (error) {
-        record('error', { detail: error instanceof Error ? error.message : 'the tool threw' });
+        record('error', { detail: failureDetailOf(error) });
         throw error;
       }
     };

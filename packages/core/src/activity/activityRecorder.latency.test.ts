@@ -15,11 +15,11 @@ describe('the cost of recording one action', () => {
   it('stays under two milliseconds per call on a file database in WAL mode, masking and pruning included', () => {
     const db = openDatabase(join(directories.make('activity-latency-'), 'openfleet.db'));
     const recorder = new ActivityRecorder({ repository: new ActivityRepository(db), clock: () => new Date().toISOString(), onFailure: (error) => { throw error; } });
-    const argsText = JSON.stringify({ project_id: 'p1', title: 'Plan', body_md: 'x'.repeat(2000), note: '--token abc123 Authorization: Bearer xyz' });
+    const args = { project_id: 'p1', title: 'Plan', body_md: 'x'.repeat(2000), note: '--token abc123 Authorization: Bearer xyz', status: 'open' };
 
     const startedAt = performance.now();
     for (let call = 0; call < CALLS_MEASURED; call += 1) {
-      recorder.record({ actorKind: 'agent', actorLabel: 'Worker', sessionId: 's1', managerId: 'm1', source: 'mcp', action: 'create_note', outcome: 'ok', durationMs: 3, argsText, resultText: '{"id":"n1"}' });
+      recorder.record({ actorKind: 'agent', actorLabel: 'Worker', sessionId: 's1', managerId: 'm1', source: 'mcp', action: 'create_note', outcome: 'ok', durationMs: 3, args, resultText: '{"id":"n1"}' });
     }
     const meanMilliseconds = (performance.now() - startedAt) / CALLS_MEASURED;
     db.close();

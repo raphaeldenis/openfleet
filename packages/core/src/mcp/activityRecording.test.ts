@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startGovernanceFixture, type GovernanceFixture } from '../governance/governanceQueue.testkit.js';
 import { ActivityRepository } from '../activity/activityRepository.js';
@@ -67,49 +67,89 @@ describe('recording the MCP calls of the daemon booted with its own wiring', () 
     expect(stored).not.toContain('hunter2');
   });
 
-  describe('a secret that survives a mask applied to serialized text', () => {
+  describe('a secret in any shape the three adversarial reviews found', () => {
     // Built at run time: no token-shaped literal sits in the source.
     const fakeSecret = (label: string) => `${label}-${randomBytes(8).toString('hex')}`;
     const storedLog = async () => {
       const response = await fixture.api('/api/activity?limit=200');
       return JSON.stringify(recordedActivity()) + await response.text();
     };
-
-    it('masks the whole quoted value of a secret flag whose quotes the JSON arguments escape', async () => {
-      const firstWord = fakeSecret('first');
-      const secondWord = fakeSecret('second');
-      const body = `deploy --token "${firstWord} ${secondWord}" --name keep-me`;
-
-      await callTool(fixture.worker.id, 'create_note', { title: 'Quoted secret', body_md: body });
-
+    const expectNoneStored = async (secrets: string[]) => {
       const log = await storedLog();
-      expect(log).not.toContain(firstWord);
-      expect(log).not.toContain(secondWord);
-      expect(log).toContain('--name keep-me');
+      for (const secret of secrets) expect(log).not.toContain(secret);
+    };
+
+    const SHELL_FORMS: [string, (secret: string, other: string) => string][] = [
+      ['a command substitution', (secret) => `deploy --password $(printf '${secret}')`],
+      ['backticks after an equals sign', (secret) => `deploy --password=\`printf ${secret}\``],
+      ['an ANSI-C quoted header name', (secret) => `curl -H $'\\x41uthorization: ${secret}' https://example.test`],
+      ['an ANSI-C quoted command name', (secret) => `$'\\x63url' -u user:${secret} https://example.test`],
+      ['a value that starts with a dash', (secret) => `sshpass -p -${secret} ssh host`],
+      ['a quoted value of two words', (secret, other) => `deploy --token "first ${secret} second-${other}" --name keep-me`],
+      ['an escaped double quote', (secret) => `cmd --password "safe\\" ${secret}" --name keep-me`],
+      ['glued single-quoted segments', (secret) => `cmd --password 'safe'\\'' ${secret}' --name keep-me`],
+      ['a flag name split by a bidirectional character', (secret) => `deploy --to‮ken ${secret} --name keep-me`],
+    ];
+
+    it.each(SHELL_FORMS)('stores neither the arguments nor the result of a note whose body holds %s', async (_label, bodyHolding) => {
+      const [secret, other] = [fakeSecret('probe'), fakeSecret('other')];
+
+      const result = await callTool(fixture.worker.id, 'create_note', { title: 'Shell secret', body_md: bodyHolding(secret, other) });
+
+      expect(result.isError).not.toBe(true);
+      await expectNoneStored([secret, other]);
     });
 
-    it.each([
-      ['an escaped double quote', (secret: string) => `cmd --password "safe\\" ${secret}" --name keep-me`],
-      ['glued single-quoted segments', (secret: string) => `cmd --password 'safe'\\'' ${secret}' --name keep-me`],
-    ])('masks the whole value of a secret flag that the shell reads past %s', async (_label, bodyHolding) => {
-      const secret = fakeSecret('probe');
+    it.each(SHELL_FORMS)('stores no secret held as %s in the nested values, keys and arrays of a call', async (_label, textHolding) => {
+      const [secret, other, keySecret] = [fakeSecret('nested'), fakeSecret('other'), fakeSecret('key')];
+      const row = { title: textHolding(secret, other), tags: [textHolding(secret, other)], meta: { password: secret, [keySecret]: 1, comment: secret } };
 
-      await callTool(fixture.worker.id, 'create_note', { title: 'Shell quoted secret', body_md: bodyHolding(secret) });
+      await callTool(fixture.worker.id, 'insert_data_store_rows', { store: 'no-such-store', rows: [row] });
 
-      const log = await storedLog();
-      expect(log).not.toContain(secret);
-      expect(log).toContain('--name keep-me');
+      expect(recordedActions()).toEqual(['insert_data_store_rows']);
+      await expectNoneStored([secret, other, keySecret]);
     });
 
-    it('masks the value of a secret flag whose name is split by a bidirectional control character', async () => {
-      const secret = fakeSecret('bidi');
-      const body = `deploy --to‮ken ${secret} --name keep-me`;
+    it('stores no secret echoed by the error text of a refused call', async () => {
+      const secret = fakeSecret('error');
 
-      await callTool(fixture.worker.id, 'create_note', { title: 'Bidi secret', body_md: body });
+      const result = await callTool(fixture.worker.id, 'delete_note', { note: `missing --password ${secret}` });
 
-      const log = await storedLog();
-      expect(log).not.toContain(secret);
-      expect(log).toContain('--name keep-me');
+      expect(result.isError).toBe(true);
+      await expectNoneStored([secret]);
+    });
+
+    it('stores no secret sent to the REST API, neither in the body nor in a route parameter', async () => {
+      const [inBody, inRoute] = [fakeSecret('body'), fakeSecret('route')];
+
+      await fixture.api('/api/notes', { method: 'POST', body: JSON.stringify({ projectId: 'project-own', title: `t --token ${inBody}`, bodyMd: `--password ${inBody}` }) });
+      await fixture.api(`/api/governance/proposals/${encodeURIComponent(`x --password ${inRoute}`)}/decide`, { method: 'POST', body: JSON.stringify({ decision: 'approve' }) });
+
+      expect(recordedActions()).toEqual(['proposal.decide', 'POST /api/notes']);
+      await expectNoneStored([inBody, inRoute]);
+    });
+  });
+
+  describe('the values the Audit reads', () => {
+    it('keeps a UUID, a ticket and a status of the arguments readable', async () => {
+      const ownerId = randomUUID();
+
+      await callTool(fixture.worker.id, 'insert_data_store_rows', { store: 'no-such-store', rows: [{ ticket: 'ACT-3', status: 'open', owner_id: ownerId }] });
+
+      expect(recordedActivity()[0]?.argsExcerpt).toBe(`{"store":"no-such-store","rows":[{"ticket":"ACT-3","status":"open","owner_id":"${ownerId}"}]}`);
+    });
+
+    it('keeps the id of the note a call created readable in the result', async () => {
+      const result = await callTool(fixture.worker.id, 'create_note', { title: 'Plan', body_md: 'x' });
+
+      const noteId = (JSON.parse((result.content as { text: string }[])[0]!.text) as { id: string }).id;
+      expect(recordedActivity()[0]?.resultExcerpt).toMatch(new RegExp(`^\\[result len=\\d+\\] \\{.*"id":"${noteId}"`));
+    });
+
+    it('keeps the error code of a refused call as its detail', async () => {
+      await callTool(fixture.worker.id, 'delete_note', { note: 'no-such-note' });
+
+      expect(recordedActivity()[0]).toMatchObject({ outcome: 'error', detail: 'note_not_found' });
     });
   });
 

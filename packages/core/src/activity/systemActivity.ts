@@ -6,7 +6,7 @@ export class SystemActivity {
   constructor(private readonly recorder: Pick<ActivityRecorder, 'record'>) {}
 
   daemonStarted(version: string): void {
-    this.recorder.record({ actorKind: 'system', actorLabel: 'daemon', source: 'daemon', action: 'daemon.start', outcome: 'ok', detail: `version ${version}` });
+    this.recorder.record({ actorKind: 'system', actorLabel: 'daemon', source: 'daemon', action: 'daemon.start', outcome: 'ok', detail: version });
   }
 
   /** The pulse is filed under the root of the lineage of the manager pulsed, like the MCP actions of its sessions. */

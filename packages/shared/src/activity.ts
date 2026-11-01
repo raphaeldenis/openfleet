@@ -7,7 +7,7 @@ export const ACTIVITY_OUTCOMES = ['ok', 'denied', 'error'] as const;
 export const DEFAULT_ACTIVITY_PAGE_LIMIT = 50;
 export const MAX_ACTIVITY_PAGE_LIMIT = 200;
 
-/** One line of the activity log: who did what to which entity, and how it ended. Text fields are masked and bounded before storage. */
+/** One line of the activity log: who did what to which entity, and how it ended. The excerpts and the detail hold no free text, only short identifiers, enumeration members, numbers, booleans and `[text len=N sha=…]` marks. */
 export const ActivityRowSchema = z.strictObject({
   id: z.number().int().positive(),
   at: z.string().min(1),
