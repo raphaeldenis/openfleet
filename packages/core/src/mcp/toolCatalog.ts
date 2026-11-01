@@ -20,7 +20,7 @@ export const isMutatingTool = (toolName: string): boolean => TOOL_CATALOG[toolNa
 
 /** Metadata for every MCP tool; a test fails when a registered tool has no entry. It enforces nothing. */
 export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
-  add_data_store_column: { domain: 'data_stores', category: 'additive' },
+  add_data_store_column: { domain: 'data_stores', category: 'destructive' },
   create_data_store: { domain: 'data_stores', category: 'additive' },
   create_data_store_view: { domain: 'data_stores', category: 'additive' },
   delete_data_store_column: { domain: 'data_stores', category: 'destructive' },
@@ -46,7 +46,7 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
   get_note_version: { domain: 'notes', category: 'read_only' },
   list_note_versions: { domain: 'notes', category: 'read_only' },
   list_notes: { domain: 'notes', category: 'read_only' },
-  move_note: { domain: 'notes', category: 'destructive' },
+  move_note: { domain: 'notes', category: 'additive' },
   restore_note_version: { domain: 'notes', category: 'additive' },
   search_notes: { domain: 'notes', category: 'read_only' },
   update_note: { domain: 'notes', category: 'additive' },
@@ -84,11 +84,11 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
   withdraw_proposal: { domain: 'governance', category: 'destructive' },
 
   approve_plan_criteria: { domain: 'escalation', category: 'additive' },
-  report_arbiter_opinion: { domain: 'escalation', category: 'additive' },
-  submit_plan_questions: { domain: 'escalation', category: 'additive' },
+  report_arbiter_opinion: { domain: 'escalation', category: 'execution_external' },
+  submit_plan_questions: { domain: 'escalation', category: 'execution_external' },
 
-  report_ship_verdict: { domain: 'review', category: 'additive' },
-  report_step_finding: { domain: 'review', category: 'additive' },
+  report_ship_verdict: { domain: 'review', category: 'execution_external' },
+  report_step_finding: { domain: 'review', category: 'execution_external' },
 
   create_worktree: { domain: 'worktrees', category: 'execution_external' },
   list_worktrees: { domain: 'worktrees', category: 'read_only' },
