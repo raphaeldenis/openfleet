@@ -100,9 +100,9 @@ describe('GET /api/activity', () => {
       await fixture.api(`/api/managers/${subManager.id}/pulse`, { method: 'POST' });
 
       const underRoot = await activityPage(`?manager=${fixture.lead.id}`);
-      expect(underRoot.items.map((row) => `${row.action}:${row.sessionId}`).sort()).toEqual([
-        `create_note:${grandchild.id}`, `create_note:${subManager.id}`, `pulse.sent:${subManager.id}`,
-      ]);
+      const rowsUnderRoot = underRoot.items.map((row) => `${row.action}:${row.sessionId}`).sort();
+      const expectedRows = [`create_note:${grandchild.id}`, `create_note:${subManager.id}`, `pulse.sent:${subManager.id}`].sort();
+      expect(rowsUnderRoot).toEqual(expectedRows);
       expect(actionsOf(await activityPage(`?manager=${subManager.id}`))).toEqual([]);
     });
   });
