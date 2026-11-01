@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { columnsByCellKey, mapChange, mapColumn, mapNote, mapRow, mapVersions, mapView, type MappedColumn, type SelectedOption } from './scapeMappers.js';
+import { columnsByCellKey, hasConvertibleColumnType, mapChange, mapColumn, mapNote, mapRow, mapVersions, mapView, type MappedColumn, type SelectedOption } from './scapeMappers.js';
 import type { RecordValues } from './scapeTarget.js';
 import { withValidDisplayColumns } from './scapeColumnSettings.js';
 import { ScapeImportError } from './scapeImportError.js';
@@ -75,7 +75,11 @@ function planNotes(plan: ImportPlan, source: ScapeSource, project: ScapeProject)
 }
 
 function planStoreColumns(plan: ImportPlan, source: ScapeSource, store: { id: string; createdAt: string }): MappedColumn[] {
-  const { columns, dropped: droppedDisplayColumns } = withValidDisplayColumns(source.columnsOf(store.id).map(mapColumn));
+  const sourceColumns = source.columnsOf(store.id);
+  for (const column of sourceColumns.filter((candidate) => !hasConvertibleColumnType(candidate))) {
+    plan.sourceLosses.unconvertedColumns.push({ columnId: column.id, columnType: column.columnType, storeId: store.id });
+  }
+  const { columns, dropped: droppedDisplayColumns } = withValidDisplayColumns(sourceColumns.filter(hasConvertibleColumnType).map(mapColumn));
   for (const column of columns) {
     const { settings } = column;
     const record = {

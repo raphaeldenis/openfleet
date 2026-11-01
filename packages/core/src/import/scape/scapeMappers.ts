@@ -39,8 +39,6 @@ export type ColumnsByCellKey = Map<string, MappedColumn>;
 /** A row value that is one of the options of its select column in Scape. */
 export interface SelectedOption { columnId: string; optionId: string }
 
-const unreadable = (message: string) => new ScapeImportError({ code: 'SCAPE_SOURCE_UNREADABLE', message });
-
 function parseJson<T>(text: string, whatIsParsed: string): T {
   try {
     return JSON.parse(text) as T;
@@ -130,11 +128,14 @@ function parseSelectOptions(rawOptions: string | null): { options: SelectOption[
   return { options: options.length === 0 ? null : options, droppedColors };
 }
 
+const CONVERTIBLE_SCAPE_COLUMN_TYPES = ['text', 'number', 'date'];
+
+export const hasConvertibleColumnType = (column: ScapeColumn): boolean => CONVERTIBLE_SCAPE_COLUMN_TYPES.includes(column.columnType);
+
+/** Maps a column whose type satisfies hasConvertibleColumnType. */
 export function mapColumn(column: ScapeColumn): MappedColumn {
   const { options, droppedColors } = parseSelectOptions(column.options);
   const isTextWithOptions = column.columnType === 'text' && options !== null;
-  const isKnownType = ['text', 'number', 'date'].includes(column.columnType);
-  if (!isKnownType) throw unreadable(`unsupported Scape column type "${column.columnType}" on column ${column.id}`);
   const columnType = isTextWithOptions ? 'select' : (column.columnType as OpenFleetColumnType);
   const parsedFormat = ColumnFormatSchema.safeParse(column.format);
   const isCompatibleFormat = parsedFormat.success && COLUMN_TYPE_BY_FORMAT[parsedFormat.data] === columnType;
