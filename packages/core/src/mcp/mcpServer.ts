@@ -22,6 +22,9 @@ import type { WorkingStateService } from '../workingState/workingStateService.js
 import type { GovernanceQueueService } from '../governance/governanceQueueService.js';
 import type { ManagerDenials } from '../policy/managerDenials.js';
 import type { DenialJournal } from '../policy/ports.js';
+import type { ActivityRecorder } from '../activity/activityRecorder.js';
+import { lineageRootIdOf } from '../managers/lineage.js';
+import { recordingActivity } from './recordingActivity.js';
 import { registerDeniedCommandTools } from './deniedCommandTools.js';
 import type { ArbiterRunner } from '../escalation/arbiterRunner.js';
 import type { AskUserGate } from '../escalation/askUserGate.js';
@@ -76,7 +79,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { askUserGate?: AskUserGate; criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
+export function createMcpHandler(deps: { activity?: ActivityRecorder; askUserGate?: AskUserGate; criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -84,7 +87,8 @@ export function createMcpHandler(deps: { askUserGate?: AskUserGate; criteria?: C
 
     // ponytail: one McpServer per request (stateless); pool them if profiling says so
     const server = new McpServer({ name: 'openfleet', version: DAEMON_VERSION }, { instructions: contractVersionInstructions() });
-    const answeringServer = answeringThrowsInGrammar(server, caller);
+    const recordingServer = deps.activity === undefined ? server : recordingActivity(server, { caller, recorder: deps.activity, managerId: lineageRootIdOf(deps.sessions, caller) });
+    const answeringServer = answeringThrowsInGrammar(recordingServer, caller);
     const isReviewer = caller.role === REVIEWER_ROLE;
     const isArbiter = caller.role === ARBITER_ROLE;
     const toolServer = isReviewer ? registeringOnly(answeringServer, REVIEWER_TOOL_NAMES) : isArbiter ? registeringOnly(answeringServer, ARBITER_TOOL_NAMES) : answeringServer;

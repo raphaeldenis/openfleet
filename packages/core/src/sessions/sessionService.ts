@@ -1608,7 +1608,7 @@ export class SessionService {
   // Boot resume decides here which rows come back: every row still open (a daemon killed without a graceful
   // close) and every row whose latest close was the daemon's own shutdown. A user close, a failed resume or a
   // session closed before the shutdown stays closed.
-  async resumeAll(): Promise<void> {
+  async resumeAll({ onResumed }: { onResumed?: (session: Session) => void } = {}): Promise<void> {
     for (const { id } of this.repo.list()) {
       const session = this.repo.get(id); // read again: a close that landed while an earlier row was resuming wins
       if (!session) continue;
@@ -1620,7 +1620,8 @@ export class SessionService {
       try {
         if (wasInterruptedByShutdown) this.repo.resumeFromShutdownClose(session.id, new Date().toISOString());
         this.assertDirectoryLaunchable(session);
-        this.resumeOne(session);
+        const outcome = this.resumeOne(session);
+        if (outcome.launched) onResumed?.(session);
       } catch (err) {
         // A failure anywhere past the launch itself (e.g. the state-machine DB write) must not abort
         // resuming the rest of the fleet — kill the process we already launched and move on.

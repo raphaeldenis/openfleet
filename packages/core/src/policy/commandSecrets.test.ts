@@ -86,6 +86,52 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     });
   });
 
+  describe('a value the shell reads past an escaped quote, a glued segment or a backslash', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = ['SECRET', 'VALUE', '0042'].join('');
+
+    it('masks the whole double-quoted value past an escaped double quote', () => {
+      expect(maskedCommandSecrets(`cmd --password "safe\\" ${secret}" --name keep`)).toBe('cmd --password *** --name keep');
+    });
+
+    it('masks the whole value glued from single-quoted segments and an escaped single quote', () => {
+      expect(maskedCommandSecrets(`cmd --password 'safe'\\'' ${secret}' --name keep`)).toBe('cmd --password *** --name keep');
+    });
+
+    it.each([
+      ['an ANSI-C quoted value', `cmd --password $'safe\\' ${secret}' --name keep`],
+      ['a space escaped by a backslash', `cmd --password safe\\ ${secret} --name keep`],
+      ['the equals form', `cmd --password="safe\\" ${secret}" --name keep`],
+      ['a quote glued inside the equals form', `cmd --token=safe"\\" ${secret}" --name keep`],
+      ['an assignment', `API_KEY="safe\\" ${secret}" run --name keep`],
+      ['an authorization header', `curl -H "Authorization: Bearer safe\\" ${secret}" --name keep`],
+      ['an api key header', `curl -H "X-Api-Key: safe\\" ${secret}" --name keep`],
+      ['an authorization scheme then a quoted token', `curl --authorization Bearer "safe\\" ${secret}" --name keep`],
+      ['a mysql password', `mysql -u root -p"safe\\" ${secret}" --name keep`],
+      ['an sshpass password', `sshpass -p 'safe'\\'' ${secret}' ssh host --name keep`],
+      ['a redis-cli password', `redis-cli -a "safe\\" ${secret}" --name keep`],
+      ['a curl user password', `curl -u "alice:safe\\" ${secret}" --name keep`],
+      ['a curl user password given with equals', `curl --user="alice:safe\\" ${secret}" --name keep`],
+      ['URL credentials', `git clone "https://alice:safe\\"${secret}@example.com/r.git" --name keep`],
+      ['a command given to sh -c', `sh -c "mysql -p'${secret}' db" --name keep`],
+      ['a command nested twice', `ssh host "sh -c \\"cmd --token '${secret}'\\"" --name keep`],
+      ['a value that runs on to the next line', `cmd --password "safe\n${secret}" --name keep`],
+      ['a program on the next line', `echo ok\nmysql -p${secret} db --name keep`],
+      ['a quote that never closes', `cmd --name keep --password "safe ${secret}`],
+    ])('masks the whole value given through %s', (_label, command) => {
+      const masked = maskedCommandSecrets(command);
+
+      expect(masked).not.toContain(secret);
+      expect(masked).toContain('--name keep');
+    });
+
+    it('keeps a quoted sentence and a quoted command without a secret readable', () => {
+      const command = 'git commit -m "fix the parser" && sh -c "echo hello world"';
+
+      expect(maskedCommandSecrets(command)).toBe(command);
+    });
+  });
+
   it.each([
     'mkdir -p dir',
     'mkdir -p a/b/c',

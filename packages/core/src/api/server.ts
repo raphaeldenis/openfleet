@@ -41,6 +41,10 @@ import { registerProjectRoutes } from './projectRoutes.js';
 import { registerWorktreeRoutes } from './worktreeRoutes.js';
 import { registerGovernanceE2eRoutes } from './governanceE2eRoutes.js';
 import { registerCommandPolicyRoutes } from './commandPolicyRoutes.js';
+import { registerActivityRoutes } from './activityRoutes.js';
+import { recordedAsHumanAction } from './recordedAsHumanAction.js';
+import type { ActivityRecorder } from '../activity/activityRecorder.js';
+import type { ActivityRepository } from '../activity/activityRepository.js';
 import { registerReviewFindingsRoutes } from './reviewFindingsRoutes.js';
 import { registerUsageRoutes } from './usageRoutes.js';
 import type { PerSessionTrailingThrottleOptions } from '../usage/perSessionTrailingThrottle.js';
@@ -106,6 +110,8 @@ export interface ServerDeps {
   degraded?: DegradedRegistry;
   // Without it PreToolUse is answered {} and a PermissionRequest always opens an approval, as before the command policy.
   commandPolicy?: CommandPolicyHooks;
+  // Without it GET /api/activity does not exist and the REST actions of the human are not recorded.
+  activity?: { recorder: Pick<ActivityRecorder, 'record'>; reader: Pick<ActivityRepository, 'list'> };
   // Without them the /api/command-policy routes do not exist.
   commandPolicyAdmin?: { policy: CommandPolicyService; denials: DenialReader };
   // Without it the /api/review-findings routes do not exist.
@@ -189,6 +195,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.governanceQueue) registerGovernanceRoutes(router, { governanceQueue: deps.governanceQueue });
   if (deps.escalations) registerEscalationRoutes(router, { escalations: deps.escalations, isManager: (sessionId) => deps.managers.get(sessionId) !== undefined });
   if (deps.commandPolicyAdmin) registerCommandPolicyRoutes(router, deps.commandPolicyAdmin);
+  if (deps.activity) registerActivityRoutes(router, { reader: deps.activity.reader });
   if (deps.reviewFindings) registerReviewFindingsRoutes(router, { findings: deps.reviewFindings });
   if (deps.usageLedger) registerUsageRoutes(router, { usageLedger: deps.usageLedger, sessions: deps.sessions, projects: deps.projects });
   if (deps.governanceQueue && deps.e2eRoutes) registerGovernanceE2eRoutes(router, { governanceQueue: deps.governanceQueue });
@@ -219,9 +226,13 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
       if (!match) throw new OpenFleetError('not_found', 'the route does not exist.');
       const isProtected = url.pathname.startsWith('/api/');
       if (isProtected && !tokensMatch(req.headers.authorization ?? '', `Bearer ${deps.adminToken}`)) throw new OpenFleetError('unauthorized', 'the admin token is missing or wrong.');
-      const body = await readJson(req);
-      refuseAttendedChange(url.pathname, body);
-      await match.handler({ req, res, params: match.params, body });
+      const answerTheRequest = async () => {
+        const body = await readJson(req);
+        refuseAttendedChange(url.pathname, body);
+        await match.handler({ req, res, params: match.params, body });
+      };
+      if (isProtected && deps.activity) await recordedAsHumanAction(deps.activity.recorder, { method: req.method ?? 'GET', template: match.template, params: match.params }, answerTheRequest);
+      else await answerTheRequest();
     } catch (error) {
       try {
         answerError(res, error, { where: `${req.method ?? 'GET'} ${redactedRequestPath(req)} → 500` });

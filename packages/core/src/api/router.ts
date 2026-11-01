@@ -28,14 +28,15 @@ export class Router {
     return this.routes.map(({ method, path }) => ({ method, path }));
   }
 
-  match(method: string, pathname: string): { handler: Handler; params: Record<string, string> } | undefined {
+  /** The handler of the route, its parameters and its template (`/api/notes/:id`). */
+  match(method: string, pathname: string): { handler: Handler; params: Record<string, string>; template: string } | undefined {
     for (const route of this.routes) {
       if (route.method !== method) continue;
       const m = route.pattern.exec(pathname);
       if (!m) continue;
       const params = decodeParams(route.keys, m);
       if (!params) return undefined;
-      return { handler: route.handler, params };
+      return { handler: route.handler, params, template: route.path };
     }
     return undefined;
   }
