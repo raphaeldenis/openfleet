@@ -27,10 +27,25 @@ describe('the root of a lineage', () => {
     expect(lineageRootIdOf(registryOf(orphan), orphan)).toBe('gone');
   });
 
-  it('stops on a parent cycle instead of looping', () => {
+  it('is the topmost ancestor however deep the lineage runs', () => {
+    const DEPTH = 200;
+    const chain: Node[] = Array.from({ length: DEPTH }, (_, level) => (level === 0 ? { id: 'node-0' } : { id: `node-${level}`, parentId: `node-${level - 1}` }));
+
+    expect(lineageRootIdOf(registryOf(...chain), chain[DEPTH - 1]!)).toBe('node-0');
+  });
+
+  it('stops on a parent cycle instead of looping, and answers a member of the cycle', () => {
     const a: Node = { id: 'a', parentId: 'b' };
     const b: Node = { id: 'b', parentId: 'a' };
 
     expect(['a', 'b']).toContain(lineageRootIdOf(registryOf(a, b), a));
+  });
+
+  it('stops on a cycle that does not include the session it starts from', () => {
+    const entry: Node = { id: 'entry', parentId: 'a' };
+    const a: Node = { id: 'a', parentId: 'b' };
+    const b: Node = { id: 'b', parentId: 'a' };
+
+    expect(['a', 'b']).toContain(lineageRootIdOf(registryOf(entry, a, b), entry));
   });
 });

@@ -29,7 +29,11 @@ const activityQueryOf = (query: z.infer<typeof ActivityQuerySchema>): ActivityQu
   ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
 });
 
-/** The human side of the activity log: read only, under /api behind the admin token, none under /mcp, so a session cannot read the log. */
+/**
+ * The human side of the activity log: read only, under /api behind the admin token, none under /mcp, so a session cannot read the log.
+ * `manager` filters by the root of a lineage: the rows of that session, of every manager beneath it and of all their sessions.
+ * `since` and `until` take an ISO 8601 instant with or without milliseconds.
+ */
 export function registerActivityRoutes(router: Router, deps: { reader: Pick<ActivityRepository, 'list'> }): void {
   router.add('GET', '/api/activity', ({ req, res }) => {
     json(res, 200, deps.reader.list(activityQueryOf(ActivityQuerySchema.parse(queryParams(req)))));

@@ -355,7 +355,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const activity = new ActivityRecorder({ repository: activityRepository, clock: () => new Date().toISOString(), onFailure: (error) => log('warn', 'the activity log could not be written', error) });
   activity.pruneAtBoot();
   const systemActivity = new SystemActivity(activity);
-  bus.subscribe((event) => { if (event.type === 'manager.pulsed') systemActivity.pulseSent(event.manager.sessionId); });
+  bus.subscribe((event) => {
+    if (event.type !== 'manager.pulsed') return;
+    const managerSessionId = event.manager.sessionId;
+    const lineageRootId = lineageRootIdOf(sessions, sessions.get(managerSessionId) ?? { id: managerSessionId });
+    systemActivity.pulseSent({ managerSessionId, lineageRootId });
+  });
   const askUserGate = new AskUserGate({ db, projects, repository: escalationRepository, audit: escalationAudit, denials: denialJournal, clock: () => new Date().toISOString() });
   const artifacts = new ArtifactDirectory({
     docsFolderPathOf: (projectId) => projects.get(projectId)?.docsFolderPath ?? undefined,

@@ -9,8 +9,9 @@ export class SystemActivity {
     this.recorder.record({ actorKind: 'system', actorLabel: 'daemon', source: 'daemon', action: 'daemon.start', outcome: 'ok', detail: `version ${version}` });
   }
 
-  pulseSent(managerId: string): void {
-    this.recorder.record({ actorKind: 'system', actorLabel: 'scheduler', source: 'daemon', action: 'pulse.sent', sessionId: managerId, managerId, outcome: 'ok' });
+  /** The pulse is filed under the root of the lineage of the manager pulsed, like the MCP actions of its sessions. */
+  pulseSent({ managerSessionId, lineageRootId }: { managerSessionId: string; lineageRootId: string }): void {
+    this.recorder.record({ actorKind: 'system', actorLabel: 'scheduler', source: 'daemon', action: 'pulse.sent', sessionId: managerSessionId, managerId: lineageRootId, outcome: 'ok' });
   }
 
   sessionResumed(session: Pick<Session, 'id' | 'name'>, managerId: string): void {

@@ -1,15 +1,17 @@
 import type { Session } from '@openfleet/shared';
 
-const MAX_LINEAGE_DEPTH = 32;
-
 type LineageNode = Pick<Session, 'id' | 'parentId'>;
 
-/** The id of the topmost ancestor of `session` (itself when it has no parent); a parent that no longer exists ends the climb at its id. */
+/** The id of the topmost ancestor of `session` (itself when it has no parent); a parent that no longer exists ends the climb at its id, and a parent already climbed through (a cycle) ends it at the last session before the cycle closes. */
 export function lineageRootIdOf(sessions: { get(id: string): LineageNode | undefined }, session: LineageNode): string {
+  const climbed = new Set<string>([session.id]);
   let root = session;
-  for (let depth = 0; depth < MAX_LINEAGE_DEPTH && root.parentId !== undefined; depth += 1) {
+  while (root.parentId !== undefined) {
     const parent = sessions.get(root.parentId);
     if (parent === undefined) return root.parentId;
+    const closesACycle = climbed.has(parent.id);
+    if (closesACycle) return root.id;
+    climbed.add(parent.id);
     root = parent;
   }
   return root.id;

@@ -82,10 +82,29 @@ describe('GET /api/activity', () => {
     expect(actionsOf(await activityPage('?since=2026-11-01T10:00:00.250Z'))).toEqual(['half_a_second_later']);
   });
 
-  it('returns the rows of the manager asked for and never those of another lineage', async () => {
-    seed([{ managerId: 'manager-a', action: 'of_a' }, { managerId: 'manager-b', action: 'of_b' }]);
+  describe('filtering by manager, which means the root of a lineage', () => {
+    const MANAGER_SPEC = { childrenCap: 2, mission: 'Lead the fleet', pulseSeconds: 3600 };
+    const createNoteAs = async (sessionId: string, title: string) => {
+      const client = await fixture.connect(sessionId);
+      await client.callTool({ name: 'create_note', arguments: { title, body_md: 'x' } });
+    };
 
-    expect(actionsOf(await activityPage('?manager=manager-a'))).toEqual(['of_a']);
+    it('returns the actions and the pulse of every manager and session beneath the root, and none of another lineage', async () => {
+      const subManager = await fixture.createSession('Sub manager', { parentId: fixture.lead.id, manager: MANAGER_SPEC });
+      const grandchild = await fixture.createSession('Grandchild', { parentId: subManager.id });
+      fixture.db.exec('DELETE FROM activity_log');
+
+      await createNoteAs(subManager.id, 'by the sub manager');
+      await createNoteAs(grandchild.id, 'by the grandchild');
+      await createNoteAs(fixture.siblingLead.id, 'by the other lineage');
+      await fixture.api(`/api/managers/${subManager.id}/pulse`, { method: 'POST' });
+
+      const underRoot = await activityPage(`?manager=${fixture.lead.id}`);
+      expect(underRoot.items.map((row) => `${row.action}:${row.sessionId}`).sort()).toEqual([
+        `create_note:${grandchild.id}`, `create_note:${subManager.id}`, `pulse.sent:${subManager.id}`,
+      ]);
+      expect(actionsOf(await activityPage(`?manager=${subManager.id}`))).toEqual([]);
+    });
   });
 
   it.each(['?limit=0', '?limit=201', '?limit=abc', '?cursor=not-a-number', '?actor=robot', '?outcome=gated', '?since=yesterday'])(
