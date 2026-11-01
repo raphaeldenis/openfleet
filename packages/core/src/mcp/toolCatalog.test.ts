@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startGovernanceFixture, type GovernanceFixture } from '../governance/governanceQueue.testkit.js';
-import { TOOL_CATALOG, TOOL_CATEGORIES } from './toolCatalog.js';
+import { TOOL_CATALOG, TOOL_CATEGORIES, isMutatingTool } from './toolCatalog.js';
 
 let fixture: GovernanceFixture;
 beforeEach(async () => { fixture = await startGovernanceFixture(); });
@@ -42,5 +42,18 @@ describe('the tool catalog', () => {
     expect(TOOL_CATALOG['create_note']?.category).toBe('additive');
     expect(TOOL_CATALOG['delete_note']?.category).toBe('destructive');
     expect(TOOL_CATALOG['create_session']?.category).toBe('execution_external');
+  });
+});
+
+describe('telling a mutating tool from a read', () => {
+  it('counts every category but read_only as mutating', () => {
+    expect(isMutatingTool('create_note')).toBe(true);
+    expect(isMutatingTool('delete_note')).toBe(true);
+    expect(isMutatingTool('send_session_message')).toBe(true);
+    expect(isMutatingTool('list_notes')).toBe(false);
+  });
+
+  it('counts a tool the catalog does not know as mutating, so the log errs towards recording', () => {
+    expect(isMutatingTool('a_tool_nobody_catalogued')).toBe(true);
   });
 });

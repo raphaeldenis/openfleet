@@ -31,6 +31,8 @@ import { createFileCommandPolicyFile } from './policy/fileCommandPolicyFile.js';
 import { evaluateCommandPolicy } from './policy/policyEvaluator.js';
 import { RefusalRepeatGuard } from './policy/refusalRepeatGuard.js';
 import { SqliteDenialJournal } from './policy/sqliteDenialJournal.js';
+import { ActivityRecorder } from './activity/activityRecorder.js';
+import { ActivityRepository } from './activity/activityRepository.js';
 import { ManagerDenials } from './policy/managerDenials.js';
 import { FINDINGS_GATE_ENFORCEMENT, FindingsGate, type FindingsGateEnforcement } from './review/findingsGate.js';
 import { ReviewFindingsRepository } from './review/reviewFindingsRepository.js';
@@ -348,6 +350,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     enforcement: options.findingsGateEnforcement ?? findingsGateSettings.enforcement ?? FINDINGS_GATE_ENFORCEMENT,
   };
   const denialJournal = new SqliteDenialJournal({ db, clock: () => new Date().toISOString() });
+  const activity = new ActivityRecorder({ repository: new ActivityRepository(db), clock: () => new Date().toISOString(), onFailure: (error) => log('warn', 'the activity log could not be written', error) });
+  activity.pruneAtBoot();
   const askUserGate = new AskUserGate({ db, projects, repository: escalationRepository, audit: escalationAudit, denials: denialJournal, clock: () => new Date().toISOString() });
   const artifacts = new ArtifactDirectory({
     docsFolderPathOf: (projectId) => projects.get(projectId)?.docsFolderPath ?? undefined,
@@ -374,7 +378,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     clock: options.childSilence?.clock ?? Date.now, schedule: options.childSilence?.schedule ?? scheduleOnRealClock,
   });
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
-  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

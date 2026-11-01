@@ -15,6 +15,9 @@ export interface ToolCatalogEntry {
   category: ToolCategory;
 }
 
+/** A tool the catalog does not know counts as mutating, so the activity log errs towards recording. */
+export const isMutatingTool = (toolName: string): boolean => TOOL_CATALOG[toolName]?.category !== 'read_only';
+
 /** Metadata for every MCP tool; a test fails when a registered tool has no entry. It enforces nothing. */
 export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
   add_data_store_column: { domain: 'data_stores', category: 'additive' },

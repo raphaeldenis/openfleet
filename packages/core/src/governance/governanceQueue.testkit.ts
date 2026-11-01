@@ -55,7 +55,7 @@ export async function startGovernanceFixture(options: Pick<DaemonOptions, 'gh' |
 
   return {
     daemon, db, lead, siblingLead, worker, governanceQueue: daemon.governanceQueue,
-    api, connect, createTable, createNote,
+    api, connect, createSession, createTable, createNote,
     close: async () => { for (const client of clients) await client.close(); await daemon.close(); db.close(); directories.removeAll(); },
   };
 }
