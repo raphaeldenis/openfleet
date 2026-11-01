@@ -1,8 +1,12 @@
+import { randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { applyMigrations } from '../db/migrate.js';
+import { DAEMON_VERSION } from '../version.js';
 import { ActivityRecorder, type ActivityDraft } from './activityRecorder.js';
 import { ActivityRepository } from './activityRepository.js';
+import { SystemActivity } from './systemActivity.js';
 
 const FIRST_INSTANT = '2026-11-01T10:00:00.000Z';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -68,13 +72,24 @@ describe('what the row keeps of the arguments, the result and the detail', () =>
   it('keeps the identifiers, the statuses, the error code and the entity id readable', () => {
     const recorder = openRecorder();
 
-    recorder.record(aDraft({ args: { note_id: 'n1', status: 'open' }, resultText: '{"id":"n1","title":"Plan"}', detail: 'note_not_found', entityId: 'n1' }));
+    recorder.learnToolParameters('assign_note', { owner_id: z.string() });
 
-    expect(listAll()[0]).toMatchObject({ argsExcerpt: '{"note_id":"n1","status":"open"}', resultExcerpt: '[result len=26] {"id":"n1"}', detail: 'note_not_found', entityId: 'n1' });
+    recorder.record(aDraft({ args: { owner_id: 'n1', status: 'todo' }, resultText: '{"id":"n1","title":"Plan"}', detail: 'note_not_found', entityId: 'n1' }));
+
+    expect(listAll()[0]).toMatchObject({ argsExcerpt: '{"owner_id":"n1","status":"todo"}', resultExcerpt: '[result len=26] {"id":"n1"}', detail: 'note_not_found', entityId: 'n1' });
+  });
+
+  it('hides the value of a key no registered tool names', () => {
+    const recorder = openRecorder();
+
+    recorder.record(aDraft({ args: { owner_id: 'n1' } }));
+
+    expect(listAll()[0]?.argsExcerpt).toBe('{"[key len=8]":"[secret]"}');
   });
 
   it('bounds the arguments at 400 characters', () => {
     const recorder = openRecorder();
+    recorder.learnToolParameters('delete_notes', { note_ids: z.array(z.string()) });
     const manyIds = Array.from({ length: 64 }, (_, index) => `identifier-${index}`);
 
     recorder.record(aDraft({ args: { note_ids: manyIds } }));
@@ -92,14 +107,58 @@ describe('what the row keeps of the arguments, the result and the detail', () =>
     expect(Math.max(row!.actorLabel.length, row!.entityId!.length, row!.entityLabel!.length, row!.action.length)).toBeLessThanOrEqual(200);
   });
 
-  it('strips control and bidirectional characters so the stored text is inert', () => {
+  it('stands a text with control or bidirectional characters as its length', () => {
     const recorder = openRecorder();
 
     recorder.record(aDraft({ detail: 'ok‮evil\u0000\u0007 text', actorLabel: 'Wor⁦ker' }));
 
     const [row] = listAll();
     expect(row?.detail).toBe('[text len=14]');
-    expect(row?.actorLabel).toBe('Worker');
+    expect(row?.actorLabel).toBe('[text len=7]');
+  });
+});
+
+describe('the labels and identifiers of a row', () => {
+  // Built at run time: no token-shaped literal sits in the source.
+  const fakeSecret = (label: string) => `${label}-${randomBytes(8).toString('hex')}`;
+
+  it('stores the name of a resumed session only when it is a safe token', () => {
+    const recorder = openRecorder();
+    const secret = fakeSecret('resumed');
+    const phrase = `confidential prose ${secret}`;
+
+    new SystemActivity(recorder).sessionResumed({ id: 'session-1', name: phrase }, 'manager-1');
+    new SystemActivity(recorder).sessionResumed({ id: 'session-2', name: 'dev-activity-mr1-sonnet' }, 'manager-1');
+
+    expect(JSON.stringify(listAll())).not.toContain(secret);
+    expect(listAll().map((row) => row.entityLabel)).toEqual(['dev-activity-mr1-sonnet', `[text len=${phrase.length}]`]);
+  });
+
+  it('stores the name of the caller only when it is a safe token', () => {
+    const recorder = openRecorder();
+    const secret = fakeSecret('caller');
+
+    recorder.record(aDraft({ actorLabel: `my caller ${secret}` }));
+
+    expect(listAll()[0]?.actorLabel).toBe(`[text len=${secret.length + 10}]`);
+  });
+
+  it('stores a session id, a manager id and an entity id only when each is a safe token or a UUID', () => {
+    const recorder = openRecorder();
+    const sessionId = randomUUID();
+
+    recorder.record(aDraft({ sessionId, managerId: 'manager x', entityId: 'n 1' }));
+
+    expect(listAll()[0]).toMatchObject({ sessionId, managerId: '[text len=9]', entityId: '[text len=3]' });
+  });
+
+  it('keeps the version of the daemon as the detail of its start, and no other version-shaped text', () => {
+    const recorder = openRecorder();
+
+    new SystemActivity(recorder).daemonStarted(DAEMON_VERSION);
+    recorder.record(aDraft({ detail: '0.15.0-other' }));
+
+    expect(listAll().map((row) => row.detail)).toEqual(['[text len=12]', DAEMON_VERSION]);
   });
 });
 

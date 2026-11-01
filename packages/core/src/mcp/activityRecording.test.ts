@@ -130,13 +130,72 @@ describe('recording the MCP calls of the daemon booted with its own wiring', () 
     });
   });
 
+  describe('a secret in a place the fourth review found', () => {
+    const fakeSecret = (label: string) => `${label}-${randomBytes(8).toString('hex')}`;
+    const fakeLetterSecret = () => `probe${randomBytes(8).toString('hex').replace(/[0-9]/g, 'q')}`;
+    const storedLog = async () => {
+      const response = await fixture.api('/api/activity?limit=200');
+      return { inTable: JSON.stringify(recordedActivity()), inRoute: await response.text() };
+    };
+    const expectNoneStored = async (secrets: string[]) => {
+      const { inTable, inRoute } = await storedLog();
+      for (const secret of secrets) {
+        expect(inTable).not.toContain(secret);
+        expect(inRoute).not.toContain(secret);
+      }
+    };
+
+    it('stores the name of a caller written as a phrase as its length only', async () => {
+      const secret = fakeSecret('caller');
+      const caller = await fixture.createSession(`confidential prose ${secret}`);
+
+      await callTool(caller.id, 'create_note', { title: 'Plan', body_md: 'x' });
+
+      await expectNoneStored([secret]);
+      expect(recordedActivity()[0]?.actorLabel).toMatch(/^\[text len=\d+\]$/);
+    });
+
+    it('stores a key that is itself a secret as its length, and hides its value', async () => {
+      const [keySecret, valueSecret] = [fakeLetterSecret(), fakeSecret('value')];
+
+      await callTool(fixture.worker.id, 'insert_data_store_rows', { store: 'no-such-store', rows: [{ [keySecret]: true, ticket: valueSecret }] });
+
+      await expectNoneStored([keySecret]);
+      expect(recordedActivity()[0]?.argsExcerpt).toContain(`"[key len=${keySecret.length}]":"[secret]"`);
+    });
+
+    it('stores a status outside the closed set of statuses as its length', async () => {
+      const secret = fakeLetterSecret();
+
+      await callTool(fixture.worker.id, 'insert_data_store_rows', { store: 'no-such-store', rows: [{ status: secret }] });
+
+      await expectNoneStored([secret]);
+    });
+
+    it('stores no fingerprint of a long text whose prefix is known', async () => {
+      await callTool(fixture.worker.id, 'create_note', { title: 'employee-login-code-value-1234', body_md: 'x' });
+
+      const { inTable, inRoute } = await storedLog();
+      expect(inTable + inRoute).not.toMatch(/sha=|employee-login-code-value-1234/);
+      expect(recordedActivity()[0]?.argsExcerpt).toContain('"title":"[text len=30]"');
+    });
+  });
+
   describe('the values the Audit reads', () => {
-    it('keeps a UUID, a ticket and a status of the arguments readable', async () => {
-      const ownerId = randomUUID();
+    it('keeps a UUID, a ticket, a status and an error code of the arguments readable', async () => {
+      const rowId = randomUUID();
 
-      await callTool(fixture.worker.id, 'insert_data_store_rows', { store: 'no-such-store', rows: [{ ticket: 'ACT-3', status: 'open', owner_id: ownerId }] });
+      await callTool(fixture.worker.id, 'insert_data_store_rows', { store: 'no-such-store', rows: [{ ticket: 'ACT-3', status: 'todo', id: rowId, code: 'not_found' }, { status: 'done' }] });
 
-      expect(recordedActivity()[0]?.argsExcerpt).toBe(`{"store":"no-such-store","rows":[{"ticket":"ACT-3","status":"open","owner_id":"${ownerId}"}]}`);
+      expect(recordedActivity()[0]?.argsExcerpt).toBe(`{"store":"no-such-store","rows":[{"ticket":"ACT-3","status":"todo","id":"${rowId}","code":"not_found"},{"status":"done"}]}`);
+    });
+
+    it('keeps a session name that is a safe token readable as the caller', async () => {
+      const caller = await fixture.createSession('dev-activity-mr1-sonnet');
+
+      await callTool(caller.id, 'create_note', { title: 'Plan', body_md: 'x' });
+
+      expect(recordedActivity()[0]?.actorLabel).toBe('dev-activity-mr1-sonnet');
     });
 
     it('keeps the id of the note a call created readable in the result', async () => {

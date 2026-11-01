@@ -1,79 +1,81 @@
-import { createHash } from 'node:crypto';
+import { DAEMON_VERSION } from '../version.js';
 import { maskedActivityText } from './activityMasking.js';
+import { closedValuesOfKeyWord, ERROR_CODE_NAMES, IDENTIFIER_KEY_WORDS, isSafeToken, isUuid, type ParameterVocabulary } from './activityVocabulary.js';
+import { UNKNOWN_FAILURE } from './refusalOutcome.js';
 
 const MAX_KEPT_SCALAR_CHARS = 64;
 const MAX_WALK_DEPTH = 4;
 const MAX_WALK_ITEMS = 64;
 const MAX_WALK_NODES = 256;
 const MAX_PARSED_RESULT_CHARS = 256 * 1024;
-const FINGERPRINT_HEX_CHARS = 8;
-const MIN_FINGERPRINTED_CHARS = 24;
 
 const CUT_MARK = '[cut]';
 const SECRET_MARK = '[secret]';
 const UNSERIALIZABLE_MARK = '[unserializable]';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
-const ENUMERATION_MEMBER = /^[a-z][a-z0-9._-]*$/;
 const KEPT_KEY = /^[A-Za-z]+(?:_[A-Za-z]+)*$/;
+const ERROR_CLASS_NAME = /^(?:[A-Z][A-Za-z0-9]*)?(?:Error|Exception)$/;
 
 const SECRET_KEY_FRAGMENT = /token|secret|passw|pwd|credential|bearer|cookie|auth|api_?key|otp|private/i;
 const SECRET_LAST_WORDS: ReadonlySet<string> = new Set(['key', 'keys', 'session', 'sessions', 'pin', 'pins', 'signature', 'signatures']);
-const IDENTIFIER_LAST_WORDS: ReadonlySet<string> = new Set(['id', 'ids', 'ticket', 'tickets', 'ref', 'refs', 'note', 'store', 'project', 'manager', 'parent', 'target']);
-const ENUMERATION_LAST_WORDS: ReadonlySet<string> = new Set(['status', 'kind', 'category', 'outcome', 'role', 'harness', 'model', 'mode', 'decision', 'verdict', 'severity']);
 
 interface KeyMeaning {
   isSecret: boolean;
   namesIdentifier: boolean;
-  namesEnumerationMember: boolean;
+  closedValues?: ReadonlySet<string>;
 }
 
-const NO_KEY: KeyMeaning = { isSecret: false, namesIdentifier: false, namesEnumerationMember: false };
-const UNREADABLE_KEY: KeyMeaning = { isSecret: true, namesIdentifier: false, namesEnumerationMember: false };
+const NO_KEY: KeyMeaning = { isSecret: false, namesIdentifier: false };
+const UNKNOWN_KEY: KeyMeaning = { isSecret: true, namesIdentifier: false };
 
-const fingerprintOf = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, FINGERPRINT_HEX_CHARS);
-
-/** A fingerprint of a short text could be confirmed against a dictionary, so a text under the bound is stood for by its length alone. */
-const markOf = (kind: 'text' | 'key', text: string): string => {
-  const isTooShortToFingerprint = text.length < MIN_FINGERPRINTED_CHARS;
-  return isTooShortToFingerprint ? `[${kind} len=${text.length}]` : `[${kind} len=${text.length} sha=${fingerprintOf(text)}]`;
-};
-const textMark = (text: string): string => markOf('text', text);
-const keyMark = (key: string): string => markOf('key', key);
-
-const isReadableKey = (key: string): boolean => key.length <= MAX_KEPT_SCALAR_CHARS && KEPT_KEY.test(key);
+const textMark = (text: string): string => `[text len=${text.length}]`;
+const keyMark = (key: string): string => `[key len=${key.length}]`;
 
 const lastWordOf = (key: string): string => key.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase().split('_').at(-1) ?? '';
 
-/** Reads what a key says of its value; a key that is not plain letters and underscores could hide a secret word, so its value counts as secret. */
-const meaningOfKey = (key: string): KeyMeaning => {
-  if (!isReadableKey(key)) return UNREADABLE_KEY;
+/** A kept string the masker would change looks like a credential: the secret mark stands for it. */
+const keptOrSecretMark = (text: string): string => (maskedActivityText(text) === text ? text : SECRET_MARK);
+
+/** The vocabulary and the budget of one excerpt. */
+interface Walk {
+  vocabulary: ParameterVocabulary;
+  nodesLeft: number;
+}
+
+const isKnownKey = (key: string, walk: Walk): boolean => key.length <= MAX_KEPT_SCALAR_CHARS && KEPT_KEY.test(key) && walk.vocabulary.has(key);
+
+/** Reads what a key says of its value; a key no registered tool names could itself be a secret, so its value counts as secret. */
+const meaningOfKey = (key: string, walk: Walk): KeyMeaning => {
+  if (!isKnownKey(key, walk)) return UNKNOWN_KEY;
   const lastWord = lastWordOf(key);
+  const closedValues = closedValuesOfKeyWord(lastWord);
   return {
     isSecret: SECRET_KEY_FRAGMENT.test(key) || SECRET_LAST_WORDS.has(lastWord),
-    namesIdentifier: IDENTIFIER_LAST_WORDS.has(lastWord),
-    namesEnumerationMember: ENUMERATION_LAST_WORDS.has(lastWord),
+    namesIdentifier: IDENTIFIER_KEY_WORDS.has(lastWord),
+    ...(closedValues === undefined ? {} : { closedValues }),
   };
 };
 
 const isKeptString = (text: string, key: KeyMeaning): boolean => {
   if (text.length > MAX_KEPT_SCALAR_CHARS) return false;
-  const isIdentifierUnderItsKey = key.namesIdentifier && IDENTIFIER.test(text);
-  const isMemberUnderItsKey = key.namesEnumerationMember && ENUMERATION_MEMBER.test(text);
-  return UUID.test(text) || isIdentifierUnderItsKey || isMemberUnderItsKey;
+  const isIdentifierUnderItsKey = key.namesIdentifier && isSafeToken(text);
+  const isMemberOfItsClosedSet = key.closedValues?.has(text) ?? false;
+  return isUuid(text) || isIdentifierUnderItsKey || isMemberOfItsClosedSet;
 };
-
-/** A kept string the masker would change looks like a credential: the secret mark stands for it. */
-const keptOrSecretMark = (text: string): string => (maskedActivityText(text) === text ? text : SECRET_MARK);
 
 const keptString = (text: string, key: KeyMeaning): string => (isKeptString(text, key) ? keptOrSecretMark(text) : textMark(text));
 
-const keptKey = (key: string): string => (isReadableKey(key) ? keptOrSecretMark(key) : keyMark(key));
+const keptKey = (key: string, walk: Walk): string => (isKnownKey(key, walk) ? keptOrSecretMark(key) : keyMark(key));
 
-interface Walk {
-  nodesLeft: number;
-}
+/** Two masked keys of the same length would overwrite each other: the second one onwards carries its index. */
+const withoutCollisions = (keys: string[]): string[] => {
+  const seen = new Map<string, number>();
+  return keys.map((key) => {
+    const occurrence = (seen.get(key) ?? 0) + 1;
+    seen.set(key, occurrence);
+    return occurrence === 1 ? key : `${key}#${occurrence}`;
+  });
+};
 
 function keptValue(value: unknown, key: KeyMeaning, depth: number, walk: Walk): unknown {
   walk.nodesLeft -= 1;
@@ -94,22 +96,23 @@ function keptArray(items: unknown[], key: KeyMeaning, depth: number, walk: Walk)
 }
 
 function keptObject(value: object, depth: number, walk: Walk): Record<string, unknown> {
-  const entries = Object.entries(value);
-  const kept = entries.slice(0, MAX_WALK_ITEMS).map(([key, entry]) => [keptKey(key), keptValue(entry, meaningOfKey(key), depth + 1, walk)]);
-  const isCut = entries.length > MAX_WALK_ITEMS;
-  return Object.fromEntries(isCut ? [...kept, [CUT_MARK, CUT_MARK]] : kept);
+  const entries = Object.entries(value).slice(0, MAX_WALK_ITEMS);
+  const keptKeys = withoutCollisions(entries.map(([key]) => keptKey(key, walk)));
+  const keptEntries = entries.map(([key, entry], index) => [keptKeys[index]!, keptValue(entry, meaningOfKey(key, walk), depth + 1, walk)]);
+  const isCut = Object.keys(value).length > MAX_WALK_ITEMS;
+  return Object.fromEntries(isCut ? [...keptEntries, [CUT_MARK, CUT_MARK]] : keptEntries);
 }
 
 /**
- * Returns the JSON of the arguments with only what the Audit needs to read: a number, a boolean, a UUID,
- * an identifier under a key that names one (`note_id`, `ticket`), or a member of an enumeration under its key (`status`, `model`),
- * each of at most 64 characters and under a key that names no secret. Every other text stands as `[text len=N sha=<8 hex>]`, or `[text len=N]` under 24 characters;
- * a secret key hides its whole value; past depth 4, 64 items or 256 values, `[cut]` stands for the rest.
- * Known limit: a secret shaped as a UUID, or as an identifier given under an identifier key, reads as the identifier it looks like.
+ * Returns the JSON of the arguments with only what the Audit needs to read, under a key a registered tool names and that names no secret:
+ * a number, a boolean, a UUID, an identifier under a key that names one (`note_id`, `ticket`), or a member of the closed set of its key (`status`, `model`, `code`),
+ * each of at most 64 characters. Every other text stands as `[text len=N]`; a key no tool names stands as `[key len=N]` and hides its value,
+ * like a secret key; past depth 4, 64 items or 256 values, `[cut]` stands for the rest.
+ * Accepted limit: a secret shaped as a UUID, or as an identifier given under an identifier key, reads as the identifier it looks like.
  */
-export function argumentsExcerpt(args: unknown): string {
+export function argumentsExcerpt(args: unknown, vocabulary: ParameterVocabulary): string {
   try {
-    return JSON.stringify(keptValue(args, NO_KEY, 0, { nodesLeft: MAX_WALK_NODES })) ?? UNSERIALIZABLE_MARK;
+    return JSON.stringify(keptValue(args, NO_KEY, 0, { vocabulary, nodesLeft: MAX_WALK_NODES })) ?? UNSERIALIZABLE_MARK;
   } catch {
     return UNSERIALIZABLE_MARK;
   }
@@ -126,24 +129,38 @@ const parsedJsonObjectOf = (text: string): Record<string, unknown> | undefined =
   }
 };
 
-const isKeptScalarField = ([key, value]: [string, unknown]): boolean => {
-  const meaning = meaningOfKey(key);
+const isKeptScalarField = ([key, value]: [string, unknown], walk: Walk): boolean => {
+  const meaning = meaningOfKey(key, walk);
   if (meaning.isSecret) return false;
   if (typeof value === 'number') return Number.isFinite(value);
   if (typeof value === 'boolean') return true;
   return typeof value === 'string' && isKeptString(value, meaning) && keptOrSecretMark(value) === value;
 };
 
-/** Returns the size of the result, followed by its top-level scalar fields that pass the list of `argumentsExcerpt`; never a free text. */
-export function resultExcerpt(resultText: string): string {
+/** Returns the size of the result, followed by its top-level scalar fields that pass the list of `argumentsExcerpt`; a field under an unknown key is left out, key included. */
+export function resultExcerpt(resultText: string, vocabulary: ParameterVocabulary): string {
   const sizeMark = `[result len=${resultText.length}]`;
+  const walk: Walk = { vocabulary, nodesLeft: MAX_WALK_NODES };
   const fields = Object.entries(parsedJsonObjectOf(resultText) ?? {}).slice(0, MAX_WALK_ITEMS);
-  const keptFields = fields.filter(isKeptScalarField);
+  const keptFields = fields.filter((field) => isKeptScalarField(field, walk));
   return keptFields.length === 0 ? sizeMark : `${sizeMark} ${JSON.stringify(Object.fromEntries(keptFields))}`;
 }
 
-/** Returns an error code, a class name, a version or an identifier as it is; any other text stands as its length and fingerprint. */
-export function keptTokenOrMark(text: string): string {
-  const isToken = text.length <= MAX_KEPT_SCALAR_CHARS && IDENTIFIER.test(text);
-  return isToken ? keptOrSecretMark(text) : textMark(text);
+/** Returns a label that is a safe token of at most 64 characters as it is; any other text stands as its length. */
+export function keptLabel(text: string): string {
+  return isSafeToken(text) ? keptOrSecretMark(text) : textMark(text);
+}
+
+/** Returns a safe token or a UUID as it is; any other text stands as its length. Accepted limit: a secret shaped as an identifier reads as one. */
+export function keptIdentifier(text: string): string {
+  return isSafeToken(text) || isUuid(text) ? keptOrSecretMark(text) : textMark(text);
+}
+
+/** Returns an error code of the grammar, the name of an error class or the version of the daemon as it is; any other text stands as its length. */
+export function keptDetail(text: string): string {
+  const isErrorCode = ERROR_CODE_NAMES.has(text) || text === UNKNOWN_FAILURE;
+  const isErrorClassName = text.length <= MAX_KEPT_SCALAR_CHARS && ERROR_CLASS_NAME.test(text);
+  const isDaemonVersion = text === DAEMON_VERSION;
+  if (isErrorCode || isDaemonVersion) return text;
+  return isErrorClassName ? keptOrSecretMark(text) : textMark(text);
 }

@@ -1,4 +1,5 @@
 import { OpenFleetError } from '@openfleet/shared';
+import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ActivityRecorder } from '../activity/activityRecorder.js';
@@ -61,5 +62,17 @@ describe('recording a human REST action', () => {
 
     await expect(failing).rejects.toThrow(TypeError);
     expect(rows()[0]).toMatchObject({ outcome: 'error', detail: 'TypeError' });
+  });
+
+  it('stores an error class named by a secret as its length, on a decision whose id is that secret', async () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = `probe-${randomBytes(8).toString('hex')}`;
+    const namedBySecret = Object.assign(new Error('boom'), { name: secret });
+    const decision = request({ template: '/api/governance/proposals/:id/decide', params: { id: `${secret} x` } });
+
+    await expect(recordedAsHumanAction(recorder, decision, async () => { throw namedBySecret; })).rejects.toThrow('boom');
+
+    expect(JSON.stringify(rows())).not.toContain(secret);
+    expect(rows()[0]).toMatchObject({ action: 'proposal.decide', entityId: `[text len=${secret.length + 2}]`, detail: `[text len=${secret.length}]` });
   });
 });

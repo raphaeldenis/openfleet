@@ -11,8 +11,10 @@ const DENIAL_ERROR_CODES: ReadonlySet<string> = new Set([
 export const outcomeOfErrorCode = (errorCode: string | undefined): 'denied' | 'error' =>
   errorCode !== undefined && DENIAL_ERROR_CODES.has(errorCode) ? 'denied' : 'error';
 
+export const UNKNOWN_FAILURE = 'unknown';
+
 /** The detail a failure leaves in the log: its error code, or the name of its class, never its message. */
 export const failureDetailOf = (error: unknown): string => {
   if (error instanceof OpenFleetError) return error.code;
-  return error instanceof Error ? error.name : 'unknown';
+  return error instanceof Error ? error.name : UNKNOWN_FAILURE;
 };
