@@ -82,6 +82,20 @@ describe('GET /api/activity', () => {
     expect(actionsOf(await activityPage('?since=2026-11-01T10:00:00.250Z'))).toEqual(['half_a_second_later']);
   });
 
+  it('reads a bound written with an offset as the instant it names', async () => {
+    const repository = new ActivityRepository(fixture.db);
+    for (const [at, action] of [['2026-11-01T10:00:00.000Z', 'on_the_second'], ['2026-11-01T10:00:00.500Z', 'half_a_second_later']] as const) {
+      repository.insert({ at, actorKind: 'agent', actorLabel: 'Seed', source: 'mcp', action, outcome: 'ok' });
+    }
+    const boundQuery = (name: string, instant: string) => `?${name}=${encodeURIComponent(instant)}`;
+
+    expect(actionsOf(await activityPage(boundQuery('since', '2026-11-01T12:00:00+02:00')))).toEqual(['half_a_second_later', 'on_the_second']);
+    expect(actionsOf(await activityPage(boundQuery('until', '2026-11-01T12:00:00+02:00')))).toEqual(['on_the_second']);
+    expect(actionsOf(await activityPage(boundQuery('since', '2026-11-01T05:00:00.250-05:00')))).toEqual(['half_a_second_later']);
+    expect(actionsOf(await activityPage(boundQuery('until', '2026-11-01T10:00:00Z')))).toEqual(['on_the_second']);
+    expect(actionsOf(await activityPage(boundQuery('since', '2026-11-01T10:00:00.250Z')))).toEqual(['half_a_second_later']);
+  });
+
   describe('filtering by manager, which means the root of a lineage', () => {
     const MANAGER_SPEC = { childrenCap: 2, mission: 'Lead the fleet', pulseSeconds: 3600 };
     const createNoteAs = async (sessionId: string, title: string) => {
@@ -107,7 +121,7 @@ describe('GET /api/activity', () => {
     });
   });
 
-  it.each(['?limit=0', '?limit=201', '?limit=abc', '?cursor=not-a-number', '?actor=robot', '?outcome=gated', '?since=yesterday'])(
+  it.each(['?limit=0', '?limit=201', '?limit=abc', '?cursor=not-a-number', '?actor=robot', '?outcome=gated', '?since=yesterday', '?since=2026-11-01T12:00:00'])(
     'refuses %s with a 400',
     async (query) => {
       const response = await fixture.api(`/api/activity${query}`);
