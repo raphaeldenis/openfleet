@@ -231,16 +231,20 @@ describe('retention', () => {
     expect(listAll().map((row) => row.action)).toEqual(['a6', 'a5', 'a4']);
   });
 
-  it('pages without duplicate or gap across a prune that removes only older rows', () => {
+  it('pages a log that is pruned between two pages without duplicate, and loses only the rows the prune expired', () => {
     const recorder = openRecorder({ retention: { maxRows: 5, maxAgeDays: 90 }, pruneEvery: 1 });
     for (let index = 1; index <= 5; index += 1) recorder.record(aDraft({ action: `a${index}` }));
+    const snapshotBeforeThePrune = listAll().map((row) => row.action);
     const first = repository.list({ limit: 2 });
 
     recorder.record(aDraft({ action: 'a6' }));
     recorder.record(aDraft({ action: 'a7' }));
     const second = repository.list({ limit: 2, cursor: first.nextCursor! });
 
-    expect(first.items.map((row) => row.action)).toEqual(['a5', 'a4']);
-    expect(second.items.map((row) => row.action)).toEqual(['a3']);
+    const survivors = listAll().map((row) => row.action);
+    const pagedActions = [...first.items, ...second.items].map((row) => row.action);
+    const expiredByThePrune = snapshotBeforeThePrune.filter((action) => !survivors.includes(action));
+    expect(expiredByThePrune).toEqual(['a2', 'a1']);
+    expect(pagedActions).toEqual(snapshotBeforeThePrune.filter((action) => !expiredByThePrune.includes(action)));
   });
 });
