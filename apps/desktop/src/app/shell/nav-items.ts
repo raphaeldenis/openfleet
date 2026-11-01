@@ -34,7 +34,7 @@ const helmSectionsFor = ({ currentManagerId }: HelmNavContext): ReadonlyArray<{ 
   { key: 'tables', glyph: '▦', label: 'Tables', route: '/tables' },
   { key: 'triggers', glyph: '⚡', label: 'Triggers & Playbooks', route: null },
   { key: 'integrations', glyph: '⇄', label: 'Integrations', route: null },
-  { key: 'usage', glyph: '$', label: 'Usage', route: null },
+  { key: 'usage', glyph: '$', label: 'Usage', route: '/usage' },
   { key: 'components', glyph: '◈', label: 'Component sheet', route: '/components' },
 ];
 
