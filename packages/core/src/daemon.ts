@@ -38,7 +38,8 @@ import { FINDINGS_GATE_ENFORCEMENT, FindingsGate, type FindingsGateEnforcement }
 import { ReviewFindingsRepository } from './review/reviewFindingsRepository.js';
 import { TranscriptUsageIngestion } from './usage/transcriptUsageIngestion.js';
 import { UsageLedgerService } from './usage/usageLedgerService.js';
-import { descendantSessionIdsOf } from './managers/lineage.js';
+import { descendantSessionIdsOf, lineageRootIdOf } from './managers/lineage.js';
+import { SystemActivity } from './activity/systemActivity.js';
 import type { BaseNotReadEnforcement } from './managers/baseReadGuard.js';
 import type { NoteNotReadEnforcement } from './managers/noteReadGuard.js';
 import { loadManagerBase, managerBaseView, type ManagerBase } from './managers/managerBase.js';
@@ -353,6 +354,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const activityRepository = new ActivityRepository(db);
   const activity = new ActivityRecorder({ repository: activityRepository, clock: () => new Date().toISOString(), onFailure: (error) => log('warn', 'the activity log could not be written', error) });
   activity.pruneAtBoot();
+  const systemActivity = new SystemActivity(activity);
+  bus.subscribe((event) => { if (event.type === 'manager.pulsed') systemActivity.pulseSent(event.manager.sessionId); });
   const askUserGate = new AskUserGate({ db, projects, repository: escalationRepository, audit: escalationAudit, denials: denialJournal, clock: () => new Date().toISOString() });
   const artifacts = new ArtifactDirectory({
     docsFolderPathOf: (projectId) => projects.get(projectId)?.docsFolderPath ?? undefined,
@@ -417,7 +420,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     sweepStaleSessions(config.sessionsRoot);
     docsFolders.start();
     sleepGuard.start();
-    await sessions.resumeAll();
+    systemActivity.daemonStarted(DAEMON_VERSION);
+    await sessions.resumeAll({ onResumed: (session) => systemActivity.sessionResumed(session, lineageRootIdOf(sessions, session)) });
     arbiters.recover();
     childSilence.restore();
     pulseScheduler.start();
