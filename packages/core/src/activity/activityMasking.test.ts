@@ -38,6 +38,41 @@ describe('masking the text of an activity row', () => {
   ])('hides the secret of %s, whose separator the stored text drops', (_label, text) => {
     expect(maskedActivityText(text)).not.toContain(SECRET);
   });
+
+  it.each([
+    ['a line separator', ' '],
+    ['a paragraph separator', ' '],
+    ['a next-line character', '\u0085'],
+    ['a carriage return', '\r'],
+    ['a vertical tab', '\v'],
+    ['a form feed', '\f'],
+  ])('hides the whole password holding %s, which bash keeps inside the word', (_label, character) => {
+    const masked = maskedActivityText(`curl -u bob:ab${character}${SECRET} https://h`);
+
+    expect(masked).not.toContain(SECRET);
+    expect(masked).toContain('https://h');
+  });
+
+  it.each([
+    ['inside 2>&1', `curl -u 2>\\\n&1 bob:${SECRET} https://h`],
+    ['inside &>', `curl -u &\\\n>/dev/null bob:${SECRET} https://h`],
+    ['between a descriptor and its operator', `curl -u 2\\\n>&1 bob:${SECRET} https://h`],
+    ['inside >|', `curl -u >\\\n|/dev/null bob:${SECRET} https://h`],
+    ['inside a program name', `cu\\\nrl -u bob:${SECRET} https://h`],
+    ['inside an option name', `tool --pass\\\nword ${SECRET} --force`],
+    ['inside a redirection of a command given to sh -c', `sh -c "curl -u 2>\\\\\n&1 bob:${SECRET} https://h"`],
+  ])('hides the secret behind a line continuation %s, joined before the line break becomes a space', (_label, text) => {
+    const masked = maskedActivityText(text);
+
+    expect(masked).not.toContain(SECRET);
+    expect(masked).toContain('***');
+  });
+
+  it('keeps apart the words around a line separator escaped before a line break', () => {
+    const masked = maskedActivityText(`run --token\\ \n${SECRET}`);
+
+    expect(masked).not.toContain(SECRET);
+  });
 });
 
 const repeatedTo = (unit: string, length: number) => unit.repeat(Math.ceil(length / unit.length)).slice(0, length);
