@@ -40,9 +40,72 @@ type ToCommandRange = (range: SourceRange) => SourceRange;
 const WORD_GAP = /[ \t\n]/;
 const COMMAND_SEPARATORS = new Set([';', '&', '|', '(', ')', '\n']);
 const LINE_BREAK = '\n';
-// A backslash before a line break continues the line: both disappear from the word, outside quotes and inside double quotes.
 const LINE_CONTINUATION = '\\\n';
-const ESCAPABLE_INSIDE_DOUBLE_QUOTES = new Set(['$', '`', '"', '\\', LINE_BREAK]);
+const ESCAPABLE_INSIDE_DOUBLE_QUOTES = new Set(['$', '`', '"', '\\']);
+
+/** A source with its line continuations taken out, and how a range of it turns back into the range of the source that holds it. */
+interface JoinedSource {
+  text: string;
+  toSourceRange: ToCommandRange;
+}
+
+type QuoteKind = 'none' | 'single' | 'double' | 'ansi-c';
+
+/**
+ * Takes out every line continuation (a backslash before a line break), as bash does before it reads words and operators:
+ * outside quotes and inside double quotes, never inside single quotes or `$'…'`; `2>\<line break>&1` reads `2>&1`. Linear in the length of the source.
+ */
+const joinedSource = (source: string): JoinedSource => {
+  if (!source.includes(LINE_CONTINUATION)) return { text: source, toSourceRange: sameRange };
+  let text = '';
+  const sourceIndexes: number[] = [];
+  const keep = (from: number, to: number) => {
+    text += source.slice(from, to);
+    for (let at = from; at < to; at += 1) sourceIndexes.push(at);
+  };
+  let quote: QuoteKind = 'none';
+  let at = 0;
+  while (at < source.length) {
+    const character = source.charAt(at);
+    const nextCharacter = source.charAt(at + 1);
+    if (quote === 'single') {
+      if (character === "'") quote = 'none';
+      keep(at, at + 1);
+      at += 1;
+      continue;
+    }
+    if (character === '\\') {
+      const continuesTheLine = nextCharacter === LINE_BREAK && quote !== 'ansi-c';
+      if (!continuesTheLine) keep(at, Math.min(at + 2, source.length));
+      at += 2;
+      continue;
+    }
+    const closesTheQuote = (quote === 'double' && character === '"') || (quote === 'ansi-c' && character === "'");
+    if (closesTheQuote) quote = 'none';
+    else if (quote === 'none' && character === "'") quote = 'single';
+    else if (quote === 'none' && character === '"') quote = 'double';
+    const opensAnsiCQuotes = quote === 'none' && character === '$' && nextCharacter === "'";
+    if (opensAnsiCQuotes) {
+      quote = 'ansi-c';
+      keep(at, at + 2);
+      at += 2;
+      continue;
+    }
+    keep(at, at + 1);
+    at += 1;
+  }
+  const sourceIndexOf = (index: number) => sourceIndexes[index] ?? source.length;
+  const toSourceRange: ToCommandRange = (range) => ({
+    start: sourceIndexOf(range.start),
+    end: range.end > range.start ? sourceIndexOf(range.end - 1) + 1 : sourceIndexOf(range.start),
+  });
+  return { text, toSourceRange };
+};
+
+/** Returns the text with its line continuations taken out, as bash reads it: `cu\<line break>rl` reads `curl`. */
+export function withoutLineContinuations(text: string): string {
+  return joinedSource(text).text;
+}
 
 const REDIRECTION_SIGNS = new Set(['<', '>']);
 
@@ -178,7 +241,7 @@ const readSingleQuoted = (source: string, openingAt: number, word: ShellWordBuil
   return closingAt === -1 ? source.length : closingAt + 1;
 };
 
-/** `"…"`: a backslash escapes `"`, `\`, `$` and a backtick, and drops with a line break it continues; one that never closes runs to the end of the source. */
+/** `"…"`: a backslash escapes `"`, `\`, `$` and a backtick; one that never closes runs to the end of the source. */
 const readDoubleQuoted = (source: string, openingAt: number, word: ShellWordBuilder): number => {
   let at = openingAt + 1;
   while (at < source.length) {
@@ -191,8 +254,7 @@ const readDoubleQuoted = (source: string, openingAt: number, word: ShellWordBuil
     const nextCharacter = source.charAt(at + 1);
     const isEscape = character === '\\' && at + 1 < source.length && ESCAPABLE_INSIDE_DOUBLE_QUOTES.has(nextCharacter);
     const width = isEscape ? 2 : 1;
-    const escapedCharacter = nextCharacter === LINE_BREAK ? '' : nextCharacter;
-    word.add(isEscape ? escapedCharacter : character, at, at + width);
+    word.add(isEscape ? nextCharacter : character, at, at + width);
     at += width;
   }
   return source.length;
@@ -272,7 +334,7 @@ const readSegment = (source: string, at: number, word: ShellWordBuilder): number
   const nextCharacter = source.charAt(at + 1);
   if (character === '\\') {
     const end = Math.min(at + 2, source.length);
-    word.add(nextCharacter === LINE_BREAK ? '' : nextCharacter, at, end);
+    word.add(nextCharacter, at, end);
     return end;
   }
   if (character === "'") return readSingleQuoted(source, at, word);
@@ -310,15 +372,11 @@ interface WordGap {
   holdsASeparator: boolean;
 }
 
-/** Skips the blanks, separators and line continuations before a word, and says whether a separator sits among them. */
+/** Skips the blanks and separators before a word, and says whether a separator sits among them. */
 const gapFrom = (source: string, from: number): WordGap => {
   let at = from;
   let holdsASeparator = false;
   while (at < source.length) {
-    if (source.startsWith(LINE_CONTINUATION, at)) {
-      at += LINE_CONTINUATION.length;
-      continue;
-    }
     const character = source.charAt(at);
     if (!endsTheWord(character) || opensARedirection(source, at)) break;
     holdsASeparator ||= COMMAND_SEPARATORS.has(character);
@@ -345,14 +403,10 @@ const redirectionOperatorEnd = (source: string, at: number): number | undefined 
   return REDIRECTION_OPERATOR.test(source) ? REDIRECTION_OPERATOR.lastIndex : NOT_FOUND;
 };
 
-/** Skips the spaces, tabs and line continuations between a redirection operator and the word it names. */
+/** Skips the spaces and tabs between a redirection operator and the word it names. */
 const blanksEnd = (source: string, from: number): number => {
   let at = from;
-  while (at < source.length) {
-    if (source.startsWith(LINE_CONTINUATION, at)) at += LINE_CONTINUATION.length;
-    else if (BLANKS.has(source.charAt(at))) at += 1;
-    else break;
-  }
+  while (at < source.length && BLANKS.has(source.charAt(at))) at += 1;
   return at;
 };
 
@@ -696,7 +750,7 @@ class CommandMasking {
       return;
     }
     const toCommandRange: ToCommandRange = (range) => this.toCommandRange(sourceRangeOf(word, command.start + range.start, command.start + range.end));
-    new CommandMasking(shellWordsOf(commandText), this.depth + 1, toCommandRange, this.masks).run();
+    maskCommand({ command: commandText, depth: this.depth + 1, toCommandRange, masks: this.masks });
   }
 
   /** `--token VALUE` or `--token=VALUE`; `--authorization=Bearer VALUE` masks the scheme and the word after it. */
@@ -752,9 +806,23 @@ const withMasksApplied = (command: string, masks: SourceRange[]): string => {
 
 const sameRange: ToCommandRange = (range) => range;
 
+interface CommandToMask {
+  command: string;
+  depth: number;
+  toCommandRange: ToCommandRange;
+  masks: SourceRange[];
+}
+
+/** Masks the secrets of a command read with its line continuations taken out; each mask lands on the range of the command as written. */
+function maskCommand({ command, depth, toCommandRange, masks }: CommandToMask): void {
+  const joined = joinedSource(command);
+  const toWrittenCommandRange: ToCommandRange = (range) => toCommandRange(joined.toSourceRange(range));
+  new CommandMasking(shellWordsOf(joined.text), depth, toWrittenCommandRange, masks).run();
+}
+
 function maskedWords(command: string): string {
   const masks: SourceRange[] = [];
-  new CommandMasking(shellWordsOf(command), 0, sameRange, masks).run();
+  maskCommand({ command, depth: 0, toCommandRange: sameRange, masks });
   return masks.length === 0 ? command : withMasksApplied(command, masks);
 }
 

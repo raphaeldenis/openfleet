@@ -52,6 +52,27 @@ describe('masking the text of an activity row', () => {
     expect(masked).not.toContain(SECRET);
     expect(masked).toContain('https://h');
   });
+
+  it.each([
+    ['inside 2>&1', `curl -u 2>\\\n&1 bob:${SECRET} https://h`],
+    ['inside &>', `curl -u &\\\n>/dev/null bob:${SECRET} https://h`],
+    ['between a descriptor and its operator', `curl -u 2\\\n>&1 bob:${SECRET} https://h`],
+    ['inside >|', `curl -u >\\\n|/dev/null bob:${SECRET} https://h`],
+    ['inside a program name', `cu\\\nrl -u bob:${SECRET} https://h`],
+    ['inside an option name', `tool --pass\\\nword ${SECRET} --force`],
+    ['inside a redirection of a command given to sh -c', `sh -c "curl -u 2>\\\\\n&1 bob:${SECRET} https://h"`],
+  ])('hides the secret behind a line continuation %s, joined before the line break becomes a space', (_label, text) => {
+    const masked = maskedActivityText(text);
+
+    expect(masked).not.toContain(SECRET);
+    expect(masked).toContain('***');
+  });
+
+  it('keeps apart the words around a line separator escaped before a line break', () => {
+    const masked = maskedActivityText(`run --token\\ \n${SECRET}`);
+
+    expect(masked).not.toContain(SECRET);
+  });
 });
 
 const repeatedTo = (unit: string, length: number) => unit.repeat(Math.ceil(length / unit.length)).slice(0, length);

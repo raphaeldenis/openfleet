@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { redactedText } from '../logger.js';
 import { maskedCommandSecrets } from './commandSecrets.js';
 
 describe('maskedCommandSecrets hides the secret a command line carries', () => {
@@ -207,6 +208,32 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
 
     it('keeps a line continuation inside single quotes literal, so the program is not curl', () => {
       const command = `'cu\\\nrl' -s https://h`;
+
+      expect(maskedCommandSecrets(command)).toBe(command);
+    });
+  });
+
+  describe('a line continuation that bash takes out before it reads operators', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = ['Probe', 'Value', '92'].join('');
+
+    it.each([
+      ['inside 2>&1', `curl -u 2>\\\n&1 bob:${secret} https://h`, `curl -u 2>\\\n&1 bob:*** https://h`],
+      ['inside &>', `curl -u &\\\n>/dev/null bob:${secret} https://h`, `curl -u &\\\n>/dev/null bob:*** https://h`],
+      ['between a descriptor and its operator', `curl -u 2\\\n>&1 bob:${secret} https://h`, `curl -u 2\\\n>&1 bob:*** https://h`],
+      ['inside >|', `curl -u >\\\n|/dev/null bob:${secret} https://h`, `curl -u >\\\n|/dev/null bob:*** https://h`],
+      ['inside a program name', `cu\\\nrl -u bob:${secret} https://h`, `cu\\\nrl -u bob:*** https://h`],
+      ['inside an option name', `tool --pass\\\nword ${secret} --force`, `tool --pass\\\nword *** --force`],
+      ['inside a redirection of a command given to sh -c', `sh -c "curl -u 2>\\\\\n&1 bob:${secret} https://h"`, `sh -c "curl -u 2>\\\\\n&1 bob:*** https://h"`],
+    ])('masks the value behind a line continuation %s, and keeps the continuation as written', (_label, command, expected) => {
+      const masked = maskedCommandSecrets(command);
+
+      expect(masked).toBe(expected);
+      expect(redactedText(masked)).not.toContain(secret);
+    });
+
+    it('keeps an escaped backslash before a line break, which continues no line', () => {
+      const command = 'echo a\\\\\nls -la';
 
       expect(maskedCommandSecrets(command)).toBe(command);
     });
