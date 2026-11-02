@@ -2,8 +2,8 @@
 export const valueAtDottedPath = (root: unknown, path: string): unknown => {
   let current: unknown = root;
   for (const segment of path.split('.')) {
-    const isReadable = typeof current === 'object' && current !== null;
-    if (!isReadable || !Object.hasOwn(current, segment)) return undefined;
+    if (typeof current !== 'object' || current === null) return undefined;
+    if (!Object.hasOwn(current, segment)) return undefined;
     current = (current as Record<string, unknown>)[segment];
   }
   return current;
