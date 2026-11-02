@@ -133,6 +133,64 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     });
   });
 
+  describe('a word spelled with ANSI-C escapes', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = ['SEKR', 'ET', '42'].join('');
+
+    it.each([
+      ['a hex escape in a header name', `curl -H $'\\x41uthorization: ${secret}' https://example.com`, "curl -H $'\\x41uthorization: ***' https://example.com"],
+      ['a short Unicode escape in a header name', `curl -H $'\\u0041uthorization: ${secret}' https://example.com`, "curl -H $'\\u0041uthorization: ***' https://example.com"],
+      ['a long Unicode escape in a header name', `curl -H $'\\U00000041uthorization: ${secret}' https://example.com`, "curl -H $'\\U00000041uthorization: ***' https://example.com"],
+      ['an octal escape in a header name', `curl -H $'\\101uthorization: ${secret}' https://example.com`, "curl -H $'\\101uthorization: ***' https://example.com"],
+      ['a hex escape in a program name', `$'\\x63url' -u alice:${secret} https://example.com`, "$'\\x63url' -u alice:*** https://example.com"],
+      ['an octal escape in a program name', `$'\\143url' -u alice:${secret} https://example.com`, "$'\\143url' -u alice:*** https://example.com"],
+      ['a hex escape in an option name', `tool $'--to\\x6ben' ${secret} --force`, "tool $'--to\\x6ben' *** --force"],
+      ['a hex escape in an assignment name', `$'API\\x5fKEY=${secret}' run`, "$'API\\x5fKEY=***' run"],
+    ])('decodes %s before reading it', (_label, command, expected) => {
+      expect(maskedCommandSecrets(command)).toBe(expected);
+    });
+
+    it('keeps a decoded word without a secret as written', () => {
+      const command = "printf $'line\\none\\t\\x41\\101\\u00e9\\\\'";
+
+      expect(maskedCommandSecrets(command)).toBe(command);
+    });
+  });
+
+  describe('a command nested deeper than the scan reads', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = ['SEKR', 'ET', '42'].join('');
+    const DEEPEST_LEVEL_READ = 4;
+    const DEEPER_THAN_READ = 5;
+    const givenToShC = (command: string) => `sh -c "${command.replace(/[\\"$`]/g, '\\$&')}"`;
+    const nestedTimes = (command: string, levels: number) => Array.from({ length: levels }).reduce<string>((inner) => givenToShC(inner), command);
+    const nested = (command: string) => nestedTimes(command, DEEPER_THAN_READ);
+
+    it.each([
+      ['a program spelled with escapes', `$'\\x63url' -u alice:${secret}`],
+      ['a secret option', `tool --token ${secret}`],
+      ['a quoted secret value', `tool --name '${secret}'`],
+    ])('masks the whole innermost word that holds %s', (_label, command) => {
+      const masked = maskedCommandSecrets(nested(command));
+
+      expect(masked).not.toContain(secret);
+      expect(masked).toContain('***');
+    });
+
+    it('keeps a command at the deepest level read readable when it names no secret and holds no quote', () => {
+      const command = nestedTimes('echo hello world', DEEPEST_LEVEL_READ);
+
+      expect(maskedCommandSecrets(command)).toBe(command);
+    });
+
+    it('masks a command nested deeper than read even without a secret, since its quoting stays unread', () => {
+      const masked = maskedCommandSecrets(nested('echo hello world'));
+
+      expect(masked).not.toContain('hello world');
+      expect(masked).toContain('***');
+    });
+  });
+
   describe('an option that always takes the next word as its value', () => {
     // Built at run time: no token-shaped literal sits in the source.
     const dashedSecret = ['-SEKR', 'ET', '42'].join('');

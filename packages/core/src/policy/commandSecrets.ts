@@ -82,17 +82,79 @@ const readSingleQuoted = (source: string, openingAt: number, word: ShellWordBuil
   return closingAt === -1 ? source.length : closingAt + 1;
 };
 
-/** `"…"` (a backslash escapes `"`, `\`, `$`, a backtick and a line break) or `$'…'` (a backslash escapes any character); one that never closes runs to the end of the source. */
-const readEscapedQuoted = (source: string, contentStart: number, quote: string, escapesAnyCharacter: boolean, word: ShellWordBuilder): number => {
-  let at = contentStart;
+/** `"…"`: a backslash escapes `"`, `\`, `$`, a backtick and a line break; one that never closes runs to the end of the source. */
+const readDoubleQuoted = (source: string, openingAt: number, word: ShellWordBuilder): number => {
+  let at = openingAt + 1;
   while (at < source.length) {
     const character = source.charAt(at);
-    if (character === quote) return at + 1;
+    if (character === '"') return at + 1;
     const nextCharacter = source.charAt(at + 1);
-    const isEscape = character === '\\' && at + 1 < source.length && (escapesAnyCharacter || ESCAPABLE_INSIDE_DOUBLE_QUOTES.has(nextCharacter));
+    const isEscape = character === '\\' && at + 1 < source.length && ESCAPABLE_INSIDE_DOUBLE_QUOTES.has(nextCharacter);
     const width = isEscape ? 2 : 1;
     word.add(isEscape ? nextCharacter : character, at, at + width);
     at += width;
+  }
+  return source.length;
+};
+
+const ANSI_C_LETTER_ESCAPES = new Map([
+  ['a', '\x07'], ['b', '\b'], ['e', '\x1b'], ['E', '\x1b'], ['f', '\f'], ['n', '\n'], ['r', '\r'], ['t', '\t'], ['v', '\v'],
+  ['\\', '\\'], ["'", "'"], ['"', '"'], ['?', '?'],
+]);
+const HEX_DIGIT = /[0-9a-fA-F]/;
+const OCTAL_DIGIT = /[0-7]/;
+const ANSI_C_CODE_ESCAPES = new Map([
+  ['x', { maxDigits: 2 }],
+  ['u', { maxDigits: 4 }],
+  ['U', { maxDigits: 8 }],
+]);
+const OCTAL_ESCAPE_MAX_DIGITS = 3;
+const BYTE_MASK = 0xff;
+const CONTROL_CHARACTER_MASK = 0x1f;
+const LAST_CODE_POINT = 0x10ffff;
+// What an escape decodes to when it names no character: the word then reads as illegible.
+const ILLEGIBLE_CHARACTER = '�';
+
+const endOfDigits = (source: string, from: number, digit: RegExp, maxDigits: number): number => {
+  let end = from;
+  while (end < source.length && end - from < maxDigits && digit.test(source.charAt(end))) end += 1;
+  return end;
+};
+
+const characterOfCode = (code: number): string => (code <= LAST_CODE_POINT ? String.fromCodePoint(code) : ILLEGIBLE_CHARACTER);
+
+type DecodedEscape = { text: string; end: number };
+
+/** The escape of `$'…'` whose backslash sits at `at`, as bash decodes it: `\n`, `\xHH`, `\uHHHH`, `\UHHHHHHHH`, `\NNN`, `\cX`; an unknown one keeps its backslash. */
+const ansiCEscapeAt = (source: string, at: number): DecodedEscape => {
+  const letter = source.charAt(at + 1);
+  const letterEscape = ANSI_C_LETTER_ESCAPES.get(letter);
+  if (letterEscape !== undefined) return { text: letterEscape, end: at + 2 };
+  const isControlEscape = letter === 'c' && at + 2 < source.length;
+  if (isControlEscape) return { text: String.fromCharCode(source.charCodeAt(at + 2) & CONTROL_CHARACTER_MASK), end: at + 3 };
+  const codeEscape = ANSI_C_CODE_ESCAPES.get(letter);
+  if (codeEscape !== undefined) {
+    const digitsEnd = endOfDigits(source, at + 2, HEX_DIGIT, codeEscape.maxDigits);
+    const hasNoDigit = digitsEnd === at + 2;
+    if (hasNoDigit) return { text: `\\${letter}`, end: at + 2 };
+    return { text: characterOfCode(parseInt(source.slice(at + 2, digitsEnd), 16)), end: digitsEnd };
+  }
+  if (OCTAL_DIGIT.test(letter)) {
+    const digitsEnd = endOfDigits(source, at + 1, OCTAL_DIGIT, OCTAL_ESCAPE_MAX_DIGITS);
+    return { text: String.fromCharCode(parseInt(source.slice(at + 1, digitsEnd), 8) & BYTE_MASK), end: digitsEnd };
+  }
+  return { text: `\\${letter}`, end: Math.min(at + 2, source.length) };
+};
+
+/** `$'…'`: every escape decoded as bash decodes it, so `$'\x63url'` reads `curl`; one that never closes runs to the end of the source. */
+const readAnsiCQuoted = (source: string, openingAt: number, word: ShellWordBuilder): number => {
+  let at = openingAt + 2;
+  while (at < source.length) {
+    const character = source.charAt(at);
+    if (character === "'") return at + 1;
+    const escape = character === '\\' ? ansiCEscapeAt(source, at) : { text: character, end: at + 1 };
+    word.add(escape.text, at, escape.end);
+    at = escape.end;
   }
   return source.length;
 };
@@ -107,9 +169,9 @@ const readSegment = (source: string, at: number, word: ShellWordBuilder): number
     return end;
   }
   if (character === "'") return readSingleQuoted(source, at, word);
-  if (character === '"') return readEscapedQuoted(source, at + 1, '"', false, word);
+  if (character === '"') return readDoubleQuoted(source, at, word);
   const opensAnsiCQuotes = character === '$' && nextCharacter === "'";
-  if (opensAnsiCQuotes) return readEscapedQuoted(source, at + 2, "'", true, word);
+  if (opensAnsiCQuotes) return readAnsiCQuoted(source, at, word);
   word.add(character, at, at + 1);
   return at + 1;
 };
@@ -278,6 +340,8 @@ const holdsSeveralWords = (text: string): boolean => WORD_GAP_OR_SEPARATOR.test(
 
 const MAX_NESTED_COMMAND_DEPTH = 3;
 const NAMES_A_SECRET_OR_A_PASSWORD_PROGRAM = /passw|passphrase|secret|token|api.?key|auth|bearer|credential|mysql|mariadb|sshpass|redis-cli|curl|wget|:\/\//i;
+// Quotes, escapes, substitutions or an undecodable escape left for a level the scan does not read: what they spell stays unknown.
+const HOLDS_UNREAD_QUOTING = /[\\'"`�]|\$\(/;
 
 type PasswordProgram = 'mysql' | 'sshpass' | 'redis-cli' | 'curl';
 
@@ -383,11 +447,15 @@ class CommandMasking {
     if (holdsSeveralWords(word.text)) this.maskNestedCommand(word);
   }
 
-  /** A word holding a whole command (`sh -c "mysql -p…"`) is masked as a command of its own; past the depth limit, one that names a secret is masked whole. */
+  /**
+   * A word holding a whole command (`sh -c "mysql -p…"`) is masked as a command of its own.
+   * Past the depth limit, one that names a secret or a password program, or still holds quoting the scan does not read, is masked whole.
+   */
   private maskNestedCommand(word: ShellWord): void {
     const isPastTheDepthLimit = this.depth >= MAX_NESTED_COMMAND_DEPTH;
     if (isPastTheDepthLimit) {
-      if (NAMES_A_SECRET_OR_A_PASSWORD_PROGRAM.test(word.text)) this.maskCharacters(word, 0, word.text.length);
+      const mayHideASecret = NAMES_A_SECRET_OR_A_PASSWORD_PROGRAM.test(word.text) || HOLDS_UNREAD_QUOTING.test(word.text);
+      if (mayHideASecret) this.maskCharacters(word, 0, word.text.length);
       return;
     }
     const toCommandRange: ToCommandRange = (range) => this.toCommandRange(sourceRangeOf(word, range.start, range.end));
