@@ -1,4 +1,6 @@
-export const TOOL_CATEGORIES = ['read_only', 'additive', 'destructive', 'execution_external'] as const;
+import { TOOL_CATEGORIES, type ToolCategory } from '@openfleet/shared';
+
+export { TOOL_CATEGORIES, type ToolCategory };
 
 /**
  * read_only: changes nothing.
@@ -6,8 +8,6 @@ export const TOOL_CATEGORIES = ['read_only', 'additive', 'destructive', 'executi
  * destructive: removes data, or overwrites content or settings in place without history.
  * execution_external: runs git or a process, or delivers a message into a session.
  */
-export type ToolCategory = (typeof TOOL_CATEGORIES)[number];
-
 export type ToolDomain = 'data_stores' | 'notes' | 'sessions' | 'managers' | 'governance' | 'escalation' | 'review' | 'worktrees' | 'projects' | 'knowledge' | 'working_state';
 
 export interface ToolCatalogEntry {

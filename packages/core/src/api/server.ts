@@ -42,6 +42,7 @@ import { registerWorktreeRoutes } from './worktreeRoutes.js';
 import { registerGovernanceE2eRoutes } from './governanceE2eRoutes.js';
 import { registerCommandPolicyRoutes } from './commandPolicyRoutes.js';
 import { registerActivityRoutes } from './activityRoutes.js';
+import { registerToolRoutes } from './toolRoutes.js';
 import { recordedAsHumanAction } from './recordedAsHumanAction.js';
 import type { ActivityRecorder } from '../activity/activityRecorder.js';
 import type { ActivityRepository } from '../activity/activityRepository.js';
@@ -196,6 +197,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.escalations) registerEscalationRoutes(router, { escalations: deps.escalations, isManager: (sessionId) => deps.managers.get(sessionId) !== undefined });
   if (deps.commandPolicyAdmin) registerCommandPolicyRoutes(router, deps.commandPolicyAdmin);
   if (deps.activity) registerActivityRoutes(router, { reader: deps.activity.reader });
+  registerToolRoutes(router);
   if (deps.reviewFindings) registerReviewFindingsRoutes(router, { findings: deps.reviewFindings });
   if (deps.usageLedger) registerUsageRoutes(router, { usageLedger: deps.usageLedger, sessions: deps.sessions, projects: deps.projects });
   if (deps.governanceQueue && deps.e2eRoutes) registerGovernanceE2eRoutes(router, { governanceQueue: deps.governanceQueue });
