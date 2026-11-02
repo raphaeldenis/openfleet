@@ -62,3 +62,39 @@ The mechanics the code supports:
 | Is private vulnerability reporting enabled? | `gh api repos/{owner}/{repo}/private-vulnerability-reporting` |
 
 Open decisions, all for Raphaël: rotation policy and owner of `CLAUDE_CODE_OAUTH_TOKEN`, security reporting channel (see [SECURITY.md](../SECURITY.md)), RELEASE01 (publication and signing).
+
+## Secrets of playbooks
+
+A playbook, an integration connection or a trigger declares the names of the secrets it needs. A human sets the values; no agent can set or read one. The daemon stores the **names and a status** (`stored` or `missing`) in `secret_refs` (migration 064) and never a value: not in SQLite, not in a log, not in an activity row, not in a backup or a diagnostics bundle.
+
+### Who can do what
+
+| Action | Human (desktop app) | Agent (MCP) |
+|---|---|---|
+| Set a value | yes: `PUT /api/secrets/:scopeKind/:scopeId/:name`, admin token **and** an operator nonce | no tool exists |
+| Clear a value | yes: `DELETE`, same two proofs | `clear_playbook_secret` (destructive) |
+| Read the status | yes: `GET` | `list_playbook_secret_statuses` (`stored` or `missing` only) |
+| Read a value | no route | no tool; only the runner of a playbook resolves one, in the daemon, for the length of a step |
+
+A scope is known when a name is declared under it. An unknown scope answers `404 secret_scope_not_found`, an undeclared name `404 secret_not_declared`. A declared name with no value in the keychain of this device fails at resolution with `secret_not_connected_on_this_device` ("the secret NAME is not connected on this device"). A value under 8 characters is refused (`400 secret_too_short`): the masker of a run could not mask it without destroying the output.
+
+### Where the value lives: the keychain of the desktop app
+
+The macOS keychain is read and written by the **desktop app** (Security framework through the `security-framework` crate), never by the daemon. The daemon is the sidecar of the app and talks to it over the pipes of the sidecar. Without the app (a daemon started from a shell) or with a locked keychain, a set, a clear and a resolve fail with the typed error `secret_store_unavailable`; the daemon keeps no copy on disk to fall back to.
+
+The channel, in the order of a request:
+
+1. **Operator nonce (set and clear from the UI).** The webview calls a Tauri command that draws a random nonce, writes it to the sidecar's **stdin** (`OPENFLEET_SECRETS {"type":"operator_nonce","nonce":"…"}`) and returns it to the webview. The webview sends it in the header `x-openfleet-operator-nonce` of the `PUT` or `DELETE`. The daemon accepts it once, within 30 seconds. An agent cannot call a Tauri command nor write to the pipe of the sidecar, so the admin token alone, which any process of the user can read from `admin.token`, does not suffice.
+2. **Request to the app.** To act on the keychain the daemon prints one line on its **stdout**: `OPENFLEET_SECRETS {"type":"secret_request","op":"set|clear|status|read","scope":{…},"name":"…","deliverNonce":"…","takeNonce":"…"}`. The line holds the operation, the scope, the name and nonces minted by the daemon; never a value. The app removes these lines from the daemon log it writes.
+3. **Answer over loopback.** The app answers with an HTTP POST to the daemon on `127.0.0.1`:
+   - `POST /internal/secrets/take {nonce: takeNonce}` (set only) returns `{value}` once. The value is held by the daemon from the `PUT` until this call, then dropped.
+   - `POST /internal/secrets/deliver {nonce: deliverNonce, outcome}` settles the request once. `outcome` is `ok` (set, clear), `stored` or `missing` (status), `value` with `value` (read), `not_found` (read: nothing in the keychain) or `unavailable` (keychain locked or unreadable).
+4. **No cache.** A resolved value is returned to the caller that asked and kept nowhere in the daemon. The next resolve asks the app again.
+
+The internal routes are outside `/api` on purpose: the only authority there is a nonce. They answer only a request from a loopback address with **no `Origin` header** (a browser page cannot reach them) and **no `Authorization` header** (an admin or MCP token opens nothing). Each nonce is 192 random bits, usable once, valid 30 seconds, and voided when the request times out (15 seconds without an answer from the app). Every refusal reads the same: `401 secret_nonce_invalid`.
+
+### What this does not claim
+
+- The status in `secret_refs` is the daemon's record of the last set or clear it did. It is not reconciled with the keychain: an item removed by hand in Keychain Access still reads `stored` until the next resolve fails with `secret_not_connected_on_this_device`.
+- A process that can read the memory of the daemon or of the app, or that reads the stdout of the sidecar before the app, can use a live nonce within its 30 seconds. The nonces protect against an agent that has only the admin token and the loopback port.
+- Whether the Security framework prompts for access to an item after a rebuild of the app (an ad hoc signature changes its identity at each build) is not verified. See the Keychain spike report: a stable signing identity is needed before any real use.

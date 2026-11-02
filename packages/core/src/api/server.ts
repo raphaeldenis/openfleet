@@ -43,6 +43,11 @@ import { registerGovernanceE2eRoutes } from './governanceE2eRoutes.js';
 import { registerCommandPolicyRoutes } from './commandPolicyRoutes.js';
 import { registerActivityRoutes } from './activityRoutes.js';
 import { registerToolRoutes } from './toolRoutes.js';
+import { registerSecretRoutes } from './secretRoutes.js';
+import { registerInternalSecretRoutes } from './internalSecretRoutes.js';
+import type { NonceLedger } from '../secrets/nonceLedger.js';
+import type { SecretExchange } from '../secrets/parentBridgeSecretStore.js';
+import type { SecretService } from '../secrets/secretService.js';
 import { recordedAsHumanAction } from './recordedAsHumanAction.js';
 import type { ActivityRecorder } from '../activity/activityRecorder.js';
 import type { ActivityRepository } from '../activity/activityRepository.js';
@@ -127,6 +132,8 @@ export interface ServerDeps {
   todos?: TodoTracker;
   // Without it the test-only routes (fake-output) do not exist.
   e2eRoutes?: boolean;
+  // Without it the /api/secrets routes and the /internal/secrets routes do not exist.
+  secrets?: { service: Pick<SecretService, 'statusOf' | 'set' | 'clear'>; nonces: Pick<NonceLedger, 'redeem'>; exchange: SecretExchange };
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
@@ -197,6 +204,10 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.escalations) registerEscalationRoutes(router, { escalations: deps.escalations, isManager: (sessionId) => deps.managers.get(sessionId) !== undefined });
   if (deps.commandPolicyAdmin) registerCommandPolicyRoutes(router, deps.commandPolicyAdmin);
   if (deps.activity) registerActivityRoutes(router, { reader: deps.activity.reader });
+  if (deps.secrets) {
+    registerSecretRoutes(router, { secrets: deps.secrets.service, nonces: deps.secrets.nonces });
+    registerInternalSecretRoutes(router, { exchange: deps.secrets.exchange });
+  }
   registerToolRoutes(router);
   if (deps.reviewFindings) registerReviewFindingsRoutes(router, { findings: deps.reviewFindings });
   if (deps.usageLedger) registerUsageRoutes(router, { usageLedger: deps.usageLedger, sessions: deps.sessions, projects: deps.projects });
