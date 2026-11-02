@@ -45,8 +45,11 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   outside_own_repository: { what: 'That path is outside the session’s repository', fix: 'pick one inside it' },
   docs_root_invalid: { what: 'That docs root cannot be used', fix: 'give an absolute path inside your home folder' },
   docs_root_forbidden: { what: 'That docs root is a folder OpenFleet or its tools keep for themselves', fix: 'pick another folder' },
+  too_many_conditions: { what: 'A trigger accepts at most 32 conditions', fix: 'remove one first' },
+  trigger_field_prefix: { what: 'The field of a table trigger condition must start with event.row. or event.previous.', fix: 'add the prefix' },
 
   unauthorized: { what: 'The daemon refused the app’s credentials', fix: 'check the admin token' },
+  human_proof_required: { what: 'Arming a trigger needs a human confirmation in the desktop app', fix: 'confirm it there' },
 
   not_found: { what: 'That item no longer exists' },
   project_not_found: { what: 'That project no longer exists' },
@@ -60,6 +63,8 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   proposal_not_found: { what: 'That proposal no longer exists' },
   law_not_found: { what: 'That law no longer exists' },
   escalation_not_found: { what: 'That escalation no longer exists' },
+  trigger_not_found: { what: 'That trigger no longer exists' },
+  trigger_condition_not_found: { what: 'That trigger condition no longer exists' },
   handoff_not_found: { what: 'That handoff is no longer in the docs folder', fix: 'pick another handoff or remove it' },
 
   session_closed: { what: 'The session is closed', fix: 'resume it first' },
