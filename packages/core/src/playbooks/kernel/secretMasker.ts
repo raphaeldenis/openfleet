@@ -115,16 +115,63 @@ const maskedWith = (text: string, matches: readonly Match[]): string => {
   return masked + text.slice(copiedUpTo);
 };
 
+/** The start of the merged region of matches that holds `position` strictly inside, or undefined when no region does. */
+const startOfRegionCrossing = (matches: readonly Match[], position: number): number | undefined => {
+  let regionStart = -1;
+  let regionEnd = -1;
+  const crossesPosition = () => regionStart < position && position < regionEnd;
+  for (const match of matches) {
+    if (match.start < regionEnd) {
+      regionEnd = Math.max(regionEnd, match.end);
+      continue;
+    }
+    if (crossesPosition()) return regionStart;
+    regionStart = match.start;
+    regionEnd = match.end;
+  }
+  return crossesPosition() ? regionStart : undefined;
+};
+
+const isHighSurrogate = (codeUnit: number): boolean => codeUnit >= 0xd800 && codeUnit <= 0xdbff;
+
+/** The largest position up to `maxChars` that falls neither inside a secret nor between the two halves of a surrogate pair. */
+const cutPositionOf = ({ text, matches, maxChars }: { text: string; matches: readonly Match[]; maxChars: number }): number => {
+  const cut = startOfRegionCrossing(matches, maxChars) ?? maxChars;
+  const splitsSurrogatePair = isHighSurrogate(text.charCodeAt(cut - 1));
+  return splitsSurrogatePair ? cut - 1 : cut;
+};
+
+export type SecretMaskerOptions = {
+  /** The most characters of a text that `mask` reads; the rest is replaced by `[truncated]`. */
+  maxInputChars?: number;
+};
+
+export const DEFAULT_MAX_INPUT_CHARS = 262_144;
+const TRUNCATION_MARKER = '[truncated]';
+
 /**
  * Builds a masker from the values of the secrets a run resolved.
  * Throws secret_too_short for a value under MIN_SECRET_LENGTH characters and invalid_secret_name for a name that cannot sit in a marker.
- * The scan is one pass over the text per call.
+ * The scan is one pass over the text per call. A text longer than `maxInputChars` (default 262 144) is cut before the scan and ends with `[truncated]`;
+ * the cut moves back before any secret it would split, so no piece of a secret survives it.
  */
-export const createSecretMasker = (secrets: readonly SecretToMask[]): SecretMasker => {
+export const createSecretMasker = (secrets: readonly SecretToMask[], { maxInputChars = DEFAULT_MAX_INPUT_CHARS }: SecretMaskerOptions = {}): SecretMasker => {
   secrets.forEach(assertMaskable);
-  if (secrets.length === 0) return { mask: (text) => text };
 
   const nameOf = namesBySpelling(secrets);
   const scan = new RegExp([...nameOf.keys()].map(patternOf).join('|'), 'g');
-  return { mask: (text) => maskedWith(text, matchesOf(text, scan, nameOf)) };
+  const longestSpelling = Math.max(1, ...Array.from(nameOf.keys(), (spelling) => spelling.length));
+  const matchesIn = (text: string): Match[] => (secrets.length === 0 ? [] : matchesOf(text, scan, nameOf));
+
+  const mask = (text: string): string => {
+    const isWithinCeiling = text.length <= maxInputChars;
+    if (isWithinCeiling) return maskedWith(text, matchesIn(text));
+
+    const windowReachingEveryStraddlingSecret = text.slice(0, maxInputChars + longestSpelling - 1);
+    const matches = matchesIn(windowReachingEveryStraddlingSecret);
+    const cut = cutPositionOf({ text, matches, maxChars: maxInputChars });
+    const matchesBeforeTheCut = matches.filter((match) => match.end <= cut);
+    return maskedWith(text.slice(0, cut), matchesBeforeTheCut) + TRUNCATION_MARKER;
+  };
+  return { mask };
 };

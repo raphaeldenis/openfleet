@@ -222,6 +222,76 @@ describe('createSecretMasker: refused secrets', () => {
   });
 });
 
+describe('createSecretMasker: input ceiling', () => {
+  const TRUNCATION_MARKER = '[truncated]';
+  const maskerWithCeiling = (maxInputChars: number) => createSecretMasker([{ name: 'JIRA_TOKEN', value: jiraValue }], { maxInputChars });
+
+  it('keeps the start of a text over the ceiling and ends it with a truncation marker', () => {
+    expect(maskerWithCeiling(100).mask('x'.repeat(300))).toBe(`${'x'.repeat(100)}${TRUNCATION_MARKER}`);
+  });
+
+  it('leaves a text of exactly the ceiling untouched', () => {
+    expect(maskerWithCeiling(100).mask('x'.repeat(100))).toBe('x'.repeat(100));
+  });
+
+  it('masks the secrets that lie before the cut', () => {
+    expect(maskerWithCeiling(100).mask(`${'x'.repeat(10)}${jiraValue}${'y'.repeat(300)}`)).toBe(`xxxxxxxxxx[secret:JIRA_TOKEN]${'y'.repeat(100 - 10 - jiraValue.length)}${TRUNCATION_MARKER}`);
+  });
+
+  it('drops a secret that straddles the cut instead of leaving a piece of it', () => {
+    const text = `${'x'.repeat(95)}${jiraValue}tail`;
+
+    expect(maskerWithCeiling(100).mask(text)).toBe(`${'x'.repeat(95)}${TRUNCATION_MARKER}`);
+  });
+
+  it('drops a URL-encoded secret that straddles the cut', () => {
+    const masker = createSecretMasker([{ name: 'AWKWARD', value: awkwardValue }], { maxInputChars: 100 });
+    const text = `${'x'.repeat(95)}${encodeURIComponent(awkwardValue)}tail`;
+
+    expect(masker.mask(text)).toBe(`${'x'.repeat(95)}${TRUNCATION_MARKER}`);
+  });
+
+  it('drops both secrets of an overlapping pair when the cut falls inside the pair', () => {
+    const masker = createSecretMasker(
+      [
+        { name: 'FIRST', value: 'abcdefgh12' },
+        { name: 'SECOND', value: 'gh12ijklmn' },
+      ],
+      { maxInputChars: 14 },
+    );
+
+    expect(masker.mask(`${'x'.repeat(5)}abcdefgh12ijklmn yy`)).toBe(`${'x'.repeat(5)}${TRUNCATION_MARKER}`);
+  });
+
+  it('never cuts between the two halves of a surrogate pair', () => {
+    expect(maskerWithCeiling(101).mask(`${'x'.repeat(100)}🔑🔑`)).toBe(`${'x'.repeat(100)}${TRUNCATION_MARKER}`);
+  });
+
+  it('truncates at 262 144 characters by default', () => {
+    const masker = maskerOfJira();
+
+    expect(masker.mask('x'.repeat(262_144))).toHaveLength(262_144);
+    expect(masker.mask('x'.repeat(262_145))).toBe(`${'x'.repeat(262_144)}${TRUNCATION_MARKER}`);
+  });
+
+  it('truncates a text even when no secret is declared', () => {
+    expect(createSecretMasker([], { maxInputChars: 10 }).mask('x'.repeat(30))).toBe(`${'x'.repeat(10)}${TRUNCATION_MARKER}`);
+  });
+
+  it('does not block on 10 000 000 characters that all match an 8-character secret', () => {
+    const masker = createSecretMasker([{ name: 'ALL_A', value: 'a'.repeat(8) }]);
+    const text = 'a'.repeat(10_000_000);
+
+    const startedAt = performance.now();
+    const masked = masker.mask(text);
+    const elapsedMilliseconds = performance.now() - startedAt;
+
+    expect(masked.endsWith(TRUNCATION_MARKER)).toBe(true);
+    expect(masked).not.toContain('aaaaaaaa');
+    expect(elapsedMilliseconds).toBeLessThan(1000);
+  });
+});
+
 describe('createSecretMasker: linear cost', () => {
   it('masks a text of 1 000 000 characters in under 200 ms', () => {
     const masker = createSecretMasker([
