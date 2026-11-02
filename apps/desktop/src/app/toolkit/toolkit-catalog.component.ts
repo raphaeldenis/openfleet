@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 import type { ToolSummary } from '@openfleet/shared';
 import { categoryLabelOf, claudeCodeNameOf, domainLabelOf } from './tool-display';
 
@@ -44,6 +44,7 @@ function groupByDomain(tools: readonly ToolSummary[]): DomainGroup[] {
             <dt>Claude Code sees</dt>
             <dd class="mono">{{ claudeCodeNameOf(tool.name) }}</dd>
           </dl>
+          <button type="button" class="of-btn of-btn--compact calls" (click)="activityRequested.emit(tool.name)">View calls →</button>
         </section>
       }
     </div>
@@ -66,6 +67,7 @@ function groupByDomain(tools: readonly ToolSummary[]): DomainGroup[] {
     dt { color: var(--mut); }
     dd { margin: 0; min-width: 0; }
     .mono { font-family: var(--mono); overflow-wrap: anywhere; }
+    .calls { align-self: flex-start; }
     .category { display: inline-block; padding: 0 .375rem; border: 1px solid var(--line-2); border-radius: .25rem; }
     .category[data-category='destructive'] { color: var(--state-error); border-color: var(--state-error); }
     .category[data-category='execution_external'] { color: var(--state-waiting-permission); border-color: var(--state-waiting-permission); }
@@ -77,6 +79,7 @@ function groupByDomain(tools: readonly ToolSummary[]): DomainGroup[] {
 })
 export class ToolkitCatalogComponent {
   readonly tools = input.required<readonly ToolSummary[]>();
+  readonly activityRequested = output<string>();
   protected readonly search = signal('');
   protected readonly picked = signal<string | undefined>(undefined);
   protected readonly domainLabelOf = domainLabelOf;

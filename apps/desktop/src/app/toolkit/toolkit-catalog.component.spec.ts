@@ -1,8 +1,8 @@
-import { inputBinding } from '@angular/core';
+import { inputBinding, outputBinding } from '@angular/core';
 import type { ToolSummary } from '@openfleet/shared';
 import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ToolkitCatalogComponent } from './toolkit-catalog.component';
 
 const TOOLS: ToolSummary[] = [
@@ -52,6 +52,16 @@ describe('ToolkitCatalogComponent', () => {
 
     expect(screen.getByRole('button', { name: 'delete_note' })).toHaveAttribute('aria-current', 'true');
     expect(screen.getByRole('button', { name: 'list_notes' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('offers the activity of the tool picked', async () => {
+    const onActivityRequested = vi.fn();
+    await render(ToolkitCatalogComponent, { bindings: [inputBinding('tools', () => TOOLS), outputBinding('activityRequested', onActivityRequested)] });
+    await userEvent.click(screen.getByRole('button', { name: 'create_session' }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'View calls →' }));
+
+    expect(onActivityRequested).toHaveBeenCalledWith('create_session');
   });
 
   it('narrows the list to the tools whose name holds the search, ignoring case', async () => {

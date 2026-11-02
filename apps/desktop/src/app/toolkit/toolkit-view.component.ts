@@ -3,14 +3,16 @@ import type { ToolSummary } from '@openfleet/shared';
 import { FleetApiService } from '../core/fleet-api.service';
 import { BannerComponent } from '../design/banner.component';
 import { focusTabAt, nextTabIndex } from '../design/tablist-keyboard';
+import { ToolkitActivityComponent } from './toolkit-activity.component';
 import { ToolkitCatalogComponent } from './toolkit-catalog.component';
 import { ToolkitHarnessesComponent } from './toolkit-harnesses.component';
 
-type ToolkitTab = 'catalog' | 'harnesses';
+type ToolkitTab = 'catalog' | 'activity' | 'harnesses';
 type ToolsLoad = { status: 'loading' } | { status: 'failed' } | { status: 'loaded'; tools: readonly ToolSummary[] };
 
 const TOOLKIT_TABS: ReadonlyArray<{ key: ToolkitTab; label: string }> = [
   { key: 'catalog', label: 'Catalog' },
+  { key: 'activity', label: 'Activity' },
   { key: 'harnesses', label: 'Harnesses' },
 ];
 
@@ -18,7 +20,7 @@ const TOOLKIT_TABS: ReadonlyArray<{ key: ToolkitTab; label: string }> = [
 @Component({
   selector: 'of-toolkit-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BannerComponent, ToolkitCatalogComponent, ToolkitHarnessesComponent],
+  imports: [BannerComponent, ToolkitActivityComponent, ToolkitCatalogComponent, ToolkitHarnessesComponent],
   template: `
     <section class="toolkit" data-testid="toolkit-view">
       <header class="head">
@@ -40,27 +42,31 @@ const TOOLKIT_TABS: ReadonlyArray<{ key: ToolkitTab; label: string }> = [
       </header>
 
       <div class="panel" role="tabpanel" [id]="tabPanelId" [attr.aria-labelledby]="'toolkit-tab-' + activeTab()">
-        @switch (load().status) {
-          @case ('loading') {
-            <div class="loading" data-testid="toolkit-loading" role="status" aria-label="Loading tools"></div>
+        @if (activeTab() === 'activity') {
+          <of-toolkit-activity [tool]="activityTool()" (toolCleared)="activityTool.set(undefined)" />
+        } @else {
+          @switch (load().status) {
+            @case ('loading') {
+              <div class="loading" data-testid="toolkit-loading" role="status" aria-label="Loading tools"></div>
+            }
+            @case ('failed') {
+              <of-banner data-testid="toolkit-error" variant="error" glyph="✕" title="Tools unavailable" description="The daemon could not list its tools.">
+                <button type="button" class="of-btn of-btn--compact" (click)="reload()">Retry</button>
+              </of-banner>
+            }
           }
-          @case ('failed') {
-            <of-banner data-testid="toolkit-error" variant="error" glyph="✕" title="Tools unavailable" description="The daemon could not list its tools.">
-              <button type="button" class="of-btn of-btn--compact" (click)="reload()">Retry</button>
-            </of-banner>
-          }
-        }
 
-        @if (tools(); as listedTools) {
-          @if (listedTools.length === 0) {
-            <div class="empty" data-testid="toolkit-empty">
-              <span class="empty-title">No tools</span>
-              <span>The daemon lists no MCP tool.</span>
-            </div>
-          } @else {
-            @switch (activeTab()) {
-              @case ('catalog') { <of-toolkit-catalog [tools]="listedTools" /> }
-              @case ('harnesses') { <of-toolkit-harnesses [tools]="listedTools" /> }
+          @if (tools(); as listedTools) {
+            @if (listedTools.length === 0) {
+              <div class="empty" data-testid="toolkit-empty">
+                <span class="empty-title">No tools</span>
+                <span>The daemon lists no MCP tool.</span>
+              </div>
+            } @else {
+              @switch (activeTab()) {
+                @case ('catalog') { <of-toolkit-catalog [tools]="listedTools" (activityRequested)="showActivityOf($event)" /> }
+                @case ('harnesses') { <of-toolkit-harnesses [tools]="listedTools" /> }
+              }
             }
           }
         }
@@ -87,10 +93,16 @@ export class ToolkitViewComponent {
   protected readonly tabs = TOOLKIT_TABS;
   protected readonly tabPanelId = 'toolkit-tabpanel';
   protected readonly activeTab = signal<ToolkitTab>('catalog');
+  protected readonly activityTool = signal<string | undefined>(undefined);
   protected readonly load = signal<ToolsLoad>({ status: 'loading' });
 
   constructor() {
     void this.reload();
+  }
+
+  protected showActivityOf(toolName: string): void {
+    this.activityTool.set(toolName);
+    this.activeTab.set('activity');
   }
 
   protected tools(): readonly ToolSummary[] | undefined {
