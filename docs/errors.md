@@ -25,7 +25,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `invalid_request` | 400 | 19 |
 | `unauthorized` | 401 | 2 |
 | `not_found` | 404 | 15 |
-| `conflict` | 409 | 44 |
+| `conflict` | 409 | 45 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 11 |
 | `internal` | 500 | 4 |
@@ -87,6 +87,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Code | HTTP status | Retry |
 | --- | --- | --- |
+| `breaker_open` | 409 | `never` |
 | `session_closed` | 409 | `never` |
 | `stale_revision` | 409 | `after_refresh` |
 | `file_backed` | 409 | `never` |

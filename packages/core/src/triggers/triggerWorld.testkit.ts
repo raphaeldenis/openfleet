@@ -23,13 +23,20 @@ export async function startTriggerWorld() {
   const clients: Client[] = [];
   let nowMs = START_OF_WORLD;
   let daemon!: Daemon;
+  const timers: { callback: () => void; delayMs: number; isCancelled: boolean }[] = [];
+  const schedule = (callback: () => void, delayMs: number) => {
+    const timer = { callback, delayMs, isCancelled: false };
+    timers.push(timer);
+    return () => { timer.isCancelled = true; };
+  };
+  const sockets: WebSocket[] = [];
 
   const boot = async () => {
     daemon = await startDaemon(config, {
       claudeConfigPath: join(config.home, 'harness-config.json'),
       power: { api: { acquire: () => ({ release: () => {} }) } },
       humanProof: { consume: () => true },
-      triggers: { clock: () => nowMs },
+      triggers: { clock: () => nowMs, schedule },
     });
   };
   await boot();
@@ -65,7 +72,19 @@ export async function startTriggerWorld() {
     return client;
   };
 
+  /** A WebSocket client of the daemon; `framesOfType` lists what it received. */
+  const openSocket = async () => {
+    const { ticket } = await json<{ ticket: string }>(await api('/api/ws-ticket', { method: 'POST' }));
+    const socket = new WebSocket(`${daemon.server.url.replace('http', 'ws')}/ws?ticket=${ticket}`);
+    sockets.push(socket);
+    const frames: { type: string; [key: string]: unknown }[] = [];
+    socket.addEventListener('message', (message) => frames.push(JSON.parse(String(message.data))));
+    await new Promise((resolve) => socket.addEventListener('open', resolve, { once: true }));
+    return { framesOfType: (type: string) => frames.filter((frame) => frame.type === type) };
+  };
+
   const stop = async () => {
+    for (const socket of sockets.splice(0)) socket.close();
     for (const client of clients.splice(0)) await client.close();
     await daemon.close();
   };
@@ -77,7 +96,9 @@ export async function startTriggerWorld() {
     get engine() { return daemon.triggerEngine; },
     get nowMs() { return nowMs; },
     advanceMs: (ms: number) => { nowMs += ms; },
-    api, json, createSession, createArmedTrigger, connect,
+    api, json, createSession, createArmedTrigger, connect, openSocket,
+    livingTimers: () => timers.filter((timer) => !timer.isCancelled),
+    fireLivingTimers: () => { for (const timer of timers.filter((candidate) => !candidate.isCancelled)) { timer.isCancelled = true; timer.callback(); } },
     /** The session as a daemon that stopped and started again finds it. */
     restart: async ({ stoppedForMs = 0, whileStopped = () => {} }: { stoppedForMs?: number; whileStopped?: (db: DatabaseSync) => void } = {}) => {
       await stop();

@@ -2,21 +2,27 @@ import type { TriggerFireReason, TriggerLedgerState } from '@openfleet/shared';
 import { canonicalDigestOf } from '../playbooks/kernel/canonicalDigest.js';
 import { evaluateConditions } from '../playbooks/kernel/conditionEvaluator.js';
 import { log } from '../logger.js';
+import type { FireBreaker } from './fireBreaker.js';
 import type { FireLedger, TriggerFire } from './fireLedger.js';
+import { policyVerdictOf } from './firePolicy.js';
 import { kernelConditionsOf } from './kernelConditions.js';
 import { approvedGraphOf } from './triggerService.js';
 import type { TriggerRecord, TriggerRepository } from './triggerRepository.js';
 
 export const MAX_EVENT_JSON_CHARS = 8192;
+/** A fire caused by a fire is depth 2; a third link is refused. */
+export const MAX_CHAIN_DEPTH = 2;
 const MINUTE_MS = 60_000;
 /** A discard_stale backlog with no explicit age keeps the fires of the last hour. */
 export const DEFAULT_STALE_BACKLOG_MINUTES = 60;
+/** A message a trigger sent to a session counts as the cause of the events of that session for this long. */
+export const CHAIN_CAUSE_WINDOW_MINUTES = 60;
 
 /** What happened to the effect of a fire: it ran, or it did not and says why. */
 export type ActionResult = { settlement: 'completed'; runId?: string } | { settlement: 'cancelled'; reason: TriggerFireReason };
 
 export interface TriggerActions {
-  perform(input: { trigger: TriggerRecord; fire: TriggerFire }): ActionResult;
+  perform(input: { trigger: TriggerRecord; fire: TriggerFire; batchSize: number }): ActionResult;
 }
 
 export type SubmitResult =
@@ -25,22 +31,35 @@ export type SubmitResult =
   | { outcome: 'fired'; fireId: string; ledgerState: TriggerLedgerState };
 
 export interface TriggerEngineDeps {
-  triggers: Pick<TriggerRepository, 'get'>;
+  triggers: Pick<TriggerRepository, 'get' | 'disarm'>;
   ledger: FireLedger;
   actions: TriggerActions;
+  breaker: FireBreaker;
   clock: () => number;
   newId: () => string;
+  /** Arms a one-shot timer and returns its cancel function. */
+  schedule: (callback: () => void, delayMs: number) => () => void;
+  /** Called once when the breaker disarms a trigger. */
+  onBreakerOpened: (trigger: TriggerRecord) => void;
 }
 
 /** True when a human armed the trigger as it stands now: the armed digest still matches what would run. */
 export const isArmedAsItStands = (trigger: TriggerRecord): boolean =>
   trigger.armedAt !== null && trigger.approvedGraphDigest === canonicalDigestOf(approvedGraphOf(trigger));
 
+/** The sessions an event is about: the session itself and its parent. */
+const sessionIdsOf = (event: Record<string, unknown>): string[] => {
+  const session = (event.session ?? {}) as { id?: unknown; parentId?: unknown };
+  return [session.id, session.parentId].filter((id): id is string => typeof id === 'string');
+};
+
 /**
  * Turns the events a source reports into fires. A fire is written to the ledger before anything happens for it, so a daemon that stops
  * at any point leaves a row that says how far the fire got. The guarantee is at most once per (trigger, dedup key), never exactly once.
  */
 export class TriggerEngine {
+  private readonly drainTimers = new Map<string, () => void>();
+
   constructor(private readonly deps: TriggerEngineDeps) {}
 
   /** Offers one event of a source: it fires when the trigger is armed, its conditions hold and its dedup key is new. */
@@ -56,24 +75,36 @@ export class TriggerEngine {
     if (eventJson.length > MAX_EVENT_JSON_CHARS) return { outcome: 'event_too_large' };
 
     const accepted = ledger.accept({
-      id: newId(), triggerId: trigger.id, dedupKey: input.dedupKey, firedAt: new Date(clock()).toISOString(), eventDigest: canonicalDigestOf(input.event), eventJson, chainDepth: 1,
+      id: newId(), triggerId: trigger.id, dedupKey: input.dedupKey, firedAt: new Date(clock()).toISOString(), eventDigest: canonicalDigestOf(input.event), eventJson,
+      chainDepth: this.chainDepthOf(input.event),
     });
     if (!accepted.wasAccepted) return { outcome: 'duplicate', fireId: accepted.fire.id };
 
-    const ledgerState = this.run({ trigger, fire: accepted.fire });
+    const ledgerState = this.process({ trigger, fire: accepted.fire, batchSize: 1 });
     return { outcome: 'fired', fireId: accepted.fire.id, ledgerState };
   }
 
   /**
    * Settles what a stopped daemon left behind: a fire it had attempted needs a human's review and is never replayed, and a fire it had only
-   * accepted runs again when its backlog policy allows it for its age.
+   * accepted is judged again by its backlog policy for its age, then by the policy of the trigger.
    */
   recover(): void {
     const { ledger, clock } = this.deps;
-    const settledAt = new Date(clock()).toISOString();
-    const interruptedCount = ledger.markInterruptedForReview(settledAt);
+    const interruptedCount = ledger.markInterruptedForReview(new Date(clock()).toISOString());
     if (interruptedCount > 0) log('warn', `${interruptedCount} trigger fire(s) were interrupted while they ran: they need a review and are not replayed`);
     this.replayAcceptedBacklog();
+  }
+
+  /** Cancels the timers of the batches that wait; the fires stay accepted for the next boot. */
+  stop(): void {
+    for (const cancel of this.drainTimers.values()) cancel();
+    this.drainTimers.clear();
+  }
+
+  private chainDepthOf(event: Record<string, unknown>): number {
+    const { ledger, clock } = this.deps;
+    const sinceIso = new Date(clock() - CHAIN_CAUSE_WINDOW_MINUTES * MINUTE_MS).toISOString();
+    return ledger.deepestChainMessagedSince({ sessionIds: sessionIdsOf(event), sinceIso }) + 1;
   }
 
   private replayAcceptedBacklog(): void {
@@ -88,28 +119,79 @@ export class TriggerEngine {
   }
 
   private replayBacklogOf(trigger: TriggerRecord, acceptedFires: TriggerFire[]): void {
-    const { ledger, clock } = this.deps;
-    const now = clock();
-    const cancel = (fire: TriggerFire, reason: TriggerFireReason) => ledger.markCancelled({ id: fire.id, settledAt: new Date(now).toISOString(), reason });
-    if (!isArmedAsItStands(trigger)) return void acceptedFires.forEach((fire) => cancel(fire, 'disarmed'));
+    const now = this.deps.clock();
+    if (!isArmedAsItStands(trigger)) return void acceptedFires.forEach((fire) => this.cancel(fire, 'disarmed'));
 
     const maxAgeMs = backlogMaxAgeMsOf(trigger);
     const isFreshEnough = (fire: TriggerFire) => maxAgeMs === undefined || now - Date.parse(fire.firedAt) <= maxAgeMs;
     const fresh = acceptedFires.filter(isFreshEnough);
-    acceptedFires.filter((fire) => !isFreshEnough(fire)).forEach((fire) => cancel(fire, 'stale'));
+    acceptedFires.filter((fire) => !isFreshEnough(fire)).forEach((fire) => this.cancel(fire, 'stale'));
 
     const toReplay = trigger.policy.backlogPolicy === 'fire_latest_only' ? fresh.slice(-1) : fresh;
-    fresh.filter((fire) => !toReplay.includes(fire)).forEach((fire) => cancel(fire, 'superseded'));
-    for (const fire of toReplay) this.run({ trigger, fire });
+    fresh.filter((fire) => !toReplay.includes(fire)).forEach((fire) => this.cancel(fire, 'superseded'));
+    for (const fire of toReplay) this.process({ trigger, fire, batchSize: 1 });
+  }
+
+  private cancel(fire: TriggerFire, reason: TriggerFireReason): void {
+    this.deps.ledger.markCancelled({ id: fire.id, settledAt: new Date(this.deps.clock()).toISOString(), reason });
+  }
+
+  /** Judges an accepted fire against the chain depth, the policy and the breaker; runs it, holds it for its batch, or cancels it. */
+  private process({ trigger, fire, batchSize }: { trigger: TriggerRecord; fire: TriggerFire; batchSize: number }): TriggerLedgerState {
+    const { ledger, clock, breaker } = this.deps;
+    const isTooDeep = fire.chainDepth > MAX_CHAIN_DEPTH;
+    if (isTooDeep) return this.cancelled(fire, 'chain_depth');
+
+    const policy = policyVerdictOf({ trigger, fire, ledger, now: clock() });
+    if (policy.verdict === 'cancel') return this.cancelled(fire, policy.reason);
+    if (policy.verdict === 'hold') {
+      this.scheduleDrain(trigger.id, policy.waitMs);
+      return 'accepted';
+    }
+
+    if (!breaker.tryStart()) return this.openBreaker(trigger, fire);
+    return this.run({ trigger, fire, batchSize });
+  }
+
+  private cancelled(fire: TriggerFire, reason: TriggerFireReason): TriggerLedgerState {
+    this.cancel(fire, reason);
+    return 'cancelled';
+  }
+
+  private openBreaker(trigger: TriggerRecord, fire: TriggerFire): TriggerLedgerState {
+    this.deps.triggers.disarm(trigger.id);
+    this.cancel(fire, 'breaker_open');
+    this.deps.onBreakerOpened(trigger);
+    return 'cancelled';
+  }
+
+  private scheduleDrain(triggerId: string, waitMs: number): void {
+    if (this.drainTimers.has(triggerId)) return;
+    const cancel = this.deps.schedule(() => {
+      this.drainTimers.delete(triggerId);
+      this.drainBatchOf(triggerId);
+    }, waitMs);
+    this.drainTimers.set(triggerId, cancel);
+  }
+
+  /** Fires the newest of the held events as one batch and cancels the older ones as batched. */
+  private drainBatchOf(triggerId: string): void {
+    const trigger = this.deps.triggers.get(triggerId);
+    const held = this.deps.ledger.listAcceptedOf(triggerId);
+    const newest = held.at(-1);
+    if (newest === undefined) return;
+    if (trigger === undefined || !isArmedAsItStands(trigger)) return void held.forEach((fire) => this.cancel(fire, 'disarmed'));
+    held.slice(0, -1).forEach((fire) => this.cancel(fire, 'batched'));
+    this.process({ trigger, fire: newest, batchSize: held.length });
   }
 
   /** Writes `attempted`, runs the effect, then writes how it ended. */
-  private run({ trigger, fire }: { trigger: TriggerRecord; fire: TriggerFire }): TriggerLedgerState {
-    const { ledger, actions, clock } = this.deps;
+  private run({ trigger, fire, batchSize }: { trigger: TriggerRecord; fire: TriggerFire; batchSize: number }): TriggerLedgerState {
+    const { ledger, clock } = this.deps;
     const stillOwnsTheFire = ledger.markAttempted(fire.id);
     if (!stillOwnsTheFire) return ledger.get(fire.id)?.ledgerState ?? 'cancelled';
 
-    const result = this.performSafely({ trigger, fire });
+    const result = this.performSafely({ trigger, fire, batchSize });
     const settledAt = new Date(clock()).toISOString();
     if (result.settlement === 'completed') {
       ledger.markCompleted({ id: fire.id, settledAt, runId: result.runId });
@@ -119,7 +201,7 @@ export class TriggerEngine {
     return 'cancelled';
   }
 
-  private performSafely(input: { trigger: TriggerRecord; fire: TriggerFire }): ActionResult {
+  private performSafely(input: { trigger: TriggerRecord; fire: TriggerFire; batchSize: number }): ActionResult {
     try {
       return this.deps.actions.perform(input);
     } catch (error) {

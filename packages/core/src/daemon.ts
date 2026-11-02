@@ -19,7 +19,7 @@ import { CriteriaStatusGuard } from './escalation/criteriaStatusGuard.js';
 import { EscalationRepository } from './escalation/escalationRepository.js';
 import { EscalationService } from './escalation/escalationService.js';
 import { GovernanceQueueService } from './governance/governanceQueueService.js';
-import type { EscalationView } from '@openfleet/shared';
+import { OpenFleetError, type EscalationView } from '@openfleet/shared';
 import { decisionNotification, escalationAnswerNotification } from './governance/decisionNotification.js';
 import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
@@ -71,6 +71,8 @@ import { createGhPullRequestPort, type GhPullRequestPort } from './github/ghPull
 import { staleInProgressRowLabelsOfProject } from './managers/staleRows.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { refusingHumanProof, type HumanProofVerifier } from './triggers/humanProofVerifier.js';
+import { toSingleLineName } from './managers/singleLineName.js';
+import { FireBreaker } from './triggers/fireBreaker.js';
 import { FireLedger } from './triggers/fireLedger.js';
 import { createTriggerActions } from './triggers/triggerActions.js';
 import { TriggerEngine } from './triggers/triggerEngine.js';
@@ -194,7 +196,7 @@ export interface DaemonOptions {
   /** Tells whether a proof of arming was minted by a human gesture; absent, no proof is good and no trigger can be armed. */
   humanProof?: HumanProofVerifier;
   /** Replaces the clock of the trigger engine (epoch milliseconds), so a test decides when a fire is accepted, how old a backlog is and which day it is. */
-  triggers?: { clock?: () => number };
+  triggers?: { clock?: () => number; schedule?: (callback: () => void, delayMs: number) => () => void };
   power?: {
     api?: PowerApi;
     clock?: () => number;
@@ -401,7 +403,16 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
   const triggerRepository = new TriggerRepository(db);
   const triggers = new TriggerService({ repository: triggerRepository, humanProof: options.humanProof ?? refusingHumanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
-  const triggerEngine = new TriggerEngine({ triggers: triggerRepository, ledger: new FireLedger(db), actions: createTriggerActions({ sessions, managers: managerRepository }), clock: options.triggers?.clock ?? Date.now, newId });
+  const triggerClock = options.triggers?.clock ?? Date.now;
+  const announceBreakerOpened = (trigger: { id: string; title: string }) => {
+    log('warn', `trigger ${trigger.id} fired more than the cap in a minute and was disarmed`);
+    const error = describeError(new OpenFleetError('breaker_open', `the trigger "${toSingleLineName(trigger.title)}" fired too often in a minute and was disarmed.`, { hint: 'Check what fires it, then arm it again from the Triggers screen.' }));
+    bus.emit({ type: 'error', scope: 'broadcast', error });
+  };
+  const triggerEngine = new TriggerEngine({
+    triggers: triggerRepository, ledger: new FireLedger(db), actions: createTriggerActions({ sessions, managers: managerRepository }), breaker: new FireBreaker(triggerClock),
+    clock: triggerClock, newId, schedule: options.triggers?.schedule ?? scheduleOnRealClock, onBreakerOpened: announceBreakerOpened,
+  });
   const server = await startServer({ ...config, triggers, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
@@ -415,6 +426,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     unwatchDatabase();
     pulseScheduler.stop();
     scheduledEvents.stop();
+    triggerEngine.stop();
     childSilence.stop();
     arbiters.stop();
     await ciWatch.stop();

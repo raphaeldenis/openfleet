@@ -78,7 +78,7 @@ describe('the triggers migration', () => {
   it('ships down migrations outside the migrations folder that remove the added columns, then the three tables', () => {
     const db = openMigratedDatabase();
 
-    db.exec(readFileSync(new URL('065_trigger_fire_events.down.sql', migrationsDownDirectory), 'utf8'));
+    db.exec(readFileSync(new URL('066_trigger_fire_events.down.sql', migrationsDownDirectory), 'utf8'));
     const columnsAfterFirstDown = (db.prepare("SELECT name FROM pragma_table_info('trigger_fires')").all() as { name: string }[]).map((column) => column.name);
     db.exec(readFileSync(new URL('064_triggers.down.sql', migrationsDownDirectory), 'utf8'));
 

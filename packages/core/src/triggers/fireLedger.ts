@@ -102,10 +102,27 @@ export class FireLedger {
     return row.n;
   }
 
-  /** When the latest fire of the trigger that reached its effect was accepted, not counting `exceptId`. */
+  /** When the effect of the latest fire of the trigger happened (its settling, else its acceptance), not counting `exceptId`. */
   latestReachedEffectAt(input: { triggerId: string; exceptId: string }): string | undefined {
-    const row = this.db.prepare(`SELECT MAX(fired_at) AS at FROM trigger_fires WHERE trigger_id = ? AND id != ? AND ledger_state IN (${STATES_SQL_LIST})`)
+    const row = this.db.prepare(`SELECT MAX(COALESCE(settled_at, fired_at)) AS at FROM trigger_fires WHERE trigger_id = ? AND id != ? AND ledger_state IN (${STATES_SQL_LIST})`)
       .get(input.triggerId, input.exceptId) as { at: string | null };
     return row.at ?? undefined;
+  }
+
+  /** The fires of a trigger that wait for their turn, oldest first. */
+  listAcceptedOf(triggerId: string): TriggerFire[] {
+    const rows = this.db.prepare(`SELECT ${COLUMNS} FROM trigger_fires WHERE trigger_id = ? AND ledger_state = 'accepted' ORDER BY fired_at, rowid`).all(triggerId) as unknown as FireRow[];
+    return rows.map(toFire);
+  }
+
+  /** The deepest chain among the fires whose message went to one of the sessions since `sinceIso`; 0 when none did. The message of a fire carries the id of the fire. */
+  deepestChainMessagedSince(input: { sessionIds: readonly string[]; sinceIso: string }): number {
+    if (input.sessionIds.length === 0) return 0;
+    const placeholders = input.sessionIds.map(() => '?').join(', ');
+    const row = this.db.prepare(
+      `SELECT MAX(f.chain_depth) AS depth FROM trigger_fires f JOIN message_queue m ON m.id = f.id
+       WHERE m.session_id IN (${placeholders}) AND f.fired_at >= ? AND f.ledger_state IN (${STATES_SQL_LIST})`,
+    ).get(...input.sessionIds, input.sinceIso) as { depth: number | null };
+    return row.depth ?? 0;
   }
 }
