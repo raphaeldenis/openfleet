@@ -435,6 +435,7 @@ const alwaysTakesAValue = (flagName: string): boolean => {
 const SECRET_IN_VARIABLE_NAME =/password|passwd|passphrase|secret|token|api_?key|auth|bearer|credential/i;
 const VARIABLE_NAME_CHARACTER = /[A-Za-z0-9_]/;
 const AUTHORIZATION_SCHEME_WORD = /^(?:bearer|basic|token)$/i;
+const HEADER_SCHEME_WORD = /^(?:bearer|basic|token|digest|negotiate|ntlm)$/i;
 const HEADER_NAME_AND_COLON = /^[ \t]*([A-Za-z0-9_-]+)[ \t]*:[ \t]*/;
 const AUTHORIZATION_SCHEME_PREFIX = /^(?:bearer|basic|token)[ \t]+/i;
 const URL_AUTHORITY_END = /[\s/?#]/;
@@ -470,6 +471,16 @@ const headerCredentialStart = (text: string): number | undefined => {
   const credential = value.slice(scheme.length);
   if (!namesASecret || credential === '' || isAlreadyMasked(credential)) return NOT_FOUND;
   return prefix.length + scheme.length;
+};
+
+const ATTACHED_HEADER_OPTION = /^(?:--header=|-H)(?=.)/s;
+
+/** `--header=Authorization:…`, `-HX-Api-Key:…`: where the credential of a header given inside its option starts. */
+const attachedHeaderCredentialStart = (text: string): number | undefined => {
+  const option = ATTACHED_HEADER_OPTION.exec(text)?.[0];
+  if (option === undefined) return NOT_FOUND;
+  const credentialStart = headerCredentialStart(text.slice(option.length));
+  return credentialStart === NOT_FOUND ? NOT_FOUND : option.length + credentialStart;
 };
 
 /** `scheme://user:password@host`: the credentials end at the last `@` before the host ends (a password may hold an `@`, never a `/`). */
@@ -615,6 +626,19 @@ class CommandMasking {
     this.masks.push(this.toCommandRange({ start: valueRange.start, end: credentialRange.end }));
   }
 
+  /** Masks the credential of a header from `from`; a scheme word given alone (`Authorization:Bearer`, `Digest`) stays readable and the next argument is masked. */
+  private maskHeaderCredential(index: number, from: number): void {
+    const word = this.words[index]!;
+    const isASchemeWordAlone = HEADER_SCHEME_WORD.test(word.text.slice(from));
+    if (!isASchemeWordAlone) {
+      this.maskValue(index, from);
+      return;
+    }
+    const credentialIndex = this.nextArgumentIndex(index);
+    if (credentialIndex === NOT_FOUND || isAlreadyMasked(this.words[credentialIndex]!.text)) return;
+    this.maskValue(credentialIndex, 0);
+  }
+
   /** The index of the next argument of the same command, past the words that redirections name; NOT_FOUND when the command ends first or that argument is masked. */
   private nextArgumentIndex(index: number): number | undefined {
     const next = this.nextArgumentIndexes[index];
@@ -640,9 +664,14 @@ class CommandMasking {
     const word = this.words[index]!;
     const isAnOption = word.text.startsWith('-') && !word.isARedirectionTarget;
     if (isAnOption && (this.maskSecretFlag(index) || this.maskProgramPassword(index))) return;
-    const namedSecretStart = assignedSecretStart(word.text) ?? headerCredentialStart(word.text);
-    if (namedSecretStart !== NOT_FOUND) {
-      this.maskValue(index, namedSecretStart);
+    const assignedStart = assignedSecretStart(word.text);
+    if (assignedStart !== NOT_FOUND) {
+      this.maskValue(index, assignedStart);
+      return;
+    }
+    const headerStart = headerCredentialStart(word.text) ?? attachedHeaderCredentialStart(word.text);
+    if (headerStart !== NOT_FOUND) {
+      this.maskHeaderCredential(index, headerStart);
       return;
     }
     for (const credentials of urlCredentialRanges(word.text)) this.maskCharacters(word, credentials.start, credentials.end);

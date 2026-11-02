@@ -228,6 +228,35 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     });
   });
 
+  describe('a credential header given unquoted', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = ['Probe', 'Value', '92'].join('');
+
+    it.each([
+      [`curl --header=Authorization:${secret} https://h`, 'curl --header=Authorization:*** https://h'],
+      [`curl -H Authorization:${secret} https://h`, 'curl -H Authorization:*** https://h'],
+      [`curl -HAuthorization:${secret} https://h`, 'curl -HAuthorization:*** https://h'],
+      [`curl --header=Proxy-Authorization:${secret} https://h`, 'curl --header=Proxy-Authorization:*** https://h'],
+      [`curl --header=X-Api-Key:${secret} https://h`, 'curl --header=X-Api-Key:*** https://h'],
+      [`curl --header=X-Auth-Token:${secret} https://h`, 'curl --header=X-Auth-Token:*** https://h'],
+      [`curl --header=Cookie:${secret} https://h`, 'curl --header=Cookie:*** https://h'],
+      [`curl --header=Authorization:Bearer ${secret} https://h`, 'curl --header=Authorization:Bearer *** https://h'],
+      [`curl -H Authorization:Basic ${secret} https://h`, 'curl -H Authorization:Basic *** https://h'],
+    ])('masks the credential and keeps the URL readable in %s', (command, expected) => {
+      expect(maskedCommandSecrets(command)).toBe(expected);
+    });
+
+    it('masks the credential after a Digest scheme, which the shared masker runs to the end of the line', () => {
+      expect(maskedCommandSecrets(`curl -H Authorization:Digest ${secret} https://h`)).toBe('curl -H Authorization:Digest ***');
+    });
+
+    it('leaves a header that names no credential readable', () => {
+      const command = 'curl --header=Accept:application/json https://h';
+
+      expect(maskedCommandSecrets(command)).toBe(command);
+    });
+  });
+
   describe('a redirection between an option and its value', () => {
     // Built at run time: no token-shaped literal sits in the source.
     const secret = ['Probe', 'Value', '92'].join('');
