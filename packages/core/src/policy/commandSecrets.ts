@@ -189,7 +189,16 @@ const isSecretFlagName = (name: string): boolean => {
   });
 };
 
-const SECRET_IN_VARIABLE_NAME = /password|passwd|passphrase|secret|token|api_?key|auth|bearer|credential/i;
+/** `--token`, `--db-password`, `--api-key`: a name that ends on the secret always takes the next word as its value, even one that starts with a dash; `--token-count`, `--auth-type` or `--no-auth` may stand alone. */
+const alwaysTakesAValue = (flagName: string): boolean => {
+  const segments = flagName.replace(LEADING_DASHES, '').toLowerCase().split('-');
+  const lastSegment = segments[segments.length - 1] ?? '';
+  const endsOnApiKey = segments[segments.length - 2] === 'api' && lastSegment === 'key';
+  const isANegation = segments[0] === 'no';
+  return !isANegation && (SECRET_FLAG_WORDS.has(lastSegment) || endsOnApiKey);
+};
+
+const SECRET_IN_VARIABLE_NAME =/password|passwd|passphrase|secret|token|api_?key|auth|bearer|credential/i;
 const VARIABLE_NAME_CHARACTER = /[A-Za-z0-9_]/;
 const AUTHORIZATION_SCHEME_WORD = /^(?:bearer|basic|token)$/i;
 const HEADER_NAME_AND_COLON = /^[ \t]*([A-Za-z0-9_-]+)[ \t]*:[ \t]*/;
@@ -290,6 +299,16 @@ const ATTACHED_A_PASSWORD = /^-a(?=.)/s;
 const CURL_USER_OPTIONS = new Set(['-u', '-U', '--user', '--proxy-user']);
 const ATTACHED_CURL_USER = /^(?:-u|-U|--user=|--proxy-user=)(?=.)/s;
 
+/** An option whose value is the next word, and where the secret starts in that value. */
+interface ValueTakingOption {
+  alwaysTakesAValue: boolean;
+  secretStart?: (value: string) => number | undefined;
+}
+
+const WHOLE_VALUE = (): number => 0;
+const PROGRAM_PASSWORD_OPTION: ValueTakingOption = { alwaysTakesAValue: true };
+const CURL_USER_OPTION: ValueTakingOption = { alwaysTakesAValue: true, secretStart: userPasswordStart };
+
 /** Masks the secrets of one command's words; a word holding a command of its own (`sh -c "…"`) is scanned as a command one level deeper. */
 class CommandMasking {
   private readonly programsInCommand = new Set<PasswordProgram>();
@@ -338,10 +357,13 @@ class CommandMasking {
     return next === undefined || next.startsACommand || next.isMasked ? undefined : next;
   }
 
-  /** Masks the word that holds the value of the option at `index`. */
-  private maskValueAfter(index: number, secretStart: (value: string) => number | undefined = () => 0): boolean {
+  /** Masks the word that holds the value of the option at `index`; a dash starts the value of an option that always takes one, and another option otherwise. */
+  private maskValueAfter(index: number, option: ValueTakingOption): boolean {
     const value = this.nextInCommand(index);
-    if (!value || value.text.startsWith('-') || isAlreadyMasked(value.text)) return false;
+    if (!value || isAlreadyMasked(value.text)) return false;
+    const isAnotherOption = value.text.startsWith('-') && !option.alwaysTakesAValue;
+    if (isAnotherOption) return false;
+    const secretStart = option.secretStart ?? WHOLE_VALUE;
     const from = secretStart(value.text);
     if (from === NOT_FOUND) return false;
     this.maskValue(index + 1, from);
@@ -379,7 +401,7 @@ class CommandMasking {
     const isGivenWithEquals = equalsAt !== -1;
     const flagName = isGivenWithEquals ? word.text.slice(0, equalsAt) : word.text;
     if (!isSecretFlagName(flagName)) return false;
-    if (!isGivenWithEquals) return this.maskValueAfter(index);
+    if (!isGivenWithEquals) return this.maskValueAfter(index, { alwaysTakesAValue: alwaysTakesAValue(flagName) });
     const value = word.text.slice(equalsAt + 1);
     if (value === '' || isAlreadyMasked(value)) return false;
     this.maskValue(index, equalsAt + 1);
@@ -396,11 +418,11 @@ class CommandMasking {
       return true;
     };
     if (isIn('mysql') && maskFrom(attachedValueStart(text, ATTACHED_P_PASSWORD))) return true;
-    if (isIn('sshpass') && text === '-p') return this.maskValueAfter(index);
+    if (isIn('sshpass') && text === '-p') return this.maskValueAfter(index, PROGRAM_PASSWORD_OPTION);
     if (isIn('sshpass') && maskFrom(attachedValueStart(text, ATTACHED_P_PASSWORD))) return true;
-    if (isIn('redis-cli') && text === '-a') return this.maskValueAfter(index);
+    if (isIn('redis-cli') && text === '-a') return this.maskValueAfter(index, PROGRAM_PASSWORD_OPTION);
     if (isIn('redis-cli') && maskFrom(attachedValueStart(text, ATTACHED_A_PASSWORD))) return true;
-    if (isIn('curl') && CURL_USER_OPTIONS.has(text)) return this.maskValueAfter(index, userPasswordStart);
+    if (isIn('curl') && CURL_USER_OPTIONS.has(text)) return this.maskValueAfter(index, CURL_USER_OPTION);
     const attachedUser = isIn('curl') ? ATTACHED_CURL_USER.exec(text)?.[0] : undefined;
     if (attachedUser === undefined) return false;
     const passwordStart = userPasswordStart(text.slice(attachedUser.length));

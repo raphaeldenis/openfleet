@@ -133,6 +133,31 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     });
   });
 
+  describe('an option that always takes the next word as its value', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const dashedSecret = ['-SEKR', 'ET', '42'].join('');
+
+    it.each([
+      ['sshpass -p', `sshpass -p ${dashedSecret} ssh host`, 'sshpass -p *** ssh host'],
+      ['redis-cli -a', `redis-cli -a ${dashedSecret} ping`, 'redis-cli -a *** ping'],
+      ['curl -u', `curl -u alice:${dashedSecret} https://example.com`, 'curl -u alice:*** https://example.com'],
+      ['--token', `tool --token ${dashedSecret} --force`, 'tool --token *** --force'],
+      ['--password', `tool --password ${dashedSecret} --force`, 'tool --password *** --force'],
+      ['--api-key', `tool --api-key ${dashedSecret} --force`, 'tool --api-key *** --force'],
+      ['--db-password', `tool --db-password ${dashedSecret} --force`, 'tool --db-password *** --force'],
+    ])('masks a value of %s that starts with a dash', (_label, command, expected) => {
+      expect(maskedCommandSecrets(command)).toBe(expected);
+    });
+
+    it.each([
+      'tool --token-count --json',
+      'tool --no-auth --verbose',
+      'tool --auth-type --verbose',
+    ])('leaves the next option of %s readable when the option may stand alone', (command) => {
+      expect(maskedCommandSecrets(command)).toBe(command);
+    });
+  });
+
   describe('the text around a masked value', () => {
     // Built at run time: no token-shaped literal sits in the source.
     const secret = ['SEKR', 'ET', '42'].join('');
