@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { SecretScope } from '@openfleet/shared';
+import type { OperatorAction } from './nonceLedger.js';
 import type { DaemonToParentMessage, ParentToDaemonMessage, SecretAnswer, SecretParentLink } from './secretParentLink.js';
 
 export type SecretRequest = Extract<DaemonToParentMessage, { type: 'secret_request' }>;
@@ -50,7 +51,7 @@ export function createFakeTauriParent() {
       behaviour = next;
     },
     /** What the Tauri command that mints the operator nonce does: draws a random nonce and writes it to the stdin of the daemon. */
-    mintOperatorNonce: ({ action, scope, name }: { action: 'set' | 'clear'; scope: SecretScope; name: string }): string => {
+    mintOperatorNonce: ({ action, scope, name }: { action: OperatorAction; scope: SecretScope; name: string }): string => {
       const nonce = randomBytes(24).toString('base64url');
       writeToDaemon({ type: 'operator_nonce', nonce, action, scopeKind: scope.kind, scopeId: scope.id, name });
       return nonce;

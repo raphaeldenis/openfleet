@@ -22,9 +22,9 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Kind | HTTP status | Codes |
 | --- | --- | --- |
-| `invalid_request` | 400 | 18 |
-| `unauthorized` | 401 | 2 |
-| `not_found` | 404 | 15 |
+| `invalid_request` | 400 | 20 |
+| `unauthorized` | 401 | 3 |
+| `not_found` | 404 | 17 |
 | `conflict` | 409 | 44 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 13 |
@@ -50,6 +50,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `outside_own_repository` | 400 | `never` |
 | `docs_root_invalid` | 400 | `never` |
 | `docs_root_forbidden` | 400 | `never` |
+| `too_many_conditions` | 400 | `never` |
+| `trigger_field_prefix` | 400 | `never` |
 | `question_unclassified` | 400 | `never` |
 | `row_guard_violation` | 400 | `never` |
 | `message_held_for_review` | 400 | `never` |
@@ -60,6 +62,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | Code | HTTP status | Retry |
 | --- | --- | --- |
 | `unauthorized` | 401 | `never` |
+| `human_proof_required` | 401 | `never` |
 | `secret_nonce_invalid` | 401 | `never` |
 
 ### not_found
@@ -78,6 +81,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `handoff_not_found` | 404 | `never` |
 | `proposal_not_found` | 404 | `never` |
 | `law_not_found` | 404 | `never` |
+| `trigger_not_found` | 404 | `never` |
+| `trigger_condition_not_found` | 404 | `never` |
 | `escalation_not_found` | 404 | `never` |
 | `secret_scope_not_found` | 404 | `never` |
 | `secret_not_declared` | 404 | `never` |

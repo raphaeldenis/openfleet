@@ -126,7 +126,7 @@ pub fn operator_nonce_from(random: [u8; OPERATOR_NONCE_BYTES]) -> String {
   random.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// What one operator nonce authorises: one action on one secret. The daemon refuses the nonce for any other action or secret.
+/// What one operator nonce authorises: one action on one secret, or the arming of one trigger (scope kind `trigger`, the trigger id as scope id and as name). The daemon refuses the nonce for any other action or target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OperatorGrant<'a> {
   pub action: &'a str,
@@ -135,8 +135,10 @@ pub struct OperatorGrant<'a> {
   pub name: &'a str,
 }
 
-const GRANT_ACTIONS: [&str; 2] = ["set", "clear"];
+const SECRET_GRANT_ACTIONS: [&str; 2] = ["set", "clear"];
+const ARM_TRIGGER_ACTION: &str = "trigger.arm";
 const GRANT_SCOPE_KINDS: [&str; 3] = ["playbook", "connection", "trigger"];
+const TRIGGER_SCOPE_KIND: &str = "trigger";
 const GRANT_MAX_CHARS: usize = 128;
 
 fn is_secret_name(name: &str) -> bool {
@@ -145,13 +147,30 @@ fn is_secret_name(name: &str) -> bool {
   starts_well && characters.all(|character| character.is_ascii_alphanumeric() || character == '_') && name.len() <= GRANT_MAX_CHARS
 }
 
+fn has_usable_id(id: &str) -> bool {
+  !id.is_empty() && id.len() <= GRANT_MAX_CHARS
+}
+
+fn is_acceptable_secret_grant(grant: &OperatorGrant) -> bool {
+  let is_known_action = SECRET_GRANT_ACTIONS.contains(&grant.action);
+  let is_known_scope_kind = GRANT_SCOPE_KINDS.contains(&grant.scope_kind);
+  is_known_action && is_known_scope_kind && has_usable_id(grant.scope_id) && is_secret_name(grant.name)
+}
+
+fn is_acceptable_arm_trigger_grant(grant: &OperatorGrant) -> bool {
+  let is_trigger_scope = grant.scope_kind == TRIGGER_SCOPE_KIND;
+  let names_the_trigger = grant.name == grant.scope_id;
+  grant.action == ARM_TRIGGER_ACTION && is_trigger_scope && names_the_trigger && has_usable_id(grant.scope_id)
+}
+
+fn is_acceptable_grant(grant: &OperatorGrant) -> bool {
+  is_acceptable_secret_grant(grant) || is_acceptable_arm_trigger_grant(grant)
+}
+
 /// The line that hands an operator nonce to the daemon over the sidecar's stdin, bound to its grant. A grant the daemon would not accept is refused here, so no nonce is minted for it.
 pub fn operator_nonce_line(nonce: &str, grant: &OperatorGrant) -> Result<String, String> {
-  let is_known_action = GRANT_ACTIONS.contains(&grant.action);
-  let is_known_scope_kind = GRANT_SCOPE_KINDS.contains(&grant.scope_kind);
-  let has_usable_scope_id = !grant.scope_id.is_empty() && grant.scope_id.len() <= GRANT_MAX_CHARS;
-  if !(is_known_action && is_known_scope_kind && has_usable_scope_id && is_secret_name(grant.name)) {
-    return Err("this action on this secret cannot be authorised".to_string());
+  if !is_acceptable_grant(grant) {
+    return Err("this action on this target cannot be authorised".to_string());
   }
   let message = json!({ "type": "operator_nonce", "nonce": nonce, "action": grant.action, "scopeKind": grant.scope_kind, "scopeId": grant.scope_id, "name": grant.name });
   Ok(format!("{SECRET_LINE_PREFIX}{message}\n"))
@@ -461,6 +480,31 @@ mod tests {
   #[test]
   fn accepts_the_clear_action() {
     assert!(operator_nonce_line("abc123", &OperatorGrant { action: "clear", ..GRANT }).is_ok());
+  }
+
+  const ARM_GRANT: OperatorGrant = OperatorGrant { action: "trigger.arm", scope_kind: "trigger", scope_id: "0b1c-trigger", name: "0b1c-trigger" };
+
+  #[test]
+  fn hands_the_daemon_a_nonce_for_arming_one_trigger_whose_id_need_not_look_like_a_secret_name() {
+    let line = operator_nonce_line("abc123", &ARM_GRANT).unwrap();
+
+    let message: Value = serde_json::from_str(secret_line_payload(&line).unwrap()).unwrap();
+    assert_eq!(message, json!({ "type": "operator_nonce", "nonce": "abc123", "action": "trigger.arm", "scopeKind": "trigger", "scopeId": "0b1c-trigger", "name": "0b1c-trigger" }));
+  }
+
+  #[test]
+  fn mints_no_arming_nonce_that_does_not_name_one_trigger() {
+    let too_long = "n".repeat(GRANT_MAX_CHARS + 1);
+    let refused = [
+      OperatorGrant { scope_kind: "playbook", ..ARM_GRANT },
+      OperatorGrant { name: "another-trigger", ..ARM_GRANT },
+      OperatorGrant { scope_id: "", name: "", ..ARM_GRANT },
+      OperatorGrant { scope_id: &too_long, name: &too_long, ..ARM_GRANT },
+    ];
+
+    for grant in &refused {
+      assert!(operator_nonce_line("abc123", grant).is_err(), "{grant:?}");
+    }
   }
 
   #[test]

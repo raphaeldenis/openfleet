@@ -12,6 +12,8 @@ const NAMED_ROUTES: Readonly<Record<string, RestActionName>> = {
   'PUT /api/command-policy': { action: 'command_policy.save' },
   'PUT /api/secrets/:scopeKind/:scopeId/:name': { action: 'secret.set' },
   'DELETE /api/secrets/:scopeKind/:scopeId/:name': { action: 'secret.clear' },
+  'POST /api/triggers/:id/arm': { action: 'trigger.arm', entity: { kind: 'trigger', idParam: 'id' } },
+  'POST /api/triggers/:id/disarm': { action: 'trigger.disarm', entity: { kind: 'trigger', idParam: 'id' } },
 };
 
 /** The name a REST route goes by in the activity log: a semantic one for the routes above, `METHOD template` for the others. */

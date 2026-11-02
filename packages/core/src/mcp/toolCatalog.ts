@@ -8,7 +8,7 @@ export { TOOL_CATEGORIES, type ToolCategory };
  * destructive: removes data, or overwrites content or settings in place without history.
  * execution_external: runs git or a process, or delivers a message into a session.
  */
-export type ToolDomain = 'data_stores' | 'notes' | 'sessions' | 'managers' | 'governance' | 'escalation' | 'review' | 'worktrees' | 'projects' | 'knowledge' | 'working_state' | 'playbooks';
+export type ToolDomain = 'data_stores' | 'notes' | 'sessions' | 'managers' | 'governance' | 'escalation' | 'review' | 'worktrees' | 'projects' | 'knowledge' | 'working_state' | 'triggers' | 'playbooks';
 
 export interface ToolCatalogEntry {
   domain: ToolDomain;
@@ -105,4 +105,16 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
 
   get_working_state: { domain: 'working_state', category: 'read_only' },
   update_working_state: { domain: 'working_state', category: 'destructive' },
+
+  add_trigger_condition: { domain: 'triggers', category: 'additive' },
+  create_trigger: { domain: 'triggers', category: 'additive' },
+  delete_trigger: { domain: 'triggers', category: 'destructive' },
+  delete_trigger_condition: { domain: 'triggers', category: 'destructive' },
+  get_trigger: { domain: 'triggers', category: 'read_only' },
+  get_trigger_schema: { domain: 'triggers', category: 'read_only' },
+  list_triggers: { domain: 'triggers', category: 'read_only' },
+  set_trigger_policy: { domain: 'triggers', category: 'additive' },
+  set_trigger_run: { domain: 'triggers', category: 'additive' },
+  set_trigger_when: { domain: 'triggers', category: 'additive' },
+  update_trigger_condition: { domain: 'triggers', category: 'additive' },
 };

@@ -7,10 +7,11 @@ const MIN_REGISTERED_NONCE_CHARS = 16;
 const MAX_REGISTERED_NONCE_CHARS = 128;
 const NONCE_CHARACTERS = /^[A-Za-z0-9_-]+$/;
 
-export const OPERATOR_ACTIONS = ['set', 'clear'] as const;
+/** `set` and `clear` act on a secret; `trigger.arm` arms the trigger whose id is both the scope id and the name. */
+export const OPERATOR_ACTIONS = ['set', 'clear', 'trigger.arm'] as const;
 export type OperatorAction = (typeof OPERATOR_ACTIONS)[number];
 
-/** What an operator nonce authorises: one action on one secret. */
+/** What an operator nonce authorises: one action on one secret, or the arming of one trigger. */
 export type OperatorBinding = { action: OperatorAction; scope: SecretScope; name: string };
 
 const bindingKeyOf = ({ action, scope, name }: OperatorBinding): string => JSON.stringify([action, scope.kind, scope.id, name]);

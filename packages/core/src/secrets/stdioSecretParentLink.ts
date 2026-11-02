@@ -7,7 +7,7 @@ import { SecretAnswerSchema, type ParentToDaemonMessage, type SecretParentLink }
 /** Every line the daemon and the desktop app exchange for secrets starts with this, so that the sidecar's ordinary log lines never parse as one. */
 export const SECRET_LINE_PREFIX = 'OPENFLEET_SECRETS ';
 
-const OperatorNonceSchema = z.object({
+const SecretOperatorNonceSchema = z.object({
   type: z.literal('operator_nonce'),
   nonce: z.string(),
   action: z.enum(['set', 'clear']),
@@ -15,6 +15,18 @@ const OperatorNonceSchema = z.object({
   scopeId: z.string().min(1).max(128),
   name: z.string().regex(SECRET_NAME).max(128),
 }).strict();
+
+/** The arming of a trigger: the trigger id is the scope id and the name, so a nonce names exactly one trigger. */
+const TriggerArmNonceSchema = z.object({
+  type: z.literal('operator_nonce'),
+  nonce: z.string(),
+  action: z.literal('trigger.arm'),
+  scopeKind: z.literal('trigger'),
+  scopeId: z.string().min(1).max(128),
+  name: z.string().min(1).max(128),
+}).strict().refine((message) => message.name === message.scopeId);
+
+const OperatorNonceSchema = z.union([SecretOperatorNonceSchema, TriggerArmNonceSchema]);
 const SecretAnswerLineSchema = z.object({ type: z.literal('secret_answer'), requestId: z.string().min(1) }).and(SecretAnswerSchema);
 
 const parentMessageOf = (line: string): ParentToDaemonMessage | undefined => {

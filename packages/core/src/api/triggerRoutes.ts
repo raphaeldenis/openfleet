@@ -1,0 +1,67 @@
+import { TriggerPolicySchema, TriggerRunSchema, TriggerWhenSchema } from '@openfleet/shared';
+import { z } from 'zod';
+import type { TriggerContent } from '../triggers/triggerRepository.js';
+import type { TriggerService } from '../triggers/triggerService.js';
+import { json, queryParams, type Router } from './router.js';
+
+export const HUMAN_PROOF_HEADER = 'x-human-proof';
+
+const ConditionsSchema = z.array(z.record(z.string(), z.unknown()));
+const RevisionSchema = z.int().min(1);
+
+const ListQuerySchema = z.object({ projectId: z.string().min(1) });
+const CreateBodySchema = z.strictObject({
+  projectId: z.string().min(1), title: z.string().optional(), when: TriggerWhenSchema.optional(), conditions: ConditionsSchema.optional(),
+  run: TriggerRunSchema.optional(), policy: TriggerPolicySchema.optional(),
+});
+const ReplaceBodySchema = z.strictObject({
+  expectedRev: RevisionSchema, title: z.string().optional(), when: TriggerWhenSchema.optional(), conditions: ConditionsSchema.optional(),
+  run: TriggerRunSchema.optional(), policy: TriggerPolicySchema.optional(),
+});
+const ArmBodySchema = z.strictObject({ approvedRev: RevisionSchema });
+
+const headerValue = (value: string | string[] | undefined): string | undefined => (Array.isArray(value) ? value[0] : value);
+
+/**
+ * The human side of the triggers: every route sits under /api, behind the admin token; none sits under /mcp, so no agent arms.
+ * Arming also needs the single-use proof of a human gesture, which the admin token alone does not give.
+ */
+export function registerTriggerRoutes(router: Router, deps: { triggers: TriggerService }): void {
+  const { triggers } = deps;
+
+  router.add('GET', '/api/triggers', ({ req, res }) => {
+    const { projectId } = ListQuerySchema.parse(queryParams(req));
+    json(res, 200, triggers.list(projectId));
+  });
+
+  router.add('POST', '/api/triggers', ({ res, body }) => {
+    json(res, 201, triggers.create(CreateBodySchema.parse(body)));
+  });
+
+  router.add('GET', '/api/triggers/:id', ({ res, params }) => {
+    json(res, 200, triggers.getById(params.id!));
+  });
+
+  router.add('PUT', '/api/triggers/:id', ({ res, params, body }) => {
+    const { expectedRev, title, when, conditions, run, policy } = ReplaceBodySchema.parse(body);
+    const replacement: TriggerContent = {
+      ...(title !== undefined && { title }), ...(when !== undefined && { when }), ...(run !== undefined && { run }), ...(policy !== undefined && { policy }),
+      ...(conditions !== undefined && { conditions: triggers.conditionsWithIds(conditions) }),
+    };
+    json(res, 200, triggers.edit(params.id!, () => replacement, { expectedRev }));
+  });
+
+  router.add('DELETE', '/api/triggers/:id', ({ res, params }) => {
+    triggers.delete(params.id!);
+    json(res, 200, { deleted: params.id! });
+  });
+
+  router.add('POST', '/api/triggers/:id/arm', ({ req, res, params, body }) => {
+    const { approvedRev } = ArmBodySchema.parse(body);
+    json(res, 200, triggers.arm({ id: params.id!, approvedRev, proof: headerValue(req.headers[HUMAN_PROOF_HEADER]) }));
+  });
+
+  router.add('POST', '/api/triggers/:id/disarm', ({ res, params }) => {
+    json(res, 200, triggers.disarm(params.id!));
+  });
+}

@@ -41,6 +41,16 @@ describe('the stdio link to the desktop app', () => {
     expect(received).toEqual([OPERATOR_NONCE_MESSAGE]);
   });
 
+  it('hears the nonce that arms one trigger, whose id is not shaped like a secret name', async () => {
+    const { input, received } = openLink();
+    const armingNonce = { type: 'operator_nonce', nonce: NONCE, action: 'trigger.arm', scopeKind: 'trigger', scopeId: '0b1c-trigger', name: '0b1c-trigger' };
+
+    input.write(lineOf(armingNonce));
+    await nextTurn();
+
+    expect(received).toEqual([armingNonce]);
+  });
+
   it.each([
     ['a value', { type: 'secret_answer', requestId: 'r1', outcome: 'value', value: 'a-value-of-the-keychain' }],
     ['an outcome without a value', { type: 'secret_answer', requestId: 'r1', outcome: 'ok' }],
@@ -58,6 +68,8 @@ describe('the stdio link to the desktop app', () => {
     ['an operator nonce bound to no action', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'operator_nonce', nonce: NONCE })}`],
     ['an operator nonce bound to an action nobody defined', `${SECRET_LINE_PREFIX}${JSON.stringify({ ...OPERATOR_NONCE_MESSAGE, action: 'read' })}`],
     ['an operator nonce bound to a secret name that is not one', `${SECRET_LINE_PREFIX}${JSON.stringify({ ...OPERATOR_NONCE_MESSAGE, name: 'not a name' })}`],
+    ['an arming nonce for a scope that is not a trigger', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'operator_nonce', nonce: NONCE, action: 'trigger.arm', scopeKind: 'playbook', scopeId: 'pb-1', name: 'pb-1' })}`],
+    ['an arming nonce whose name is not the trigger id', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'operator_nonce', nonce: NONCE, action: 'trigger.arm', scopeKind: 'trigger', scopeId: 't-1', name: 't-2' })}`],
     ['a prefixed line that is not JSON', `${SECRET_LINE_PREFIX}{not json`],
     ['a prefixed message of another type', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'shutdown' })}`],
     ['an operator nonce that is not a string', `${SECRET_LINE_PREFIX}${JSON.stringify({ ...OPERATOR_NONCE_MESSAGE, nonce: 12 })}`],

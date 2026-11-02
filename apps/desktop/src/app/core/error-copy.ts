@@ -45,8 +45,11 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   outside_own_repository: { what: 'That path is outside the session’s repository', fix: 'pick one inside it' },
   docs_root_invalid: { what: 'That docs root cannot be used', fix: 'give an absolute path inside your home folder' },
   docs_root_forbidden: { what: 'That docs root is a folder OpenFleet or its tools keep for themselves', fix: 'pick another folder' },
+  too_many_conditions: { what: 'A trigger accepts at most 32 conditions', fix: 'remove one first' },
+  trigger_field_prefix: { what: 'The field of a table trigger condition must start with event.row. or event.previous.', fix: 'add the prefix' },
 
   unauthorized: { what: 'The daemon refused the app’s credentials', fix: 'check the admin token' },
+  human_proof_required: { what: 'Arming a trigger needs a human confirmation in the desktop app', fix: 'confirm it there' },
 
   not_found: { what: 'That item no longer exists' },
   project_not_found: { what: 'That project no longer exists' },
@@ -60,6 +63,8 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   proposal_not_found: { what: 'That proposal no longer exists' },
   law_not_found: { what: 'That law no longer exists' },
   escalation_not_found: { what: 'That escalation no longer exists' },
+  trigger_not_found: { what: 'That trigger no longer exists' },
+  trigger_condition_not_found: { what: 'That trigger condition no longer exists' },
   handoff_not_found: { what: 'That handoff is no longer in the docs folder', fix: 'pick another handoff or remove it' },
 
   session_closed: { what: 'The session is closed', fix: 'resume it first' },
@@ -128,6 +133,12 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   gh_timeout: { what: 'The GitHub CLI took too long to answer' },
   too_many_watched_prs: { what: 'This manager watches too many pull requests', fix: 'unwatch one' },
   harness_binary_broken: { what: 'The agent command fails its version check', fix: 'reinstall it, then spawn again' },
+  secret_scope_not_found: { what: 'Nothing declares a secret under that playbook, connection or trigger' },
+  secret_not_declared: { what: 'That secret name is not declared by its playbook, connection or trigger' },
+  secret_not_connected_on_this_device: { what: 'The secret is not connected on this device', fix: 'set its value from this device' },
+  secret_store_unavailable: { what: 'The secret store of the desktop app is not available', fix: 'unlock the keychain and keep the desktop app open' },
+  secret_too_short: { what: 'A secret value holds at least 8 characters', fix: 'enter a longer value' },
+  secret_nonce_invalid: { what: 'The confirmation of the desktop app is missing or expired', fix: 'confirm the action again in the desktop app' },
 
   internal_error: { what: 'The daemon hit an unexpected error' },
   launch_failed: { what: 'The agent failed to launch' },

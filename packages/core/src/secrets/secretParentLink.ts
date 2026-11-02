@@ -27,10 +27,10 @@ export type SecretAnswer = z.infer<typeof SecretAnswerSchema>;
 
 /**
  * What the desktop app writes to the daemon over the stdin of the sidecar, which only the app holds the writing end of:
- * the operator nonce its Tauri command minted, which authorises one REST set or clear, and the answer to a request, which names it by its request id.
+ * the operator nonce its Tauri command minted, which authorises one REST set or clear, or the arming of one trigger, and the answer to a request, which names it by its request id.
  */
 export type ParentToDaemonMessage =
-  | { type: 'operator_nonce'; nonce: string; action: 'set' | 'clear'; scopeKind: SecretScope['kind']; scopeId: string; name: string }
+  | { type: 'operator_nonce'; nonce: string; action: 'set' | 'clear' | 'trigger.arm'; scopeKind: SecretScope['kind']; scopeId: string; name: string }
   | ({ type: 'secret_answer'; requestId: string } & SecretAnswer);
 
 /** The line between the daemon and the app that spawned it: the sidecar's stdout towards the app, its stdin from the app. No other process can write to either pipe, nor take it over. */
