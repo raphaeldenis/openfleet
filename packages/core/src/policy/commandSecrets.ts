@@ -852,7 +852,8 @@ function maskedWords(command: string): string {
  * - an assignment whose name holds no secret word (`env X=… cmd`, `export X=…`): its value has no name to tell it from a setting;
  * - a credential under an arbitrary name with no recognisable format (a base64 string given as a plain argument);
  * - the word after `--password ;`, `--password &&` or `--password |`: it starts another command and is not the option's value;
- * - a header read from a file (`-H @file`): the file holds the credential, the command does not.
+ * - a header read from a file (`-H @file`): the file holds the credential, the command does not;
+ * - a program name built by an expansion (`$"cu${X:+}rl" -u …`, `c"u"$Y"rl"`): the scan reads the command as written and evaluates no expansion, so the program it names stays unknown.
  */
 export function maskedCommandSecrets(command: string): string {
   return maskedSecrets(maskedWords(command));
