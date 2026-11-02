@@ -309,7 +309,8 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
 
   describe('the cost of masking an adversarial command, uncut', () => {
     const ADVERSARIAL_LENGTH = 100_000;
-    const MAX_MILLISECONDS = 20;
+    // A linear scan takes about 15 ms here and a quadratic one over 600 ms: 100 ms leaves room for a loaded CI machine and still catches the regression.
+    const MAX_MILLISECONDS = 100;
     const MEASURES = 3;
     const repeatedTo = (unit: string, length: number) => unit.repeat(Math.ceil(length / unit.length)).slice(0, length);
     const fastestMilliseconds = (mask: () => unknown) => {
@@ -340,7 +341,7 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
       ['substitutions behind secret options', '--token $(printf '],
       ['backticks', '`'],
       ['ANSI-C escapes', "$'\\x41"],
-    ])('masks %s repeated over 100000 characters in under 20 ms', (_label, unit) => {
+    ])('masks %s repeated over 100000 characters in under 100 ms', (_label, unit) => {
       const command = repeatedTo(unit, ADVERSARIAL_LENGTH);
 
       const milliseconds = fastestMilliseconds(() => maskedCommandSecrets(command));
