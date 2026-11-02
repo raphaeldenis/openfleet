@@ -68,6 +68,56 @@ describe('createSecretMasker: forms of one value', () => {
   });
 });
 
+describe('createSecretMasker: re-spellings of the same value', () => {
+  const probeValue = ['abc', 'é', '/', 'xyz1'].join('');
+  const maskerOfProbe = () => createSecretMasker([{ name: 'PROBE', value: probeValue }]);
+  const withLowercaseHex = (urlEncoded: string) => urlEncoded.replace(/%[0-9A-F]{2}/g, (sequence) => sequence.toLowerCase());
+
+  it('replaces the URL-encoded value written with lowercase hexadecimal', () => {
+    expect(maskerOfProbe().mask(`k=${withLowercaseHex(encodeURIComponent(probeValue))}`)).toBe('k=[secret:PROBE]');
+  });
+
+  it('replaces the URL-encoded value written with mixed-case hexadecimal', () => {
+    expect(maskerOfProbe().mask('k=abc%c3%A9%2fxyz1')).toBe('k=[secret:PROBE]');
+  });
+
+  it('replaces the form-encoded value written with lowercase hexadecimal', () => {
+    const masker = createSecretMasker([{ name: 'AWKWARD', value: awkwardValue }]);
+    const formEncoded = withLowercaseHex(encodeURIComponent(awkwardValue)).replaceAll('%20', '+');
+
+    expect(masker.mask(`body=${formEncoded}`)).toBe('body=[secret:AWKWARD]');
+  });
+
+  it.each([
+    ['lowercase', 'abc\\u00e9/xyz1'],
+    ['uppercase', 'abc\\u00E9/xyz1'],
+    ['lowercase with an escaped slash', 'abc\\u00e9\\/xyz1'],
+    ['uppercase with an escaped slash', 'abc\\u00E9\\/xyz1'],
+    ['unescaped non-ASCII with an escaped slash', 'abcé\\/xyz1'],
+  ])('replaces the JSON value whose non-ASCII character is escaped as \\uXXXX, %s', (_label, jsonText) => {
+    expect(maskerOfProbe().mask(`{"k":"${jsonText}"}`)).toBe('{"k":"[secret:PROBE]"}');
+  });
+
+  it.each(['\\ud83d\\udd11', '\\uD83D\\uDD11', '\\ud83D\\uDd11'])('replaces a value made of surrogate pairs written %s', (escapedKey) => {
+    const masker = createSecretMasker([{ name: 'KEYS', value: '🔑'.repeat(8) }]);
+
+    expect(masker.mask(`"${escapedKey.repeat(8)}"`)).toBe('"[secret:KEYS]"');
+  });
+
+  it('keeps naming the owner of a value matched through another hexadecimal case', () => {
+    const masker = createSecretMasker([
+      { name: 'PROBE', value: probeValue },
+      { name: 'JIRA_TOKEN', value: jiraValue },
+    ]);
+
+    expect(masker.mask(`${withLowercaseHex(encodeURIComponent(probeValue))} ${jiraValue}`)).toBe('[secret:PROBE] [secret:JIRA_TOKEN]');
+  });
+
+  it('does not replace another value that differs by more than the hexadecimal case', () => {
+    expect(maskerOfProbe().mask('k=abc%c3%a8%2fxyz1 j=abc\\u00e8/xyz1')).toBe('k=abc%c3%a8%2fxyz1 j=abc\\u00e8/xyz1');
+  });
+});
+
 describe('createSecretMasker: occurrences', () => {
   it('replaces a secret in the middle of a word', () => {
     expect(maskerOfJira().mask(`pre${jiraValue}post`)).toBe('pre[secret:JIRA_TOKEN]post');
