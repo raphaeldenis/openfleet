@@ -11,12 +11,16 @@ interface CharacterPositions {
   segmentEnds: number[];
 }
 
-/** One shell word: the text the shell passes to the program, and where the word sits in the scanned source. */
+/**
+ * One shell word: the text the shell passes to the program, and where the word sits in the scanned source.
+ * A command substitution (`$(…)`, a backtick pair) stays in the text as written; `substitutions` says where each one and its command lie in the text.
+ */
 interface ShellWord {
   text: string;
   source: string;
   start: number;
   end: number;
+  substitutions: Substitution[];
   startsACommand: boolean;
   isMasked: boolean;
   positions?: CharacterPositions;
@@ -48,6 +52,7 @@ const endsTheWord = (character: string): boolean => {
 /** Gathers the characters of a word, segment by segment; when asked, also where each one was written. */
 class ShellWordBuilder {
   text = '';
+  readonly substitutions: Substitution[] = [];
   private segmentStart = 0;
   private segmentFirstChar = 0;
 
@@ -68,11 +73,98 @@ class ShellWordBuilder {
     }
   }
 
+  /** Adds the source from `start` to `end` as it is written, each character standing for itself. */
+  private addAsWritten(source: string, start: number, end: number): void {
+    this.text += source.slice(start, end);
+    if (!this.positions) return;
+    for (let at = start; at < end; at += 1) {
+      this.positions.charStarts.push(at);
+      this.positions.charEnds.push(at + 1);
+      this.positions.segmentStarts.push(this.segmentStart);
+    }
+  }
+
+  /** Adds a command substitution as written, one character per source character, and records where it and its command lie in the text. */
+  addSubstitution(source: string, substitution: Substitution): void {
+    const shift = this.text.length - substitution.start;
+    this.addAsWritten(source, substitution.start, substitution.end);
+    this.substitutions.push({
+      start: substitution.start + shift,
+      end: substitution.end + shift,
+      commandStart: substitution.commandStart + shift,
+      commandEnd: substitution.commandEnd + shift,
+    });
+  }
+
   closeSegment(end: number): void {
     if (!this.positions) return;
     for (let index = this.segmentFirstChar; index < this.text.length; index += 1) this.positions.segmentEnds.push(end);
   }
 }
+
+/** A command substitution in a source: the whole of it (`$(` or a backtick to its closer) and the command it runs. */
+interface Substitution {
+  start: number;
+  end: number;
+  commandStart: number;
+  commandEnd: number;
+}
+
+const opensASubstitution = (source: string, at: number): boolean => {
+  const character = source.charAt(at);
+  return character === '`' || (character === '$' && source.charAt(at + 1) === '(');
+};
+
+/**
+ * Finds where the substitution that opens at `start` closes, in one pass: quotes, nested `$(…)`, parentheses and backticks
+ * are tracked on a stack of the closers they wait for; one that never closes runs to the end of the source.
+ */
+const substitutionFrom = (source: string, start: number): Substitution => {
+  const isABacktickPair = source.charAt(start) === '`';
+  const commandStart = start + (isABacktickPair ? 1 : 2);
+  const awaitedClosers: string[] = [isABacktickPair ? '`' : ')'];
+  let at = commandStart;
+  while (at < source.length) {
+    const character = source.charAt(at);
+    const awaitedCloser = awaitedClosers[awaitedClosers.length - 1];
+    if (character === '\\') {
+      at += 2;
+      continue;
+    }
+    if (character === awaitedCloser) {
+      awaitedClosers.pop();
+      if (awaitedClosers.length === 0) return { start, end: at + 1, commandStart, commandEnd: at };
+      at += 1;
+      continue;
+    }
+    const isInsideDoubleQuotes = awaitedCloser === '"';
+    const isInsideBackticks = awaitedCloser === '`';
+    const opensANestedCommand = character === '$' && source.charAt(at + 1) === '(';
+    if (opensANestedCommand) {
+      awaitedClosers.push(')');
+      at += 2;
+      continue;
+    }
+    if (character === '`') awaitedClosers.push('`');
+    const readsQuotesAndParentheses = !isInsideDoubleQuotes && !isInsideBackticks;
+    if (readsQuotesAndParentheses && character === '"') awaitedClosers.push('"');
+    if (readsQuotesAndParentheses && character === '(') awaitedClosers.push(')');
+    if (readsQuotesAndParentheses && character === "'") {
+      const closingAt = source.indexOf("'", at + 1);
+      if (closingAt === -1) break;
+      at = closingAt + 1;
+      continue;
+    }
+    at += 1;
+  }
+  return { start, end: source.length, commandStart, commandEnd: source.length };
+};
+
+const readSubstitution = (source: string, start: number, word: ShellWordBuilder): number => {
+  const substitution = substitutionFrom(source, start);
+  word.addSubstitution(source, substitution);
+  return substitution.end;
+};
 
 /** `'…'`: no escape inside; one that never closes runs to the end of the source. Returns where the segment ends. */
 const readSingleQuoted = (source: string, openingAt: number, word: ShellWordBuilder): number => {
@@ -88,6 +180,10 @@ const readDoubleQuoted = (source: string, openingAt: number, word: ShellWordBuil
   while (at < source.length) {
     const character = source.charAt(at);
     if (character === '"') return at + 1;
+    if (opensASubstitution(source, at)) {
+      at = readSubstitution(source, at, word);
+      continue;
+    }
     const nextCharacter = source.charAt(at + 1);
     const isEscape = character === '\\' && at + 1 < source.length && ESCAPABLE_INSIDE_DOUBLE_QUOTES.has(nextCharacter);
     const width = isEscape ? 2 : 1;
@@ -172,6 +268,7 @@ const readSegment = (source: string, at: number, word: ShellWordBuilder): number
   if (character === '"') return readDoubleQuoted(source, at, word);
   const opensAnsiCQuotes = character === '$' && nextCharacter === "'";
   if (opensAnsiCQuotes) return readAnsiCQuoted(source, at, word);
+  if (opensASubstitution(source, at)) return readSubstitution(source, at, word);
   word.add(character, at, at + 1);
   return at + 1;
 };
@@ -209,7 +306,8 @@ const shellWordsOf = (source: string): ShellWord[] => {
     const builder = new ShellWordBuilder();
     const start = at;
     at = readWord(source, start, builder);
-    words.push({ text: builder.text, source, start, end: at, startsACommand: words.length === 0 || holdsASeparator, isMasked: false });
+    const startsACommand = words.length === 0 || holdsASeparator;
+    words.push({ text: builder.text, source, start, end: at, substitutions: builder.substitutions, startsACommand, isMasked: false });
   }
   return words;
 };
@@ -338,6 +436,17 @@ const WORD_GAP_OR_SEPARATOR = /[\s\u0085;&|()]/;
 
 const holdsSeveralWords = (text: string): boolean => WORD_GAP_OR_SEPARATOR.test(text);
 
+/** The text of a word with its substitutions left out: `--x=$(a b)` is one word, its substitution is read on its own. */
+const textOutsideSubstitutions = (word: ShellWord): string => {
+  let outside = '';
+  let copiedUpTo = 0;
+  for (const substitution of word.substitutions) {
+    outside += word.text.slice(copiedUpTo, substitution.start);
+    copiedUpTo = substitution.end;
+  }
+  return outside + word.text.slice(copiedUpTo);
+};
+
 const MAX_NESTED_COMMAND_DEPTH = 3;
 const NAMES_A_SECRET_OR_A_PASSWORD_PROGRAM = /passw|passphrase|secret|token|api.?key|auth|bearer|credential|mysql|mariadb|sshpass|redis-cli|curl|wget|:\/\//i;
 // Quotes, escapes, substitutions or an undecodable escape left for a level the scan does not read: what they spell stays unknown.
@@ -444,22 +553,28 @@ class CommandMasking {
       return;
     }
     for (const credentials of urlCredentialRanges(word.text)) this.maskCharacters(word, credentials.start, credentials.end);
-    if (holdsSeveralWords(word.text)) this.maskNestedCommand(word);
+    const wholeWord = { start: 0, end: word.text.length };
+    if (holdsSeveralWords(textOutsideSubstitutions(word))) {
+      this.maskNestedCommand(word, wholeWord);
+      return;
+    }
+    for (const substitution of word.substitutions) this.maskNestedCommand(word, { start: substitution.commandStart, end: substitution.commandEnd });
   }
 
   /**
-   * A word holding a whole command (`sh -c "mysql -p…"`) is masked as a command of its own.
-   * Past the depth limit, one that names a secret or a password program, or still holds quoting the scan does not read, is masked whole.
+   * The part of a word that holds a whole command (`sh -c "mysql -p…"`, the command of `$(…)`) is masked as a command of its own.
+   * Past the depth limit, a command that names a secret or a password program, or still holds quoting the scan does not read, is masked whole.
    */
-  private maskNestedCommand(word: ShellWord): void {
+  private maskNestedCommand(word: ShellWord, command: SourceRange): void {
+    const commandText = word.text.slice(command.start, command.end);
     const isPastTheDepthLimit = this.depth >= MAX_NESTED_COMMAND_DEPTH;
     if (isPastTheDepthLimit) {
-      const mayHideASecret = NAMES_A_SECRET_OR_A_PASSWORD_PROGRAM.test(word.text) || HOLDS_UNREAD_QUOTING.test(word.text);
-      if (mayHideASecret) this.maskCharacters(word, 0, word.text.length);
+      const mayHideASecret = NAMES_A_SECRET_OR_A_PASSWORD_PROGRAM.test(commandText) || HOLDS_UNREAD_QUOTING.test(commandText);
+      if (mayHideASecret) this.maskCharacters(word, command.start, command.end);
       return;
     }
-    const toCommandRange: ToCommandRange = (range) => this.toCommandRange(sourceRangeOf(word, range.start, range.end));
-    new CommandMasking(shellWordsOf(word.text), this.depth + 1, toCommandRange, this.masks).run();
+    const toCommandRange: ToCommandRange = (range) => this.toCommandRange(sourceRangeOf(word, command.start + range.start, command.start + range.end));
+    new CommandMasking(shellWordsOf(commandText), this.depth + 1, toCommandRange, this.masks).run();
   }
 
   /** `--token VALUE` or `--token=VALUE`; `--authorization=Bearer VALUE` masks the scheme and the word after it. */

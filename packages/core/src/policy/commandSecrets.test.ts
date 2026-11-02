@@ -133,6 +133,35 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     });
   });
 
+  describe('a command substitution', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = ['SEKR', 'ET', '42'].join('');
+
+    it.each([
+      ['the value of a secret option', `cmd --password $(printf '${secret}') --name keep`, 'cmd --password *** --name keep'],
+      ['the value of a secret option given with equals', `cmd --password=$(printf '${secret}') --name keep`, 'cmd --password=*** --name keep'],
+      ['a backtick value of a secret option', `cmd --password=\`printf ${secret}\` --name keep`, 'cmd --password=*** --name keep'],
+      ['a quoted substitution value', `cmd --token "$(printf '${secret}')" --name keep`, 'cmd --token *** --name keep'],
+      ['a substitution holding a closing parenthesis in quotes', `cmd --token $(printf ')${secret}') --name keep`, 'cmd --token *** --name keep'],
+      ['nested substitutions', `cmd --token $(echo $(printf '${secret}')) --name keep`, 'cmd --token *** --name keep'],
+      ['the value of a secret assignment', `API_KEY=$(printf '${secret}') run --name keep`, 'API_KEY=*** run --name keep'],
+      ['a password program run inside', `echo $(mysql -p${secret} db) --name keep`, 'echo $(mysql -p*** db) --name keep'],
+      ['a password program run inside backticks', `echo \`sshpass -p ${secret} ssh host\` --name keep`, 'echo `sshpass -p *** ssh host` --name keep'],
+      ['a password program run inside a quoted substitution', `echo "out: $(curl -u alice:${secret} https://example.com)" --name keep`, 'echo "out: $(curl -u alice:*** https://example.com)" --name keep'],
+    ])('masks %s', (_label, command, expected) => {
+      expect(maskedCommandSecrets(command)).toBe(expected);
+    });
+
+    it.each([
+      'echo $(date) $((1 + 2))',
+      'git log --since="$(date -v-1d)" --oneline',
+      'cd "$(git rev-parse --show-toplevel)"',
+      'echo `whoami`',
+    ])('leaves %s readable', (command) => {
+      expect(maskedCommandSecrets(command)).toBe(command);
+    });
+  });
+
   describe('a word spelled with ANSI-C escapes', () => {
     // Built at run time: no token-shaped literal sits in the source.
     const secret = ['SEKR', 'ET', '42'].join('');
@@ -306,6 +335,11 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
       ['escaped nested sh -c commands', 'sh -c \\"'],
       ['secret flags', '--token '],
       ['plain words', 'x '],
+      ['command substitutions', '$('],
+      ['substitutions in double quotes', '"$('],
+      ['substitutions behind secret options', '--token $(printf '],
+      ['backticks', '`'],
+      ['ANSI-C escapes', "$'\\x41"],
     ])('masks %s repeated over 100000 characters in under 20 ms', (_label, unit) => {
       const command = repeatedTo(unit, ADVERSARIAL_LENGTH);
 
