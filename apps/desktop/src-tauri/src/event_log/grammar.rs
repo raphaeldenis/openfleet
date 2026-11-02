@@ -260,10 +260,10 @@ const DAEMON_TEXT_FIELDS: &[FieldSpec] = &[
 const DAEMON_LINE_FIELDS: &[FieldSpec] = &[
   field!("id", FieldKind::Hex8, 8),
   field!("session", FieldKind::Uuid, 36),
-  field!("code", FieldKind::Enum(&CODE_VALUES), 26),
+  field!("code", FieldKind::Enum(&CODE_VALUES), 35),
   field!("msg", FieldKind::CatalogueOrBucketedOpaque, 64),
   field!("err_name", FieldKind::Enum(&ERROR_NAME_VALUES), 14),
-  field!("err_code", FieldKind::Enum(&CODE_VALUES), 26),
+  field!("err_code", FieldKind::Enum(&CODE_VALUES), 35),
   field!("err_msg", FieldKind::BucketedOpaque, 24),
   field!("frames", FieldKind::Frames, 64),
   field!("extra_fields", FieldKind::Decimal, 20),
