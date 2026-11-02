@@ -693,6 +693,18 @@ class CommandMasking {
     this.maskValue(credentialIndex, 0);
   }
 
+  /**
+   * Masks the credential of a header given inside its option (`-HAuthorization:…`, `--header=X-Api-Key:…`) from `from`.
+   * The header ends with the word: a scheme word alone (`-HAuthorization:Negotiate`) stays readable, and the next argument is no part of it.
+   */
+  private maskAttachedHeaderCredential(index: number, from: number): void {
+    const word = this.words[index]!;
+    const isASchemeWordAlone = HEADER_SCHEME_WORD.test(word.text.slice(from));
+    if (isASchemeWordAlone) return;
+    word.isMasked = true;
+    this.maskCharacters(word, from, word.text.length);
+  }
+
   /** The index of the next argument of the same command, past the words that redirections name; NOT_FOUND when the command ends first or that argument is masked. */
   private nextArgumentIndex(index: number): number | undefined {
     const next = this.nextArgumentIndexes[index];
@@ -723,7 +735,12 @@ class CommandMasking {
       this.maskValue(index, assignedStart);
       return;
     }
-    const headerStart = headerCredentialStart(word.text) ?? attachedHeaderCredentialStart(word.text);
+    const attachedHeaderStart = attachedHeaderCredentialStart(word.text);
+    if (attachedHeaderStart !== NOT_FOUND) {
+      this.maskAttachedHeaderCredential(index, attachedHeaderStart);
+      return;
+    }
+    const headerStart = headerCredentialStart(word.text);
     if (headerStart !== NOT_FOUND) {
       this.maskHeaderCredential(index, headerStart);
       return;

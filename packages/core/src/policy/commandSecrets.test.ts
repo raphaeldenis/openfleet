@@ -277,6 +277,22 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
       expect(maskedCommandSecrets(`curl -H Authorization:Digest ${secret} https://h`)).toBe('curl -H Authorization:Digest ***');
     });
 
+    it.each([
+      'curl -HAuthorization:Basic https://example.com',
+      'curl -HAuthorization:Negotiate https://example.com',
+      'curl -HAuthorization:NTLM https://example.com',
+    ])('keeps the next argument of %s readable, since the header ends with its word', (command) => {
+      expect(maskedCommandSecrets(command)).toContain(' https://example.com');
+    });
+
+    it.each([
+      [`curl -H "Authorization: Bearer ${secret}" https://example.com`, 'curl -H "Authorization: Bearer ***" https://example.com'],
+      [`curl "-HAuthorization: Bearer ${secret}" https://example.com`, 'curl "-HAuthorization: Bearer ***" https://example.com'],
+      [`curl "--header=Authorization: Basic ${secret}" https://example.com`, 'curl "--header=Authorization: Basic ***" https://example.com'],
+    ])('masks the part after the scheme of a header that holds its credential, in %s', (command, expected) => {
+      expect(maskedCommandSecrets(command)).toBe(expected);
+    });
+
     it('leaves a header that names no credential readable', () => {
       const command = 'curl --header=Accept:application/json https://h';
 
