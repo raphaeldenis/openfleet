@@ -21,7 +21,7 @@ export type UntrustedSources = {
   isItemUntrusted: boolean;
 };
 
-export type TemplateViolation = { code: 'secret_not_allowed_here' | 'untrusted_reference'; token: string; slot: TemplateSlot };
+export type TemplateViolation = { code: 'secret_not_allowed_here' | 'untrusted_reference' | 'non_canonical_url'; token: string; slot: TemplateSlot };
 
 export type ResolutionScope = {
   inputs: Record<string, unknown>;
@@ -72,16 +72,28 @@ const endOfAuthorityOf = (urlTemplate: string): number => {
   return relativeEnd < 0 ? urlTemplate.length : authorityStart + relativeEnd;
 };
 
-const referencesUntrustedData = (token: TemplateToken, untrusted: UntrustedSources): boolean => {
+/** `scheme://` followed by a host character, or a token standing for the whole base URL. */
+const CANONICAL_URL_START = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/(?=[^/\\?#])|\{\{)/;
+/** Characters the URL parser strips or rewrites (tab, newline, carriage return and other controls, backslash), which move the host out of sight. */
+const CHARACTERS_THE_URL_PARSER_REWRITES = /[\u0000-\u001f\u007f\\]/;
+
+const hasCanonicalUrlAuthority = (urlText: string): boolean => CANONICAL_URL_START.test(urlText) && !CHARACTERS_THE_URL_PARSER_REWRITES.test(urlText);
+
+const referencesUntrustedData =(token: TemplateToken, untrusted: UntrustedSources): boolean => {
   if (token.kind === 'steps') return untrusted.stepIds.has(token.stepId);
   return token.kind === 'item' && untrusted.isItemUntrusted;
 };
 
 type ViolationCheck = { template: string; slot: TemplateSlot; untrusted?: UntrustedSources };
 
-/** Lists the tokens a template may not hold in its slot: a secret outside the slots that accept one, a reference to untrusted data where it could steer a command or a request. Throws unknown_token or invalid_secret_name for a malformed token. */
+/**
+ * Lists what a template may not hold in its slot: a secret outside the slots that accept one, a reference to untrusted data where it could steer a command or a request,
+ * and, in an http_url, an authority that is not exactly `scheme://` + host (a missing or extra slash, a backslash, a tab or newline, a scheme-relative start), which the URL parser would read as another host.
+ * A non-canonical URL is reported alone. Throws unknown_token or invalid_secret_name for a malformed token.
+ */
 export const findTemplateViolations = ({ template, slot, untrusted }: ViolationCheck): TemplateViolation[] => {
   const isUrl = slot === 'http_url';
+  if (isUrl && !hasCanonicalUrlAuthority(template)) return [{ code: 'non_canonical_url', token: template, slot }];
   const endOfAuthority = isUrl ? endOfAuthorityOf(template) : template.length;
   const untrustedIsRefused = SLOTS_REFUSING_UNTRUSTED.has(slot);
 
@@ -144,4 +156,34 @@ export const resolveTemplate = ({ template, scope }: { template: string; scope: 
     copiedUpTo = token.start + token.raw.length;
   }
   return { text: text + template.slice(copiedUpTo), secretNames: [...usedSecretNames] };
+};
+
+const AUTHORITY_PARTS_OF_A_URL = ['protocol', 'username', 'password', 'hostname', 'port'] as const;
+
+const parsedUrl = (urlText: string): URL => {
+  try {
+    return new URL(urlText);
+  } catch {
+    throw new KernelError('non_canonical_url', 'the URL has no valid scheme and host once its tokens are resolved.');
+  }
+};
+
+type HttpUrlResolution = { template: string; scope: ResolutionScope; untrusted?: UntrustedSources };
+
+/**
+ * Resolves an http_url template and returns the URL exactly as the HTTP client will parse it.
+ * Refuses the template when assertTemplateAllowed does (untrusted token in the authority, secret, non-canonical authority);
+ * refuses the resolved URL when its authority part (the template up to the first `/`, `?` or `#`) is no longer `scheme://` + host,
+ * or when parsing the whole URL yields a scheme, userinfo, host or port other than the ones of that authority part.
+ */
+export const resolveHttpUrl = ({ template, scope, untrusted }: HttpUrlResolution): string => {
+  assertTemplateAllowed({ template, slot: 'http_url', untrusted });
+  const resolvedAuthority = resolveTemplate({ template: template.slice(0, endOfAuthorityOf(template)), scope }).text;
+  if (!hasCanonicalUrlAuthority(resolvedAuthority)) throw new KernelError('non_canonical_url', 'the authority of the URL is not `scheme://host` once its tokens are resolved.');
+
+  const url = parsedUrl(resolveTemplate({ template, scope }).text);
+  const expectedAuthority = parsedUrl(resolvedAuthority);
+  const changedPart = AUTHORITY_PARTS_OF_A_URL.find((part) => url[part] !== expectedAuthority[part]);
+  if (changedPart) throw new KernelError('url_authority_changed', `the resolved URL has another ${changedPart} than the authority written in the template.`);
+  return url.href;
 };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { KernelError } from './kernelError.js';
-import { type ResolutionScope, type TemplateSlot, assertTemplateAllowed, findTemplateViolations, resolveTemplate } from './tokenResolver.js';
+import { type ResolutionScope, type TemplateSlot, assertTemplateAllowed, findTemplateViolations, resolveHttpUrl, resolveTemplate } from './tokenResolver.js';
 
 const codeOfThrown = (action: () => unknown): string | undefined => {
   try {
@@ -105,7 +105,7 @@ describe('findTemplateViolations: secret tokens', () => {
   });
 
   it.each(['script_args', 'http_url', 'http_body', 'text'] as const)('refuses {{secret:..}} in %s with secret_not_allowed_here', (slot) => {
-    expect(violationCodesOf(slot, 'x {{secret:JIRA_TOKEN}}')).toEqual(['secret_not_allowed_here']);
+    expect(violationCodesOf(slot, 'https://host/x {{secret:JIRA_TOKEN}}')).toEqual(['secret_not_allowed_here']);
   });
 
   it('names the offending token and the slot', () => {
@@ -170,6 +170,109 @@ describe('findTemplateViolations: untrusted references', () => {
     it('accepts a trusted reference in the host', () => {
       expect(violationCodesOf('http_url', 'https://{{inputs.host}}/api')).toEqual([]);
     });
+  });
+});
+
+describe('findTemplateViolations: the authority of a URL is canonical', () => {
+  const untrusted = { stepIds: new Set(['bad', 'llm']), isItemUntrusted: false };
+  const violationCodesOf = (template: string) => findTemplateViolations({ template, slot: 'http_url', untrusted }).map((violation) => violation.code);
+
+  it.each([
+    ['one slash too many', 'https:///{{steps.bad.host}}/'],
+    ['one slash too few', 'https:/{{steps.bad.host}}/'],
+    ['a scheme-relative URL', '//{{steps.bad.host}}/'],
+    ['backslashes instead of slashes', 'https:\\\\{{steps.bad.host}}/'],
+    ['an uppercase scheme with one slash too many', 'HTTPS:///{{steps.bad.host}}/'],
+    ['a tab inside the scheme', 'ht\ttps://{{steps.bad.host}}/'],
+    ['a newline before the host', 'https://\n{{steps.bad.host}}/'],
+    ['a carriage return after the host', 'https://{{steps.bad.host}}\r/'],
+    ['no host at all', 'https://'],
+    ['a path right after the scheme', 'https://?x={{steps.bad.host}}'],
+    ['a backslash in the host', 'https://{{inputs.host}}\\@evil.example/'],
+    ['a literal before the first token that is no scheme', 'x{{steps.bad.url}}'],
+    ['trusted tokens only, behind one slash too many', 'https:///{{inputs.host}}/'],
+  ])('refuses %s with non_canonical_url', (_label, template) => {
+    expect(violationCodesOf(template)).toEqual(['non_canonical_url']);
+  });
+
+  it('judges the authority without any untrusted rule', () => {
+    expect(findTemplateViolations({ template: 'https:///{{inputs.host}}/', slot: 'http_url' }).map((violation) => violation.code)).toEqual(['non_canonical_url']);
+  });
+
+  it('does not judge the authority of other slots', () => {
+    expect(findTemplateViolations({ template: '//{{inputs.host}}', slot: 'http_body' })).toEqual([]);
+  });
+
+  it.each([
+    'https://{{inputs.host}}:8080/api',
+    'https://[::1]:8080/{{steps.llm.key}}',
+    'HTTPS://jira.example.com/{{steps.llm.key}}',
+    'https://user%40x:pw@jira.example.com/{{steps.llm.key}}',
+    '{{inputs.baseUrl}}/api',
+  ])('accepts the canonical authority of %s', (template) => {
+    expect(violationCodesOf(template)).toEqual([]);
+  });
+
+  it.each([
+    ['an encoded @ followed by an untrusted token', 'https://a%40{{steps.bad.x}}@good.example/'],
+    ['an untrusted token in an IPv6 literal', 'https://[{{steps.bad.ip}}]:443/'],
+    ['an untrusted token in the port', 'https://good.example:{{steps.bad.port}}/'],
+  ])('keeps refusing %s as untrusted_reference', (_label, template) => {
+    expect(violationCodesOf(template)).toEqual(['untrusted_reference']);
+  });
+});
+
+describe('resolveHttpUrl', () => {
+  const urlScope: ResolutionScope = {
+    inputs: { host: 'jira.example.com', port: 8443, base: 'https://jira.example.com', schemeless: 'jira.example.com', slashedHost: '/evil.example', tabbedHost: 'jira\t.evil.example' },
+    steps: { llm: { key: '@evil.example', tabbed: 'a\tb\nc' } },
+    secretValueOf: () => undefined,
+  };
+  const untrusted = { stepIds: new Set(['llm']), isItemUntrusted: false };
+  const resolveUrl = (template: string) => resolveHttpUrl({ template, scope: urlScope, untrusted });
+
+  it('returns the URL as the HTTP client parses it', () => {
+    expect(resolveUrl('https://{{inputs.host}}:{{inputs.port}}/rest')).toBe('https://jira.example.com:8443/rest');
+  });
+
+  it('accepts a template made of a trusted base URL', () => {
+    expect(resolveUrl('{{inputs.base}}/rest')).toBe('https://jira.example.com/rest');
+  });
+
+  it('keeps an untrusted value that looks like userinfo inside the path', () => {
+    expect(resolveUrl('https://jira.example.com/{{steps.llm.key}}')).toBe('https://jira.example.com/@evil.example');
+  });
+
+  it('returns what the parser keeps of an untrusted value holding tabs and newlines', () => {
+    expect(resolveUrl('https://jira.example.com/{{steps.llm.tabbed}}')).toBe('https://jira.example.com/abc');
+  });
+
+  it('refuses an untrusted token in the authority', () => {
+    expect(codeOfThrown(() => resolveUrl('https://{{steps.llm.key}}/rest'))).toBe('untrusted_reference');
+  });
+
+  it('refuses a template whose authority is not canonical', () => {
+    expect(codeOfThrown(() => resolveUrl('https:///{{inputs.host}}/rest'))).toBe('non_canonical_url');
+  });
+
+  it('refuses a trusted value that opens a second slash after the scheme', () => {
+    expect(codeOfThrown(() => resolveUrl('https://{{inputs.slashedHost}}/rest'))).toBe('non_canonical_url');
+  });
+
+  it('refuses a trusted value holding a tab in the host', () => {
+    expect(codeOfThrown(() => resolveUrl('https://{{inputs.tabbedHost}}/rest'))).toBe('non_canonical_url');
+  });
+
+  it('refuses a trusted base URL that holds no scheme', () => {
+    expect(codeOfThrown(() => resolveUrl('{{inputs.schemeless}}/rest'))).toBe('non_canonical_url');
+  });
+
+  it('refuses a secret in the URL', () => {
+    expect(codeOfThrown(() => resolveUrl('https://jira.example.com/{{secret:JIRA_TOKEN}}'))).toBe('secret_not_allowed_here');
+  });
+
+  it('refuses a reference to nothing', () => {
+    expect(codeOfThrown(() => resolveUrl('https://{{inputs.absent}}/'))).toBe('unresolved_reference');
   });
 });
 

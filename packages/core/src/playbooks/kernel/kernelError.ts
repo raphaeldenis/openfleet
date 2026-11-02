@@ -7,6 +7,8 @@ export type KernelErrorCode =
   | 'invalid_secret_name'
   | 'secret_not_allowed_here'
   | 'untrusted_reference'
+  | 'non_canonical_url'
+  | 'url_authority_changed'
   | 'secret_too_short'
   | 'not_canonical_json';
 
