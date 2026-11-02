@@ -9,7 +9,9 @@ import { ActivityRepository } from './activityRepository.js';
 const NOW = '2026-11-01T10:00:00.000Z';
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 const BUSY_TIMEOUT_MILLISECONDS = 5000;
-const MAX_BOOT_PRUNE_MILLISECONDS = 1000;
+// Cold measure: ~320 ms for the heaviest prune (120 000 rows removed). 5 s leaves room for a loaded machine
+// (1859 ms seen at load 32) and still catches a quadratic sweep, which would take minutes at this size.
+const MAX_BOOT_PRUNE_MILLISECONDS = 5000;
 const LOG_OVER_THE_CAP = 150_000;
 
 const directories = createTempDirTracker();
@@ -44,7 +46,7 @@ const pruneAtBootTakingMilliseconds = (repository: ActivityRepository) => {
 };
 
 describe('the cost of pruning the activity log at boot', () => {
-  it('stays under a second, and far under the busy timeout, when the log holds 150 000 rows and the cap removes 50 000', () => {
+  it('stays within the boot budget, and under the busy timeout, when the log holds 150 000 rows and the cap removes 50 000', () => {
     const log = openLogOnDisk();
     fillLog(log, { count: LOG_OVER_THE_CAP, at: () => instantDaysAgo(1) });
 
@@ -56,7 +58,7 @@ describe('the cost of pruning the activity log at boot', () => {
     log.db.close();
   });
 
-  it('stays under a second when the log holds 120 000 rows past the maximum age and 30 000 fresh ones', () => {
+  it('stays within the boot budget when the log holds 120 000 rows past the maximum age and 30 000 fresh ones', () => {
     const log = openLogOnDisk();
     const PAST_THE_MAXIMUM_AGE_DAYS = ACTIVITY_RETENTION.maxAgeDays + 10;
     fillLog(log, { count: LOG_OVER_THE_CAP, at: (index) => instantDaysAgo(index < 120_000 ? PAST_THE_MAXIMUM_AGE_DAYS : 1) });
@@ -69,7 +71,7 @@ describe('the cost of pruning the activity log at boot', () => {
     log.db.close();
   });
 
-  it('stays under a second when the log is full and nothing is removed, which is the usual boot', () => {
+  it('stays within the boot budget when the log is full and nothing is removed, which is the usual boot', () => {
     const log = openLogOnDisk();
     fillLog(log, { count: ACTIVITY_RETENTION.maxRows, at: () => instantDaysAgo(1) });
 

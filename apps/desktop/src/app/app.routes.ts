@@ -21,6 +21,7 @@ export const routes: Routes = [
       { path: 'tables', loadComponent: () => import('./tables/tables-view.component').then((m) => m.TablesViewComponent) },
       // --- end Tables ---
       { path: 'usage', loadComponent: () => import('./usage/usage-view.component').then((m) => m.UsageViewComponent) },
+      { path: 'audit', loadComponent: () => import('./audit/audit-view.component').then((m) => m.AuditViewComponent) },
       { path: 'project', loadComponent: () => import('./projects/project-home.component').then((m) => m.ProjectHomeComponent) },
       { path: 'project/:id', loadComponent: () => import('./projects/project-home.component').then((m) => m.ProjectHomeComponent) },
       { path: 'manager/:id', loadComponent: () => import('./managers/manager-dashboard.component').then((m) => m.ManagerDashboardComponent) },
