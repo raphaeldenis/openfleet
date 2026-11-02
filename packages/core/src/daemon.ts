@@ -76,7 +76,7 @@ import { SessionStateSource } from './triggers/sessionStateSource.js';
 import { FireBreaker } from './triggers/fireBreaker.js';
 import { FireLedger } from './triggers/fireLedger.js';
 import { createTriggerActions } from './triggers/triggerActions.js';
-import { TriggerEngine } from './triggers/triggerEngine.js';
+import { TriggerEngine, type SettledFire } from './triggers/triggerEngine.js';
 import { TriggerRepository } from './triggers/triggerRepository.js';
 import { TriggerService } from './triggers/triggerService.js';
 import { pendingPermissionViewOf } from './mcp/pendingPermissionView.js';
@@ -410,14 +410,20 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     const error = describeError(new OpenFleetError('breaker_open', `the trigger "${toSingleLineName(trigger.title)}" fired too often in a minute and was disarmed.`, { hint: 'Check what fires it, then arm it again from the Triggers screen.' }));
     bus.emit({ type: 'error', scope: 'broadcast', error });
   };
+  const fireLedger = new FireLedger(db);
+  const announceSettledFire = ({ triggerId, fireId, ledgerState, reason }: SettledFire) => {
+    bus.emit({ type: 'trigger.fired', triggerId, fireId, ledgerState, ...(reason !== undefined && { reason }) });
+    systemActivity.triggerFired({ triggerId, ledgerState, reason });
+  };
   const triggerEngine = new TriggerEngine({
-    triggers: triggerRepository, ledger: new FireLedger(db), actions: createTriggerActions({ sessions, managers: managerRepository, clock: triggerClock, announce: (notice) => bus.emit({ type: 'notification.trigger', category: 'triggerNotice', ...notice }) }), breaker: new FireBreaker(triggerClock),
+    onSettled: announceSettledFire,
+    triggers: triggerRepository, ledger: fireLedger, actions: createTriggerActions({ sessions, managers: managerRepository, clock: triggerClock, announce: (notice) => bus.emit({ type: 'notification.trigger', category: 'triggerNotice', ...notice }) }), breaker: new FireBreaker(triggerClock),
     clock: triggerClock, newId, schedule: options.triggers?.schedule ?? scheduleOnRealClock, onBreakerOpened: announceBreakerOpened,
   });
   const sessionStateSource = new SessionStateSource({
     bus, sessions, managers: managerRepository, triggers: triggerRepository, engine: triggerEngine, clock: triggerClock, schedule: options.triggers?.schedule ?? scheduleOnRealClock,
   });
-  const server = await startServer({ ...config, triggers, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, triggers, triggerFires: fireLedger, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

@@ -83,7 +83,7 @@ describe('the tool catalog', () => {
 
     expect(triggerEntries.sort()).toEqual([
       ['add_trigger_condition', 'additive'], ['create_trigger', 'additive'], ['delete_trigger', 'destructive'], ['delete_trigger_condition', 'destructive'],
-      ['get_trigger', 'read_only'], ['get_trigger_schema', 'read_only'], ['list_triggers', 'read_only'], ['set_trigger_policy', 'additive'],
+      ['get_trigger', 'read_only'], ['get_trigger_schema', 'read_only'], ['list_trigger_fires', 'read_only'], ['list_triggers', 'read_only'], ['set_trigger_policy', 'additive'],
       ['set_trigger_run', 'additive'], ['set_trigger_when', 'additive'], ['update_trigger_condition', 'additive'],
     ]);
   });

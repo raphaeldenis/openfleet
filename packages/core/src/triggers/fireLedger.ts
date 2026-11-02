@@ -1,4 +1,4 @@
-import type { TriggerFireReason, TriggerLedgerState } from '@openfleet/shared';
+import type { TriggerFireReason, TriggerFireView, TriggerLedgerState } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
 
 export interface TriggerFire {
@@ -9,6 +9,7 @@ export interface TriggerFire {
   firedAt: string;
   settledAt: string | null;
   settleReason: TriggerFireReason | null;
+  runId: string | null;
   eventDigest: string | null;
   event: Record<string, unknown>;
   /** 1 for an event nothing in the fleet caused; one more than the fire whose message set the session going. */
@@ -17,20 +18,25 @@ export interface TriggerFire {
 
 interface FireRow {
   id: string; trigger_id: string; dedup_key: string; ledger_state: TriggerLedgerState; fired_at: string; settled_at: string | null;
-  settle_reason: TriggerFireReason | null; event_digest: string | null; event_json: string; chain_depth: number;
+  settle_reason: TriggerFireReason | null; run_id: string | null; event_digest: string | null; event_json: string; chain_depth: number;
 }
 
-const COLUMNS = 'id, trigger_id, dedup_key, ledger_state, fired_at, settled_at, settle_reason, event_digest, event_json, chain_depth';
+const COLUMNS = 'id, trigger_id, dedup_key, ledger_state, fired_at, settled_at, settle_reason, run_id, event_digest, event_json, chain_depth';
 
 const toFire = (row: FireRow): TriggerFire => ({
   id: row.id, triggerId: row.trigger_id, dedupKey: row.dedup_key, ledgerState: row.ledger_state, firedAt: row.fired_at, settledAt: row.settled_at,
-  settleReason: row.settle_reason, eventDigest: row.event_digest, event: JSON.parse(row.event_json), chainDepth: row.chain_depth,
+  settleReason: row.settle_reason, runId: row.run_id, eventDigest: row.event_digest, event: JSON.parse(row.event_json), chainDepth: row.chain_depth,
 });
 
 const STATES_THAT_REACHED_THE_EFFECT: readonly TriggerLedgerState[] = ['attempted', 'completed', 'needs_review'];
 const STATES_SQL_LIST = STATES_THAT_REACHED_THE_EFFECT.map((state) => `'${state}'`).join(', ');
 
 export type AcceptResult = { wasAccepted: true; fire: TriggerFire } | { wasAccepted: false; fire: TriggerFire };
+
+/** The fire as the API shows it. */
+export const fireViewOf = (fire: TriggerFire): TriggerFireView => ({
+  id: fire.id, triggerId: fire.triggerId, ledgerState: fire.ledgerState, firedAt: fire.firedAt, settledAt: fire.settledAt, reason: fire.settleReason, runId: fire.runId, chainDepth: fire.chainDepth,
+});
 
 /** The ledger of the fires: each state change is one row update, written before the step it announces. */
 export class FireLedger {

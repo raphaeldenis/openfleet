@@ -25,6 +25,18 @@ export const TRIGGER_FIRE_REASONS = [
 ] as const;
 export type TriggerFireReason = (typeof TRIGGER_FIRE_REASONS)[number];
 
+/** A fire as the REST API and the tools show it: ids, times, the ledger state and why it ended. Neither the dedup key nor the event travels. */
+export interface TriggerFireView {
+  id: string;
+  triggerId: string;
+  ledgerState: TriggerLedgerState;
+  firedAt: string;
+  settledAt: string | null;
+  reason: TriggerFireReason | null;
+  runId: string | null;
+  chainDepth: number;
+}
+
 /** The twelve operators of the condition evaluator of the playbook kernel; a test in core keeps the two lists equal. */
 export const TRIGGER_CONDITION_OPERATORS = [
   'contains', 'ends_with', 'eq', 'exists', 'gt', 'gte', 'lt', 'lte', 'neq', 'not_contains', 'not_exists', 'starts_with',

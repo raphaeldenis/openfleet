@@ -1,8 +1,9 @@
 import {
   EVENT_PREFIXES_BY_SOURCE, MAX_TRIGGER_CONDITIONS, OpenFleetError, PROMPT_MANAGER_ALIAS, TRIGGER_BACKLOG_POLICIES, TRIGGER_BATCH_MODES, TRIGGER_CONDITION_JOINS,
-  TRIGGER_CONDITION_OPERATORS, TRIGGER_RUN_KINDS, TRIGGER_WHEN_SOURCES, TriggerConditionInputSchema, TriggerPolicySchema, TriggerRunSchema, TriggerWhenSchema,
-  type Session, type TriggerCondition,
+  TRIGGER_CONDITION_OPERATORS, TRIGGER_LEDGER_STATES, TRIGGER_RUN_KINDS, TRIGGER_WHEN_SOURCES, TriggerConditionInputSchema, TriggerPolicySchema, TriggerRunSchema, TriggerWhenSchema,
+  type Session, type TriggerCondition, type TriggerLedgerState,
 } from '@openfleet/shared';
+import type { FireLedger, TriggerFire } from '../triggers/fireLedger.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { newId } from '../ids.js';
@@ -54,10 +55,20 @@ const expectedRevParameter = z.number().optional().describe('The content_rev you
 
 export interface TriggerToolDeps {
   triggers: TriggerService;
+  fires: Pick<FireLedger, 'listOfTrigger'>;
   caller: Session;
 }
 
-export function registerTriggerTools(server: McpServer, { triggers, caller }: TriggerToolDeps): void {
+const MAX_FIRES_LISTED = 200;
+const DEFAULT_FIRES_LISTED = 50;
+
+/** A fire as an agent reads it: ids, times, the state and why it ended; no dedup key and no text of the event. */
+const fireToolView = (fire: TriggerFire) => ({
+  id: fire.id, ledger_state: fire.ledgerState, fired_at: fire.firedAt, settled_at: fire.settledAt ?? undefined,
+  ...(fire.settleReason !== null && { reason: fire.settleReason }), ...(fire.runId !== null && { run_id: fire.runId }), chain_depth: fire.chainDepth,
+});
+
+export function registerTriggerTools(server: McpServer, { triggers, fires, caller }: TriggerToolDeps): void {
   const projectIdOfCaller = (): string => {
     if (caller.projectId === undefined) throw new OpenFleetError('project_not_found', 'your session belongs to no project.');
     return caller.projectId;
@@ -76,6 +87,18 @@ export function registerTriggerTools(server: McpServer, { triggers, caller }: Tr
   server.registerTool('get_trigger', { description: 'One trigger: WHEN, conditions with their ids, RUN, policy, content_rev and armed state', inputSchema: { trigger: triggerParameter } }, async ({ trigger }) =>
     ok(triggerView(triggerOf(trigger))),
   );
+
+  server.registerTool('list_trigger_fires', {
+    description: 'The fires of a trigger, newest first: id, ledger_state (accepted, attempted, completed, cancelled, needs_review), times, why a fire was cancelled or needs review. A needs_review fire may or may not have had its effect and is never replayed. Optional state filter and limit (default 50, at most 200).',
+    inputSchema: { trigger: triggerParameter, state: z.string().optional().describe('Only the fires in this ledger state'), limit: z.number().optional() },
+  }, async ({ trigger, state, limit }) => {
+    const target = triggerOf(trigger);
+    const isKnownState = state === undefined || (TRIGGER_LEDGER_STATES as readonly string[]).includes(state);
+    if (!isKnownState) throw new OpenFleetError('invalid_body', `state is one of ${TRIGGER_LEDGER_STATES.join(', ')}.`);
+    const count = Math.min(Math.max(Math.trunc(limit ?? DEFAULT_FIRES_LISTED), 1), MAX_FIRES_LISTED);
+    const listed = fires.listOfTrigger(target.id, { limit: count, ...(state !== undefined && { state: state as TriggerLedgerState }) });
+    return ok({ fires: listed.map(fireToolView) });
+  });
 
   server.registerTool('create_trigger', {
     description: 'Create a trigger in your project. It starts with a session_state idle WHEN and a notify RUN; shape it with set_trigger_when, add_trigger_condition, set_trigger_run and set_trigger_policy. It cannot fire until a human arms it.',

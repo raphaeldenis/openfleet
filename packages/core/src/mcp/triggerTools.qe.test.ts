@@ -11,7 +11,7 @@ type TriggerView = {
 
 const TRIGGER_TOOLS = [
   'get_trigger_schema', 'list_triggers', 'get_trigger', 'create_trigger', 'delete_trigger', 'set_trigger_when', 'set_trigger_run',
-  'set_trigger_policy', 'add_trigger_condition', 'update_trigger_condition', 'delete_trigger_condition',
+  'set_trigger_policy', 'add_trigger_condition', 'update_trigger_condition', 'delete_trigger_condition', 'list_trigger_fires',
 ];
 
 let fixture: GovernanceFixture;
@@ -261,12 +261,11 @@ describe('delete_trigger', () => {
 });
 
 describe('the tools a session sees', () => {
-  it('offers eleven trigger tools and no tool that arms', async () => {
+  it('offers twelve trigger tools and no tool that arms', async () => {
     const names = (await lead.listTools()).tools.map((tool) => tool.name);
 
     expect(names.filter((name) => TRIGGER_TOOLS.includes(name)).sort()).toEqual([...TRIGGER_TOOLS].sort());
     expect(names.filter((name) => /arm/.test(name))).toEqual([]);
-    expect(names).not.toContain('list_trigger_fires');
   });
 
   it('shows a reviewer none of them', async () => {

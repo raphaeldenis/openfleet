@@ -41,6 +41,15 @@ export interface TriggerEngineDeps {
   schedule: (callback: () => void, delayMs: number) => () => void;
   /** Called once when the breaker disarms a trigger. */
   onBreakerOpened: (trigger: TriggerRecord) => void;
+  /** Called once for each fire that ends `completed` or `cancelled`. */
+  onSettled: (settled: SettledFire) => void;
+}
+
+export interface SettledFire {
+  triggerId: string;
+  fireId: string;
+  ledgerState: 'completed' | 'cancelled';
+  reason?: TriggerFireReason;
 }
 
 /** True when a human armed the trigger as it stands now: the armed digest still matches what would run. */
@@ -134,6 +143,7 @@ export class TriggerEngine {
 
   private cancel(fire: TriggerFire, reason: TriggerFireReason): void {
     this.deps.ledger.markCancelled({ id: fire.id, settledAt: new Date(this.deps.clock()).toISOString(), reason });
+    this.deps.onSettled({ triggerId: fire.triggerId, fireId: fire.id, ledgerState: 'cancelled', reason });
   }
 
   /** Judges an accepted fire against the chain depth, the policy and the breaker; runs it, holds it for its batch, or cancels it. */
@@ -195,9 +205,11 @@ export class TriggerEngine {
     const settledAt = new Date(clock()).toISOString();
     if (result.settlement === 'completed') {
       ledger.markCompleted({ id: fire.id, settledAt, runId: result.runId });
+      this.deps.onSettled({ triggerId: fire.triggerId, fireId: fire.id, ledgerState: 'completed' });
       return 'completed';
     }
     ledger.markCancelled({ id: fire.id, settledAt, reason: result.reason });
+    this.deps.onSettled({ triggerId: fire.triggerId, fireId: fire.id, ledgerState: 'cancelled', reason: result.reason });
     return 'cancelled';
   }
 

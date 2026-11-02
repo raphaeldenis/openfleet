@@ -1,5 +1,6 @@
-import { TriggerPolicySchema, TriggerRunSchema, TriggerWhenSchema } from '@openfleet/shared';
+import { TRIGGER_LEDGER_STATES, TriggerPolicySchema, TriggerRunSchema, TriggerWhenSchema } from '@openfleet/shared';
 import { z } from 'zod';
+import { fireViewOf, type FireLedger } from '../triggers/fireLedger.js';
 import type { TriggerContent } from '../triggers/triggerRepository.js';
 import type { TriggerService } from '../triggers/triggerService.js';
 import { json, queryParams, type Router } from './router.js';
@@ -9,7 +10,11 @@ export const HUMAN_PROOF_HEADER = 'x-human-proof';
 const ConditionsSchema = z.array(z.record(z.string(), z.unknown()));
 const RevisionSchema = z.int().min(1);
 
-const ListQuerySchema = z.object({ projectId: z.string().min(1) });
+const FiresQuerySchema = z.object({
+  state: z.enum(TRIGGER_LEDGER_STATES).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+const ListQuerySchema =z.object({ projectId: z.string().min(1) });
 const CreateBodySchema = z.strictObject({
   projectId: z.string().min(1), title: z.string().optional(), when: TriggerWhenSchema.optional(), conditions: ConditionsSchema.optional(),
   run: TriggerRunSchema.optional(), policy: TriggerPolicySchema.optional(),
@@ -26,8 +31,14 @@ const headerValue = (value: string | string[] | undefined): string | undefined =
  * The human side of the triggers: every route sits under /api, behind the admin token; none sits under /mcp, so no agent arms.
  * Arming also needs the single-use proof of a human gesture, which the admin token alone does not give.
  */
-export function registerTriggerRoutes(router: Router, deps: { triggers: TriggerService }): void {
-  const { triggers } = deps;
+export function registerTriggerRoutes(router: Router, deps: { triggers: TriggerService; fires: Pick<FireLedger, 'listOfTrigger'> }): void {
+  const { triggers, fires } = deps;
+
+  router.add('GET', '/api/triggers/:id/fires', ({ req, res, params }) => {
+    const { state, limit } = FiresQuerySchema.parse(queryParams(req));
+    const trigger = triggers.getById(params.id!);
+    json(res, 200, { fires: fires.listOfTrigger(trigger.id, { limit, ...(state !== undefined && { state }) }).map(fireViewOf) });
+  });
 
   router.add('GET', '/api/triggers', ({ req, res }) => {
     const { projectId } = ListQuerySchema.parse(queryParams(req));

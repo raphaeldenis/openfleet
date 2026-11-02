@@ -4,6 +4,7 @@ import type { ErrorEnvelope } from './errors.js';
 import type { EscalationView } from './escalation.js';
 import type { GovernanceProposalView, LawView } from './governance.js';
 import type { ManagerView } from './managers.js';
+import type { TriggerFireReason, TriggerLedgerState } from './triggers.js';
 import type { Approval, PermissionMode, ReadinessFailureReason, RuntimeAttention, Session, SessionCloseReason, SessionState } from './session.js';
 import type { SessionTodos, TodoSummary } from './todos.js';
 import type { WorkingState } from './workingState.js';
@@ -85,4 +86,6 @@ export type ServerEvent =
   | { type: 'permission.silent_blocks'; blocks: SilentBlock[] }
   | { type: 'command.denied'; denial: DeniedCommand }
   | ({ type: 'notification.trigger' } & NotificationTrigger)
+  /** A fire of a trigger settled (completed or cancelled): ids, the ledger state and, for a cancelled one, why. No text of the event. */
+  | { type: 'trigger.fired'; triggerId: string; fireId: string; ledgerState: TriggerLedgerState; reason?: TriggerFireReason }
   | NoteChangeEvent;
