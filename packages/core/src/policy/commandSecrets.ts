@@ -255,7 +255,7 @@ const readAnsiCQuoted = (source: string, openingAt: number, word: ShellWordBuild
   return source.length;
 };
 
-/** Reads the segment of a word that starts at `at` (an escaped character, a quoted segment or one plain character) and returns where it ends. */
+/** Reads the segment of a word that starts at `at` (an escaped character, a quoted segment or one plain character) and returns where it ends; `$"…"` reads as `"…"`, as bash reads it outside a translated locale. */
 const readSegment = (source: string, at: number, word: ShellWordBuilder): number => {
   const character = source.charAt(at);
   const nextCharacter = source.charAt(at + 1);
@@ -266,6 +266,8 @@ const readSegment = (source: string, at: number, word: ShellWordBuilder): number
   }
   if (character === "'") return readSingleQuoted(source, at, word);
   if (character === '"') return readDoubleQuoted(source, at, word);
+  const opensLocaleQuotes = character === '$' && nextCharacter === '"';
+  if (opensLocaleQuotes) return readDoubleQuoted(source, at + 1, word);
   const opensAnsiCQuotes = character === '$' && nextCharacter === "'";
   if (opensAnsiCQuotes) return readAnsiCQuoted(source, at, word);
   if (opensASubstitution(source, at)) return readSubstitution(source, at, word);

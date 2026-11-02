@@ -186,6 +186,17 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     });
   });
 
+  describe('a word the shell reads differently from how it is written', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = ['Probe', 'Value', '92'].join('');
+
+    it.each([
+      ['a program name in locale double quotes', `$"curl" -u bob:${secret} https://h`, '$"curl" -u bob:*** https://h'],
+    ])('masks the secret behind %s', (_label, command, expected) => {
+      expect(maskedCommandSecrets(command)).toBe(expected);
+    });
+  });
+
   describe('a command nested deeper than the scan reads', () => {
     // Built at run time: no token-shaped literal sits in the source.
     const secret = ['SEKR', 'ET', '42'].join('');
@@ -341,6 +352,7 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
       ['substitutions behind secret options', '--token $(printf '],
       ['backticks', '`'],
       ['ANSI-C escapes', "$'\\x41"],
+      ['locale double quotes', '$"'],
     ])('masks %s repeated over 100000 characters in under 100 ms', (_label, unit) => {
       const command = repeatedTo(unit, ADVERSARIAL_LENGTH);
 
