@@ -192,8 +192,18 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
 
     it.each([
       ['a program name in locale double quotes', `$"curl" -u bob:${secret} https://h`, '$"curl" -u bob:*** https://h'],
+      ['a program name split by a line continuation', `cu\\\nrl -u bob:${secret} https://h`, `cu\\\nrl -u bob:*** https://h`],
+      ['a double-quoted program name split by a line continuation', `"cu\\\nrl" -u bob:${secret} https://h`, `"cu\\\nrl" -u bob:*** https://h`],
+      ['a line continuation before the value', `curl -u \\\nbob:${secret} https://h`, `curl -u \\\nbob:*** https://h`],
+      ['a line continuation and a space before the value', `curl -u \\\n bob:${secret} https://h`, `curl -u \\\n bob:*** https://h`],
     ])('masks the secret behind %s', (_label, command, expected) => {
       expect(maskedCommandSecrets(command)).toBe(expected);
+    });
+
+    it('keeps a line continuation inside single quotes literal, so the program is not curl', () => {
+      const command = `'cu\\\nrl' -s https://h`;
+
+      expect(maskedCommandSecrets(command)).toBe(command);
     });
   });
 
@@ -353,6 +363,7 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
       ['backticks', '`'],
       ['ANSI-C escapes', "$'\\x41"],
       ['locale double quotes', '$"'],
+      ['line continuations', '\\\n'],
     ])('masks %s repeated over 100000 characters in under 100 ms', (_label, unit) => {
       const command = repeatedTo(unit, ADVERSARIAL_LENGTH);
 

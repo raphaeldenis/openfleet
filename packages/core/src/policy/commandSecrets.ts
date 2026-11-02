@@ -37,7 +37,10 @@ type ToCommandRange = (range: SourceRange) => SourceRange;
 
 const WORD_GAP = /[\s\u0085]/;
 const COMMAND_SEPARATORS = new Set([';', '&', '|', '(', ')', '\n', '\r']);
-const ESCAPABLE_INSIDE_DOUBLE_QUOTES = new Set(['$', '`', '"', '\\', '\n']);
+const LINE_BREAK = '\n';
+// A backslash before a line break continues the line: both disappear from the word, outside quotes and inside double quotes.
+const LINE_CONTINUATION = '\\\n';
+const ESCAPABLE_INSIDE_DOUBLE_QUOTES = new Set(['$', '`', '"', '\\', LINE_BREAK]);
 
 const ASCII_WORD_ENDS = Array.from({ length: 128 }, (_, code) => {
   const character = String.fromCharCode(code);
@@ -174,7 +177,7 @@ const readSingleQuoted = (source: string, openingAt: number, word: ShellWordBuil
   return closingAt === -1 ? source.length : closingAt + 1;
 };
 
-/** `"…"`: a backslash escapes `"`, `\`, `$`, a backtick and a line break; one that never closes runs to the end of the source. */
+/** `"…"`: a backslash escapes `"`, `\`, `$` and a backtick, and drops with a line break it continues; one that never closes runs to the end of the source. */
 const readDoubleQuoted = (source: string, openingAt: number, word: ShellWordBuilder): number => {
   let at = openingAt + 1;
   while (at < source.length) {
@@ -187,7 +190,8 @@ const readDoubleQuoted = (source: string, openingAt: number, word: ShellWordBuil
     const nextCharacter = source.charAt(at + 1);
     const isEscape = character === '\\' && at + 1 < source.length && ESCAPABLE_INSIDE_DOUBLE_QUOTES.has(nextCharacter);
     const width = isEscape ? 2 : 1;
-    word.add(isEscape ? nextCharacter : character, at, at + width);
+    const escapedCharacter = nextCharacter === LINE_BREAK ? '' : nextCharacter;
+    word.add(isEscape ? escapedCharacter : character, at, at + width);
     at += width;
   }
   return source.length;
@@ -261,7 +265,7 @@ const readSegment = (source: string, at: number, word: ShellWordBuilder): number
   const nextCharacter = source.charAt(at + 1);
   if (character === '\\') {
     const end = Math.min(at + 2, source.length);
-    word.add(nextCharacter, at, end);
+    word.add(nextCharacter === LINE_BREAK ? '' : nextCharacter, at, end);
     return end;
   }
   if (character === "'") return readSingleQuoted(source, at, word);
@@ -294,16 +298,36 @@ const positionsOf = (word: ShellWord): CharacterPositions => {
   return word.positions;
 };
 
+interface WordGap {
+  end: number;
+  holdsASeparator: boolean;
+}
+
+/** Skips the blanks, separators and line continuations before a word, and says whether a separator sits among them. */
+const gapFrom = (source: string, from: number): WordGap => {
+  let at = from;
+  let holdsASeparator = false;
+  while (at < source.length) {
+    if (source.startsWith(LINE_CONTINUATION, at)) {
+      at += LINE_CONTINUATION.length;
+      continue;
+    }
+    const character = source.charAt(at);
+    if (!endsTheWord(character)) break;
+    holdsASeparator ||= COMMAND_SEPARATORS.has(character);
+    at += 1;
+  }
+  return { end: at, holdsASeparator };
+};
+
 /** Splits a source into its words in one pass; a separator (`;`, `&`, `|`, a parenthesis, a line break) in the gap before a word starts a new command. */
 const shellWordsOf = (source: string): ShellWord[] => {
   const words: ShellWord[] = [];
   let at = 0;
   while (at < source.length) {
-    let holdsASeparator = false;
-    while (at < source.length && endsTheWord(source.charAt(at))) {
-      holdsASeparator ||= COMMAND_SEPARATORS.has(source.charAt(at));
-      at += 1;
-    }
+    const gap = gapFrom(source, at);
+    const holdsASeparator = gap.holdsASeparator;
+    at = gap.end;
     if (at >= source.length) return words;
     const builder = new ShellWordBuilder();
     const start = at;
