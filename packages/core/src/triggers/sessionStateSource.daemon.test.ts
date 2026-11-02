@@ -121,6 +121,95 @@ describe('idle for more than N minutes', () => {
   });
 });
 
+describe('a deadline that came due while the daemon was stopped', () => {
+  /** A child idle for 10 minutes, a 15-minute trigger, and a daemon that stays stopped for 20 minutes: the deadline fell 15 minutes before the boot. */
+  const idleChildWithDeadlineMissed = async (policy: Record<string, unknown> = {}) => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead);
+    await world.postHook(child.id, SESSION_START);
+    const triggerId = await promptLead('idle', { source: 'session_state', state: 'idle', minutes: 15 }, { policy });
+    world.advanceMs(10 * MINUTE_MS);
+    return { world, lead, child, triggerId };
+  };
+  const stateSinceOf = (sessionId: string) => (world!.db.prepare('SELECT state_since FROM sessions WHERE id = ?').get(sessionId) as { state_since: string }).state_since;
+
+  it('fires once on the next boot, and not again on the boot after', async () => {
+    const { world, lead, triggerId } = await idleChildWithDeadlineMissed();
+
+    await world.restart({ stoppedForMs: 20 * MINUTE_MS });
+    const afterFirstBoot = world.firesOf(triggerId).map((fire) => fire.ledger_state);
+    await world.restart({ stoppedForMs: MINUTE_MS });
+
+    expect(afterFirstBoot).toEqual(['completed']);
+    expect(world.firesOf(triggerId)).toHaveLength(1);
+    expect(bodiesTo(lead.id)).toHaveLength(1);
+  });
+
+  it('fires once when the daemon was killed, so the row still says idle since the start of the episode', async () => {
+    const { world, lead, child, triggerId } = await idleChildWithDeadlineMissed();
+    const episodeStart = stateSinceOf(child.id);
+
+    await world.restart({
+      stoppedForMs: 20 * MINUTE_MS,
+      whileStopped: (db) => {
+        db.prepare('DELETE FROM trigger_cursors').run();
+        db.prepare("DELETE FROM session_events WHERE kind = 'daemon_shutdown' AND session_id = ?").run(child.id);
+        db.prepare("UPDATE sessions SET state = 'idle', state_since = ?, closed_at = NULL, close_reason = NULL WHERE id = ?").run(episodeStart, child.id);
+      },
+    });
+
+    expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'completed', dedup_key: `idle:${child.id}:${episodeStart}` })]);
+    expect(bodiesTo(lead.id)).toHaveLength(1);
+  });
+
+  it('does not fire a deadline that has not come due: the episode is lost with the restart of the session, as before', async () => {
+    const { world, triggerId } = await idleChildWithDeadlineMissed();
+
+    await world.restart({ stoppedForMs: MINUTE_MS });
+
+    expect(world.firesOf(triggerId)).toEqual([]);
+  });
+
+  it('measures the age of the backlog from the real deadline: discard_stale cancels it as stale and sends nothing', async () => {
+    const { world, lead, triggerId } = await idleChildWithDeadlineMissed({ backlogPolicy: 'discard_stale', backlogMaxAgeMinutes: 5 });
+
+    await world.restart({ stoppedForMs: 20 * MINUTE_MS });
+
+    expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'cancelled', settle_reason: 'stale' })]);
+    expect(bodiesTo(lead.id)).toEqual([]);
+  });
+
+  it('keeps only the latest episode with fire_latest_only and supersedes the others', async () => {
+    const { world, lead, triggerId } = await idleChildWithDeadlineMissed({ backlogPolicy: 'fire_latest_only' });
+    const secondChild = await world.createChild(lead, 'Second');
+    await world.postHook(secondChild.id, SESSION_START);
+    world.advanceMs(MINUTE_MS);
+
+    await world.restart({ stoppedForMs: 20 * MINUTE_MS });
+
+    expect(world.firesOf(triggerId).map((fire) => [fire.ledger_state, fire.settle_reason]).sort()).toEqual([['cancelled', 'superseded'], ['completed', null]]);
+    expect(bodiesTo(lead.id)).toHaveLength(1);
+  });
+
+  it('fires once for a child whose process closed with an error while the daemon was stopped', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead, 'Crashy');
+    const triggerId = await promptLead('crash', { source: 'session_state', state: 'closed_with_error' });
+
+    await world.restart({
+      stoppedForMs: MINUTE_MS,
+      whileStopped: (db) => {
+        db.prepare("DELETE FROM session_events WHERE kind = 'daemon_shutdown' AND session_id = ?").run(child.id);
+        db.prepare("UPDATE sessions SET state = 'closed', close_reason = 'harness_exit', closed_at = ? WHERE id = ?").run(new Date(world.nowMs + 30_000).toISOString(), child.id);
+      },
+    });
+    await world.restart({ stoppedForMs: MINUTE_MS });
+
+    expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'completed' })]);
+    expect(bodiesTo(lead.id)).toHaveLength(1);
+  });
+});
+
 describe('waiting_permission for more than N minutes', () => {
   it('fires when the child sits on a permission prompt for the minutes', async () => {
     const { world, lead } = await worldWithLead();

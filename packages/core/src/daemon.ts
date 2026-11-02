@@ -76,6 +76,7 @@ import { SessionStateSource } from './triggers/sessionStateSource.js';
 import { FireBreaker } from './triggers/fireBreaker.js';
 import { FireLedger } from './triggers/fireLedger.js';
 import { createTriggerActions } from './triggers/triggerActions.js';
+import { TriggerCursors } from './triggers/triggerCursors.js';
 import { TriggerEngine, type SettledFire } from './triggers/triggerEngine.js';
 import { TriggerRepository } from './triggers/triggerRepository.js';
 import { TriggerService } from './triggers/triggerService.js';
@@ -421,7 +422,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     clock: triggerClock, newId, schedule: options.triggers?.schedule ?? scheduleOnRealClock, onBreakerOpened: announceBreakerOpened,
   });
   const sessionStateSource = new SessionStateSource({
-    bus, sessions, managers: managerRepository, triggers: triggerRepository, engine: triggerEngine, clock: triggerClock, schedule: options.triggers?.schedule ?? scheduleOnRealClock,
+    bus, sessions, managers: managerRepository, triggers: triggerRepository, cursors: new TriggerCursors(db), engine: triggerEngine, clock: triggerClock, schedule: options.triggers?.schedule ?? scheduleOnRealClock,
   });
   const server = await startServer({ ...config, triggers, triggerFires: fireLedger, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
@@ -464,10 +465,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     docsFolders.start();
     sleepGuard.start();
     systemActivity.daemonStarted(DAEMON_VERSION);
+    // Resuming writes a new state time: the source reads the episodes a killed daemon left before that.
+    const sessionsBeforeResume = sessions.list();
     await sessions.resumeAll({ onResumed: (session) => systemActivity.sessionResumed(session, lineageRootIdOf(sessions, session)) });
     arbiters.recover();
     triggerEngine.recover();
-    sessionStateSource.start();
+    sessionStateSource.start({ sessionsBeforeResume });
     childSilence.restore();
     pulseScheduler.start();
     scheduledEvents.start();

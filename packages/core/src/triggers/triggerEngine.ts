@@ -73,24 +73,48 @@ export class TriggerEngine {
 
   /** Offers one event of a source: it fires when the trigger is armed, its conditions hold and its dedup key is new. */
   submit(input: { triggerId: string; dedupKey: string; event: Record<string, unknown> }): SubmitResult {
-    const { triggers, ledger, clock, newId } = this.deps;
+    const { triggers, clock } = this.deps;
     const trigger = triggers.get(input.triggerId);
     if (trigger === undefined || !isArmedAsItStands(trigger)) return { outcome: 'not_armed' };
 
-    const holds = evaluateConditions(kernelConditionsOf(trigger.conditions), { event: input.event });
+    const accepted = this.accept({ trigger, dedupKey: input.dedupKey, event: input.event, firedAtMs: clock() });
+    if (accepted.outcome !== 'accepted') return accepted.outcome === 'duplicate' ? { outcome: 'duplicate', fireId: accepted.fire.id } : { outcome: accepted.outcome };
+
+    const ledgerState = this.process({ trigger, fire: accepted.fire, batchSize: 1 });
+    return { outcome: 'fired', fireId: accepted.fire.id, ledgerState };
+  }
+
+  /**
+   * Offers the events a source found due late, such as a wait that ended while the daemon was stopped. Each fire is dated with the moment its
+   * event was due, so its age is the lateness; the offers are then judged together by the backlog policy of the trigger, as the fires left `accepted` are at boot.
+   */
+  submitBacklog(input: { triggerId: string; offers: { dedupKey: string; event: Record<string, unknown>; dueAtMs: number }[] }): void {
+    const trigger = this.deps.triggers.get(input.triggerId);
+    if (trigger === undefined || !isArmedAsItStands(trigger)) return;
+
+    const oldestFirst = [...input.offers].sort((first, second) => first.dueAtMs - second.dueAtMs);
+    const acceptedFires: TriggerFire[] = [];
+    for (const offer of oldestFirst) {
+      const accepted = this.accept({ trigger, dedupKey: offer.dedupKey, event: offer.event, firedAtMs: offer.dueAtMs });
+      if (accepted.outcome === 'accepted') acceptedFires.push(accepted.fire);
+    }
+    if (acceptedFires.length > 0) this.replayBacklogOf(trigger, acceptedFires);
+  }
+
+  private accept(input: { trigger: TriggerRecord; dedupKey: string; event: Record<string, unknown>; firedAtMs: number }):
+    | { outcome: 'filtered' | 'event_too_large' } | { outcome: 'duplicate' | 'accepted'; fire: TriggerFire } {
+    const { ledger, newId } = this.deps;
+    const holds = evaluateConditions(kernelConditionsOf(input.trigger.conditions), { event: input.event });
     if (!holds) return { outcome: 'filtered' };
 
     const eventJson = JSON.stringify(input.event);
     if (eventJson.length > MAX_EVENT_JSON_CHARS) return { outcome: 'event_too_large' };
 
     const accepted = ledger.accept({
-      id: newId(), triggerId: trigger.id, dedupKey: input.dedupKey, firedAt: new Date(clock()).toISOString(), eventDigest: canonicalDigestOf(input.event), eventJson,
+      id: newId(), triggerId: input.trigger.id, dedupKey: input.dedupKey, firedAt: new Date(input.firedAtMs).toISOString(), eventDigest: canonicalDigestOf(input.event), eventJson,
       chainDepth: this.chainDepthOf(input.event),
     });
-    if (!accepted.wasAccepted) return { outcome: 'duplicate', fireId: accepted.fire.id };
-
-    const ledgerState = this.process({ trigger, fire: accepted.fire, batchSize: 1 });
-    return { outcome: 'fired', fireId: accepted.fire.id, ledgerState };
+    return { outcome: accepted.wasAccepted ? 'accepted' : 'duplicate', fire: accepted.fire };
   }
 
   /**
