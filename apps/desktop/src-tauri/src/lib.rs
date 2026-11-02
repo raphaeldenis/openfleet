@@ -11,9 +11,11 @@ mod issue_report;
 #[cfg(test)]
 mod linear_growth;
 mod log_file;
+mod macos_keychain;
 mod notifications;
 mod panic_hook;
 mod path_repair;
+mod secret_channel;
 
 pub use event_log::{EventName, Level, LineBuilder, LogValue, Pid, SanitizedLine, Ts};
 
@@ -42,6 +44,19 @@ fn read_admin_token(app: tauri::AppHandle) -> Result<String, String> {
   let user_home = app.path().home_dir().map_err(|err| err.to_string())?;
   let token_path = admin_token::admin_token_path(std::env::var("OPENFLEET_HOME").ok(), &user_home);
   admin_token::read_admin_token_at(&token_path)
+}
+
+/// Mints the single-use nonce that authorises one `action` (`set` or `clear`) on the secret `name` of a scope in the daemon, and hands it to the daemon over the stdin of the sidecar.
+/// The daemon refuses the nonce for any other action or secret. An agent cannot call a Tauri command nor write to that pipe, which is why the daemon asks for this nonce besides the admin token.
+#[tauri::command(async)]
+fn mint_operator_nonce(daemon: tauri::State<daemon::DaemonState>, action: String, scope_kind: String, scope_id: String, name: String) -> Result<String, String> {
+  let grant = secret_channel::OperatorGrant { action: &action, scope_kind: &scope_kind, scope_id: &scope_id, name: &name };
+  let mut random = [0u8; 24];
+  std::fs::File::open("/dev/urandom").and_then(|mut source| std::io::Read::read_exact(&mut source, &mut random)).map_err(|_| "could not draw a nonce".to_string())?;
+  let nonce = secret_channel::operator_nonce_from(random);
+  let line = secret_channel::operator_nonce_line(&nonce, &grant)?;
+  let was_written = daemon.write_to_daemon(line.as_bytes());
+  if was_written { Ok(nonce) } else { Err("the daemon of this app is not running".to_string()) }
 }
 
 const LOG_LINES_IN_REPORT: usize = 50;
@@ -159,7 +174,7 @@ pub fn run() {
         let _ = window.hide();
       }
     })
-    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, open_external_url, read_desktop_log, diagnostics_bundle::project_daemon_records, save_diagnostics_bundle, reveal_diagnostics_bundle, show_native_notification, set_dock_badge])
+    .invoke_handler(tauri::generate_handler![read_admin_token, daemon::daemon_status, reveal_logs, report_issue, open_external_url, read_desktop_log, diagnostics_bundle::project_daemon_records, save_diagnostics_bundle, reveal_diagnostics_bundle, show_native_notification, set_dock_badge, mint_operator_nonce])
     .setup(|app| {
       #[cfg(target_os = "macos")]
       focus_window_and_send_route_on_banner_click(app.handle().clone());

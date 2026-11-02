@@ -51,7 +51,7 @@ const VALUES_BY_KEY_WORD: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['code', ERROR_CODE_NAMES],
 ]);
 
-export const IDENTIFIER_KEY_WORDS: ReadonlySet<string> = new Set(['id', 'ids', 'ticket', 'tickets', 'ref', 'refs', 'note', 'store', 'project', 'manager', 'parent', 'target', 'trigger', 'run']);
+export const IDENTIFIER_KEY_WORDS: ReadonlySet<string> = new Set(['id', 'ids', 'ticket', 'tickets', 'ref', 'refs', 'note', 'store', 'project', 'playbook', 'manager', 'parent', 'target', 'trigger', 'run']);
 
 export const closedValuesOfKeyWord = (keyWord: string): ReadonlySet<string> | undefined => VALUES_BY_KEY_WORD.get(keyWord);
 

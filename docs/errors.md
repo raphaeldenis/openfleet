@@ -22,12 +22,12 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Kind | HTTP status | Codes |
 | --- | --- | --- |
-| `invalid_request` | 400 | 19 |
-| `unauthorized` | 401 | 2 |
-| `not_found` | 404 | 15 |
+| `invalid_request` | 400 | 20 |
+| `unauthorized` | 401 | 3 |
+| `not_found` | 404 | 17 |
 | `conflict` | 409 | 45 |
 | `too_large` | 413 | 4 |
-| `unavailable` | 503 | 11 |
+| `unavailable` | 503 | 13 |
 | `internal` | 500 | 4 |
 
 ## Codes
@@ -55,6 +55,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `question_unclassified` | 400 | `never` |
 | `row_guard_violation` | 400 | `never` |
 | `message_held_for_review` | 400 | `never` |
+| `secret_too_short` | 400 | `never` |
 
 ### unauthorized
 
@@ -62,6 +63,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | --- | --- | --- |
 | `unauthorized` | 401 | `never` |
 | `human_proof_required` | 401 | `never` |
+| `secret_nonce_invalid` | 401 | `never` |
 
 ### not_found
 
@@ -82,6 +84,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `trigger_not_found` | 404 | `never` |
 | `trigger_condition_not_found` | 404 | `never` |
 | `escalation_not_found` | 404 | `never` |
+| `secret_scope_not_found` | 404 | `never` |
+| `secret_not_declared` | 404 | `never` |
 
 ### conflict
 
@@ -157,6 +161,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `gh_bad_output` | 503 | `later` |
 | `gh_timeout` | 503 | `later` |
 | `harness_binary_broken` | 503 | `later` |
+| `secret_not_connected_on_this_device` | 503 | `never` |
+| `secret_store_unavailable` | 503 | `later` |
 
 ### internal
 

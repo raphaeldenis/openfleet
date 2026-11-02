@@ -151,6 +151,17 @@ export const ERROR_CODES = {
   too_many_watched_prs: { kind: 'conflict', retry: 'later' },
   // The binary answers `--version` with a failure: repairing or reinstalling it, then waiting out the 60 s health cache, lets the same spawn succeed.
   harness_binary_broken: { kind: 'unavailable', retry: 'later' },
+  // No playbook, connection or trigger declares a secret under this scope, or the scope declares no secret of this name.
+  secret_scope_not_found: { kind: 'not_found' },
+  secret_not_declared: { kind: 'not_found' },
+  // The name is declared but no value sits in this device's keychain: only a human connecting it on this device helps.
+  secret_not_connected_on_this_device: { kind: 'unavailable', retry: 'never' },
+  // The desktop app that holds the keychain is closed, the keychain is locked or the exchange timed out: starting the app or unlocking the keychain helps.
+  secret_store_unavailable: { kind: 'unavailable', retry: 'later' },
+  // A value under 8 characters cannot be masked in an output without destroying it.
+  secret_too_short: { kind: 'invalid_request' },
+  // The single-use operator nonce is missing, spent, expired or unknown: mint a fresh one from the desktop app.
+  secret_nonce_invalid: { kind: 'unauthorized' },
 
   internal_error: { kind: 'internal' },
   launch_failed: { kind: 'internal' },

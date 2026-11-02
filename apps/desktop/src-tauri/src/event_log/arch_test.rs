@@ -141,7 +141,9 @@ impl<'ast> Visit<'ast> for SourcePolicy<'_> {
     let method = call.method.to_string();
     let writes_bytes = ["write", "write_all", "write_fmt", "write_vectored"].contains(&method.as_str());
     let is_health_request = self.file == "daemon.rs" && self.function == "health_response";
-    if writes_bytes && !self.is_disk_adapter() && !is_health_request {
+    // Reviewed: these write an answer or a nonce line to the sidecar's stdin (docs/secrets.md); it reaches neither a log nor a file.
+    let is_daemon_channel_write = self.file == "daemon.rs" && ["write_all", "write_to_daemon"].contains(&self.function.as_str());
+    if writes_bytes && !self.is_disk_adapter() && !is_health_request && !is_daemon_channel_write {
       self.reject(&method);
     }
     visit::visit_expr_method_call(self, call);
