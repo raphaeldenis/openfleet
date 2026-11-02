@@ -23,9 +23,19 @@ A crash test cannot stop the process between two lines of synchronous code. The 
 ## Policy and breakers
 
 - `cooldownSeconds`: counted from the effect of the previous fire of the trigger. With `batchMode: per_batch` the fires that arrive during the cooldown wait as `accepted`; when it ends, the newest runs with `batch=N` in its header and the older ones are cancelled `batched`.
-- `maxFiresPerDay`: fires that reached their effect since local midnight.
-- Breaker: 30 effects started per minute for the whole daemon. The 31st fire is cancelled `breaker_open`, its trigger is disarmed, the Inbox gets the error code `breaker_open` (a broadcast `error` event). The counter lives in memory.
-- Chain depth: the cause of an event is found with the message a fire sent: its id is the id of the fire, so the message queue says which session a fire prompted. An event about that session, or about one of its children, within 60 minutes, makes a fire of depth 2. A depth above 2 is cancelled `chain_depth`.
+- `maxFiresPerDay`: effects started in the local day. The ledger stamps `effect_started_at` in the same statement that writes `attempted`, and the count reads that stamp (states `attempted`, `needs_review` and `completed`), not the date the fire was accepted: a fire held across midnight counts on the day it runs.
+- Breaker: 30 effects started per minute for the whole daemon. The 31st fire is cancelled `breaker_open`, its trigger is disarmed, the Inbox gets the error code `breaker_open` (a broadcast `error` event). The counter lives in memory and starts again at zero at every boot.
+- Chain depth: the cause of an event is found with the message a fire sent: its id is the id of the fire, so the message queue says which session a fire prompted. An event about that session, or about one of its children, within 60 minutes, makes a fire of depth 2. A depth above 2 is cancelled `chain_depth`. The 60 minutes are a heuristic: an event that has nothing to do with the message can be counted as its effect, and a late one is missed.
+- Arming rescans the sessions already in the state. The rescan is not capped on the side of the registry (every session that matches is offered); the effects are capped by the policy and the breaker.
+- Fires are kept: there is no 90-day retention yet.
+
+## The owner of a trigger
+
+A trigger has an owner, `owner_manager_id`: a manager, the root of a lineage, or none. A trigger created by an MCP tool gets the lineage root of the calling session. A trigger created with the REST API names its owner or `null` (`ownerManagerId` is required in the body). The owner is part of the approved graph: changing it clears the arming and changes the digest.
+
+- `session_state` only watches the children whose lineage root is the owner. A trigger with no owner watches the children of every manager of its project, and may only `prompt_manager` and `notify`.
+- `close_session` closes a child of the owner only, and only when the event is about a child of the same owner. Anything else is cancelled `target_not_eligible`, and the target stays active.
+- `prompt_session` reaches a session of the project in the lineage of the owner (the owner included). A trigger with no owner, or a target outside the lineage, is cancelled `target_not_eligible`.
 
 ## What a message holds
 
@@ -33,4 +43,6 @@ The header is written by the daemon from ids and enumerations. The prompt, with 
 
 ## Sources
 
-`session_state` is the only source the engine runs. `silent_run`, `data_store_query`, `cron` and `integration_records` are accepted by the schema and do not fire yet. The RUN `run_playbook` does not run either.
+`session_state` is the only source the engine runs. A wait that ends while the daemon is stopped is not lost. A daemon that stops cleanly writes its pending waits to `trigger_cursors`; at boot, before the sessions are resumed (resuming writes a new state time), the source reads those cursors and the sessions a killed daemon left idle or on a permission prompt, and offers the episodes already due with their real deadline as the date of the fire. The backlog policy judges them like the fires left `accepted`: `fire_all` fires each, `fire_latest_only` keeps the latest, `discard_stale` cancels as `stale` what is older than `backlogMaxAgeMinutes` (60 by default) counted from the deadline. An episode already fired is a duplicate. A session that closed with an error while the daemon was stopped, after the trigger was armed, is offered once. A wait not yet due at boot is not restored: resuming starts a new episode.
+
+`silent_run`, `data_store_query`, `cron` and `integration_records` are accepted by the schema and do not fire yet. The RUN `run_playbook` does not run either.
