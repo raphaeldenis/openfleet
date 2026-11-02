@@ -34,7 +34,13 @@ export const ERROR_CODES = {
   docs_root_invalid: { kind: 'invalid_request' },
   docs_root_forbidden: { kind: 'invalid_request' },
 
+  // A condition list of a trigger holds at most 32 conditions; a path outside the event namespaces of the WHEN source is refused naming the right prefix.
+  too_many_conditions: { kind: 'invalid_request' },
+  trigger_field_prefix: { kind: 'invalid_request' },
+
   unauthorized: { kind: 'unauthorized' },
+  // Arming a trigger is a gesture of a human: the admin token alone is not the proof, a single-use proof minted by the desktop app is.
+  human_proof_required: { kind: 'unauthorized' },
 
   not_found: { kind: 'not_found' },
   project_not_found: { kind: 'not_found' },
@@ -49,6 +55,9 @@ export const ERROR_CODES = {
   // The id of another manager's proposal reads exactly like an id nobody proposed.
   proposal_not_found: { kind: 'not_found' },
   law_not_found: { kind: 'not_found' },
+  // A trigger of another project reads exactly like one that does not exist.
+  trigger_not_found: { kind: 'not_found' },
+  trigger_condition_not_found: { kind: 'not_found' },
 
   // A conflict retries `never` unless a reload (stale_revision) or waiting (file_unreadable, too_many_pending, children_cap) can change the answer.
   session_closed: { kind: 'conflict', retry: 'never' },

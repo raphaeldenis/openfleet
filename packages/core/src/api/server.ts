@@ -63,6 +63,8 @@ import { registerHandoffPickerRoutes } from './handoffPickerRoutes.js';
 import { HandoffSeed } from '../notes/handoffSeed.js';
 import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { registerRestRoutes } from './restHandlers.js';
+import { HUMAN_PROOF_HEADER, registerTriggerRoutes } from './triggerRoutes.js';
+import type { TriggerService } from '../triggers/triggerService.js';
 import { decodeParams, json, readJson, redactedRequestPath, Router, type Handler } from './router.js';
 import { createWsHandler } from './wsHandler.js';
 import { createWsTicketStore, type WsTicketStore } from './wsTicketStore.js';
@@ -127,13 +129,15 @@ export interface ServerDeps {
   todos?: TodoTracker;
   // Without it the test-only routes (fake-output) do not exist.
   e2eRoutes?: boolean;
+  // Without it the /api/triggers routes do not exist.
+  triggers?: TriggerService;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
   const origin = req.headers.origin;
   if (!origin || !ALLOWED_ORIGINS.has(origin)) return;
   res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
+  res.setHeader('Access-Control-Allow-Headers', `authorization, content-type, ${HUMAN_PROOF_HEADER}`);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
 }
 
@@ -204,6 +208,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.projects && deps.noteRepo) registerHandoffPickerRoutes(router, new HandoffSeed({ projects: deps.projects, notes: deps.noteRepo, files: nodeHandoffFileReader }));
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
   if (deps.handoff) registerHandoffRoutes(router, deps.handoff);
+  if (deps.triggers) registerTriggerRoutes(router, { triggers: deps.triggers });
   if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });
 
   const handleHook = hooksHandler(deps);

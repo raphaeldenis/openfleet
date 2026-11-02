@@ -10,6 +10,8 @@ const NAMED_ROUTES: Readonly<Record<string, RestActionName>> = {
   'PATCH /api/governance/laws/:id': { action: 'law.edit', entity: { kind: 'law', idParam: 'id' } },
   'POST /api/governance/laws/:id/withdraw': { action: 'law.withdraw', entity: { kind: 'law', idParam: 'id' } },
   'PUT /api/command-policy': { action: 'command_policy.save' },
+  'POST /api/triggers/:id/arm': { action: 'trigger.arm', entity: { kind: 'trigger', idParam: 'id' } },
+  'POST /api/triggers/:id/disarm': { action: 'trigger.disarm', entity: { kind: 'trigger', idParam: 'id' } },
 };
 
 /** The name a REST route goes by in the activity log: a semantic one for the routes above, `METHOD template` for the others. */

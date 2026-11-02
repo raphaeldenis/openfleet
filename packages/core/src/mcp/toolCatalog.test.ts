@@ -47,6 +47,8 @@ describe('the tool catalog', () => {
       'delete_data_store_row',
       'delete_data_store_view',
       'delete_note',
+      'delete_trigger',
+      'delete_trigger_condition',
       'remove_worktree',
       'reorder_data_store_columns',
       'set_argus_log_store',
@@ -73,6 +75,16 @@ describe('the tool catalog', () => {
       'report_step_finding', // runs git in the worktree
       'send_session_message',
       'submit_plan_questions', // launches an arbiter session
+    ]);
+  });
+
+  it('files the trigger tools under the triggers domain: reads are read_only, creates and edits additive, deletes destructive', () => {
+    const triggerEntries = Object.entries(TOOL_CATALOG).filter(([, entry]) => entry.domain === 'triggers').map(([name, entry]) => [name, entry.category]);
+
+    expect(triggerEntries.sort()).toEqual([
+      ['add_trigger_condition', 'additive'], ['create_trigger', 'additive'], ['delete_trigger', 'destructive'], ['delete_trigger_condition', 'destructive'],
+      ['get_trigger', 'read_only'], ['get_trigger_schema', 'read_only'], ['list_triggers', 'read_only'], ['set_trigger_policy', 'additive'],
+      ['set_trigger_run', 'additive'], ['set_trigger_when', 'additive'], ['update_trigger_condition', 'additive'],
     ]);
   });
 

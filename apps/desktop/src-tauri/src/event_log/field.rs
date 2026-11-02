@@ -645,6 +645,7 @@ const KNOWN_CODES: &[&str] = &[
   "db_stuck", "proposal_not_found", "governance_queue_full", "law_not_found", "law_revision_conflict", "law_withdrawn",
   "harness_binary_broken", "directory_not_in_project", "question_unclassified", "escalation_open", "criteria_stale", "escalation_not_found",
   "gh_unavailable", "gh_not_authenticated", "gh_bad_output", "gh_timeout", "too_many_watched_prs",
+  "trigger_not_found", "trigger_condition_not_found", "too_many_conditions", "trigger_field_prefix", "human_proof_required",
 ];
 
 const OTHER_CODE: &str = "other";
