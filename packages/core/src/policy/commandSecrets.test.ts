@@ -196,6 +196,11 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
       ['a double-quoted program name split by a line continuation', `"cu\\\nrl" -u bob:${secret} https://h`, `"cu\\\nrl" -u bob:*** https://h`],
       ['a line continuation before the value', `curl -u \\\nbob:${secret} https://h`, `curl -u \\\nbob:*** https://h`],
       ['a line continuation and a space before the value', `curl -u \\\n bob:${secret} https://h`, `curl -u \\\n bob:*** https://h`],
+      ['an ANSI-C program name cut by a NUL escape', `$'curl\\0ignored' -u bob:${secret} https://h`, `$'curl\\0ignored' -u bob:*** https://h`],
+      ['an ANSI-C program name cut by a hex NUL escape', `$'curl\\x00ignored' -u bob:${secret} https://h`, `$'curl\\x00ignored' -u bob:*** https://h`],
+      ['an ANSI-C program name cut by a Unicode NUL escape', `$'curl\\u0000ignored' -u bob:${secret} https://h`, `$'curl\\u0000ignored' -u bob:*** https://h`],
+      ['an ANSI-C program name cut by an octal NUL escape', `$'curl\\000ignored' -u bob:${secret} https://h`, `$'curl\\000ignored' -u bob:*** https://h`],
+      ['an ANSI-C option name cut by a NUL escape', `curl $'--user\\0ignored' bob:${secret} https://h`, `curl $'--user\\0ignored' bob:*** https://h`],
     ])('masks the secret behind %s', (_label, command, expected) => {
       expect(maskedCommandSecrets(command)).toBe(expected);
     });
@@ -390,6 +395,7 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
       ['substitutions behind secret options', '--token $(printf '],
       ['backticks', '`'],
       ['ANSI-C escapes', "$'\\x41"],
+      ['ANSI-C NUL escapes', "$'\\0"],
       ['locale double quotes', '$"'],
       ['line continuations', '\\\n'],
       ['redirections', '> '],

@@ -217,6 +217,7 @@ const CONTROL_CHARACTER_MASK = 0x1f;
 const LAST_CODE_POINT = 0x10ffff;
 // What an escape decodes to when it names no character: the word then reads as illegible.
 const ILLEGIBLE_CHARACTER = '�';
+const NUL = '\0';
 
 const endOfDigits = (source: string, from: number, digit: RegExp, maxDigits: number): number => {
   let end = from;
@@ -249,14 +250,19 @@ const ansiCEscapeAt = (source: string, at: number): DecodedEscape => {
   return { text: `\\${letter}`, end: Math.min(at + 2, source.length) };
 };
 
-/** `$'…'`: every escape decoded as bash decodes it, so `$'\x63url'` reads `curl`; one that never closes runs to the end of the source. */
+/**
+ * `$'…'`: every escape decoded as bash decodes it, so `$'\x63url'` reads `curl`; one that never closes runs to the end of the source.
+ * Bash ends the segment's text at the first NUL (`\0`, `\x00`, `\u0000`, `\000`, `\c@`): `$'curl\0ignored'` reads `curl`.
+ */
 const readAnsiCQuoted = (source: string, openingAt: number, word: ShellWordBuilder): number => {
   let at = openingAt + 2;
+  let isCutByANul = false;
   while (at < source.length) {
     const character = source.charAt(at);
     if (character === "'") return at + 1;
     const escape = character === '\\' ? ansiCEscapeAt(source, at) : { text: character, end: at + 1 };
-    word.add(escape.text, at, escape.end);
+    isCutByANul ||= escape.text === NUL;
+    if (!isCutByANul) word.add(escape.text, at, escape.end);
     at = escape.end;
   }
   return source.length;
