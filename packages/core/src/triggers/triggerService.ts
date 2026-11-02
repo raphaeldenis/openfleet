@@ -3,9 +3,10 @@ import {
   type TriggerCondition, type TriggerPolicy, type TriggerRun, type TriggerWhen,
 } from '@openfleet/shared';
 import { canonicalDigestOf } from '../playbooks/kernel/canonicalDigest.js';
-import { evaluateConditions, type Condition } from '../playbooks/kernel/conditionEvaluator.js';
+import { evaluateConditions } from '../playbooks/kernel/conditionEvaluator.js';
 import { KernelError } from '../playbooks/kernel/kernelError.js';
 import type { HumanProofVerifier } from './humanProofVerifier.js';
+import { kernelConditionsOf } from './kernelConditions.js';
 import type { TriggerContent, TriggerRecord, TriggerRepository } from './triggerRepository.js';
 
 const DEFAULT_TITLE = 'Untitled Trigger';
@@ -25,14 +26,10 @@ type ContentEdit = (current: TriggerRecord) => TriggerContent;
 const notFound = () => new OpenFleetError('trigger_not_found', 'trigger not found');
 const staleRevision = (currentRev: number) => new OpenFleetError('stale_revision', `the trigger revision is stale, current rev: ${currentRev}.`, { hint: 'Reload the trigger, then write again.' });
 
-const kernelConditionOf = (condition: TriggerCondition): Condition => ({
-  path: condition.lhs, operator: condition.op, value: condition.rhs, caseInsensitive: condition.caseInsensitive, join: condition.join,
-});
-
 /** The conditions the evaluator of the kernel accepts: its own checks (operator, cap) run against an empty event. */
 function assertEvaluableByTheKernel(conditions: TriggerCondition[]): void {
   try {
-    evaluateConditions(conditions.map(kernelConditionOf), {});
+    evaluateConditions(kernelConditionsOf(conditions), {});
   } catch (error) {
     if (error instanceof KernelError) throw new OpenFleetError('invalid_body', error.message);
     throw error;

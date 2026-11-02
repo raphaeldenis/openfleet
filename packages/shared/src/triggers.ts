@@ -18,6 +18,12 @@ export const TRIGGER_CRON_CATCH_UPS = ['skip', 'run_once', 'run_all'] as const;
 export const TRIGGER_BATCH_MODES = ['per_event', 'per_batch'] as const;
 export const TRIGGER_BACKLOG_POLICIES = ['fire_all', 'fire_latest_only', 'discard_stale'] as const;
 export const TRIGGER_LEDGER_STATES = ['accepted', 'attempted', 'completed', 'cancelled', 'needs_review'] as const;
+export type TriggerLedgerState = (typeof TRIGGER_LEDGER_STATES)[number];
+/** Why a fire ended `cancelled` or `needs_review`; a fire that completed has none. */
+export const TRIGGER_FIRE_REASONS = [
+  'interrupted', 'stale', 'superseded', 'batched', 'disarmed', 'target_unavailable', 'cooldown', 'daily_cap', 'breaker_open', 'chain_depth', 'action_failed',
+] as const;
+export type TriggerFireReason = (typeof TRIGGER_FIRE_REASONS)[number];
 
 /** The twelve operators of the condition evaluator of the playbook kernel; a test in core keeps the two lists equal. */
 export const TRIGGER_CONDITION_OPERATORS = [

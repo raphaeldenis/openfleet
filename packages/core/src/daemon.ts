@@ -71,6 +71,9 @@ import { createGhPullRequestPort, type GhPullRequestPort } from './github/ghPull
 import { staleInProgressRowLabelsOfProject } from './managers/staleRows.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { refusingHumanProof, type HumanProofVerifier } from './triggers/humanProofVerifier.js';
+import { FireLedger } from './triggers/fireLedger.js';
+import { createTriggerActions } from './triggers/triggerActions.js';
+import { TriggerEngine } from './triggers/triggerEngine.js';
 import { TriggerRepository } from './triggers/triggerRepository.js';
 import { TriggerService } from './triggers/triggerService.js';
 import { pendingPermissionViewOf } from './mcp/pendingPermissionView.js';
@@ -137,6 +140,8 @@ export interface Daemon {
   governanceQueue: GovernanceQueueService;
   scheduledEvents: ScheduledEventService;
   ciWatch: CiWatchService;
+  /** The entry point of the trigger sources: they offer events, the engine fires. */
+  triggerEngine: TriggerEngine;
   askUserGate: AskUserGate;
   criteriaStatusGuard: CriteriaStatusGuard;
   harnesses: Harness[];
@@ -188,6 +193,8 @@ export interface DaemonOptions {
   };
   /** Tells whether a proof of arming was minted by a human gesture; absent, no proof is good and no trigger can be armed. */
   humanProof?: HumanProofVerifier;
+  /** Replaces the clock of the trigger engine (epoch milliseconds), so a test decides when a fire is accepted, how old a backlog is and which day it is. */
+  triggers?: { clock?: () => number };
   power?: {
     api?: PowerApi;
     clock?: () => number;
@@ -392,7 +399,9 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     clock: options.childSilence?.clock ?? Date.now, schedule: options.childSilence?.schedule ?? scheduleOnRealClock,
   });
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
-  const triggers = new TriggerService({ repository: new TriggerRepository(db), humanProof: options.humanProof ?? refusingHumanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
+  const triggerRepository = new TriggerRepository(db);
+  const triggers = new TriggerService({ repository: triggerRepository, humanProof: options.humanProof ?? refusingHumanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
+  const triggerEngine = new TriggerEngine({ triggers: triggerRepository, ledger: new FireLedger(db), actions: createTriggerActions({ sessions, managers: managerRepository }), clock: options.triggers?.clock ?? Date.now, newId });
   const server = await startServer({ ...config, triggers, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
@@ -434,6 +443,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     systemActivity.daemonStarted(DAEMON_VERSION);
     await sessions.resumeAll({ onResumed: (session) => systemActivity.sessionResumed(session, lineageRootIdOf(sessions, session)) });
     arbiters.recover();
+    triggerEngine.recover();
     childSilence.restore();
     pulseScheduler.start();
     scheduledEvents.start();
@@ -445,5 +455,5 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     throw error;
   }
 
-  return { server, db, degraded, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, harnesses, close };
+  return { server, db, degraded, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, triggerEngine, harnesses, close };
 }
