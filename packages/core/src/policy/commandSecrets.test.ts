@@ -207,6 +207,34 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     });
   });
 
+  describe('a redirection between an option and its value', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = ['Probe', 'Value', '92'].join('');
+
+    it.each([
+      [`sshpass -p >/dev/null ${secret} ssh host`, 'sshpass -p >/dev/null *** ssh host'],
+      [`sshpass -p 2> /dev/null ${secret} ssh host`, 'sshpass -p 2> /dev/null *** ssh host'],
+      [`curl -u > /dev/null bob:${secret} https://h`, 'curl -u > /dev/null bob:*** https://h'],
+      [`curl -u >> log bob:${secret} https://h`, 'curl -u >> log bob:*** https://h'],
+      [`curl -u < in bob:${secret} https://h`, 'curl -u < in bob:*** https://h'],
+      [`curl -u 2>err.log bob:${secret} https://h`, 'curl -u 2>err.log bob:*** https://h'],
+      [`curl -u &>/dev/null bob:${secret} https://h`, 'curl -u &>/dev/null bob:*** https://h'],
+      [`curl -u >&2 bob:${secret} https://h`, 'curl -u >&2 bob:*** https://h'],
+      [`tool --token >/dev/null ${secret} --force`, 'tool --token >/dev/null *** --force'],
+      [`curl -u bob:${secret}>/dev/null https://h`, 'curl -u bob:***>/dev/null https://h'],
+    ])('skips the redirection and masks the value in %s', (command, expected) => {
+      expect(maskedCommandSecrets(command)).toBe(expected);
+    });
+
+    it.each([
+      'curl -s https://example.com > out.json 2>&1',
+      'echo done >> log.txt',
+      'sort < in.txt > out.txt',
+    ])('leaves %s readable', (command) => {
+      expect(maskedCommandSecrets(command)).toBe(command);
+    });
+  });
+
   describe('a command nested deeper than the scan reads', () => {
     // Built at run time: no token-shaped literal sits in the source.
     const secret = ['SEKR', 'ET', '42'].join('');
@@ -364,6 +392,10 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
       ['ANSI-C escapes', "$'\\x41"],
       ['locale double quotes', '$"'],
       ['line continuations', '\\\n'],
+      ['redirections', '> '],
+      ['glued redirections', '2>'],
+      ['redirections behind secret options', '--token >'],
+      ['digits', '1'],
     ])('masks %s repeated over 100000 characters in under 100 ms', (_label, unit) => {
       const command = repeatedTo(unit, ADVERSARIAL_LENGTH);
 

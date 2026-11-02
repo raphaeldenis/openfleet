@@ -22,6 +22,7 @@ interface ShellWord {
   end: number;
   substitutions: Substitution[];
   startsACommand: boolean;
+  isARedirectionTarget: boolean;
   isMasked: boolean;
   positions?: CharacterPositions;
 }
@@ -42,9 +43,11 @@ const LINE_BREAK = '\n';
 const LINE_CONTINUATION = '\\\n';
 const ESCAPABLE_INSIDE_DOUBLE_QUOTES = new Set(['$', '`', '"', '\\', LINE_BREAK]);
 
+const REDIRECTION_SIGNS = new Set(['<', '>']);
+
 const ASCII_WORD_ENDS = Array.from({ length: 128 }, (_, code) => {
   const character = String.fromCharCode(code);
-  return WORD_GAP.test(character) || COMMAND_SEPARATORS.has(character);
+  return WORD_GAP.test(character) || COMMAND_SEPARATORS.has(character) || REDIRECTION_SIGNS.has(character);
 });
 
 const endsTheWord = (character: string): boolean => {
@@ -313,27 +316,68 @@ const gapFrom = (source: string, from: number): WordGap => {
       continue;
     }
     const character = source.charAt(at);
-    if (!endsTheWord(character)) break;
+    if (!endsTheWord(character) || opensARedirection(source, at)) break;
     holdsASeparator ||= COMMAND_SEPARATORS.has(character);
     at += 1;
   }
   return { end: at, holdsASeparator };
 };
 
-/** Splits a source into its words in one pass; a separator (`;`, `&`, `|`, a parenthesis, a line break) in the gap before a word starts a new command. */
+// `>`, `>>`, `<`, `2>`, `&>`, `>&`, `<<<`, `<>`, `>|`: the operator bash takes out of the arguments along with the word it names.
+const REDIRECTION_OPERATOR = /\d*(?:&>>?|[<>]&|<<<|<<-?|<>|>>|>\||[<>])/y;
+const DIGIT = /\d/;
+const BLANKS = new Set([' ', '\t']);
+
+const opensARedirection = (source: string, at: number): boolean => {
+  const character = source.charAt(at);
+  return REDIRECTION_SIGNS.has(character) || (character === '&' && source.charAt(at + 1) === '>');
+};
+
+/** Where the redirection operator that starts at `at` ends, or NOT_FOUND when no operator starts there. */
+const redirectionOperatorEnd = (source: string, at: number): number | undefined => {
+  const mayStartAnOperator = DIGIT.test(source.charAt(at)) || opensARedirection(source, at);
+  if (!mayStartAnOperator) return NOT_FOUND;
+  REDIRECTION_OPERATOR.lastIndex = at;
+  return REDIRECTION_OPERATOR.test(source) ? REDIRECTION_OPERATOR.lastIndex : NOT_FOUND;
+};
+
+/** Skips the spaces, tabs and line continuations between a redirection operator and the word it names. */
+const blanksEnd = (source: string, from: number): number => {
+  let at = from;
+  while (at < source.length) {
+    if (source.startsWith(LINE_CONTINUATION, at)) at += LINE_CONTINUATION.length;
+    else if (BLANKS.has(source.charAt(at))) at += 1;
+    else break;
+  }
+  return at;
+};
+
+/**
+ * Splits a source into its words in one pass; a separator (`;`, `&`, `|`, a parenthesis, a line break) in the gap before a word starts a new command.
+ * The word a redirection names (`>/dev/null`, `2> err.log`) is kept as a redirection target: it is no argument of the program.
+ */
 const shellWordsOf = (source: string): ShellWord[] => {
   const words: ShellWord[] = [];
   let at = 0;
+  let holdsASeparator = false;
   while (at < source.length) {
     const gap = gapFrom(source, at);
-    const holdsASeparator = gap.holdsASeparator;
+    holdsASeparator ||= gap.holdsASeparator;
     at = gap.end;
     if (at >= source.length) return words;
+    const operatorEnd = redirectionOperatorEnd(source, at);
+    const isARedirectionTarget = operatorEnd !== NOT_FOUND;
+    const start = isARedirectionTarget ? blanksEnd(source, operatorEnd) : at;
+    const namesNoWord = start >= source.length || endsTheWord(source.charAt(start));
+    if (isARedirectionTarget && namesNoWord) {
+      at = start;
+      continue;
+    }
     const builder = new ShellWordBuilder();
-    const start = at;
     at = readWord(source, start, builder);
     const startsACommand = words.length === 0 || holdsASeparator;
-    words.push({ text: builder.text, source, start, end: at, substitutions: builder.substitutions, startsACommand, isMasked: false });
+    holdsASeparator = false;
+    words.push({ text: builder.text, source, start, end: at, substitutions: builder.substitutions, startsACommand, isARedirectionTarget, isMasked: false });
   }
   return words;
 };
@@ -508,16 +552,30 @@ const WHOLE_VALUE = (): number => 0;
 const PROGRAM_PASSWORD_OPTION: ValueTakingOption = { alwaysTakesAValue: true };
 const CURL_USER_OPTION: ValueTakingOption = { alwaysTakesAValue: true, secretStart: userPasswordStart };
 
+/** For each word, the index of the next argument of the same command, the words that redirections name skipped; built backwards in one pass. */
+const nextArgumentIndexesOf = (words: ShellWord[]): (number | undefined)[] => {
+  const indexes = new Array<number | undefined>(words.length).fill(NOT_FOUND);
+  for (let index = words.length - 2; index >= 0; index -= 1) {
+    const next = words[index + 1]!;
+    if (next.startsACommand) continue;
+    indexes[index] = next.isARedirectionTarget ? indexes[index + 1] : index + 1;
+  }
+  return indexes;
+};
+
 /** Masks the secrets of one command's words; a word holding a command of its own (`sh -c "…"`) is scanned as a command one level deeper. */
 class CommandMasking {
   private readonly programsInCommand = new Set<PasswordProgram>();
+  private readonly nextArgumentIndexes: (number | undefined)[];
 
   constructor(
     private readonly words: ShellWord[],
     private readonly depth: number,
     private readonly toCommandRange: ToCommandRange,
     private readonly masks: SourceRange[],
-  ) {}
+  ) {
+    this.nextArgumentIndexes = nextArgumentIndexesOf(words);
+  }
 
   run(): void {
     for (let index = 0; index < this.words.length; index += 1) {
@@ -525,7 +583,8 @@ class CommandMasking {
       if (word.startsACommand) this.programsInCommand.clear();
       if (word.isMasked) continue;
       if (MAY_HOLD_A_SECRET.test(word.text)) this.maskWord(index);
-      if (!MENTIONS_A_PASSWORD_PROGRAM.test(word.text)) continue;
+      const mayNameAProgram = !word.isARedirectionTarget && MENTIONS_A_PASSWORD_PROGRAM.test(word.text);
+      if (!mayNameAProgram) continue;
       for (const program of PASSWORD_PROGRAMS) if (program.name.test(word.text)) this.programsInCommand.add(program.kind);
     }
   }
@@ -541,37 +600,41 @@ class CommandMasking {
     word.isMasked = true;
     const valueRange = sourceRangeOf(word, from, word.text.length);
     const isASchemeWordAlone = AUTHORIZATION_SCHEME_WORD.test(word.text.slice(from));
-    const credential = isASchemeWordAlone ? this.nextInCommand(index) : undefined;
-    if (credential === undefined) {
+    const credentialIndex = isASchemeWordAlone ? this.nextArgumentIndex(index) : NOT_FOUND;
+    if (credentialIndex === NOT_FOUND) {
       this.masks.push(this.toCommandRange(valueRange));
       return;
     }
+    const credential = this.words[credentialIndex]!;
     credential.isMasked = true;
     const credentialRange = sourceRangeOf(credential, 0, credential.text.length);
     this.masks.push(this.toCommandRange({ start: valueRange.start, end: credentialRange.end }));
   }
 
-  private nextInCommand(index: number): ShellWord | undefined {
-    const next = this.words[index + 1];
-    return next === undefined || next.startsACommand || next.isMasked ? undefined : next;
+  /** The index of the next argument of the same command, past the words that redirections name; NOT_FOUND when the command ends first or that argument is masked. */
+  private nextArgumentIndex(index: number): number | undefined {
+    const next = this.nextArgumentIndexes[index];
+    return next === NOT_FOUND || this.words[next]!.isMasked ? NOT_FOUND : next;
   }
 
   /** Masks the word that holds the value of the option at `index`; a dash starts the value of an option that always takes one, and another option otherwise. */
   private maskValueAfter(index: number, option: ValueTakingOption): boolean {
-    const value = this.nextInCommand(index);
-    if (!value || isAlreadyMasked(value.text)) return false;
+    const valueIndex = this.nextArgumentIndex(index);
+    if (valueIndex === NOT_FOUND) return false;
+    const value = this.words[valueIndex]!;
+    if (isAlreadyMasked(value.text)) return false;
     const isAnotherOption = value.text.startsWith('-') && !option.alwaysTakesAValue;
     if (isAnotherOption) return false;
     const secretStart = option.secretStart ?? WHOLE_VALUE;
     const from = secretStart(value.text);
     if (from === NOT_FOUND) return false;
-    this.maskValue(index + 1, from);
+    this.maskValue(valueIndex, from);
     return true;
   }
 
   private maskWord(index: number): void {
     const word = this.words[index]!;
-    const isAnOption = word.text.startsWith('-');
+    const isAnOption = word.text.startsWith('-') && !word.isARedirectionTarget;
     if (isAnOption && (this.maskSecretFlag(index) || this.maskProgramPassword(index))) return;
     const namedSecretStart = assignedSecretStart(word.text) ?? headerCredentialStart(word.text);
     if (namedSecretStart !== NOT_FOUND) {
