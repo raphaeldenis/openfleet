@@ -46,7 +46,7 @@ describe('the secret refs migration', () => {
   it('ships a down migration outside the migrations folder that removes the table', () => {
     const db = openMigratedDatabase();
 
-    db.exec(readFileSync(new URL('064_secret_refs.down.sql', migrationsDownDirectory), 'utf8'));
+    db.exec(readFileSync(new URL('065_secret_refs.down.sql', migrationsDownDirectory), 'utf8'));
 
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'secret_refs%'").all()).toEqual([]);
   });

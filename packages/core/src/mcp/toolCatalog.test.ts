@@ -42,6 +42,7 @@ describe('the tool catalog', () => {
     expect(toolsOfCategory('destructive')).toEqual([
       'add_data_store_column', // natural_key: true replaces the natural key of the store with no history
       'cancel_argus_event',
+      'clear_playbook_secret', // removes the value of a secret from this device
       'close_session',
       'delete_data_store_column',
       'delete_data_store_row',

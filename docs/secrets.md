@@ -65,7 +65,7 @@ Open decisions, all for Raphaël: rotation policy and owner of `CLAUDE_CODE_OAUT
 
 ## Secrets of playbooks
 
-A playbook, an integration connection or a trigger declares the names of the secrets it needs. A human sets the values; no agent can set or read one. The daemon stores the **names and a status** (`stored` or `missing`) in `secret_refs` (migration 064) and never a value: not in SQLite, not in a log, not in an activity row, not in a backup or a diagnostics bundle.
+A playbook, an integration connection or a trigger declares the names of the secrets it needs. A human sets the values; no agent can set or read one. The daemon stores the **names and a status** (`stored` or `missing`) in `secret_refs` (migration 065) and never a value: not in SQLite, not in a log, not in an activity row, not in a backup or a diagnostics bundle.
 
 ### Who can do what
 
