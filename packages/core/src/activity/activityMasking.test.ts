@@ -38,6 +38,20 @@ describe('masking the text of an activity row', () => {
   ])('hides the secret of %s, whose separator the stored text drops', (_label, text) => {
     expect(maskedActivityText(text)).not.toContain(SECRET);
   });
+
+  it.each([
+    ['a line separator', ' '],
+    ['a paragraph separator', ' '],
+    ['a next-line character', '\u0085'],
+    ['a carriage return', '\r'],
+    ['a vertical tab', '\v'],
+    ['a form feed', '\f'],
+  ])('hides the whole password holding %s, which bash keeps inside the word', (_label, character) => {
+    const masked = maskedActivityText(`curl -u bob:ab${character}${SECRET} https://h`);
+
+    expect(masked).not.toContain(SECRET);
+    expect(masked).toContain('https://h');
+  });
 });
 
 const repeatedTo = (unit: string, length: number) => unit.repeat(Math.ceil(length / unit.length)).slice(0, length);
