@@ -19,7 +19,7 @@ const SELECT_A_MANAGER = 'Select a manager';
 const helmSectionsFor = ({ currentManagerId }: HelmNavContext): ReadonlyArray<{ key: string; glyph: string; label: string; route: string | null; unroutedAvailability?: string }> => [
   { key: 'inbox', glyph: '◫', label: 'Inbox', route: '/inbox' },
   { key: 'project', glyph: '⌂', label: 'Project home', route: '/project' },
-  { key: 'toolkit', glyph: '⚒', label: 'Toolkit', route: null },
+  { key: 'toolkit', glyph: '⚒', label: 'Toolkit', route: '/toolkit' },
   { key: 'audit', glyph: '≣', label: 'Audit', route: '/audit' },
   {
     key: 'mgrprofile',

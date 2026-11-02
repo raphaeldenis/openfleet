@@ -30,5 +30,6 @@ export * from './worktrees.js';
 export * from './governance.js';
 export * from './commandPolicy.js';
 export * from './activity.js';
+export * from './tools.js';
 export * from './mcpContract.js';
 export * from './teamPack.js';

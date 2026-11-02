@@ -1,9 +1,9 @@
 import { Injectable } from '@angular/core';
-import { DIAGNOSTICS_PATH, DOCS_ROOT_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
+import { DIAGNOSTICS_PATH, DOCS_ROOT_PATH, ToolListSchema, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
   ActivityPage, ActivityRow, Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DetectedRepository, DiagnosticsDocument, DocsRootView, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, EscalationAnswerBody, EscalationView, GovernanceProposalView, HandoffContent, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
   LawView, ManagerGovernanceWithLawsView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
-  RemovedWorktree, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
+  RemovedWorktree, ToolSummary, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import { parseActivityPage } from './activity-page-parser';
@@ -181,6 +181,13 @@ export class FleetApiService {
     const rows = parseUsageDaily(await this.call<unknown>(path));
     if (!rows) throw new ApiError(200, `GET ${path} → unreadable usage`);
     return rows;
+  }
+  /** The MCP tools of the server with their domain and category. */
+  async listTools(): Promise<ToolSummary[]> {
+    const path = '/api/tools';
+    const parsed = ToolListSchema.safeParse(await this.call<unknown>(path));
+    if (!parsed.success) throw new ApiError(200, `GET ${path} → unreadable tools`);
+    return parsed.data.items;
   }
   /** One page of the activity log, newest first, narrowed by the filters; pass the previous page's `nextCursor` to read the one after. */
   async listActivity(query: ActivityQueryParams): Promise<ActivityPage> {
