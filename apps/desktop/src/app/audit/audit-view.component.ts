@@ -99,7 +99,7 @@ const EXPORT_FORMATS: Record<ExportFormat, { mimeType: string; serialize: (rows:
                 </thead>
                 <tbody>
                   @for (row of rows(); track row.id) {
-                    <tr class="entry" [attr.data-testid]="'audit-row-' + row.id">
+                    <tr class="entry" [attr.data-testid]="'audit-row-' + row.id" (keydown.escape)="closeDetail(row, detailsButton)">
                       <td class="time">{{ time(row) }}</td>
                       <td><span class="kind" [attr.data-kind]="row.actorKind">{{ row.actorKind }}</span> {{ text(row.actorLabel) }}</td>
                       <td class="action">{{ text(row.action) }}</td>
@@ -109,12 +109,12 @@ const EXPORT_FORMATS: Record<ExportFormat, { mimeType: string; serialize: (rows:
                         @if (sessionIdOf(row); as sessionId) {
                           <a class="session-link" [routerLink]="['/session', sessionId]" [attr.aria-label]="'Open session of ' + row.action">Session</a>
                         }
-                        <button type="button" class="of-btn of-btn--compact" [attr.aria-expanded]="isOpen(row)" [attr.aria-controls]="'audit-detail-' + row.id" [attr.aria-label]="'Details of ' + row.action" (click)="toggleDetail(row)">{{ isOpen(row) ? 'Hide' : 'Details' }}</button>
+                        <button #detailsButton type="button" class="of-btn of-btn--compact" [attr.aria-expanded]="isOpen(row)" [attr.aria-controls]="'audit-detail-' + row.id" [attr.aria-label]="'Details of ' + row.action" (click)="toggleDetail(row)">{{ isOpen(row) ? 'Hide' : 'Details' }}</button>
                       </td>
                     </tr>
                     @if (isOpen(row)) {
-                      <tr class="detail" [id]="'audit-detail-' + row.id" [attr.data-testid]="'audit-detail-' + row.id">
-                        <td colspan="6">
+                      <tr class="detail" [id]="'audit-detail-' + row.id" [attr.data-testid]="'audit-detail-' + row.id" (keydown.escape)="closeDetail(row, detailsButton)">
+                        <td colspan="6" tabindex="-1">
                           <dl>
                             @for (field of fieldsOf(row); track field.label) {
                               <dt>{{ field.label }}</dt><dd>{{ field.value }}</dd>
@@ -159,7 +159,7 @@ const EXPORT_FORMATS: Record<ExportFormat, { mimeType: string; serialize: (rows:
     .time, .action { font-family: var(--mono); }
     .kind, .entity-kind { padding: 0 .25rem; border-radius: .1875rem; background: var(--sunk); color: var(--mut); font-size: .6875rem; }
     .outcome[data-outcome='denied'], .outcome[data-outcome='error'] { color: var(--s-err); }
-    .detail td { background: var(--sunk); white-space: normal; }
+    .detail td { background: var(--sunk); white-space: normal; outline: none; }
     dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: 0; }
     dt { color: var(--mut); }
     dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
@@ -205,6 +205,12 @@ export class AuditViewComponent {
 
   protected toggleDetail(row: ActivityRow): void {
     this.openRowId.set(this.isOpen(row) ? null : row.id);
+  }
+
+  protected closeDetail(row: ActivityRow, detailsButton: HTMLElement): void {
+    if (!this.isOpen(row)) return;
+    this.openRowId.set(null);
+    detailsButton.focus();
   }
 
   protected pickActor(value: string): void {

@@ -351,6 +351,65 @@ describe('AuditViewComponent', () => {
       expect(screen.queryByTestId('audit-detail-7')).toBeNull();
     });
 
+    it('closes on Escape from the Details button and hands the focus back to it', async () => {
+      await renderAudit(() => Promise.resolve({ items: [detailed] }));
+      const toggle = await screen.findByRole('button', { name: 'Details of create_note' });
+      await userEvent.click(toggle);
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(screen.queryByTestId('audit-detail-7')).toBeNull();
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(toggle).toHaveFocus();
+    });
+
+    it('closes on Escape from the session link of the row and hands the focus to its Details button', async () => {
+      await renderAudit(() => Promise.resolve({ items: [detailed] }));
+      const toggle = await screen.findByRole('button', { name: 'Details of create_note' });
+      await userEvent.click(toggle);
+      screen.getByRole('link', { name: 'Open session of create_note' }).focus();
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(screen.queryByTestId('audit-detail-7')).toBeNull();
+      expect(toggle).toHaveFocus();
+    });
+
+    it('closes on Escape from inside the detail and hands the focus to its Details button', async () => {
+      await renderAudit(() => Promise.resolve({ items: [detailed] }));
+      const toggle = await screen.findByRole('button', { name: 'Details of create_note' });
+      await userEvent.click(toggle);
+      await userEvent.click(screen.getByText('ValidationError'));
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(screen.queryByTestId('audit-detail-7')).toBeNull();
+      expect(toggle).toHaveFocus();
+    });
+
+    it('opens and closes with Enter and Space on the Details button', async () => {
+      await renderAudit(() => Promise.resolve({ items: [detailed] }));
+      const toggle = await screen.findByRole('button', { name: 'Details of create_note' });
+      toggle.focus();
+
+      await userEvent.keyboard('{Enter}');
+      expect(screen.getByTestId('audit-detail-7')).toBeInTheDocument();
+
+      await userEvent.keyboard(' ');
+      expect(screen.queryByTestId('audit-detail-7')).toBeNull();
+    });
+
+    it('keeps the focus where it is when Escape is pressed with nothing open', async () => {
+      await renderAudit(() => Promise.resolve({ items: [detailed] }));
+      const toggle = await screen.findByRole('button', { name: 'Details of create_note' });
+      toggle.focus();
+
+      await userEvent.keyboard('{Escape}');
+
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(toggle).toHaveFocus();
+    });
+
     it('leaves out the fields a row does not carry', async () => {
       await renderAudit(() => Promise.resolve({ items: [row()] }));
 
