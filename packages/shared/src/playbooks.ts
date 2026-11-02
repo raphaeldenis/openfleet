@@ -55,7 +55,7 @@ const isBoundedData = (value: unknown, depth = 0): boolean => {
   return members.every((member) => isBoundedData(member, depth + 1));
 };
 
-const isSmallEnough = (value: unknown): boolean => JSON.stringify(value).length <= MAX_DATA_BYTES;
+const isSmallEnough = (value: unknown): boolean => new TextEncoder().encode(JSON.stringify(value)).length <= MAX_DATA_BYTES;
 
 /** Free JSON data (a tool input): plain values, nested at most MAX_DATA_DEPTH levels, serialized at most MAX_DATA_BYTES. */
 const boundedData = z.record(text(), z.unknown()).refine(isBoundedData, `must be plain JSON nested at most ${MAX_DATA_DEPTH} levels`).refine(isSmallEnough, `must be at most ${MAX_DATA_BYTES} bytes`);

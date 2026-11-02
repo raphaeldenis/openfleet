@@ -58,6 +58,13 @@ describe('the other cells', () => {
     expect(PlaybookCellSchema.safeParse({ ...http, method: 'TRACE' }).success).toBe(false);
   });
 
+  it('counts the bytes of tool input in UTF-8: 6000 kanji are 18000 bytes, over the 16384 cap', () => {
+    const tool = (query: string) => ({ id: 't', kind: 'tool', tool: 'list_notes', input: { query } });
+
+    expect(PlaybookCellSchema.safeParse(tool('a'.repeat(6000))).success).toBe(true);
+    expect(PlaybookCellSchema.safeParse(tool('漢'.repeat(6000))).success).toBe(false);
+  });
+
   it('refuses tool input nested deeper than 6 levels', () => {
     const deep = { a: { b: { c: { d: { e: { f: { g: 1 } } } } } } };
 
