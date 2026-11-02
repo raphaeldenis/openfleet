@@ -5,6 +5,7 @@ import type { NotificationTrigger, Session } from '@openfleet/shared';
 import { Subject } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sessionOf, silentWorkingStateSignals } from '../working-state/working-state-fixtures';
+import { FleetApiService } from './fleet-api.service';
 import { FleetEventsService } from './fleet-events.service';
 import { NativeNotifications, type NativeNotificationOutcome } from './native-notifications.service';
 import { NotificationDispatcher } from './notification-dispatcher.service';
@@ -14,6 +15,8 @@ const STORAGE_KEY = 'openfleet.notifications.v1';
 const BURST_WINDOW_MS = 1_000;
 
 interface Setup {
+  /** What the admin API answers for the trigger title: a string, or an error when the API fails. */
+  triggerTitle?: string | Error;
   sessions?: Session[];
   prefs?: Partial<NotificationPrefs>;
   currentUrl?: string;
@@ -21,7 +24,7 @@ interface Setup {
   outcome?: NativeNotificationOutcome;
 }
 
-function startDispatcher({ sessions = [sessionOf()], prefs = {}, currentUrl = '/inbox', isAppFocused = false, outcome = 'delivered' }: Setup = {}) {
+function startDispatcher({ sessions = [sessionOf()], prefs = {}, currentUrl = '/inbox', isAppFocused = false, outcome = 'delivered', triggerTitle = 'Wake the lead' }: Setup = {}) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
   vi.spyOn(document, 'hasFocus').mockReturnValue(isAppFocused);
   const triggers = new Subject<NotificationTrigger>();
@@ -39,6 +42,7 @@ function startDispatcher({ sessions = [sessionOf()], prefs = {}, currentUrl = '/
     providers: [
       { provide: NativeNotifications, useValue: notifications },
       { provide: Router, useValue: { url: currentUrl } },
+      { provide: FleetApiService, useValue: { getTrigger: vi.fn(async (id: string) => (triggerTitle instanceof Error ? Promise.reject(triggerTitle) : { id, title: triggerTitle })) } },
       { provide: FleetEventsService, useValue: { notificationTriggers: triggers, sessions: signal(sessions), approvals: signal([]), ...silentWorkingStateSignals() } },
     ],
   });
@@ -298,5 +302,56 @@ describe('NotificationDispatcher', () => {
     await raise(finished());
 
     expect(dispatcher.isPermissionDenied()).toBe(true);
+  });
+
+  describe('a trigger notice', () => {
+    const noticeOf = (fireId = 'f1', triggerId = 't1'): NotificationTrigger => ({ category: 'triggerNotice', triggerId, fireId });
+
+    it('shows a fixed banner whose body is the title of the trigger read from the API, and opens the Inbox', async () => {
+      const { shown, raise } = startDispatcher({ triggerTitle: 'Wake the lead' });
+
+      await raise(noticeOf());
+
+      expect(shown).toEqual([{ title: 'Trigger fired', body: 'Wake the lead', route: '/inbox' }]);
+    });
+
+    it('strips the control characters of the title and cuts it at 80 characters', async () => {
+      const escape = String.fromCharCode(27);
+      const nul = String.fromCharCode(0);
+      const { shown, raise } = startDispatcher({ triggerTitle: `${escape}[31mAlert${nul}\nnow ${'y'.repeat(200)}` });
+
+      await raise(noticeOf());
+
+      const [banner] = shown;
+      expect(banner!.title).toBe('Trigger fired');
+      expect(banner!.body).not.toMatch(/[\u0000-\u001f]/);
+      expect(Array.from(banner!.body)).toHaveLength(81);
+      expect(banner!.body.endsWith('…')).toBe(true);
+    });
+
+    it('falls back to a plain body when the API does not answer', async () => {
+      const { shown, raise } = startDispatcher({ triggerTitle: new Error('offline') });
+
+      await raise(noticeOf());
+
+      expect(shown).toEqual([{ title: 'Trigger fired', body: 'A trigger fired', route: '/inbox' }]);
+    });
+
+    it('announces a fire once, however many times its frame arrives', async () => {
+      const { shown, raise } = startDispatcher();
+
+      await raise(noticeOf('f1'), noticeOf('f1'));
+      await raise(noticeOf('f2'));
+
+      expect(shown).toHaveLength(2);
+    });
+
+    it.each([{ enabled: false }, { muted: true }])('stays silent with preferences %j', async (prefs) => {
+      const { shown, raise } = startDispatcher({ prefs });
+
+      await raise(noticeOf());
+
+      expect(shown).toEqual([]);
+    });
   });
 });

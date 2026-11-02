@@ -44,7 +44,9 @@ export type NotificationTrigger =
   | { category: 'agentFinished'; sessionId: string }
   | { category: 'needsInput'; sessionId: string; kind: NeedsInputKind; promptKey: string; toolName?: string }
   | { category: 'toolCompletion'; sessionId: string; toolUseId: string; toolName: string }
-  | { category: 'chatMessage'; sessionId: string; questionKey: string; questionCount: number };
+  | { category: 'chatMessage'; sessionId: string; questionKey: string; questionCount: number }
+  /** A `notify` trigger fired: the two ids only. The desktop reads the title of the trigger from the admin API and shows a fixed banner; no text of the trigger travels in the frame. */
+  | { category: 'triggerNotice'; triggerId: string; fireId: string };
 
 export type ServerEvent =
   | { type: 'snapshot'; sessions: Session[]; approvals: Approval[]; proposals?: GovernanceProposalView[]; escalations?: EscalationView[]; queuedCounts?: Record<string, number>; managers: ManagerView[]; workingStates?: WorkingState[]; workingStateMaxAgeMinutes?: number; workingStateMaxBytes?: number; todoSummaries?: TodoSummary[]; daemonIssues?: DaemonIssue[]; silentBlocks?: SilentBlock[] }
