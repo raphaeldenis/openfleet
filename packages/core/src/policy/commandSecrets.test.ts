@@ -212,6 +212,22 @@ describe('maskedCommandSecrets hides the secret a command line carries', () => {
     });
   });
 
+  describe('a value holding a character bash keeps inside a word', () => {
+    // Built at run time: no token-shaped literal sits in the source.
+    const secret = ['Probe', 'Value', '92'].join('');
+
+    it.each([
+      ['a line separator', ' '],
+      ['a paragraph separator', ' '],
+      ['a no-break space', ' '],
+      ['a next-line character', '\u0085'],
+      ['a carriage return', '\r'],
+    ])('masks a password holding %s whole', (_label, character) => {
+      expect(maskedCommandSecrets(`curl -u bob:ab${character}${secret} https://h`)).toBe('curl -u bob:*** https://h');
+      expect(maskedCommandSecrets(`tool --password ab${character}${secret} --force`)).toBe('tool --password *** --force');
+    });
+  });
+
   describe('a redirection between an option and its value', () => {
     // Built at run time: no token-shaped literal sits in the source.
     const secret = ['Probe', 'Value', '92'].join('');

@@ -36,8 +36,9 @@ interface SourceRange {
 /** Turns a range of the scanned source into the range of the original command that holds it. */
 type ToCommandRange = (range: SourceRange) => SourceRange;
 
-const WORD_GAP = /[\s\u0085]/;
-const COMMAND_SEPARATORS = new Set([';', '&', '|', '(', ')', '\n', '\r']);
+// Bash splits words on these alone: a carriage return, a no-break space or a line separator stays inside the word.
+const WORD_GAP = /[ \t\n]/;
+const COMMAND_SEPARATORS = new Set([';', '&', '|', '(', ')', '\n']);
 const LINE_BREAK = '\n';
 // A backslash before a line break continues the line: both disappear from the word, outside quotes and inside double quotes.
 const LINE_CONTINUATION = '\\\n';
@@ -50,10 +51,7 @@ const ASCII_WORD_ENDS = Array.from({ length: 128 }, (_, code) => {
   return WORD_GAP.test(character) || COMMAND_SEPARATORS.has(character) || REDIRECTION_SIGNS.has(character);
 });
 
-const endsTheWord = (character: string): boolean => {
-  const code = character.charCodeAt(0);
-  return code < ASCII_WORD_ENDS.length ? ASCII_WORD_ENDS[code]! : WORD_GAP.test(character);
-};
+const endsTheWord = (character: string): boolean => ASCII_WORD_ENDS[character.charCodeAt(0)] === true;
 
 /** Gathers the characters of a word, segment by segment; when asked, also where each one was written. */
 class ShellWordBuilder {
@@ -508,7 +506,7 @@ const attachedValueStart = (text: string, optionPrefix: RegExp): number | undefi
   return prefix.length;
 };
 
-const WORD_GAP_OR_SEPARATOR = /[\s\u0085;&|()]/;
+const WORD_GAP_OR_SEPARATOR = /[ \t\n;&|()]/;
 
 const holdsSeveralWords = (text: string): boolean => WORD_GAP_OR_SEPARATOR.test(text);
 
@@ -540,7 +538,7 @@ const PASSWORD_PROGRAMS: { kind: PasswordProgram; name: RegExp }[] = [
 ];
 
 // Every rule needs one of these: an option's dash, an assignment's `=`, a header's or a URL's colon, or the gap of a nested command.
-const MAY_HOLD_A_SECRET = /^-|[=:\s\u0085;&|()]/;
+const MAY_HOLD_A_SECRET = /^-|[=: \t\n;&|()]/;
 const MENTIONS_A_PASSWORD_PROGRAM = /(?:mysql|mysqldump|mysqladmin|mariadb|-dump|-admin|sshpass|redis-cli|curl|wget)$/;
 
 const ATTACHED_P_PASSWORD = /^-p(?=.)/s;
