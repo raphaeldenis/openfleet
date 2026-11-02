@@ -44,6 +44,8 @@ import { registerProjectProfileTools } from './projectProfileTools.js';
 import { registerProjectTools } from './projectTools.js';
 import { registerScheduledEventTools } from './scheduledEventTools.js';
 import { registerCiWatchTools } from './ciWatchTools.js';
+import { registerSecretTools } from './secretTools.js';
+import type { SecretService } from '../secrets/secretService.js';
 import type { CiWatchService } from '../managers/ciWatchService.js';
 import type { ScheduledEventService } from '../managers/scheduledEventService.js';
 import type { ProjectProfileBootstrap } from '../managers/projectProfileBootstrap.js';
@@ -81,7 +83,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { triggers?: TriggerService; activity?: ActivityRecorder; askUserGate?: AskUserGate; criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
+export function createMcpHandler(deps: { triggers?: TriggerService; secrets?: SecretService; activity?: ActivityRecorder; askUserGate?: AskUserGate; criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -99,6 +101,7 @@ export function createMcpHandler(deps: { triggers?: TriggerService; activity?: A
     if (deps.reviewFindings) registerStepFindingTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, caller, ...(deps.ticketPattern === undefined ? {} : { ticketPattern: deps.ticketPattern }) });
     if (deps.scheduledEvents) registerScheduledEventTools(toolServer, { scheduledEvents: deps.scheduledEvents, managers: deps.managers, caller });
     if (deps.ciWatch) registerCiWatchTools(toolServer, { ciWatch: deps.ciWatch, managers: deps.managers, caller });
+    if (deps.secrets) registerSecretTools(toolServer, { secrets: deps.secrets });
     if (deps.triggers) registerTriggerTools(toolServer, { triggers: deps.triggers, caller });
     registerManagerLinkTools(toolServer, { managers: deps.managers, caller });
     registerManagerProfileTools(toolServer, { managers: deps.managers, caller });

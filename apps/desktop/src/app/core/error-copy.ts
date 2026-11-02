@@ -133,6 +133,12 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   gh_timeout: { what: 'The GitHub CLI took too long to answer' },
   too_many_watched_prs: { what: 'This manager watches too many pull requests', fix: 'unwatch one' },
   harness_binary_broken: { what: 'The agent command fails its version check', fix: 'reinstall it, then spawn again' },
+  secret_scope_not_found: { what: 'Nothing declares a secret under that playbook, connection or trigger' },
+  secret_not_declared: { what: 'That secret name is not declared by its playbook, connection or trigger' },
+  secret_not_connected_on_this_device: { what: 'The secret is not connected on this device', fix: 'set its value from this device' },
+  secret_store_unavailable: { what: 'The secret store of the desktop app is not available', fix: 'unlock the keychain and keep the desktop app open' },
+  secret_too_short: { what: 'A secret value holds at least 8 characters', fix: 'enter a longer value' },
+  secret_nonce_invalid: { what: 'The confirmation of the desktop app is missing or expired', fix: 'confirm the action again in the desktop app' },
 
   internal_error: { what: 'The daemon hit an unexpected error' },
   launch_failed: { what: 'The agent failed to launch' },

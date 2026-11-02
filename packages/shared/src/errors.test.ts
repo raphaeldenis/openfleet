@@ -64,6 +64,8 @@ describe('the wire contract of the registry', () => {
     gh_unavailable: 'unavailable/never', gh_not_authenticated: 'unavailable/never', gh_bad_output: 'unavailable/later', gh_timeout: 'unavailable/later',
     too_many_watched_prs: 'conflict/later',
     harness_binary_broken: 'unavailable/later', directory_not_in_project: 'conflict/never',
+    secret_scope_not_found: 'not_found/never', secret_not_declared: 'not_found/never', secret_not_connected_on_this_device: 'unavailable/never',
+    secret_store_unavailable: 'unavailable/later', secret_too_short: 'invalid_request/never', secret_nonce_invalid: 'unauthorized/never',
     internal_error: 'internal/later', launch_failed: 'internal/later', resume_timeout: 'internal/later', db_stuck: 'internal/later',
   };
 
