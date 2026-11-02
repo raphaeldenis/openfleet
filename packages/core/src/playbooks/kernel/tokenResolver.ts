@@ -158,7 +158,15 @@ export const resolveTemplate = ({ template, scope }: { template: string; scope: 
   return { text: text + template.slice(copiedUpTo), secretNames: [...usedSecretNames] };
 };
 
-const AUTHORITY_PARTS_OF_A_URL = ['protocol', 'username', 'password', 'hostname', 'port'] as const;
+const LINE_BREAK_OR_NUL = /[\r\n\u0000]/;
+
+/** Throws header_injection when a resolved header name or value holds a CR, LF or NUL, which would end the header and start another. The message never repeats the value, which may hold a secret. */
+export const assertResolvedHeadersAreSafe = (headers: Readonly<Record<string, string>>): void => {
+  const isUnsafe = Object.entries(headers).some(([name, value]) => LINE_BREAK_OR_NUL.test(name) || LINE_BREAK_OR_NUL.test(value));
+  if (isUnsafe) throw new KernelError('header_injection', 'a resolved header holds a line break or a NUL character.');
+};
+
+const AUTHORITY_PARTS_OF_A_URL =['protocol', 'username', 'password', 'hostname', 'port'] as const;
 
 const parsedUrl = (urlText: string): URL => {
   try {

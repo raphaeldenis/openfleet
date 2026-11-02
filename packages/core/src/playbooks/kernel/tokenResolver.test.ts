@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { KernelError } from './kernelError.js';
-import { type ResolutionScope, type TemplateSlot, assertTemplateAllowed, findTemplateViolations, resolveHttpUrl, resolveTemplate } from './tokenResolver.js';
+import { type ResolutionScope, type TemplateSlot, assertResolvedHeadersAreSafe, assertTemplateAllowed, findTemplateViolations, resolveHttpUrl, resolveTemplate } from './tokenResolver.js';
 
 const codeOfThrown = (action: () => unknown): string | undefined => {
   try {
@@ -273,6 +273,44 @@ describe('resolveHttpUrl', () => {
 
   it('refuses a reference to nothing', () => {
     expect(codeOfThrown(() => resolveUrl('https://{{inputs.absent}}/'))).toBe('unresolved_reference');
+  });
+});
+
+describe('assertResolvedHeadersAreSafe', () => {
+  it('accepts ordinary headers, a tab in a value included', () => {
+    expect(() => assertResolvedHeadersAreSafe({ Accept: 'application/json', 'X-Note': 'a\tb', Authorization: 'Bearer abc.def' })).not.toThrow();
+  });
+
+  it('accepts no header at all', () => {
+    expect(() => assertResolvedHeadersAreSafe({})).not.toThrow();
+  });
+
+  it.each([
+    ['a CRLF followed by another header', { 'X-Trace': 'abc\r\nX-Injected: 1' }],
+    ['a lone LF', { 'X-Trace': 'abc\nX-Injected: 1' }],
+    ['a lone CR', { 'X-Trace': 'abc\rX-Injected: 1' }],
+    ['a trailing CRLF', { 'X-Trace': 'abc\r\n' }],
+    ['a NUL character', { 'X-Trace': 'abc\u0000def' }],
+    ['a line break in the name', { 'X-Trace\r\nX-Injected': '1' }],
+  ])('refuses %s with header_injection', (_label, headers) => {
+    expect(codeOfThrown(() => assertResolvedHeadersAreSafe(headers))).toBe('header_injection');
+  });
+
+  it('refuses the whole set when only the second header is unsafe', () => {
+    expect(codeOfThrown(() => assertResolvedHeadersAreSafe({ Accept: 'application/json', 'X-Trace': 'a\nb' }))).toBe('header_injection');
+  });
+
+  it('does not repeat the header value in its message', () => {
+    const secretLookingValue = ['top', 'secret', 'value'].join('-');
+    let message = '';
+    try {
+      assertResolvedHeadersAreSafe({ 'X-Trace': `${secretLookingValue}\r\nX-Injected: 1` });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    expect(message).not.toBe('');
+    expect(message).not.toContain(secretLookingValue);
   });
 });
 

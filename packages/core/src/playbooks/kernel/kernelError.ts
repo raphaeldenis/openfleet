@@ -9,6 +9,7 @@ export type KernelErrorCode =
   | 'untrusted_reference'
   | 'non_canonical_url'
   | 'url_authority_changed'
+  | 'header_injection'
   | 'secret_too_short'
   | 'not_canonical_json';
 
