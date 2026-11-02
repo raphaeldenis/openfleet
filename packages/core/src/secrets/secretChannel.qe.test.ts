@@ -3,27 +3,31 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { OPERATOR_NONCE_HEADER, type SecretScope } from '@openfleet/shared';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon, type DaemonOptions } from '../daemon.js';
+import { recentLogLines } from '../logger.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 import { createFakeTauriParent, keychainKeyOf, type FakeTauriParent } from './fakeTauriParent.testkit.js';
 
 const tempDirs = createTempDirTracker();
 const playbook: SecretScope = { kind: 'playbook', id: 'pb-1' };
 const SECRET_NAME = 'JIRA_TOKEN';
-const NONCE_LIFETIME_MS = 30_000;
+const ANSWER_LIFETIME_MS = 30_000;
 
 let daemon: Daemon;
 let config: Config;
 let parent: FakeTauriParent;
-let nowMs: number;
+let monotonicMs: number;
 
 const makeCanary = () => ['canary', randomUUID()].join('-');
 
 const adminHeaders = (extra: Record<string, string> = {}) => ({ authorization: `Bearer ${config.adminToken}`, 'content-type': 'application/json', ...extra });
 
+const declare = (database: Daemon['db']) =>
+  database.prepare("INSERT OR IGNORE INTO secret_refs (id, scope_kind, scope_id, name, status) VALUES (?, 'playbook', 'pb-1', ?, 'missing')").run(randomUUID(), SECRET_NAME);
+
 const boot = async ({ withParent = true, exchangeTimeoutMs = 2_000 }: { withParent?: boolean; exchangeTimeoutMs?: number } = {}) => {
-  const secrets: NonNullable<DaemonOptions['secrets']> = { clock: () => nowMs, exchangeTimeoutMs, ...(withParent ? { parent: parent.link } : {}) };
+  const secrets: NonNullable<DaemonOptions['secrets']> = { monotonicClock: () => monotonicMs, exchangeTimeoutMs, ...(withParent ? { parent: parent.link } : {}) };
   daemon = await startDaemon(config, { secrets });
-  daemon.db.prepare("INSERT INTO secret_refs (id, scope_kind, scope_id, name, status) VALUES (?, 'playbook', 'pb-1', ?, 'missing')").run(randomUUID(), SECRET_NAME);
+  declare(daemon.db);
 };
 
 const url = (path: string) => `${daemon.server.url}${path}`;
@@ -33,12 +37,11 @@ const put = (value: string) =>
 
 const answerOf = async (response: Response) => ({ status: response.status, json: (await response.json()) as Record<string, unknown> });
 
-const postInternal = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-  fetch(url(path), { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+const nextTurn = () => new Promise((resolve) => setTimeout(resolve, 20));
 
 beforeEach(() => {
-  nowMs = Date.parse('2026-11-02T10:00:00.000Z');
-  parent = createFakeTauriParent({ daemonUrl: () => daemon.server.url });
+  monotonicMs = 1_000;
+  parent = createFakeTauriParent();
   config = loadConfig({ OPENFLEET_HOME: tempDirs.make('of-secrets-channel-'), OPENFLEET_PORT: '0' });
 });
 afterEach(async () => {
@@ -49,22 +52,21 @@ afterEach(async () => {
 describe('setting a secret through the desktop app', () => {
   beforeEach(() => boot());
 
-  it('puts the value in the keychain of the app and nowhere in what the daemon printed to it', async () => {
+  it('has the app write the value to its keychain and marks the secret stored', async () => {
     const value = makeCanary();
 
     const answer = await answerOf(await put(value));
 
     expect([answer.status, answer.json.status, parent.keychain.get(keychainKeyOf(playbook, SECRET_NAME))]).toEqual([200, 'stored', value]);
-    expect(JSON.stringify(parent.requests).includes(value)).toBe(false);
   });
 
-  it('asks the app for the right operation on the right secret, each with fresh nonces', async () => {
+  it('asks the app for the right operation on the right secret, each time under a fresh request id', async () => {
     await put(makeCanary());
     await put(makeCanary());
 
     const [first, second] = parent.requests;
     expect([first?.op, first?.scope, first?.name]).toEqual(['set', playbook, SECRET_NAME]);
-    expect(new Set([first?.deliverNonce, first?.takeNonce, second?.deliverNonce, second?.takeNonce]).size).toBe(4);
+    expect(first?.requestId).not.toBe(second?.requestId);
   });
 
   it('asks the app to clear the keychain item', async () => {
@@ -82,13 +84,18 @@ describe('setting a secret through the desktop app', () => {
     const status = await answerOf(await fetch(url(`/api/secrets/playbook/pb-1/${SECRET_NAME}`), { headers: adminHeaders() }));
     expect([answer.status, answer.json.error, status.json.status]).toEqual([503, 'secret_store_unavailable', 'missing']);
   });
+
+  it('serves no HTTP route for the exchange: there is nothing to answer in the app\'s place', () => {
+    const exchangeRoutes = daemon.server.routes.filter(({ path }) => path.startsWith('/internal'));
+
+    expect(exchangeRoutes).toEqual([]);
+  });
 });
 
 describe('resolving a secret on demand', () => {
   beforeEach(() => boot());
 
   it('reads the value from the app each time it is asked, and keeps no copy', async () => {
-    await put(makeCanary());
     parent.keychain.set(keychainKeyOf(playbook, SECRET_NAME), 'first-value-in-the-keychain');
     const first = await daemon.secrets.resolve(playbook, SECRET_NAME);
     parent.keychain.set(keychainKeyOf(playbook, SECRET_NAME), 'second-value-in-the-keychain');
@@ -117,7 +124,7 @@ describe('resolving a secret on demand', () => {
 describe('a daemon without the desktop app', () => {
   beforeEach(() => boot({ withParent: false }));
 
-  it('answers the status from its metadata and refuses to set, typed', async () => {
+  it('answers the status from its metadata and cannot set: no operator nonce can exist', async () => {
     const status = await answerOf(await fetch(url(`/api/secrets/playbook/pb-1/${SECRET_NAME}`), { headers: adminHeaders() }));
     const set = await answerOf(await fetch(url(`/api/secrets/playbook/pb-1/${SECRET_NAME}`), { method: 'PUT', headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: 'any-nonce' }), body: JSON.stringify({ value: makeCanary() }) }));
 
@@ -134,91 +141,87 @@ describe('a daemon without the desktop app', () => {
 describe('an app that does not answer', () => {
   beforeEach(() => boot({ exchangeTimeoutMs: 100 }));
 
-  it('fails the request with secret_store_unavailable and spends the nonces, so a late answer is refused', async () => {
+  it('fails the request with secret_store_unavailable, and a late answer changes nothing and is counted', async () => {
     parent.setBehaviour('stays_silent');
 
     const answer = await answerOf(await put(makeCanary()));
 
-    const late = await postInternal('/internal/secrets/deliver', { nonce: parent.requests[0]?.deliverNonce, outcome: 'ok' });
-    expect([answer.status, answer.json.error, late.status]).toEqual([503, 'secret_store_unavailable', 401]);
+    parent.writeAnswer(parent.requests[0]!.requestId, { outcome: 'ok' });
+    const status = await answerOf(await fetch(url(`/api/secrets/playbook/pb-1/${SECRET_NAME}`), { headers: adminHeaders() }));
+    expect([answer.status, answer.json.error, status.json.status, daemon.secretChannel.ignoredAnswerCount()]).toEqual([503, 'secret_store_unavailable', 'missing', 1]);
   });
 });
 
-describe('the internal routes the desktop app answers on', () => {
+describe('answers that no request in flight claims', () => {
   beforeEach(async () => {
     await boot({ exchangeTimeoutMs: 400 });
     parent.setBehaviour('stays_silent');
   });
 
-  const requestPendingRead = async () => {
+  const startPendingRead = async () => {
     const pending = daemon.secrets.resolve(playbook, SECRET_NAME).catch((error: unknown) => error);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    return { pending, request: parent.requests[0]! };
+    await nextTurn();
+    return { pending, requestId: parent.requests[0]!.requestId };
   };
 
-  it('accepts the nonce once: a second delivery with the same nonce is refused', async () => {
-    const { pending, request } = await requestPendingRead();
+  it('accepts the answer of a request once: the same answer again is ignored and counted', async () => {
+    const { pending, requestId } = await startPendingRead();
 
-    const first = await postInternal('/internal/secrets/deliver', { nonce: request.deliverNonce, outcome: 'value', value: 'delivered-value-123' });
-    const second = await postInternal('/internal/secrets/deliver', { nonce: request.deliverNonce, outcome: 'value', value: 'another-value-1234' });
+    parent.writeAnswer(requestId, { outcome: 'value', value: 'delivered-value-123' });
+    parent.writeAnswer(requestId, { outcome: 'value', value: 'replayed-value-1234' });
 
-    expect([first.status, second.status, await pending]).toEqual([200, 401, 'delivered-value-123']);
+    expect([await pending, daemon.secretChannel.ignoredAnswerCount()]).toEqual(['delivered-value-123', 1]);
   });
 
-  it('refuses a nonce older than 30 seconds', async () => {
-    const { pending, request } = await requestPendingRead();
-    nowMs += NONCE_LIFETIME_MS + 1;
+  it('ignores an answer after 30 seconds on the monotonic clock', async () => {
+    const { pending, requestId } = await startPendingRead();
+    monotonicMs += ANSWER_LIFETIME_MS + 1;
 
-    const late = await postInternal('/internal/secrets/deliver', { nonce: request.deliverNonce, outcome: 'value', value: 'delivered-value-123' });
+    parent.writeAnswer(requestId, { outcome: 'value', value: 'delivered-value-123' });
 
-    expect(late.status).toBe(401);
     expect(await pending).toMatchObject({ code: 'secret_store_unavailable' });
+    expect(daemon.secretChannel.ignoredAnswerCount()).toBe(1);
   });
 
-  it('refuses a nonce nobody issued', async () => {
-    await requestPendingRead();
+  it('ignores an answer to a request id nobody issued, and leaves the request in flight alone', async () => {
+    const { pending, requestId } = await startPendingRead();
 
-    const forged = await postInternal('/internal/secrets/deliver', { nonce: 'forged', outcome: 'value', value: 'forged-value-12345' });
+    parent.writeAnswer('forged-request-id', { outcome: 'value', value: 'forged-value-12345' });
+    parent.writeAnswer(requestId, { outcome: 'value', value: 'delivered-value-123' });
 
-    expect(forged.status).toBe(401);
+    expect([await pending, daemon.secretChannel.ignoredAnswerCount()]).toEqual(['delivered-value-123', 1]);
   });
 
-  it('counts the nonce only: the admin token alone does not deliver', async () => {
-    const { request } = await requestPendingRead();
+  it('ignores the answer of an older generation of the daemon', async () => {
+    const { requestId: oldGenerationRequestId } = await startPendingRead();
+    await daemon.close();
+    parent.startNewGeneration();
+    await boot({ exchangeTimeoutMs: 400 });
+    const newPending = daemon.secrets.resolve(playbook, SECRET_NAME).catch((error: unknown) => error);
+    await nextTurn();
 
-    const withAdminToken = await postInternal('/internal/secrets/deliver', { outcome: 'value', value: 'forged-value-12345' }, adminHeaders());
-    const nonceAndAdminToken = await postInternal('/internal/secrets/deliver', { nonce: request.deliverNonce, outcome: 'value', value: 'forged-value-12345' }, adminHeaders());
+    parent.writeAnswer(oldGenerationRequestId, { outcome: 'value', value: 'old-generation-value' });
+    parent.writeAnswer(parent.requests.at(-1)!.requestId, { outcome: 'value', value: 'new-generation-value' });
 
-    expect([withAdminToken.status, nonceAndAdminToken.status]).toEqual([401, 401]);
+    expect([await newPending, daemon.secretChannel.ignoredAnswerCount()]).toEqual(['new-generation-value', 1]);
   });
+});
 
-  it('refuses a request that carries a bearer token of a session', async () => {
-    const { request } = await requestPendingRead();
+describe('where a value that crossed the pipes can appear', () => {
+  beforeEach(() => boot());
 
-    const answer = await postInternal('/internal/secrets/deliver', { nonce: request.deliverNonce, outcome: 'ok' }, { authorization: 'Bearer some-session-mcp-token' });
+  it('shows in no log line, activity row or diagnostics of the daemon', async () => {
+    const setValue = makeCanary();
+    const readValue = makeCanary();
+    await put(setValue);
+    parent.keychain.set(keychainKeyOf(playbook, SECRET_NAME), readValue);
+    await daemon.secrets.resolve(playbook, SECRET_NAME);
+    parent.writeAnswer('replayed-request-id', { outcome: 'value', value: makeCanary() });
 
-    expect(answer.status).toBe(401);
-  });
+    const activity = await (await fetch(url('/api/activity?limit=200'), { headers: adminHeaders() })).text();
+    const diagnostics = await (await fetch(url('/api/diagnostics'), { headers: adminHeaders() })).text();
 
-  it('refuses a request that carries an Origin header (a browser page)', async () => {
-    const { request } = await requestPendingRead();
-
-    const answer = await postInternal('/internal/secrets/deliver', { nonce: request.deliverNonce, outcome: 'ok' }, { origin: 'http://evil.example' });
-
-    expect(answer.status).toBe(401);
-  });
-
-  it('gives the pending value of a set once, to the take nonce only', async () => {
-    const value = makeCanary();
-    const setting = put(value);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const request = parent.requests[0]!;
-
-    const withDeliverNonce = await postInternal('/internal/secrets/take', { nonce: request.deliverNonce });
-    const first = await postInternal('/internal/secrets/take', { nonce: request.takeNonce });
-    const second = await postInternal('/internal/secrets/take', { nonce: request.takeNonce });
-
-    expect([withDeliverNonce.status, first.status, ((await first.json()) as { value: string }).value, second.status]).toEqual([401, 200, value, 401]);
-    await setting;
+    const everywhere = [activity, diagnostics, ...recentLogLines()].join('\n');
+    expect([everywhere.includes(setValue), everywhere.includes(readValue)]).toEqual([false, false]);
   });
 });

@@ -34,7 +34,7 @@ import { SqliteDenialJournal } from './policy/sqliteDenialJournal.js';
 import { ActivityRecorder } from './activity/activityRecorder.js';
 import { ActivityRepository } from './activity/activityRepository.js';
 import { createNonceLedger } from './secrets/nonceLedger.js';
-import { createParentBridgeSecretStore, NO_EXCHANGE } from './secrets/parentBridgeSecretStore.js';
+import { createParentBridgeSecretStore } from './secrets/parentBridgeSecretStore.js';
 import type { SecretParentLink } from './secrets/secretParentLink.js';
 import { SecretRefRepository } from './secrets/secretRefRepository.js';
 import { SecretService } from './secrets/secretService.js';
@@ -148,6 +148,8 @@ export interface Daemon {
   harnesses: Harness[];
   /** The secrets service the REST routes use; a playbook run resolves its values through it. */
   secrets: SecretService;
+  /** The health of the line to the desktop app: how many answers it ignored because no request in flight claimed them. */
+  secretChannel: { ignoredAnswerCount: () => number };
   close: () => Promise<void>;
 }
 
@@ -204,7 +206,7 @@ export interface DaemonOptions {
    * `store` replaces the keychain adapter with another holder, so a test needs no desktop app. `clock` and `exchangeTimeoutMs` replace the clock of the nonces and the wait for the app's answer.
    * Without `parent` and `store` nothing can be set or read: the typed error is secret_store_unavailable.
    */
-  secrets?: { parent?: SecretParentLink; store?: SecretStore; clock?: () => number; exchangeTimeoutMs?: number };
+  secrets?: { parent?: SecretParentLink; store?: SecretStore; clock?: () => number; monotonicClock?: () => number; exchangeTimeoutMs?: number };
 }
 
 // Builds every service from the config and starts serving; a throw at any point refuses the boot, after closing whatever already started.
@@ -404,12 +406,16 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     clock: options.childSilence?.clock ?? Date.now, schedule: options.childSilence?.schedule ?? scheduleOnRealClock,
   });
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
-  const secretNonces = createNonceLedger({ clock: options.secrets?.clock ?? Date.now });
+  const secretMonotonicClock = options.secrets?.monotonicClock ?? (() => performance.now());
+  const secretNonces = createNonceLedger({ monotonicClock: secretMonotonicClock });
   const secretParent = options.secrets?.parent;
-  const secretBridge = secretParent === undefined ? undefined : createParentBridgeSecretStore({ link: secretParent, ledger: secretNonces, exchangeTimeoutMs: options.secrets?.exchangeTimeoutMs ?? DEFAULT_SECRET_EXCHANGE_TIMEOUT_MS });
-  secretParent?.onMessage((message) => void secretNonces.register('operator', message.nonce));
+  const secretBridge = secretParent === undefined ? undefined : createParentBridgeSecretStore({ link: secretParent, monotonicClock: secretMonotonicClock, exchangeTimeoutMs: options.secrets?.exchangeTimeoutMs ?? DEFAULT_SECRET_EXCHANGE_TIMEOUT_MS });
+  secretParent?.onMessage((message) => {
+    if (message.type === 'operator_nonce') secretNonces.register(message.nonce);
+  });
   const secrets = new SecretService({ refs: new SecretRefRepository(db), store: options.secrets?.store ?? secretBridge ?? createUnavailableSecretStore(), clock: options.secrets?.clock ?? Date.now });
-  const server = await startServer({ ...config, secrets: { service: secrets, nonces: secretNonces, exchange: secretBridge ?? NO_EXCHANGE }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const secretChannel = { ignoredAnswerCount: () => secretBridge?.ignoredAnswerCount() ?? 0 };
+  const server = await startServer({ ...config, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -461,5 +467,5 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     throw error;
   }
 
-  return { server, db, degraded, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, harnesses, secrets, close };
+  return { server, db, degraded, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, harnesses, secrets, secretChannel, close };
 }

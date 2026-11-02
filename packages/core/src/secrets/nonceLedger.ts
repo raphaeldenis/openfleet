@@ -1,58 +1,47 @@
 import { randomBytes } from 'node:crypto';
 
-/** operator: minted by a desktop command for a REST set or clear. deliver and take: minted by the daemon for one request to the desktop app. */
-export type NoncePurpose = 'operator' | 'deliver' | 'take';
-
 export const NONCE_LIFETIME_MS = 30_000;
-const MAX_LIVE_OPERATOR_NONCES = 16;
+const MAX_LIVE_NONCES = 16;
 const MIN_REGISTERED_NONCE_CHARS = 16;
 const MAX_REGISTERED_NONCE_CHARS = 128;
 const NONCE_CHARACTERS = /^[A-Za-z0-9_-]+$/;
 
+/** The operator nonces a desktop command minted and wrote to the stdin of the sidecar. Each authorises one REST set or clear. */
 export interface NonceLedger {
-  /** Mints a nonce of 192 random bits that `redeem` accepts once, for `purpose`, within 30 seconds. */
-  issue: (purpose: NoncePurpose) => string;
   /** Accepts a nonce the desktop app minted; refuses (false) one that is too short, too long or not URL-safe base64. */
-  register: (purpose: 'operator', nonce: string) => boolean;
-  /** True exactly once for a live nonce of that purpose; a spent, expired, unknown or wrong-purpose nonce answers false. */
-  redeem: (nonce: string, purpose: NoncePurpose) => boolean;
-  revoke: (nonce: string) => void;
+  register: (nonce: string) => boolean;
+  /** True exactly once for a live nonce; a spent, expired or unknown nonce answers false. */
+  redeem: (nonce: string) => boolean;
 }
 
-/** The live nonces of the daemon, in memory only: a restart voids them all. */
-export const createNonceLedger = ({ clock }: { clock: () => number }): NonceLedger => {
-  const live = new Map<string, { purpose: NoncePurpose; expiresAt: number }>();
+/** The live nonces of the daemon, in memory only: a restart voids them all. `monotonicClock` measures expiry, so a change of the wall clock cannot extend a nonce. */
+export const createNonceLedger = ({ monotonicClock }: { monotonicClock: () => number }): NonceLedger => {
+  const expiryByNonce = new Map<string, number>();
 
   const dropExpired = () => {
-    for (const [nonce, { expiresAt }] of live) if (expiresAt <= clock()) live.delete(nonce);
+    for (const [nonce, expiresAt] of expiryByNonce) if (expiresAt <= monotonicClock()) expiryByNonce.delete(nonce);
   };
-  const dropOldestOperatorNoncesBeyondTheCap = () => {
-    const operatorNonces = [...live].filter(([, { purpose }]) => purpose === 'operator').map(([nonce]) => nonce);
-    for (const nonce of operatorNonces.slice(0, Math.max(0, operatorNonces.length - MAX_LIVE_OPERATOR_NONCES))) live.delete(nonce);
-  };
-  const keep = (purpose: NoncePurpose, nonce: string) => {
-    dropExpired();
-    live.set(nonce, { purpose, expiresAt: clock() + NONCE_LIFETIME_MS });
-    dropOldestOperatorNoncesBeyondTheCap();
+  const dropOldestBeyondTheCap = () => {
+    for (const nonce of [...expiryByNonce.keys()].slice(0, Math.max(0, expiryByNonce.size - MAX_LIVE_NONCES))) expiryByNonce.delete(nonce);
   };
 
   return {
-    issue: (purpose) => {
-      const nonce = randomBytes(24).toString('base64url');
-      keep(purpose, nonce);
-      return nonce;
-    },
-    register: (purpose, nonce) => {
+    register: (nonce) => {
       const isWellFormed = nonce.length >= MIN_REGISTERED_NONCE_CHARS && nonce.length <= MAX_REGISTERED_NONCE_CHARS && NONCE_CHARACTERS.test(nonce);
-      if (isWellFormed) keep(purpose, nonce);
-      return isWellFormed;
+      if (!isWellFormed) return false;
+      dropExpired();
+      expiryByNonce.set(nonce, monotonicClock() + NONCE_LIFETIME_MS);
+      dropOldestBeyondTheCap();
+      return true;
     },
-    redeem: (nonce, purpose) => {
-      const entry = live.get(nonce);
-      if (entry === undefined || entry.purpose !== purpose) return false;
-      live.delete(nonce);
-      return entry.expiresAt > clock();
+    redeem: (nonce) => {
+      const expiresAt = expiryByNonce.get(nonce);
+      if (expiresAt === undefined) return false;
+      expiryByNonce.delete(nonce);
+      return expiresAt > monotonicClock();
     },
-    revoke: (nonce) => void live.delete(nonce),
   };
 };
+
+/** A request id: 192 random bits, unguessable by a process that cannot read the pipes. */
+export const newRequestId = (): string => randomBytes(24).toString('base64url');

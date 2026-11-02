@@ -21,7 +21,7 @@ const secretOfPath = (params: Record<string, string>): { scope: SecretScope; nam
 
 const requireOperatorNonce = (req: IncomingMessage, ledger: Pick<NonceLedger, 'redeem'>): void => {
   const nonce = req.headers[OPERATOR_NONCE_HEADER];
-  const isLiveNonce = typeof nonce === 'string' && ledger.redeem(nonce, 'operator');
+  const isLiveNonce = typeof nonce === 'string' && ledger.redeem(nonce);
   if (!isLiveNonce) throw new OpenFleetError('secret_nonce_invalid', 'a set or a clear needs a live operator nonce from the desktop app.', { hint: 'set or clear the secret from the OpenFleet desktop app.' });
 };
 

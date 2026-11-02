@@ -44,7 +44,7 @@ const clearSecret = (nonce = parent.mintOperatorNonce(), scope = playbook, name 
 beforeEach(async () => {
   responseTexts = [];
   store = createInMemorySecretStore();
-  parent = createFakeTauriParent({ daemonUrl: () => daemon.server.url });
+  parent = createFakeTauriParent();
   config = loadConfig({ OPENFLEET_HOME: tempDirs.make('of-secrets-rest-'), OPENFLEET_PORT: '0' });
   daemon = await startDaemon(config, { secrets: { store, parent: parent.link } });
   declare(playbook, SECRET_NAME);

@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
+import { recentLogLines } from '../logger.js';
 import type { ParentToDaemonMessage } from './secretParentLink.js';
 import { createStdioSecretParentLink, SECRET_LINE_PREFIX } from './stdioSecretParentLink.js';
 
@@ -16,11 +18,13 @@ const openLink = () => {
 
 const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 
+const lineOf = (message: unknown) => `${SECRET_LINE_PREFIX}${JSON.stringify(message)}\n`;
+
 describe('the stdio link to the desktop app', () => {
   it('prints one prefixed JSON line per request, ending with a newline', () => {
     const { link, written } = openLink();
 
-    link.send({ type: 'secret_request', requestId: 'r1', op: 'read', scope: { kind: 'playbook', id: 'pb' }, name: 'TOKEN', deliverNonce: 'n1' });
+    link.send({ type: 'secret_request', requestId: 'r1', op: 'read', scope: { kind: 'playbook', id: 'pb' }, name: 'TOKEN' });
 
     expect(written).toHaveLength(1);
     expect(written[0]).toMatch(new RegExp(`^${SECRET_LINE_PREFIX}\\{.*\\}\\n$`));
@@ -30,10 +34,22 @@ describe('the stdio link to the desktop app', () => {
   it('hears the operator nonce the app writes to its stdin', async () => {
     const { input, received } = openLink();
 
-    input.write(`${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'operator_nonce', nonce: NONCE })}\n`);
+    input.write(lineOf({ type: 'operator_nonce', nonce: NONCE }));
     await nextTurn();
 
     expect(received).toEqual([{ type: 'operator_nonce', nonce: NONCE }]);
+  });
+
+  it.each([
+    ['a value', { type: 'secret_answer', requestId: 'r1', outcome: 'value', value: 'a-value-of-the-keychain' }],
+    ['an outcome without a value', { type: 'secret_answer', requestId: 'r1', outcome: 'ok' }],
+  ])('hears the answer of a request, with %s', async (_label, message) => {
+    const { input, received } = openLink();
+
+    input.write(lineOf(message));
+    await nextTurn();
+
+    expect(received).toEqual([message]);
   });
 
   it.each([
@@ -41,6 +57,9 @@ describe('the stdio link to the desktop app', () => {
     ['a prefixed line that is not JSON', `${SECRET_LINE_PREFIX}{not json`],
     ['a prefixed message of another type', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'shutdown' })}`],
     ['an operator nonce that is not a string', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'operator_nonce', nonce: 12 })}`],
+    ['an answer without a request id', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'secret_answer', outcome: 'ok' })}`],
+    ['an answer with an outcome nobody defined', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'secret_answer', requestId: 'r1', outcome: 'maybe' })}`],
+    ['a value answer with an empty value', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'secret_answer', requestId: 'r1', outcome: 'value', value: '' })}`],
   ])('ignores %s', async (_label, line) => {
     const { input, received } = openLink();
 
@@ -48,5 +67,18 @@ describe('the stdio link to the desktop app', () => {
     await nextTurn();
 
     expect(received).toEqual([]);
+  });
+
+  it('echoes nothing and logs nothing of the lines it reads, whether they parse or not', async () => {
+    const { input, written } = openLink();
+    const value = ['canary', randomUUID()].join('-');
+
+    input.write(lineOf({ type: 'secret_answer', requestId: 'r1', outcome: 'value', value }));
+    input.write(`${SECRET_LINE_PREFIX}{"type":"secret_answer","value":"${value}`);
+    input.write('\n');
+    await nextTurn();
+
+    expect(written).toEqual([]);
+    expect(recentLogLines().join('\n').includes(value)).toBe(false);
   });
 });

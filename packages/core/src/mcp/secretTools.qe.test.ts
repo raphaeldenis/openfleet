@@ -50,7 +50,7 @@ const setSecretAsHuman = (value: string) =>
 
 beforeEach(async () => {
   store = createInMemorySecretStore();
-  parent = createFakeTauriParent({ daemonUrl: () => daemon.server.url });
+  parent = createFakeTauriParent();
   config = loadConfig({ OPENFLEET_HOME: tempDirs.make('of-secret-tools-'), OPENFLEET_PORT: '0', [E2E_FLAG_ENV]: E2E_FLAG_ON });
   const settings = defaultCommandPolicySettings();
   daemon = await startDaemon(config, { secrets: { store, parent: parent.link }, commandPolicy: { settings: { ...settings, unattended: { ...settings.unattended, askBecomesDeny: false } } } });
