@@ -79,6 +79,14 @@ describe('app.routes', () => {
     expect(harness.routeNativeElement?.querySelector('[data-testid="notes-view"]')).toBeTruthy();
   });
 
+  it("renders the toolkit screen at '/toolkit', inside the shell", async () => {
+    await configureTestBed();
+    TestBed.overrideProvider(FleetApiService, { useValue: { listTools: () => new Promise(() => undefined) } });
+    const harness = await RouterTestingHarness.create('/toolkit');
+    expect(harness.routeNativeElement?.querySelector('[data-testid="app-shell"]')).toBeTruthy();
+    expect(harness.routeNativeElement?.querySelector('[data-testid="toolkit-view"]')).toBeTruthy();
+  });
+
   it("renders the tables screen at '/tables' inside the shell, scoped by the projectId query parameter", async () => {
     await configureTestBed();
     const api = {

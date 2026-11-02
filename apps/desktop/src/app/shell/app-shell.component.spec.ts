@@ -103,6 +103,16 @@ describe('AppShellComponent', () => {
     expect(notes.getAttribute('href')).toBe('/notes');
   });
 
+  it('renders Toolkit as a real link to the toolkit screen', async () => {
+    const { root } = await setUp();
+
+    const toolkit = root.querySelector('[data-testid="nav-toolkit"]') as HTMLAnchorElement;
+
+    expect(toolkit.tagName).toBe('A');
+    expect(toolkit).not.toHaveAttribute('aria-disabled');
+    expect(toolkit.getAttribute('href')).toBe('/toolkit');
+  });
+
   it('renders Project home as a real link to the project home screen', async () => {
     const { root } = await setUp();
 
@@ -116,7 +126,7 @@ describe('AppShellComponent', () => {
   it('says "Coming soon" on every section that has no screen yet', async () => {
     const { root } = await setUp();
 
-    for (const key of ['audit', 'toolkit', 'profiles', 'triggers', 'integrations']) {
+    for (const key of ['audit', 'profiles', 'triggers', 'integrations']) {
       expect(root.querySelector(`[data-testid="nav-${key}"]`), key).toHaveTextContent('Coming soon');
     }
   });
