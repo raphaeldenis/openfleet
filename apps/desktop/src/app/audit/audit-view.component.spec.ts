@@ -245,6 +245,26 @@ describe('AuditViewComponent', () => {
 
       expect(screen.queryByRole('link')).toBeNull();
     });
+
+    it.each([
+      ['a word', 'not-a-uuid'],
+      ['an id of 64 characters without dashes', 'a'.repeat(64)],
+    ])('does not turn %s into a link, and still shows it in the detail', async (_label, sessionId) => {
+      await renderAudit(() => Promise.resolve({ items: [row({ sessionId })] }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Details of create_note' }));
+
+      expect(screen.queryByRole('link')).toBeNull();
+      expect(screen.getByTestId('audit-detail-7')).toHaveTextContent(sessionId);
+    });
+
+    it('links an upper-case UUID', async () => {
+      const sessionId = '3F2A9C1E-0000-4000-8000-00000000000A';
+      await renderAudit(() => Promise.resolve({ items: [row({ sessionId })] }));
+
+      const link = await screen.findByRole('link', { name: 'Open session of create_note' });
+
+      expect(link).toHaveAttribute('href', `/session/${sessionId}`);
+    });
   });
 
   describe('export', () => {
