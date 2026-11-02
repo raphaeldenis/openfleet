@@ -762,6 +762,12 @@ function maskedWords(command: string): string {
  * Returns the command with the value of every credential option, assignment, header and URL replaced by a mask.
  * The command is read word by word as the shell reads it (quotes, escaped quotes, glued segments, backslashes), so a value ends where the shell ends it;
  * only the source of the value is replaced, the quotes and words around it stay as written. The scan is linear in the length of the command.
+ *
+ * Known limits, left readable:
+ * - an assignment whose name holds no secret word (`env X=… cmd`, `export X=…`): its value has no name to tell it from a setting;
+ * - a credential under an arbitrary name with no recognisable format (a base64 string given as a plain argument);
+ * - the word after `--password ;`, `--password &&` or `--password |`: it starts another command and is not the option's value;
+ * - a header read from a file (`-H @file`): the file holds the credential, the command does not.
  */
 export function maskedCommandSecrets(command: string): string {
   return maskedSecrets(maskedWords(command));
