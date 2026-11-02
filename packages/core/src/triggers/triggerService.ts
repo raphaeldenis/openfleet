@@ -11,6 +11,7 @@ import type { TriggerContent, TriggerRecord, TriggerRepository } from './trigger
 
 const DEFAULT_TITLE = 'Untitled Trigger';
 const MAX_TITLE_CHARS = 200;
+const NUL = String.fromCharCode(0);
 
 export interface TriggerServiceDeps {
   repository: TriggerRepository;
@@ -63,7 +64,8 @@ export const withFirstJoinForced = (conditions: TriggerCondition[]): TriggerCond
   conditions.map((condition, position) => (position === 0 ? { ...condition, join: 'and' as const } : condition));
 
 function titleOf(requested: string | undefined): string {
-  const title = requested?.trim() || DEFAULT_TITLE;
+  // SQLite reads a text column up to its first NUL: a title is stored without them.
+  const title = requested?.replaceAll(NUL, '').trim() || DEFAULT_TITLE;
   if (title.length > MAX_TITLE_CHARS) throw new OpenFleetError('invalid_body', `a title holds at most ${MAX_TITLE_CHARS} characters.`);
   return title;
 }

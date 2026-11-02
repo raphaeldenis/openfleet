@@ -55,7 +55,11 @@ const text = (maxChars = MAX_NAME_CHARS) => z.string().min(1).max(maxChars);
 const nonBlankText = (maxChars = MAX_TEXT_CHARS) => z.string().max(maxChars).refine((value) => !isBlankText(value), 'must not be blank');
 const minutes = z.int().min(1).max(MAX_MINUTES);
 
+export const MAX_CRON_EXPRESSION_CHARS = 100;
+export const MAX_TIME_ZONE_CHARS = 64;
+
 const isKnownTimeZone = (timeZone: string): boolean => {
+  if (timeZone.length > MAX_TIME_ZONE_CHARS) return false;
   try {
     new Intl.DateTimeFormat('en', { timeZone });
     return true;
@@ -66,8 +70,50 @@ const isKnownTimeZone = (timeZone: string): boolean => {
 
 const CRON_FIELD = /^[0-9A-Za-z*,/\-?]+$/;
 const isFiveFieldCron = (expression: string): boolean => {
+  if (expression.length > MAX_CRON_EXPRESSION_CHARS) return false;
   const fields = expression.trim().split(/\s+/);
   return fields.length === 5 && fields.every((field) => CRON_FIELD.test(field));
+};
+
+export const MAX_RUN_INPUT_KEYS = 32;
+export const MAX_RUN_INPUT_DEPTH = 4;
+export const MAX_RUN_INPUT_NODES = 256;
+export const MAX_RUN_INPUT_KEY_CHARS = 64;
+export const MAX_RUN_INPUT_JSON_CHARS = 8192;
+
+/** True when the value is plain JSON within the bounds of the inputs of a run: levels, nodes, key length and serialized size. */
+const isBoundedRunInputs = (inputs: Record<string, unknown>): boolean => {
+  if (Object.keys(inputs).length > MAX_RUN_INPUT_KEYS) return false;
+  let nodes = 0;
+  const isWithinBounds = (value: unknown, level: number): boolean => {
+    nodes += 1;
+    if (nodes > MAX_RUN_INPUT_NODES) return false;
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+    if (typeof value === 'number') return Number.isFinite(value);
+    const isContainer = typeof value === 'object';
+    if (!isContainer || level > MAX_RUN_INPUT_DEPTH) return false;
+    if (Array.isArray(value)) return value.every((item) => isWithinBounds(item, level + 1));
+    return Object.entries(value).every(([key, item]) => key.length <= MAX_RUN_INPUT_KEY_CHARS && isWithinBounds(item, level + 1));
+  };
+  return isWithinBounds(inputs, 1) && JSON.stringify(inputs).length <= MAX_RUN_INPUT_JSON_CHARS;
+};
+
+const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+/** The text with every control, format and line or paragraph separator character written as its code (`\u001b`); line breaks and tabs stay. For anything that shows stored text to a reader. */
+export const escapedControlsOf = (text: string): string =>
+  text.replace(CONTROL_OR_FORMAT, (character) => {
+    if (character === '\n' || character === '\t') return character;
+    const hex = (character.codePointAt(0) ?? 0).toString(16).padStart(4, '0');
+    return hex.length > 4 ? `\\u{${hex}}` : `\\u${hex}`;
+  });
+
+/** The same, for every string of a JSON value, keys included. */
+export const escapedControlsDeep = <T>(value: T): T => {
+  if (typeof value === 'string') return escapedControlsOf(value) as T;
+  if (Array.isArray(value)) return value.map((item) => escapedControlsDeep(item)) as T;
+  if (typeof value !== 'object' || value === null) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [escapedControlsOf(key), escapedControlsDeep(item)])) as T;
 };
 
 const SessionStateWhenSchema = z.strictObject({
@@ -109,7 +155,7 @@ const RUN_MEMBERS = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('notify'), title: nonBlankText(MAX_NAME_CHARS), message: nonBlankText() }),
   z.strictObject({ kind: z.literal('prompt_session'), sessionId: text(), prompt: nonBlankText() }),
   z.strictObject({ kind: z.literal('close_session'), sessionId: text() }),
-  z.strictObject({ kind: z.literal('run_playbook'), playbookId: text(), inputs: z.record(z.string(), z.unknown()).optional() }),
+  z.strictObject({ kind: z.literal('run_playbook'), playbookId: text(), inputs: z.record(z.string(), z.unknown()).refine(isBoundedRunInputs, 'the inputs are too large, too deep or hold something other than plain JSON').optional() }),
 ]);
 
 const withManagerAliasesResolved = (run: unknown): unknown => {

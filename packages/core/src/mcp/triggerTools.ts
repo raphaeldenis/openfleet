@@ -1,5 +1,5 @@
 import {
-  EVENT_PREFIXES_BY_SOURCE, MAX_TRIGGER_CONDITIONS, OpenFleetError, PROMPT_MANAGER_ALIAS, TRIGGER_BACKLOG_POLICIES, TRIGGER_BATCH_MODES, TRIGGER_CONDITION_JOINS,
+  escapedControlsDeep, escapedControlsOf, EVENT_PREFIXES_BY_SOURCE, MAX_TRIGGER_CONDITIONS, OpenFleetError, PROMPT_MANAGER_ALIAS, TRIGGER_BACKLOG_POLICIES, TRIGGER_BATCH_MODES, TRIGGER_CONDITION_JOINS,
   TRIGGER_CONDITION_OPERATORS, TRIGGER_LEDGER_STATES, TRIGGER_RUN_KINDS, TRIGGER_WHEN_SOURCES, TriggerConditionInputSchema, TriggerPolicySchema, TriggerRunSchema, TriggerWhenSchema,
   type Session, type TriggerCondition, type TriggerLedgerState,
 } from '@openfleet/shared';
@@ -15,8 +15,8 @@ const conditionView = (condition: TriggerCondition) => ({
   id: condition.id, lhs: condition.lhs, op: condition.op, ...(condition.rhs !== undefined && { rhs: condition.rhs }), join: condition.join, case_insensitive: condition.caseInsensitive,
 });
 
-/** A trigger as an agent reads it: the rule, its revision and whether a human armed it. */
-export const triggerView = (trigger: TriggerRecord) => ({
+/** A trigger as an agent reads it: the rule, its revision and whether a human armed it. Control characters of the stored text are written as their codes. */
+export const triggerView = (trigger: TriggerRecord) => escapedControlsDeep({
   id: trigger.id, title: trigger.title, project_id: trigger.projectId, when: trigger.when, conditions: trigger.conditions.map(conditionView), run: trigger.run, policy: trigger.policy,
   content_rev: trigger.contentRev, armed: trigger.armedAt !== null, ...(trigger.armedAt !== null && { armed_at: trigger.armedAt, approved_rev: trigger.approvedRev }),
 });
@@ -81,7 +81,7 @@ export function registerTriggerTools(server: McpServer, { triggers, fires, calle
   }, async () => ok(triggerSchemaView()));
 
   server.registerTool('list_triggers', { description: 'The triggers of your project: id, title, content_rev and whether a human armed each. Agents can build and edit triggers but never arm them.', inputSchema: {} }, async () =>
-    ok({ triggers: triggers.list(projectIdOfCaller()).map((trigger) => ({ id: trigger.id, title: trigger.title, content_rev: trigger.contentRev, armed: trigger.armedAt !== null })) }),
+    ok({ triggers: triggers.list(projectIdOfCaller()).map((trigger) => ({ id: trigger.id, title: escapedControlsOf(trigger.title), content_rev: trigger.contentRev, armed: trigger.armedAt !== null })) }),
   );
 
   server.registerTool('get_trigger', { description: 'One trigger: WHEN, conditions with their ids, RUN, policy, content_rev and armed state', inputSchema: { trigger: triggerParameter } }, async ({ trigger }) =>
