@@ -145,7 +145,9 @@ describe('describeError: every Error subclass of core is mapped or internal on p
   // are boot refusals that never reach the REST catch-all, so describeError never sees them. DataStoreWriteError stays internal_error on REST (its cause is SQL), while the MCP
   // path still answers its safe message ('The write failed') through mapDatabaseError: ERR-03 must keep that message for agents.
   // ScapeImportError is raised by the import command line only and answered by importCli.ts; no REST route or MCP tool throws it.
-  const INTERNAL_ON_PURPOSE = ['ConfigFileError', 'DatabaseOpenError', 'PortInUseError', 'DataStoreWriteError', 'BackupFailedError', 'MigrationFailedError', 'SchemaNewerThanCodeError', 'ScapeImportError'];
+  // KernelError is raised by the playbook kernel, which no route, MCP tool or runner calls: no KernelError reaches describeError,
+  // and its codes are not in the shared error registry.
+  const INTERNAL_ON_PURPOSE = ['ConfigFileError', 'DatabaseOpenError', 'PortInUseError', 'DataStoreWriteError', 'BackupFailedError', 'MigrationFailedError', 'SchemaNewerThanCodeError', 'ScapeImportError', 'KernelError'];
 
   const declaredErrorClasses = (): string[] =>
     readdirSync(CORE_DIRECTORY, { recursive: true, encoding: 'utf8' })
