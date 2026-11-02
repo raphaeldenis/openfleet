@@ -50,9 +50,9 @@ export function createFakeTauriParent() {
       behaviour = next;
     },
     /** What the Tauri command that mints the operator nonce does: draws a random nonce and writes it to the stdin of the daemon. */
-    mintOperatorNonce: (): string => {
+    mintOperatorNonce: ({ action, scope, name }: { action: 'set' | 'clear'; scope: SecretScope; name: string }): string => {
       const nonce = randomBytes(24).toString('base64url');
-      writeToDaemon({ type: 'operator_nonce', nonce });
+      writeToDaemon({ type: 'operator_nonce', nonce, action, scopeKind: scope.kind, scopeId: scope.id, name });
       return nonce;
     },
     /** Writes any answer to the stdin of the daemon, as a process holding the pipe could: the answer of a request, replayed, late, forged or from another generation. */

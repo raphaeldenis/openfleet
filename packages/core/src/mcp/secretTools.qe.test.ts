@@ -46,7 +46,7 @@ const bootRootSession = async () => {
 };
 
 const setSecretAsHuman = (value: string) =>
-  adminApi(`/api/secrets/playbook/pb-1/${SECRET_NAME}`, { method: 'PUT', headers: { [OPERATOR_NONCE_HEADER]: parent.mintOperatorNonce() }, body: JSON.stringify({ value }) });
+  adminApi(`/api/secrets/playbook/pb-1/${SECRET_NAME}`, { method: 'PUT', headers: { [OPERATOR_NONCE_HEADER]: parent.mintOperatorNonce({ action: 'set', scope: playbook, name: SECRET_NAME }) }, body: JSON.stringify({ value }) });
 
 beforeEach(async () => {
   store = createInMemorySecretStore();

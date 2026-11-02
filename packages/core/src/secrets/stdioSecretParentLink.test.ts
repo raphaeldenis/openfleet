@@ -6,6 +6,7 @@ import type { ParentToDaemonMessage } from './secretParentLink.js';
 import { createStdioSecretParentLink, SECRET_LINE_PREFIX } from './stdioSecretParentLink.js';
 
 const NONCE = 'AbCdEf0123456789-_AbCdEf';
+const OPERATOR_NONCE_MESSAGE = { type: 'operator_nonce', nonce: NONCE, action: 'set', scopeKind: 'playbook', scopeId: 'pb-1', name: 'JIRA_TOKEN' };
 
 const openLink = () => {
   const input = new PassThrough();
@@ -34,10 +35,10 @@ describe('the stdio link to the desktop app', () => {
   it('hears the operator nonce the app writes to its stdin', async () => {
     const { input, received } = openLink();
 
-    input.write(lineOf({ type: 'operator_nonce', nonce: NONCE }));
+    input.write(lineOf(OPERATOR_NONCE_MESSAGE));
     await nextTurn();
 
-    expect(received).toEqual([{ type: 'operator_nonce', nonce: NONCE }]);
+    expect(received).toEqual([OPERATOR_NONCE_MESSAGE]);
   });
 
   it.each([
@@ -53,10 +54,13 @@ describe('the stdio link to the desktop app', () => {
   });
 
   it.each([
-    ['a line without the prefix', JSON.stringify({ type: 'operator_nonce', nonce: NONCE })],
+    ['a line without the prefix', JSON.stringify(OPERATOR_NONCE_MESSAGE)],
+    ['an operator nonce bound to no action', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'operator_nonce', nonce: NONCE })}`],
+    ['an operator nonce bound to an action nobody defined', `${SECRET_LINE_PREFIX}${JSON.stringify({ ...OPERATOR_NONCE_MESSAGE, action: 'read' })}`],
+    ['an operator nonce bound to a secret name that is not one', `${SECRET_LINE_PREFIX}${JSON.stringify({ ...OPERATOR_NONCE_MESSAGE, name: 'not a name' })}`],
     ['a prefixed line that is not JSON', `${SECRET_LINE_PREFIX}{not json`],
     ['a prefixed message of another type', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'shutdown' })}`],
-    ['an operator nonce that is not a string', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'operator_nonce', nonce: 12 })}`],
+    ['an operator nonce that is not a string', `${SECRET_LINE_PREFIX}${JSON.stringify({ ...OPERATOR_NONCE_MESSAGE, nonce: 12 })}`],
     ['an answer without a request id', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'secret_answer', outcome: 'ok' })}`],
     ['an answer with an outcome nobody defined', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'secret_answer', requestId: 'r1', outcome: 'maybe' })}`],
     ['a value answer with an empty value', `${SECRET_LINE_PREFIX}${JSON.stringify({ type: 'secret_answer', requestId: 'r1', outcome: 'value', value: '' })}`],

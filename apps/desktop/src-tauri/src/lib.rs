@@ -46,14 +46,16 @@ fn read_admin_token(app: tauri::AppHandle) -> Result<String, String> {
   admin_token::read_admin_token_at(&token_path)
 }
 
-/// Mints the single-use nonce that authorises one set or clear of a secret in the daemon, and hands it to the daemon over the stdin of the sidecar.
-/// An agent cannot call a Tauri command nor write to that pipe, which is why the daemon asks for this nonce besides the admin token.
+/// Mints the single-use nonce that authorises one `action` (`set` or `clear`) on the secret `name` of a scope in the daemon, and hands it to the daemon over the stdin of the sidecar.
+/// The daemon refuses the nonce for any other action or secret. An agent cannot call a Tauri command nor write to that pipe, which is why the daemon asks for this nonce besides the admin token.
 #[tauri::command(async)]
-fn mint_operator_nonce(daemon: tauri::State<daemon::DaemonState>) -> Result<String, String> {
+fn mint_operator_nonce(daemon: tauri::State<daemon::DaemonState>, action: String, scope_kind: String, scope_id: String, name: String) -> Result<String, String> {
+  let grant = secret_channel::OperatorGrant { action: &action, scope_kind: &scope_kind, scope_id: &scope_id, name: &name };
   let mut random = [0u8; 24];
   std::fs::File::open("/dev/urandom").and_then(|mut source| std::io::Read::read_exact(&mut source, &mut random)).map_err(|_| "could not draw a nonce".to_string())?;
   let nonce = secret_channel::operator_nonce_from(random);
-  let was_written = daemon.write_to_daemon(secret_channel::operator_nonce_line(&nonce).as_bytes());
+  let line = secret_channel::operator_nonce_line(&nonce, &grant)?;
+  let was_written = daemon.write_to_daemon(line.as_bytes());
   if was_written { Ok(nonce) } else { Err("the daemon of this app is not running".to_string()) }
 }
 

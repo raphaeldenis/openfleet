@@ -126,9 +126,35 @@ pub fn operator_nonce_from(random: [u8; OPERATOR_NONCE_BYTES]) -> String {
   random.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The line that hands an operator nonce to the daemon over the sidecar's stdin.
-pub fn operator_nonce_line(nonce: &str) -> String {
-  format!("{SECRET_LINE_PREFIX}{}\n", json!({ "type": "operator_nonce", "nonce": nonce }))
+/// What one operator nonce authorises: one action on one secret. The daemon refuses the nonce for any other action or secret.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperatorGrant<'a> {
+  pub action: &'a str,
+  pub scope_kind: &'a str,
+  pub scope_id: &'a str,
+  pub name: &'a str,
+}
+
+const GRANT_ACTIONS: [&str; 2] = ["set", "clear"];
+const GRANT_SCOPE_KINDS: [&str; 3] = ["playbook", "connection", "trigger"];
+const GRANT_MAX_CHARS: usize = 128;
+
+fn is_secret_name(name: &str) -> bool {
+  let mut characters = name.chars();
+  let starts_well = characters.next().is_some_and(|first| first.is_ascii_alphabetic() || first == '_');
+  starts_well && characters.all(|character| character.is_ascii_alphanumeric() || character == '_') && name.len() <= GRANT_MAX_CHARS
+}
+
+/// The line that hands an operator nonce to the daemon over the sidecar's stdin, bound to its grant. A grant the daemon would not accept is refused here, so no nonce is minted for it.
+pub fn operator_nonce_line(nonce: &str, grant: &OperatorGrant) -> Result<String, String> {
+  let is_known_action = GRANT_ACTIONS.contains(&grant.action);
+  let is_known_scope_kind = GRANT_SCOPE_KINDS.contains(&grant.scope_kind);
+  let has_usable_scope_id = !grant.scope_id.is_empty() && grant.scope_id.len() <= GRANT_MAX_CHARS;
+  if !(is_known_action && is_known_scope_kind && has_usable_scope_id && is_secret_name(grant.name)) {
+    return Err("this action on this secret cannot be authorised".to_string());
+  }
+  let message = json!({ "type": "operator_nonce", "nonce": nonce, "action": grant.action, "scopeKind": grant.scope_kind, "scopeId": grant.scope_id, "name": grant.name });
+  Ok(format!("{SECRET_LINE_PREFIX}{message}\n"))
 }
 
 /// What a chunk of the sidecar's stdout holds: the secret requests it completes, and the bytes that are ordinary output.
@@ -402,14 +428,39 @@ mod tests {
     assert!(nonce.chars().all(|character| character.is_ascii_hexdigit()));
   }
 
+  const GRANT: OperatorGrant = OperatorGrant { action: "set", scope_kind: "playbook", scope_id: "pb-1", name: "JIRA_TOKEN" };
+
   #[test]
-  fn hands_the_operator_nonce_to_the_daemon_as_one_prefixed_json_line() {
-    let line = operator_nonce_line("abc123");
+  fn hands_the_operator_nonce_to_the_daemon_as_one_prefixed_json_line_bound_to_its_grant() {
+    let line = operator_nonce_line("abc123", &GRANT).unwrap();
 
     assert!(line.ends_with('\n'));
     let payload = secret_line_payload(&line).unwrap();
     let message: Value = serde_json::from_str(payload).unwrap();
-    assert_eq!(message, json!({ "type": "operator_nonce", "nonce": "abc123" }));
+    assert_eq!(message, json!({ "type": "operator_nonce", "nonce": "abc123", "action": "set", "scopeKind": "playbook", "scopeId": "pb-1", "name": "JIRA_TOKEN" }));
+  }
+
+  #[test]
+  fn mints_no_nonce_for_a_grant_the_daemon_would_refuse() {
+    let too_long = "n".repeat(GRANT_MAX_CHARS + 1);
+    let refused = [
+      OperatorGrant { action: "read", ..GRANT },
+      OperatorGrant { scope_kind: "planet", ..GRANT },
+      OperatorGrant { scope_id: "", ..GRANT },
+      OperatorGrant { scope_id: &too_long, ..GRANT },
+      OperatorGrant { name: "not a name", ..GRANT },
+      OperatorGrant { name: "1STARTS_WITH_A_DIGIT", ..GRANT },
+      OperatorGrant { name: &too_long, ..GRANT },
+    ];
+
+    for grant in &refused {
+      assert!(operator_nonce_line("abc123", grant).is_err(), "{grant:?}");
+    }
+  }
+
+  #[test]
+  fn accepts_the_clear_action() {
+    assert!(operator_nonce_line("abc123", &OperatorGrant { action: "clear", ..GRANT }).is_ok());
   }
 
   #[test]

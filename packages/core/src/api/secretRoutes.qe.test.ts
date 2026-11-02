@@ -35,10 +35,13 @@ const call = async (method: string, url: string, init: { headers?: Record<string
   return { status: response.status, text, json: text ? (JSON.parse(text) as Record<string, unknown>) : {} };
 };
 
-const setSecret = (value: string, { nonce = parent.mintOperatorNonce(), scope = playbook, name = SECRET_NAME } = {}) =>
+const setNonce = (scope = playbook, name = SECRET_NAME) => parent.mintOperatorNonce({ action: 'set', scope, name });
+const clearNonce = (scope = playbook, name = SECRET_NAME) => parent.mintOperatorNonce({ action: 'clear', scope, name });
+
+const setSecret = (value: string, { scope = playbook, name = SECRET_NAME, nonce = setNonce(scope, name) } = {}) =>
   call('PUT', pathOf(scope, name), { headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: nonce }), body: { value } });
 
-const clearSecret = (nonce = parent.mintOperatorNonce(), scope = playbook, name = SECRET_NAME) =>
+const clearSecret = (nonce = clearNonce(), scope = playbook, name = SECRET_NAME) =>
   call('DELETE', pathOf(scope, name), { headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: nonce }) });
 
 beforeEach(async () => {
@@ -127,13 +130,13 @@ describe('PUT, DELETE and GET /api/secrets/:scopeKind/:scopeId/:name on a booted
     ['a body without a value', {}],
     ['a value that is not a string', { value: 12345678 }],
   ])('refuses %s', async (_label, body) => {
-    const answer = await call('PUT', pathOf(playbook, SECRET_NAME), { headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: parent.mintOperatorNonce() }), body });
+    const answer = await call('PUT', pathOf(playbook, SECRET_NAME), { headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: setNonce() }), body });
 
     expect([answer.status, answer.json.error]).toEqual([400, 'invalid_body']);
   });
 
   it('ignores a value in the query string: the body is the only way in', async () => {
-    const answer = await call('PUT', `${pathOf(playbook, SECRET_NAME)}?value=query-string-value`, { headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: parent.mintOperatorNonce() }) });
+    const answer = await call('PUT', `${pathOf(playbook, SECRET_NAME)}?value=query-string-value`, { headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: setNonce() }) });
 
     expect([answer.status, store.valueOf(playbook, SECRET_NAME)]).toEqual([400, undefined]);
   });
@@ -144,7 +147,7 @@ describe('who may set or clear a secret', () => {
     ['no token at all', {}],
     ['a token of a session (the MCP token)', { authorization: 'Bearer not-the-admin-token' }],
   ])('answers 401 to %s', async (_label, headers) => {
-    const answer = await call('PUT', pathOf(playbook, SECRET_NAME), { headers: { ...headers, [OPERATOR_NONCE_HEADER]: parent.mintOperatorNonce() }, body: { value: makeCanary() } });
+    const answer = await call('PUT', pathOf(playbook, SECRET_NAME), { headers: { ...headers, [OPERATOR_NONCE_HEADER]: setNonce() }, body: { value: makeCanary() } });
 
     expect([answer.status, store.valueOf(playbook, SECRET_NAME)]).toEqual([401, undefined]);
   });
@@ -163,12 +166,52 @@ describe('who may set or clear a secret', () => {
   });
 
   it('spends the nonce: the second request with the same nonce answers 401', async () => {
-    const nonce = parent.mintOperatorNonce();
+    const nonce = setNonce();
     const first = await setSecret(makeCanary(), { nonce });
 
     const second = await setSecret(makeCanary(), { nonce });
 
     expect([first.status, second.status]).toEqual([200, 401]);
+  });
+
+  it('refuses a nonce minted for a set when it is used to clear, and the secret keeps its value', async () => {
+    await setSecret(makeCanary());
+
+    const answer = await clearSecret(setNonce());
+
+    expect([answer.status, answer.json.error, store.valueOf(playbook, SECRET_NAME) !== undefined]).toEqual([401, 'secret_nonce_invalid', true]);
+  });
+
+  it('refuses a nonce minted for a clear when it is used to set', async () => {
+    const answer = await setSecret(makeCanary(), { nonce: clearNonce() });
+
+    expect([answer.status, store.valueOf(playbook, SECRET_NAME)]).toEqual([401, undefined]);
+  });
+
+  it('refuses a nonce minted for another secret of the same scope', async () => {
+    declare(playbook, 'OTHER_NAME');
+
+    const answer = await setSecret(makeCanary(), { name: 'OTHER_NAME', nonce: setNonce(playbook, SECRET_NAME) });
+
+    expect([answer.status, store.valueOf(playbook, 'OTHER_NAME')]).toEqual([401, undefined]);
+  });
+
+  it('refuses a nonce minted for the same name under another scope', async () => {
+    const otherPlaybook: SecretScope = { kind: 'playbook', id: 'pb-2' };
+    declare(otherPlaybook, SECRET_NAME);
+
+    const answer = await setSecret(makeCanary(), { scope: otherPlaybook, nonce: setNonce(playbook, SECRET_NAME) });
+
+    expect([answer.status, store.valueOf(otherPlaybook, SECRET_NAME)]).toEqual([401, undefined]);
+  });
+
+  it('spends a nonce used for the wrong action: the action it was minted for cannot use it afterwards', async () => {
+    const nonce = setNonce();
+    await clearSecret(nonce);
+
+    const answer = await setSecret(makeCanary(), { nonce });
+
+    expect(answer.status).toBe(401);
   });
 
   it('lets a status read through with the admin token alone', async () => {
@@ -187,7 +230,7 @@ describe('where a secret value can appear', () => {
     await call('GET', pathOf(playbook, SECRET_NAME));
     await setSecret(tooShort);
     await setSecret(value, { name: 'UNDECLARED' });
-    await call('PUT', pathOf(playbook, SECRET_NAME), { headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: parent.mintOperatorNonce() }), body: { value, other: value } });
+    await call('PUT', pathOf(playbook, SECRET_NAME), { headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: setNonce() }), body: { value, other: value } });
     await clearSecret();
     const activity = await call('GET', `${daemon.server.url}/api/activity`);
     const diagnostics = await call('GET', `${daemon.server.url}/api/diagnostics`);

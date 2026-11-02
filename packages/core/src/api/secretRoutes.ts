@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'node:http';
 import * as z from 'zod';
 import { OPERATOR_NONCE_HEADER, OpenFleetError, SECRET_SCOPE_KINDS, SetSecretBodySchema, type SecretScope } from '@openfleet/shared';
 import { SECRET_NAME } from '../playbooks/kernel/secretName.js';
-import type { NonceLedger } from '../secrets/nonceLedger.js';
+import type { NonceLedger, OperatorBinding } from '../secrets/nonceLedger.js';
 import type { SecretService } from '../secrets/secretService.js';
 import { json, type Router } from './router.js';
 
@@ -19,10 +19,10 @@ const secretOfPath = (params: Record<string, string>): { scope: SecretScope; nam
   return { scope: { kind: scopeKind, id: scopeId }, name };
 };
 
-const requireOperatorNonce = (req: IncomingMessage, ledger: Pick<NonceLedger, 'redeem'>): void => {
+const requireOperatorNonce = (req: IncomingMessage, ledger: Pick<NonceLedger, 'redeem'>, binding: OperatorBinding): void => {
   const nonce = req.headers[OPERATOR_NONCE_HEADER];
-  const isLiveNonce = typeof nonce === 'string' && ledger.redeem(nonce);
-  if (!isLiveNonce) throw new OpenFleetError('secret_nonce_invalid', 'a set or a clear needs a live operator nonce from the desktop app.', { hint: 'set or clear the secret from the OpenFleet desktop app.' });
+  const isLiveNonceForThisAction = typeof nonce === 'string' && ledger.redeem(nonce, binding);
+  if (!isLiveNonceForThisAction) throw new OpenFleetError('secret_nonce_invalid', 'a set or a clear needs a live operator nonce from the desktop app, minted for this action on this secret.', { hint: 'set or clear the secret from the OpenFleet desktop app.' });
 };
 
 /**
@@ -37,15 +37,15 @@ export function registerSecretRoutes(router: Router, deps: { secrets: Pick<Secre
   });
 
   router.add('PUT', '/api/secrets/:scopeKind/:scopeId/:name', async ({ req, res, params, body }) => {
-    requireOperatorNonce(req, deps.nonces);
     const { scope, name } = secretOfPath(params);
+    requireOperatorNonce(req, deps.nonces, { action: 'set', scope, name });
     const { value } = SetSecretBodySchema.parse(body);
     json(res, 200, await deps.secrets.set(scope, name, value, { by: REST_ACTOR_LABEL }));
   });
 
   router.add('DELETE', '/api/secrets/:scopeKind/:scopeId/:name', async ({ req, res, params }) => {
-    requireOperatorNonce(req, deps.nonces);
     const { scope, name } = secretOfPath(params);
+    requireOperatorNonce(req, deps.nonces, { action: 'clear', scope, name });
     json(res, 200, await deps.secrets.clear(scope, name));
   });
 }

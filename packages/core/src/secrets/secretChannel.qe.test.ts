@@ -33,7 +33,7 @@ const boot = async ({ withParent = true, exchangeTimeoutMs = 2_000 }: { withPare
 const url = (path: string) => `${daemon.server.url}${path}`;
 
 const put = (value: string) =>
-  fetch(url(`/api/secrets/playbook/pb-1/${SECRET_NAME}`), { method: 'PUT', headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: parent.mintOperatorNonce() }), body: JSON.stringify({ value }) });
+  fetch(url(`/api/secrets/playbook/pb-1/${SECRET_NAME}`), { method: 'PUT', headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: parent.mintOperatorNonce({ action: 'set', scope: playbook, name: SECRET_NAME }) }), body: JSON.stringify({ value }) });
 
 const answerOf = async (response: Response) => ({ status: response.status, json: (await response.json()) as Record<string, unknown> });
 
@@ -71,7 +71,7 @@ describe('setting a secret through the desktop app', () => {
 
   it('asks the app to clear the keychain item', async () => {
     await put(makeCanary());
-    const cleared = await answerOf(await fetch(url(`/api/secrets/playbook/pb-1/${SECRET_NAME}`), { method: 'DELETE', headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: parent.mintOperatorNonce() }) }));
+    const cleared = await answerOf(await fetch(url(`/api/secrets/playbook/pb-1/${SECRET_NAME}`), { method: 'DELETE', headers: adminHeaders({ [OPERATOR_NONCE_HEADER]: parent.mintOperatorNonce({ action: 'clear', scope: playbook, name: SECRET_NAME }) }) }));
 
     expect([cleared.json.status, parent.keychain.has(keychainKeyOf(playbook, SECRET_NAME))]).toEqual(['missing', false]);
   });

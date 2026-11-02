@@ -1,11 +1,20 @@
 import { createInterface } from 'node:readline';
 import * as z from 'zod';
+import { SECRET_SCOPE_KINDS } from '@openfleet/shared';
+import { SECRET_NAME } from '../playbooks/kernel/secretName.js';
 import { SecretAnswerSchema, type ParentToDaemonMessage, type SecretParentLink } from './secretParentLink.js';
 
 /** Every line the daemon and the desktop app exchange for secrets starts with this, so that the sidecar's ordinary log lines never parse as one. */
 export const SECRET_LINE_PREFIX = 'OPENFLEET_SECRETS ';
 
-const OperatorNonceSchema = z.object({ type: z.literal('operator_nonce'), nonce: z.string() }).strict();
+const OperatorNonceSchema = z.object({
+  type: z.literal('operator_nonce'),
+  nonce: z.string(),
+  action: z.enum(['set', 'clear']),
+  scopeKind: z.enum(SECRET_SCOPE_KINDS),
+  scopeId: z.string().min(1).max(128),
+  name: z.string().regex(SECRET_NAME).max(128),
+}).strict();
 const SecretAnswerLineSchema = z.object({ type: z.literal('secret_answer'), requestId: z.string().min(1) }).and(SecretAnswerSchema);
 
 const parentMessageOf = (line: string): ParentToDaemonMessage | undefined => {

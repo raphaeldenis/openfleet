@@ -411,7 +411,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const secretParent = options.secrets?.parent;
   const secretBridge = secretParent === undefined ? undefined : createParentBridgeSecretStore({ link: secretParent, monotonicClock: secretMonotonicClock, exchangeTimeoutMs: options.secrets?.exchangeTimeoutMs ?? DEFAULT_SECRET_EXCHANGE_TIMEOUT_MS });
   secretParent?.onMessage((message) => {
-    if (message.type === 'operator_nonce') secretNonces.register(message.nonce);
+    if (message.type === 'operator_nonce') secretNonces.register(message.nonce, { action: message.action, scope: { kind: message.scopeKind, id: message.scopeId }, name: message.name });
   });
   const secrets = new SecretService({ refs: new SecretRefRepository(db), store: options.secrets?.store ?? secretBridge ?? createUnavailableSecretStore(), clock: options.secrets?.clock ?? Date.now });
   const secretChannel = { ignoredAnswerCount: () => secretBridge?.ignoredAnswerCount() ?? 0 };
