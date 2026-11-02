@@ -1,6 +1,7 @@
 import type { ServerEvent, Session, SessionCloseReason } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
+import { lineageRootIdOf } from '../managers/lineage.js';
 import type { ManagerRepository } from '../managers/managerRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { TriggerEngine } from './triggerEngine.js';
@@ -132,7 +133,8 @@ export class SessionStateSource {
       const isWatchingThisState = trigger.when.state === state;
       const isInProject = trigger.projectId === session.projectId && trigger.projectId === manager.projectId;
       const namesAnotherManager = trigger.run.kind === 'prompt_manager' && trigger.run.managerId !== undefined && trigger.run.managerId !== managerId;
-      return isWatchingThisState && isInProject && !namesAnotherManager;
+      const isOutsideTheLineageOfTheOwner = trigger.ownerManagerId !== null && trigger.ownerManagerId !== lineageRootIdOf(this.deps.sessions, session);
+      return isWatchingThisState && isInProject && !namesAnotherManager && !isOutsideTheLineageOfTheOwner;
     });
   }
 }

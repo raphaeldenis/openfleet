@@ -4,7 +4,7 @@ import { canonicalDigestOf } from '../playbooks/kernel/canonicalDigest.js';
 import type { HumanProofVerifier } from '../triggers/humanProofVerifier.js';
 
 type RestTrigger = {
-  id: string; projectId: string; title: string; contentRev: number; armedAt: string | null; approvedRev: number | null; approvedGraphDigest: string | null;
+  id: string; projectId: string; ownerManagerId: string | null; title: string; contentRev: number; armedAt: string | null; approvedRev: number | null; approvedGraphDigest: string | null;
   when: unknown; conditions: unknown[]; run: unknown; policy: unknown;
 };
 
@@ -31,7 +31,8 @@ const boot = async (humanProof?: HumanProofVerifier) => {
   return fixture;
 };
 const jsonOf = async <T = RestTrigger>(response: Response) => await response.json() as T;
-const createTrigger = async (f: GovernanceFixture, title = 'T1') => jsonOf(await f.api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: OWN_PROJECT_ID, title }) }));
+const createTrigger = async (f: GovernanceFixture, title = 'T1', ownerManagerId: string | null = null) =>
+  jsonOf(await f.api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: OWN_PROJECT_ID, ownerManagerId, title }) }));
 const NO_PROOF = null;
 const arm = (f: GovernanceFixture, id: string, approvedRev: number, proof: string | null = proofFor(id)) =>
   f.api(`/api/triggers/${id}/arm`, { method: 'POST', body: JSON.stringify({ approvedRev }), headers: proof === NO_PROOF ? {} : { [PROOF_HEADER]: proof } });
@@ -76,6 +77,31 @@ describe('the CRUD of triggers', () => {
     expect((await f.api(`/api/triggers/${trigger.id}`)).status).toBe(404);
   });
 
+  it('needs the owner of a trigger, a manager id or null, at creation', async () => {
+    const f = await boot();
+    const create = (body: object) => f.api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: OWN_PROJECT_ID, ...body }) });
+
+    const withoutOwner = await create({});
+    const withBlankOwner = await create({ ownerManagerId: '' });
+    const withOwner = await create({ ownerManagerId: f.lead.id });
+    const withNullOwner = await create({ ownerManagerId: null });
+
+    expect([withoutOwner.status, withBlankOwner.status, withOwner.status, withNullOwner.status]).toEqual([400, 400, 201, 201]);
+    expect(await jsonOf(withOwner)).toMatchObject({ ownerManagerId: f.lead.id });
+    expect(await jsonOf(withNullOwner)).toMatchObject({ ownerManagerId: null });
+  });
+
+  it('changing the owner of an armed trigger bumps the revision and clears the arming', async () => {
+    const f = await boot(singleUseProofs());
+    const trigger = await createTrigger(f, 'T1', f.lead.id);
+    const armed = await jsonOf(await arm(f, trigger.id, 1));
+
+    const replaced = await jsonOf(await f.api(`/api/triggers/${trigger.id}`, { method: 'PUT', body: JSON.stringify({ expectedRev: 1, ownerManagerId: null }) }));
+
+    expect(armed.armedAt).toEqual(expect.any(String));
+    expect(replaced).toMatchObject({ ownerManagerId: null, contentRev: 2, armedAt: null, approvedGraphDigest: null });
+  });
+
   it('answers 409 stale_revision to a replacement made on an old revision', async () => {
     const f = await boot();
     const trigger = await createTrigger(f);
@@ -116,7 +142,7 @@ describe('arming', () => {
     expect(response.status).toBe(200);
     expect(armed.armedAt).toEqual(expect.any(String));
     expect(armed.approvedRev).toBe(1);
-    expect(armed.approvedGraphDigest).toBe(canonicalDigestOf({ when: armed.when, conditions: armed.conditions, run: armed.run, policy: armed.policy }));
+    expect(armed.approvedGraphDigest).toBe(canonicalDigestOf({ ownerManagerId: armed.ownerManagerId, when: armed.when, conditions: armed.conditions, run: armed.run, policy: armed.policy }));
   });
 
   it.each([

@@ -7,6 +7,8 @@ import type { FireLedger, TriggerFire } from '../triggers/fireLedger.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { newId } from '../ids.js';
+import { lineageRootIdOf } from '../managers/lineage.js';
+import type { SessionService } from '../sessions/sessionService.js';
 import type { TriggerRecord } from '../triggers/triggerRepository.js';
 import type { TriggerService } from '../triggers/triggerService.js';
 import { ok } from './toolResults.js';
@@ -17,7 +19,7 @@ const conditionView = (condition: TriggerCondition) => ({
 
 /** A trigger as an agent reads it: the rule, its revision and whether a human armed it. Control characters of the stored text are written as their codes. */
 export const triggerView = (trigger: TriggerRecord) => escapedControlsDeep({
-  id: trigger.id, title: trigger.title, project_id: trigger.projectId, when: trigger.when, conditions: trigger.conditions.map(conditionView), run: trigger.run, policy: trigger.policy,
+  id: trigger.id, title: trigger.title, project_id: trigger.projectId, owner_manager_id: trigger.ownerManagerId, when: trigger.when, conditions: trigger.conditions.map(conditionView), run: trigger.run, policy: trigger.policy,
   content_rev: trigger.contentRev, armed: trigger.armedAt !== null, ...(trigger.armedAt !== null && { armed_at: trigger.armedAt, approved_rev: trigger.approvedRev }),
 });
 
@@ -55,6 +57,7 @@ const expectedRevParameter = z.number().optional().describe('The content_rev you
 
 export interface TriggerToolDeps {
   triggers: TriggerService;
+  sessions: Pick<SessionService, 'get'>;
   fires: Pick<FireLedger, 'listOfTrigger'>;
   caller: Session;
 }
@@ -68,7 +71,7 @@ const fireToolView = (fire: TriggerFire) => ({
   ...(fire.settleReason !== null && { reason: fire.settleReason }), ...(fire.runId !== null && { run_id: fire.runId }), chain_depth: fire.chainDepth,
 });
 
-export function registerTriggerTools(server: McpServer, { triggers, fires, caller }: TriggerToolDeps): void {
+export function registerTriggerTools(server: McpServer, { triggers, sessions, fires, caller }: TriggerToolDeps): void {
   const projectIdOfCaller = (): string => {
     if (caller.projectId === undefined) throw new OpenFleetError('project_not_found', 'your session belongs to no project.');
     return caller.projectId;
@@ -81,7 +84,7 @@ export function registerTriggerTools(server: McpServer, { triggers, fires, calle
   }, async () => ok(triggerSchemaView()));
 
   server.registerTool('list_triggers', { description: 'The triggers of your project: id, title, content_rev and whether a human armed each. Agents can build and edit triggers but never arm them.', inputSchema: {} }, async () =>
-    ok({ triggers: triggers.list(projectIdOfCaller()).map((trigger) => ({ id: trigger.id, title: escapedControlsOf(trigger.title), content_rev: trigger.contentRev, armed: trigger.armedAt !== null })) }),
+    ok({ triggers: triggers.list(projectIdOfCaller()).map((trigger) => ({ id: trigger.id, title: escapedControlsOf(trigger.title), owner_manager_id: trigger.ownerManagerId, content_rev: trigger.contentRev, armed: trigger.armedAt !== null })) }),
   );
 
   server.registerTool('get_trigger', { description: 'One trigger: WHEN, conditions with their ids, RUN, policy, content_rev and armed state', inputSchema: { trigger: triggerParameter } }, async ({ trigger }) =>
@@ -103,7 +106,7 @@ export function registerTriggerTools(server: McpServer, { triggers, fires, calle
   server.registerTool('create_trigger', {
     description: 'Create a trigger in your project. It starts with a session_state idle WHEN and a notify RUN; shape it with set_trigger_when, add_trigger_condition, set_trigger_run and set_trigger_policy. It cannot fire until a human arms it.',
     inputSchema: { title: z.string().optional().describe("Display name (default 'Untitled Trigger')") },
-  }, async ({ title }) => ok(triggerView(triggers.create({ projectId: projectIdOfCaller(), title }))));
+  }, async ({ title }) => ok(triggerView(triggers.create({ projectId: projectIdOfCaller(), ownerManagerId: lineageRootIdOf(sessions, caller), title }))));
 
   server.registerTool('delete_trigger', { description: 'Delete a trigger and its fire history. Irreversible.', inputSchema: { trigger: triggerParameter } }, async ({ trigger }) => {
     const target = triggerOf(trigger);

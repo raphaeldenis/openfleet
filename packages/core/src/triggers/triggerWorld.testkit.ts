@@ -58,8 +58,8 @@ export async function startTriggerWorld() {
   };
 
   /** A trigger created through the REST API and armed with a human proof. */
-  const createArmedTrigger = async (content: { title?: string; when?: unknown; conditions?: unknown[]; run: unknown; policy?: unknown }): Promise<string> => {
-    const created = await json<TriggerRecordView>(await api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: PROJECT_ID, ...content }) }));
+  const createArmedTrigger = async (content: { title?: string; when?: unknown; conditions?: unknown[]; run: unknown; policy?: unknown; ownerManagerId?: string | null }): Promise<string> => {
+    const created = await json<TriggerRecordView>(await api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: PROJECT_ID, ownerManagerId: null, ...content }) }));
     const armed = await api(`/api/triggers/${created.id}/arm`, { method: 'POST', body: JSON.stringify({ approvedRev: created.contentRev }), headers: { 'x-human-proof': 'proof' } });
     if (armed.status !== 200) throw new Error(`world: arming failed with ${armed.status} ${await armed.text()}`);
     return created.id;

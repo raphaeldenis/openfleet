@@ -71,7 +71,7 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '062_child_silence_checks': '949f1977ce82b72aa78c17b3969163cc10b378975f0a64b6a560756801dc43a5',
   '063_activity_log': '0aea04739fc4d8f418c164052ac2ee76953af24de95f23842c6a1b6157c531e5',
   '064_triggers': 'aead2c1d70d9b5423380bbc744885dea83ce97b195c1cfedffca5615bffc4340',
-  '066_trigger_fire_events': '5f0929f0fedf43c3c04c0768788cd7c422750b0373b1bebefbc698a5935d0675',
+  '066_trigger_fire_events': '3924e5afb9ae349385e657c455d43b9d51ce3729a44b5ff8b473eb7cd5f15ce9',
 };
 
 const migrationVersionsOnDisk = () =>

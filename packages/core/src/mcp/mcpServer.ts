@@ -100,7 +100,7 @@ export function createMcpHandler(deps: { triggers?: TriggerService; triggerFires
     if (deps.reviewFindings) registerStepFindingTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, caller, ...(deps.ticketPattern === undefined ? {} : { ticketPattern: deps.ticketPattern }) });
     if (deps.scheduledEvents) registerScheduledEventTools(toolServer, { scheduledEvents: deps.scheduledEvents, managers: deps.managers, caller });
     if (deps.ciWatch) registerCiWatchTools(toolServer, { ciWatch: deps.ciWatch, managers: deps.managers, caller });
-    if (deps.triggers && deps.triggerFires) registerTriggerTools(toolServer, { triggers: deps.triggers, fires: deps.triggerFires, caller });
+    if (deps.triggers && deps.triggerFires) registerTriggerTools(toolServer, { triggers: deps.triggers, sessions: deps.sessions, fires: deps.triggerFires, caller });
     registerManagerLinkTools(toolServer, { managers: deps.managers, caller });
     registerManagerProfileTools(toolServer, { managers: deps.managers, caller });
     if (deps.projectProfile) registerProjectProfileTools(toolServer, { projectProfile: deps.projectProfile, managers: deps.managers, sessions: deps.sessions, caller });

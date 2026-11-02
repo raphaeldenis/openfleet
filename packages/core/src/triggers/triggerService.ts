@@ -71,20 +71,20 @@ function titleOf(requested: string | undefined): string {
 }
 
 /** The part of a trigger that a human approves when arming it. */
-export const approvedGraphOf = (trigger: Pick<TriggerRecord, 'when' | 'conditions' | 'run' | 'policy'>) =>
-  ({ when: trigger.when, conditions: trigger.conditions, run: trigger.run, policy: trigger.policy });
+export const approvedGraphOf = (trigger: Pick<TriggerRecord, 'ownerManagerId' | 'when' | 'conditions' | 'run' | 'policy'>) =>
+  ({ ownerManagerId: trigger.ownerManagerId, when: trigger.when, conditions: trigger.conditions, run: trigger.run, policy: trigger.policy });
 
 export class TriggerService {
   constructor(private readonly deps: TriggerServiceDeps) {}
 
-  create(input: { projectId: string; title?: string; when?: TriggerWhen; conditions?: Record<string, unknown>[]; run?: TriggerRun; policy?: Partial<TriggerPolicy> }): TriggerRecord {
+  create(input: { projectId: string; ownerManagerId: string | null; title?: string; when?: TriggerWhen; conditions?: Record<string, unknown>[]; run?: TriggerRun; policy?: Partial<TriggerPolicy> }): TriggerRecord {
     const { repository, projectExists, clock, newId } = this.deps;
     if (!projectExists(input.projectId)) throw new OpenFleetError('project_not_found', 'project not found');
     const when = input.when ?? DEFAULT_TRIGGER_WHEN;
     const conditions = this.conditionsWithIds(input.conditions ?? []);
     assertDocumentIsSound({ when, conditions });
     const id = newId();
-    repository.insert({ id, projectId: input.projectId, title: titleOf(input.title), when, conditions, run: input.run ?? DEFAULT_TRIGGER_RUN, policy: TriggerPolicySchema.parse(input.policy ?? {}), createdAt: clock() });
+    repository.insert({ id, projectId: input.projectId, ownerManagerId: input.ownerManagerId, title: titleOf(input.title), when, conditions, run: input.run ?? DEFAULT_TRIGGER_RUN, policy: TriggerPolicySchema.parse(input.policy ?? {}), createdAt: clock() });
     return this.getById(id);
   }
 

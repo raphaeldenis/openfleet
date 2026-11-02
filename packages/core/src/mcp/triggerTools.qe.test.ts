@@ -4,7 +4,7 @@ import { ARBITER_TOOL_NAMES } from './arbiterTools.js';
 
 type Client = Awaited<ReturnType<GovernanceFixture['connect']>>;
 type TriggerView = {
-  id: string; title: string; project_id: string; content_rev: number; armed: boolean;
+  id: string; title: string; project_id: string; owner_manager_id: string | null; content_rev: number; armed: boolean;
   when: Record<string, unknown>; run: Record<string, unknown>; policy: Record<string, unknown>;
   conditions: { id: string; lhs: string; op: string; rhs?: unknown; join: string; case_insensitive: boolean }[];
 };
@@ -55,11 +55,26 @@ describe('create_trigger, list_triggers, get_trigger', () => {
   });
 
   it('does not show a trigger of another project, whatever its id or title', async () => {
-    const foreign = await (await fixture.api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: OTHER_PROJECT_ID, title: 'Foreign' }) })).json() as { id: string };
+    const foreign = await (await fixture.api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: OTHER_PROJECT_ID, ownerManagerId: null, title: 'Foreign' }) })).json() as { id: string };
 
     expect((await call(lead, 'get_trigger', { trigger: foreign.id })).text).toMatch(/^error trigger_not_found:/);
     expect((await call(lead, 'get_trigger', { trigger: 'Foreign' })).text).toMatch(/^error trigger_not_found:/);
     expect((await call(lead, 'list_triggers')).json.triggers).toEqual([]);
+  });
+
+  it('records the root of the lineage of the caller as the owner, and shows it in get_trigger and list_triggers', async () => {
+    fixture.db.prepare('UPDATE sessions SET parent_id = ? WHERE id = ?').run(fixture.lead.id, fixture.worker.id);
+    const worker = await fixture.connect(fixture.worker.id);
+    const rootOfWorker = fixture.lead.id;
+
+    const byManager = await created('By manager');
+    const byWorker = (await call(worker, 'create_trigger', { title: 'By worker' })).json as TriggerView;
+
+    expect(byManager.owner_manager_id).toBe(fixture.lead.id);
+    expect(byWorker.owner_manager_id).toBe(rootOfWorker);
+    expect(byWorker.owner_manager_id).not.toBe(fixture.worker.id);
+    expect((await viewOf(byManager.id)).owner_manager_id).toBe(fixture.lead.id);
+    expect((await call(lead, 'list_triggers')).json.triggers.map((listed: { owner_manager_id: string | null }) => listed.owner_manager_id)).toEqual([fixture.lead.id, rootOfWorker]);
   });
 
   it('refuses an ambiguous title', async () => {

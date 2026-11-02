@@ -1,5 +1,6 @@
 import { OpenFleetError, type Session, type SessionCloseReason, type TriggerFireReason, type TriggerRun } from '@openfleet/shared';
 import { log } from '../logger.js';
+import { lineageRootIdOf } from '../managers/lineage.js';
 import type { ManagerRepository } from '../managers/managerRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
 import type { ActionResult, TriggerActions } from './triggerEngine.js';
@@ -46,6 +47,20 @@ export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
 
   const isManager = (sessionId: string) => managers.get(sessionId) !== undefined;
 
+  const sessionOfEvent = (event: Record<string, unknown>): Session | undefined => {
+    const { id } = (event.session ?? {}) as { id?: unknown };
+    return typeof id === 'string' ? sessions.get(id) : undefined;
+  };
+
+  const isInLineageOf = (ownerId: string, session: Session) => lineageRootIdOf(sessions, session) === ownerId;
+  const isChildOfManagerInLineageOf = (ownerId: string, session: Session) => session.parentId !== undefined && isManager(session.parentId) && isInLineageOf(ownerId, session);
+
+  /** The manager that owns the trigger; none when the trigger has no owner or its owner is no longer a manager. */
+  const ownerOf = (trigger: TriggerRecord): string | undefined => {
+    const { ownerManagerId } = trigger;
+    return ownerManagerId !== null && isManager(ownerManagerId) ? ownerManagerId : undefined;
+  };
+
   const send = (session: Session, message: string, fire: TriggerFire): ActionResult => {
     sessions.sendMessage({ sessionId: session.id, messageId: fire.id, body: message });
     return completed();
@@ -59,8 +74,11 @@ export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
   };
 
   const promptSession = (trigger: TriggerRecord, fire: TriggerFire, batchSize: number, run: RunOf<'prompt_session'>): ActionResult => {
+    const ownerId = ownerOf(trigger);
+    if (ownerId === undefined) return cancelled('target_not_eligible');
     const target = sessions.get(run.sessionId);
     if (!isOpenSessionOfTheProject(trigger, target)) return cancelled('target_unavailable');
+    if (!isInLineageOf(ownerId, target)) return cancelled('target_not_eligible');
     return send(target, triggerMessageOf({ trigger, fire, prompt: run.prompt, batchSize }), fire);
   };
 
@@ -69,10 +87,17 @@ export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
     return completed();
   };
 
-  const closeSession = (trigger: TriggerRecord, run: RunOf<'close_session'>): ActionResult => {
+  const closeSession = (trigger: TriggerRecord, fire: TriggerFire, run: RunOf<'close_session'>): ActionResult => {
+    const ownerId = ownerOf(trigger);
+    if (ownerId === undefined) return cancelled('target_not_eligible');
+
     const target = sessions.get(run.sessionId);
-    const isChildOfAManagerOfTheProject = target !== undefined && target.projectId === trigger.projectId && target.parentId !== undefined && isManager(target.parentId);
-    if (!isChildOfAManagerOfTheProject) return cancelled('target_not_eligible');
+    const isChildOfTheOwner = target !== undefined && target.projectId === trigger.projectId && isChildOfManagerInLineageOf(ownerId, target);
+    if (!isChildOfTheOwner) return cancelled('target_not_eligible');
+
+    const eventSession = sessionOfEvent(fire.event);
+    const eventIsAboutAChildOfTheOwner = eventSession !== undefined && isChildOfManagerInLineageOf(ownerId, eventSession);
+    if (!eventIsAboutAChildOfTheOwner) return cancelled('target_not_eligible');
 
     const hasClosedWithError = target.state === 'closed' && target.closeReason !== undefined && ERROR_CLOSE_REASONS.includes(target.closeReason);
     if (hasClosedWithError) return completed();
@@ -92,7 +117,7 @@ export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
       if (run.kind === 'prompt_manager') return promptManager(trigger, fire, batchSize, run);
       if (run.kind === 'prompt_session') return promptSession(trigger, fire, batchSize, run);
       if (run.kind === 'notify') return notify(trigger, fire);
-      if (run.kind === 'close_session') return closeSession(trigger, run);
+      if (run.kind === 'close_session') return closeSession(trigger, fire, run);
       throw new OpenFleetError('invalid_body', `the RUN kind ${run.kind} is not performed by the engine.`);
     },
   };

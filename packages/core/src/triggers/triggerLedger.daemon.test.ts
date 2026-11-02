@@ -55,7 +55,7 @@ describe('the ledger writes ahead of every effect', () => {
   it('writes nothing for a trigger that is not armed, and nothing for an event its conditions refuse', async () => {
     world = await startTriggerWorld();
     const lead = await world.createSession('Lead', { manager: world.managerSpec });
-    const created = await world.json<{ id: string }>(await world.api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: 'project-triggers', run: { kind: 'prompt_manager', managerId: lead.id, prompt: 'p' } }) }));
+    const created = await world.json<{ id: string }>(await world.api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: 'project-triggers', ownerManagerId: null, run: { kind: 'prompt_manager', managerId: lead.id, prompt: 'p' } }) }));
     const armedId = await world.createArmedTrigger({
       run: { kind: 'prompt_manager', managerId: lead.id, prompt: 'p' }, conditions: [{ lhs: 'event.session.name', op: 'eq', rhs: 'Expected' }],
     });

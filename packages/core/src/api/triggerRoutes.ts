@@ -15,12 +15,13 @@ const FiresQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 const ListQuerySchema =z.object({ projectId: z.string().min(1) });
+const OwnerManagerIdSchema = z.string().min(1).nullable();
 const CreateBodySchema = z.strictObject({
-  projectId: z.string().min(1), title: z.string().optional(), when: TriggerWhenSchema.optional(), conditions: ConditionsSchema.optional(),
+  projectId: z.string().min(1), ownerManagerId: OwnerManagerIdSchema, title: z.string().optional(), when: TriggerWhenSchema.optional(), conditions: ConditionsSchema.optional(),
   run: TriggerRunSchema.optional(), policy: TriggerPolicySchema.optional(),
 });
 const ReplaceBodySchema = z.strictObject({
-  expectedRev: RevisionSchema, title: z.string().optional(), when: TriggerWhenSchema.optional(), conditions: ConditionsSchema.optional(),
+  expectedRev: RevisionSchema, ownerManagerId: OwnerManagerIdSchema.optional(), title: z.string().optional(), when: TriggerWhenSchema.optional(), conditions: ConditionsSchema.optional(),
   run: TriggerRunSchema.optional(), policy: TriggerPolicySchema.optional(),
 });
 const ArmBodySchema = z.strictObject({ approvedRev: RevisionSchema });
@@ -54,9 +55,9 @@ export function registerTriggerRoutes(router: Router, deps: { triggers: TriggerS
   });
 
   router.add('PUT', '/api/triggers/:id', ({ res, params, body }) => {
-    const { expectedRev, title, when, conditions, run, policy } = ReplaceBodySchema.parse(body);
+    const { expectedRev, ownerManagerId, title, when, conditions, run, policy } = ReplaceBodySchema.parse(body);
     const replacement: TriggerContent = {
-      ...(title !== undefined && { title }), ...(when !== undefined && { when }), ...(run !== undefined && { run }), ...(policy !== undefined && { policy }),
+      ...(ownerManagerId !== undefined && { ownerManagerId }), ...(title !== undefined && { title }), ...(when !== undefined && { when }), ...(run !== undefined && { run }), ...(policy !== undefined && { policy }),
       ...(conditions !== undefined && { conditions: triggers.conditionsWithIds(conditions) }),
     };
     json(res, 200, triggers.edit(params.id!, () => replacement, { expectedRev }));
