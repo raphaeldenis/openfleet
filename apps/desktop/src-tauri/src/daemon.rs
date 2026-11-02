@@ -3,7 +3,6 @@ use crate::daemon_status_line::StatusLine;
 use crate::event_log::{self, DesktopEvent, ExitCode, IoFailure, KnownPaths, Opaque, PathClass, Pid, SpawnFailure, Stream};
 use crate::daemon_version::DaemonVersion;
 use crate::log_file::{logs_dir, start_on_disk, DesktopLog};
-use crate::loopback_http::Loopback;
 use crate::macos_keychain::MacKeychain;
 use crate::secret_channel::{self, SecretLineFilter};
 use crate::path_repair::{repair_path, run_login_shell, PathSource, RepairedPath, LOGIN_SHELL_TIMEOUT};
@@ -581,12 +580,13 @@ fn unix_seconds_now() -> u64 {
   SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
 }
 
-/// Answers one secret request of the daemon off the event loop: the keychain call may wait for the user.
-fn answer_secret_request(request_text: String) {
+/// Answers one secret request of the daemon off the event loop: the keychain call may wait for the user, and the answer waits at most `KEYCHAIN_WAIT`.
+/// The answer is written to the stdin of the daemon that runs now; the request id lets a newer daemon ignore the answer to an older one's request.
+fn answer_secret_request(app: AppHandle, request_text: String) {
   std::thread::spawn(move || {
     let Some(request) = secret_channel::parse_request(&request_text) else { return };
-    let Ok(address) = HEALTH_ADDRESS.parse() else { return };
-    let _ = secret_channel::answer_request(&request, &MacKeychain, &Loopback::at(address));
+    let answer = secret_channel::answer_request_within(request, std::sync::Arc::new(MacKeychain), secret_channel::KEYCHAIN_WAIT);
+    app.state::<DaemonState>().write_to_daemon(answer.as_bytes());
   });
 }
 
@@ -600,7 +600,7 @@ async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Re
         if !filtered.passthrough.is_empty() {
           daemon_log.ingest_daemon_chunk(Stream::Out, &filtered.passthrough);
         }
-        filtered.requests.into_iter().for_each(answer_secret_request);
+        filtered.requests.into_iter().for_each(|request_text| answer_secret_request(app.clone(), request_text));
       }
       CommandEvent::Stderr(bytes) => {
         daemon_log.ingest_daemon_chunk(Stream::Err, &bytes);

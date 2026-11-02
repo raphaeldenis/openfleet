@@ -1,17 +1,22 @@
 //! The desktop side of the secrets channel (docs/secrets.md, "Secrets of playbooks").
 //!
-//! The keychain belongs to this app. The daemon, the app's sidecar, prints one request per line on its stdout; the app does the keychain work and answers over the daemon's loopback routes
-//! `/internal/secrets/take` and `/internal/secrets/deliver`, each with a single-use nonce the daemon minted. The operator nonce that authorises a REST set or clear is minted here
-//! and written to the sidecar's stdin. This module holds the logic with no I/O of its own: the keychain and the loopback are ports.
+//! The keychain belongs to this app. The daemon, the app's sidecar, prints one request per line on its stdout; the app does the keychain work and answers on the daemon's stdin.
+//! Both are private pipes: no other process can answer in the app's place or take the connection over, and only the app holds the writing end of the stdin. No network is involved.
+//! This module holds the logic and no I/O of its own: the keychain is a port, and the answer is a line the caller writes to the stdin of the sidecar.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// Every line of the channel, in both directions, starts with this; the sidecar's ordinary log lines never do.
 pub const SECRET_LINE_PREFIX: &str = "OPENFLEET_SECRETS ";
 
 /// The keychain service every playbook secret is filed under; the account is `kind/id/name`.
 pub const KEYCHAIN_SERVICE: &str = "app.openfleet.playbook-secrets";
+
+/// How long the app waits for the keychain before it answers `unavailable`: a keychain that waits on a prompt must not hold the daemon past its own wait of 15 seconds.
+pub const KEYCHAIN_WAIT: Duration = Duration::from_secs(10);
 
 const OPERATOR_NONCE_BYTES: usize = 24;
 
@@ -30,17 +35,17 @@ pub enum SecretOperation {
   Read,
 }
 
-/// A request the daemon printed. It names the operation, the secret and two nonces; it never holds a value.
+/// A request the daemon printed. `value` is present for a set only.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SecretRequest {
   #[serde(rename = "type")]
   message_type: String,
+  pub request_id: String,
   pub op: SecretOperation,
   pub scope: SecretScope,
   pub name: String,
-  pub deliver_nonce: String,
-  pub take_nonce: Option<String>,
+  pub value: Option<String>,
 }
 
 /// The keychain could not be used: locked, denied, or unreadable. Its cause stays out of the answer to the daemon.
@@ -52,19 +57,6 @@ pub trait SecretKeychain {
   /// Removes the item; an item that is not there is a success.
   fn clear(&self, account: &str) -> Result<(), KeychainUnavailable>;
   fn read(&self, account: &str) -> Result<Option<String>, KeychainUnavailable>;
-}
-
-/// The daemon's loopback routes. `post` answers the HTTP status and the JSON body.
-pub trait DaemonLoopback {
-  fn post(&self, path: &str, body: &Value) -> Result<(u16, Value), String>;
-}
-
-/// Why a request was not answered; the daemon times out on its own and answers the caller with `secret_store_unavailable`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ChannelFailure {
-  DaemonUnreachable,
-  NonceRefused,
-  MalformedAnswer,
 }
 
 /// The line after the prefix, read as a request; `None` for any line that is not one (ordinary log, another message type, broken JSON).
@@ -83,19 +75,11 @@ pub fn keychain_account_of(scope: &SecretScope, name: &str) -> String {
   format!("{}/{}/{}", scope.kind, scope.id, name)
 }
 
-fn deliver(daemon: &impl DaemonLoopback, nonce: &str, outcome: Value) -> Result<(), ChannelFailure> {
-  let mut body = outcome;
-  body["nonce"] = Value::String(nonce.to_string());
-  let (status, _) = daemon.post("/internal/secrets/deliver", &body).map_err(|_| ChannelFailure::DaemonUnreachable)?;
-  if status == 200 { Ok(()) } else { Err(ChannelFailure::NonceRefused) }
-}
-
-fn take_value(daemon: &impl DaemonLoopback, take_nonce: &str) -> Result<String, ChannelFailure> {
-  let (status, answer) = daemon.post("/internal/secrets/take", &json!({ "nonce": take_nonce })).map_err(|_| ChannelFailure::DaemonUnreachable)?;
-  if status != 200 {
-    return Err(ChannelFailure::NonceRefused);
-  }
-  answer.get("value").and_then(Value::as_str).map(str::to_string).ok_or(ChannelFailure::MalformedAnswer)
+fn answer_line(request_id: &str, outcome: Value) -> String {
+  let mut message = outcome;
+  message["type"] = Value::String("secret_answer".to_string());
+  message["requestId"] = Value::String(request_id.to_string());
+  format!("{SECRET_LINE_PREFIX}{message}\n")
 }
 
 fn unavailable() -> Value {
@@ -106,15 +90,14 @@ fn succeeded() -> Value {
   json!({ "outcome": "ok" })
 }
 
-/// Does the keychain work a request asks for and delivers the outcome to the daemon. A value goes from the daemon to the keychain (set) or from the keychain to the daemon (read), nowhere else.
-pub fn answer_request(request: &SecretRequest, keychain: &impl SecretKeychain, daemon: &impl DaemonLoopback) -> Result<(), ChannelFailure> {
+/// Does the keychain work a request asks for and returns the line that answers it on the stdin of the daemon. A value goes from the request to the keychain (set) or from the keychain to the answer (read), nowhere else.
+pub fn answer_request(request: &SecretRequest, keychain: &impl SecretKeychain) -> String {
   let account = keychain_account_of(&request.scope, &request.name);
   let outcome = match request.op {
-    SecretOperation::Set => {
-      let Some(take_nonce) = request.take_nonce.as_deref() else { return Err(ChannelFailure::MalformedAnswer) };
-      let value = take_value(daemon, take_nonce)?;
-      keychain.set(&account, &value).map_or_else(|_| unavailable(), |()| succeeded())
-    }
+    SecretOperation::Set => match request.value.as_deref() {
+      Some(value) => keychain.set(&account, value).map_or_else(|_| unavailable(), |()| succeeded()),
+      None => unavailable(),
+    },
     SecretOperation::Clear => keychain.clear(&account).map_or_else(|_| unavailable(), |()| succeeded()),
     SecretOperation::Status => keychain.read(&account).map_or_else(
       |_| unavailable(),
@@ -125,7 +108,17 @@ pub fn answer_request(request: &SecretRequest, keychain: &impl SecretKeychain, d
       |found| found.map_or_else(|| json!({ "outcome": "not_found" }), |value| json!({ "outcome": "value", "value": value })),
     ),
   };
-  deliver(daemon, &request.deliver_nonce, outcome)
+  answer_line(&request.request_id, outcome)
+}
+
+/// Like `answer_request`, but gives up after `wait`: a keychain that blocks (a prompt nobody answers) yields the line `unavailable` and the worker finishes on its own.
+pub fn answer_request_within<K: SecretKeychain + Send + Sync + 'static>(request: SecretRequest, keychain: std::sync::Arc<K>, wait: Duration) -> String {
+  let request_id = request.request_id.clone();
+  let (sender, receiver) = mpsc::channel();
+  std::thread::spawn(move || {
+    let _ = sender.send(answer_request(&request, keychain.as_ref()));
+  });
+  receiver.recv_timeout(wait).unwrap_or_else(|_| answer_line(&request_id, unavailable()))
 }
 
 /// A nonce of 192 random bits written in hexadecimal (48 characters, inside the daemon's URL-safe alphabet).
@@ -177,19 +170,25 @@ mod tests {
   use super::*;
   use std::cell::RefCell;
   use std::collections::HashMap;
+  use std::sync::{Arc, Mutex};
 
   const CANARY: &str = "canary-value-0123456789";
+  const ACCOUNT: &str = "playbook/pb-1/JIRA_TOKEN";
 
-  fn request_json(op: &str, take_nonce: Option<&str>) -> String {
-    let mut request = json!({ "type": "secret_request", "requestId": "r1", "op": op, "scope": { "kind": "playbook", "id": "pb-1" }, "name": "JIRA_TOKEN", "deliverNonce": "deliver-1" });
-    if let Some(nonce) = take_nonce {
-      request["takeNonce"] = json!(nonce);
+  fn request_json(op: &str, value: Option<&str>) -> String {
+    let mut request = json!({ "type": "secret_request", "requestId": "req-1", "op": op, "scope": { "kind": "playbook", "id": "pb-1" }, "name": "JIRA_TOKEN" });
+    if let Some(value) = value {
+      request["value"] = json!(value);
     }
     request.to_string()
   }
 
-  fn request_of(op: &str, take_nonce: Option<&str>) -> SecretRequest {
-    parse_request(&request_json(op, take_nonce)).unwrap()
+  fn request_of(op: &str, value: Option<&str>) -> SecretRequest {
+    parse_request(&request_json(op, value)).unwrap()
+  }
+
+  fn answer_of(line: &str) -> Value {
+    serde_json::from_str(secret_line_payload(line).unwrap()).unwrap()
   }
 
   #[derive(Default)]
@@ -221,39 +220,33 @@ mod tests {
     }
   }
 
-  /// A daemon that serves `take` from `value_to_take` and records every post.
-  struct FakeDaemon {
-    value_to_take: Option<String>,
-    status: u16,
-    posts: RefCell<Vec<(String, Value)>>,
+  /// A keychain whose every call waits until the test lets it go, as a keychain does behind a prompt nobody answers.
+  struct BlockedKeychain {
+    release: Mutex<mpsc::Receiver<()>>,
   }
 
-  impl FakeDaemon {
-    fn accepting() -> Self {
-      Self { value_to_take: Some(CANARY.to_string()), status: 200, posts: RefCell::new(Vec::new()) }
+  impl SecretKeychain for BlockedKeychain {
+    fn set(&self, _account: &str, _value: &str) -> Result<(), KeychainUnavailable> {
+      let _ = self.release.lock().unwrap().recv();
+      Ok(())
     }
-    fn delivered(&self) -> Value {
-      self.posts.borrow().iter().find(|(path, _)| path == "/internal/secrets/deliver").map(|(_, body)| body.clone()).unwrap()
+    fn clear(&self, _account: &str) -> Result<(), KeychainUnavailable> {
+      let _ = self.release.lock().unwrap().recv();
+      Ok(())
     }
-  }
-
-  impl DaemonLoopback for FakeDaemon {
-    fn post(&self, path: &str, body: &Value) -> Result<(u16, Value), String> {
-      self.posts.borrow_mut().push((path.to_string(), body.clone()));
-      let answer = if path == "/internal/secrets/take" { json!({ "value": self.value_to_take }) } else { json!({ "ok": true }) };
-      Ok((self.status, answer))
+    fn read(&self, _account: &str) -> Result<Option<String>, KeychainUnavailable> {
+      let _ = self.release.lock().unwrap().recv();
+      Ok(Some(CANARY.to_string()))
     }
   }
-
-  const ACCOUNT: &str = "playbook/pb-1/JIRA_TOKEN";
 
   #[test]
   fn parses_a_request_line_of_the_daemon() {
-    let request = request_of("set", Some("take-1"));
+    let request = request_of("set", Some(CANARY));
 
     assert_eq!(request.op, SecretOperation::Set);
     assert_eq!(request.scope, SecretScope { kind: "playbook".to_string(), id: "pb-1".to_string() });
-    assert_eq!((request.name.as_str(), request.deliver_nonce.as_str(), request.take_nonce.as_deref()), ("JIRA_TOKEN", "deliver-1", Some("take-1")));
+    assert_eq!((request.request_id.as_str(), request.name.as_str(), request.value.as_deref()), ("req-1", "JIRA_TOKEN", Some(CANARY)));
   }
 
   #[test]
@@ -271,102 +264,134 @@ mod tests {
   }
 
   #[test]
-  fn a_set_takes_the_value_once_stores_it_and_delivers_ok_without_the_value() {
-    let (keychain, daemon) = (FakeKeychain::default(), FakeDaemon::accepting());
+  fn a_set_stores_the_value_and_answers_ok_under_the_request_id_without_the_value() {
+    let keychain = FakeKeychain::default();
 
-    let result = answer_request(&request_of("set", Some("take-1")), &keychain, &daemon);
+    let line = answer_request(&request_of("set", Some(CANARY)), &keychain);
 
-    assert_eq!(result, Ok(()));
     assert_eq!(keychain.items.borrow().get(ACCOUNT).map(String::as_str), Some(CANARY));
-    assert_eq!(daemon.delivered(), json!({ "outcome": "ok", "nonce": "deliver-1" }));
-    assert_eq!(daemon.posts.borrow()[0], ("/internal/secrets/take".to_string(), json!({ "nonce": "take-1" })));
+    assert_eq!(answer_of(&line), json!({ "type": "secret_answer", "requestId": "req-1", "outcome": "ok" }));
+    assert!(!line.contains(CANARY));
   }
 
   #[test]
-  fn a_set_on_a_locked_keychain_delivers_unavailable_and_stores_nothing() {
-    let (keychain, daemon) = (FakeKeychain { locked: true, ..FakeKeychain::default() }, FakeDaemon::accepting());
+  fn a_set_without_a_value_stores_nothing_and_answers_unavailable() {
+    let keychain = FakeKeychain::default();
 
-    answer_request(&request_of("set", Some("take-1")), &keychain, &daemon).unwrap();
+    let line = answer_request(&request_of("set", None), &keychain);
 
-    assert_eq!(daemon.delivered(), json!({ "outcome": "unavailable", "nonce": "deliver-1" }));
+    assert_eq!(answer_of(&line)["outcome"], json!("unavailable"));
     assert!(keychain.items.borrow().is_empty());
   }
 
   #[test]
-  fn a_set_without_a_take_nonce_is_not_answered() {
-    let (keychain, daemon) = (FakeKeychain::default(), FakeDaemon::accepting());
+  fn a_set_on_a_locked_keychain_answers_unavailable_and_stores_nothing() {
+    let keychain = FakeKeychain { locked: true, ..FakeKeychain::default() };
 
-    assert_eq!(answer_request(&request_of("set", None), &keychain, &daemon), Err(ChannelFailure::MalformedAnswer));
-    assert!(daemon.posts.borrow().is_empty());
-  }
+    let line = answer_request(&request_of("set", Some(CANARY)), &keychain);
 
-  #[test]
-  fn a_refused_take_stores_nothing_and_delivers_nothing() {
-    let (keychain, daemon) = (FakeKeychain::default(), FakeDaemon { status: 401, ..FakeDaemon::accepting() });
-
-    let result = answer_request(&request_of("set", Some("take-1")), &keychain, &daemon);
-
-    assert_eq!(result, Err(ChannelFailure::NonceRefused));
+    assert_eq!(answer_of(&line)["outcome"], json!("unavailable"));
     assert!(keychain.items.borrow().is_empty());
-    assert_eq!(daemon.posts.borrow().len(), 1);
   }
 
   #[test]
-  fn a_clear_removes_the_item_and_clearing_a_missing_item_still_delivers_ok() {
+  fn a_clear_removes_the_item_and_clearing_a_missing_item_still_answers_ok() {
     let keychain = FakeKeychain::default();
     keychain.items.borrow_mut().insert(ACCOUNT.to_string(), CANARY.to_string());
-    let first = FakeDaemon::accepting();
-    let second = FakeDaemon::accepting();
 
-    answer_request(&request_of("clear", None), &keychain, &first).unwrap();
-    answer_request(&request_of("clear", None), &keychain, &second).unwrap();
+    let first = answer_request(&request_of("clear", None), &keychain);
+    let second = answer_request(&request_of("clear", None), &keychain);
 
     assert!(keychain.items.borrow().is_empty());
-    assert_eq!((first.delivered()["outcome"].clone(), second.delivered()["outcome"].clone()), (json!("ok"), json!("ok")));
+    assert_eq!((answer_of(&first)["outcome"].clone(), answer_of(&second)["outcome"].clone()), (json!("ok"), json!("ok")));
   }
 
   #[test]
   fn a_status_reports_stored_or_missing_and_never_the_value() {
     let keychain = FakeKeychain::default();
-    let missing = FakeDaemon::accepting();
-    answer_request(&request_of("status", None), &keychain, &missing).unwrap();
+    let missing = answer_request(&request_of("status", None), &keychain);
     keychain.items.borrow_mut().insert(ACCOUNT.to_string(), CANARY.to_string());
-    let stored = FakeDaemon::accepting();
 
-    answer_request(&request_of("status", None), &keychain, &stored).unwrap();
+    let stored = answer_request(&request_of("status", None), &keychain);
 
-    assert_eq!(missing.delivered()["outcome"], json!("missing"));
-    assert_eq!(stored.delivered(), json!({ "outcome": "stored", "nonce": "deliver-1" }));
+    assert_eq!(answer_of(&missing)["outcome"], json!("missing"));
+    assert_eq!(answer_of(&stored)["outcome"], json!("stored"));
+    assert!(!stored.contains(CANARY));
   }
 
   #[test]
-  fn a_read_delivers_the_value_or_not_found() {
+  fn a_read_answers_the_value_or_not_found() {
     let keychain = FakeKeychain::default();
-    let absent = FakeDaemon::accepting();
-    answer_request(&request_of("read", None), &keychain, &absent).unwrap();
+    let absent = answer_request(&request_of("read", None), &keychain);
     keychain.items.borrow_mut().insert(ACCOUNT.to_string(), CANARY.to_string());
-    let present = FakeDaemon::accepting();
 
-    answer_request(&request_of("read", None), &keychain, &present).unwrap();
+    let present = answer_request(&request_of("read", None), &keychain);
 
-    assert_eq!(absent.delivered(), json!({ "outcome": "not_found", "nonce": "deliver-1" }));
-    assert_eq!(present.delivered(), json!({ "outcome": "value", "value": CANARY, "nonce": "deliver-1" }));
+    assert_eq!(answer_of(&absent), json!({ "type": "secret_answer", "requestId": "req-1", "outcome": "not_found" }));
+    assert_eq!(answer_of(&present), json!({ "type": "secret_answer", "requestId": "req-1", "outcome": "value", "value": CANARY }));
   }
 
   #[test]
-  fn a_read_on_a_locked_keychain_delivers_unavailable() {
-    let (keychain, daemon) = (FakeKeychain { locked: true, ..FakeKeychain::default() }, FakeDaemon::accepting());
+  fn a_read_on_a_locked_keychain_answers_unavailable() {
+    let keychain = FakeKeychain { locked: true, ..FakeKeychain::default() };
 
-    answer_request(&request_of("read", None), &keychain, &daemon).unwrap();
+    let line = answer_request(&request_of("read", None), &keychain);
 
-    assert_eq!(daemon.delivered(), json!({ "outcome": "unavailable", "nonce": "deliver-1" }));
+    assert_eq!(answer_of(&line)["outcome"], json!("unavailable"));
   }
 
   #[test]
-  fn a_delivery_the_daemon_refuses_is_a_failure() {
-    let (keychain, daemon) = (FakeKeychain::default(), FakeDaemon { status: 401, ..FakeDaemon::accepting() });
+  fn a_blocked_keychain_answers_unavailable_within_the_wait_and_never_the_value() {
+    let (release, blocked) = mpsc::channel();
+    let keychain = Arc::new(BlockedKeychain { release: Mutex::new(blocked) });
 
-    assert_eq!(answer_request(&request_of("clear", None), &keychain, &daemon), Err(ChannelFailure::NonceRefused));
+    let line = answer_request_within(request_of("read", None), keychain, Duration::from_millis(50));
+
+    assert_eq!(answer_of(&line), json!({ "type": "secret_answer", "requestId": "req-1", "outcome": "unavailable" }));
+    assert!(!line.contains(CANARY));
+    drop(release);
+  }
+
+  #[test]
+  fn a_blocked_keychain_does_not_hold_back_the_next_request() {
+    let (release, blocked) = mpsc::channel();
+    let stuck = Arc::new(BlockedKeychain { release: Mutex::new(blocked) });
+    let free = Arc::new(Mutex::new(FakeKeychainSync::default()));
+    let _ = answer_request_within(request_of("clear", None), stuck, Duration::from_millis(20));
+
+    let line = answer_request_within(request_of("status", None), free, Duration::from_secs(5));
+
+    assert_eq!(answer_of(&line)["outcome"], json!("missing"));
+    drop(release);
+  }
+
+  /// A thread-safe keychain with nothing in it, for the request that follows a blocked one.
+  #[derive(Default)]
+  struct FakeKeychainSync(HashMap<String, String>);
+
+  impl SecretKeychain for Mutex<FakeKeychainSync> {
+    fn set(&self, account: &str, value: &str) -> Result<(), KeychainUnavailable> {
+      self.lock().unwrap().0.insert(account.to_string(), value.to_string());
+      Ok(())
+    }
+    fn clear(&self, account: &str) -> Result<(), KeychainUnavailable> {
+      self.lock().unwrap().0.remove(account);
+      Ok(())
+    }
+    fn read(&self, account: &str) -> Result<Option<String>, KeychainUnavailable> {
+      Ok(self.lock().unwrap().0.get(account).cloned())
+    }
+  }
+
+  #[test]
+  fn an_answer_names_the_request_it_answers_so_an_older_generation_of_the_daemon_can_ignore_it() {
+    let keychain = FakeKeychain::default();
+    let mut request = request_of("clear", None);
+    request.request_id = "request-of-the-old-daemon".to_string();
+
+    let line = answer_request(&request, &keychain);
+
+    assert_eq!(answer_of(&line)["requestId"], json!("request-of-the-old-daemon"));
   }
 
   #[test]

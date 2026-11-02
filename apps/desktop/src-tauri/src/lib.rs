@@ -11,7 +11,6 @@ mod issue_report;
 #[cfg(test)]
 mod linear_growth;
 mod log_file;
-mod loopback_http;
 mod macos_keychain;
 mod notifications;
 mod panic_hook;
