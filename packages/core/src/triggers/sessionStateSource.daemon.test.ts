@@ -191,6 +191,50 @@ describe('a deadline that came due while the daemon was stopped', () => {
     expect(bodiesTo(lead.id)).toHaveLength(1);
   });
 
+  describe('the cursors it was remembered with', () => {
+    const cursorRowOf = (triggerId: string) => world!.db.prepare('SELECT cursor_json FROM trigger_cursors WHERE trigger_id = ?').get(triggerId) as { cursor_json: string } | undefined;
+
+    it('keeps the episodes of the other triggers when one cursor is not valid JSON, and leaves that cursor in place', async () => {
+      const { world, triggerId } = await idleChildWithDeadlineMissed();
+      const triggerWithCorruptedCursor = await promptLead('other', { source: 'session_state', state: 'closed_with_error' });
+      const corruptedJson = '{"episodes": [';
+
+      await world.restart({
+        stoppedForMs: 20 * MINUTE_MS,
+        whileStopped: (db) => { db.prepare('INSERT INTO trigger_cursors (trigger_id, cursor_json) VALUES (?, ?)').run(triggerWithCorruptedCursor, corruptedJson); },
+      });
+
+      expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'completed' })]);
+      expect(cursorRowOf(triggerWithCorruptedCursor)?.cursor_json).toBe(corruptedJson);
+    });
+
+    it('gives the episode of a cursor to the trigger it was written for, and to no other', async () => {
+      const { world, lead, triggerId: rememberingTrigger } = await idleChildWithDeadlineMissed();
+      const otherTrigger = await promptLead('idle too', { source: 'session_state', state: 'idle', minutes: 15 });
+
+      await world.restart({
+        stoppedForMs: 20 * MINUTE_MS,
+        whileStopped: (db) => { db.prepare('DELETE FROM trigger_cursors WHERE trigger_id = ?').run(otherTrigger); },
+      });
+
+      expect(world.firesOf(rememberingTrigger)).toEqual([expect.objectContaining({ ledger_state: 'completed' })]);
+      expect(world.firesOf(otherTrigger)).toEqual([]);
+      expect(bodiesTo(lead.id)).toHaveLength(1);
+    });
+
+    it('ignores an episode whose date is not an ISO date, even one that Date.parse understands', async () => {
+      const { world, child, triggerId } = await idleChildWithDeadlineMissed();
+      const cursorWithLooseDate = JSON.stringify({ episodes: [{ sessionId: child.id, state: 'idle', stateSince: 'Jan 1 2020 00:00:00' }] });
+
+      await world.restart({
+        stoppedForMs: 20 * MINUTE_MS,
+        whileStopped: (db) => { db.prepare('UPDATE trigger_cursors SET cursor_json = ? WHERE trigger_id = ?').run(cursorWithLooseDate, triggerId); },
+      });
+
+      expect(world.firesOf(triggerId)).toEqual([]);
+    });
+  });
+
   it('fires once for a child whose process closed with an error while the daemon was stopped', async () => {
     const { world, lead } = await worldWithLead();
     const child = await world.createChild(lead, 'Crashy');

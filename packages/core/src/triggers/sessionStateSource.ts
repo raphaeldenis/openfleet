@@ -21,11 +21,16 @@ const isWaitableState = (state: string): state is WaitableState => state === 'id
 
 /** One stay of a session in a state a trigger waits on, identified by the moment the session entered the state. */
 interface Episode { sessionId: string; state: WaitableState; stateSince: string }
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+const isIsoDate = (value: unknown): value is string => typeof value === 'string' && ISO_DATE.test(value) && Number.isFinite(Date.parse(value));
 const isEpisode = (value: unknown): value is Episode => {
   const candidate = value as Partial<Episode> | null;
-  return typeof candidate?.sessionId === 'string' && typeof candidate.state === 'string' && isWaitableState(candidate.state) && typeof candidate.stateSince === 'string';
+  return typeof candidate?.sessionId === 'string' && typeof candidate.state === 'string' && isWaitableState(candidate.state) && isIsoDate(candidate.stateSince);
 };
 const episodeKeyOf = (episode: Episode) => `${episode.state}:${episode.sessionId}:${episode.stateSince}`;
+
+/** An episode of the last run; `triggerId` is set when a cursor remembered it for that trigger only, absent when it is read from a session. */
+interface RememberedEpisode { episode: Episode; triggerId?: string }
 
 interface PendingWait { triggerId: string; episode: Episode; cancel: () => void }
 interface LateOffer { dedupKey: string; event: Record<string, unknown>; dueAtMs: number }
@@ -44,7 +49,7 @@ export interface SessionStateSourceDeps {
 /**
  * Offers the engine the events of the children of a manager: a process that closed on a failure, and a session that stayed idle or on a permission
  * prompt for the minutes of a trigger. The wait is read from `stateSince`. A restart loses nothing: the waits that had not ended are written to the
- * cursors when the source stops, the boot reads them (and the sessions as the database held them before they were resumed, for a daemon that was killed),
+ * cursors when the source stops; the boot captures the sessions as the database holds them before `resumeAll`, then reads them and the cursors after it (a killed daemon leaves no cursor),
  * and what came due while the daemon was stopped is offered with its real deadline, so the backlog policy judges its age. The ledger keeps an episode from firing twice.
  */
 export class SessionStateSource {
@@ -158,13 +163,19 @@ export class SessionStateSource {
   /** Offers what came due while the daemon was stopped, to each trigger in one batch so its backlog policy sees them together. */
   private offerWhatCameDueWhileStopped(sessionsBeforeResume: Session[]): void {
     const offersByTrigger = new Map<string, LateOffer[]>();
-    const addOffer = (trigger: SessionStateTrigger, offer: LateOffer) => offersByTrigger.set(trigger.id, [...(offersByTrigger.get(trigger.id) ?? []), offer]);
+    const addOffer = (trigger: SessionStateTrigger, offer: LateOffer) => {
+      const offersOfTrigger = offersByTrigger.get(trigger.id) ?? [];
+      const isAlreadyOffered = offersOfTrigger.some((offered) => offered.dedupKey === offer.dedupKey);
+      if (!isAlreadyOffered) offersByTrigger.set(trigger.id, [...offersOfTrigger, offer]);
+    };
     const now = this.deps.clock();
 
-    for (const episode of this.episodesOfTheLastRun(sessionsBeforeResume)) {
+    for (const { episode, triggerId } of this.episodesOfTheLastRun(sessionsBeforeResume)) {
       const session = this.deps.sessions.get(episode.sessionId);
       if (session === undefined) continue;
       for (const trigger of this.triggersWatching(session, episode.state)) {
+        const isRememberedForAnotherTrigger = triggerId !== undefined && triggerId !== trigger.id;
+        if (isRememberedForAnotherTrigger) continue;
         const minutes = trigger.when.minutes ?? 0;
         const dueAtMs = Date.parse(episode.stateSince) + minutes * MINUTE_MS;
         const hasCameDue = dueAtMs <= now;
@@ -186,14 +197,14 @@ export class SessionStateSource {
   }
 
   /** The episodes the previous run was in the middle of: the cursors it wrote when it stopped, and the sessions a killed daemon left in a waitable state. */
-  private episodesOfTheLastRun(sessionsBeforeResume: Session[]): Episode[] {
-    const fromCursors = this.deps.cursors.takeAll().flatMap(({ value }) => {
-      const episodes = (value as { episodes?: unknown })?.episodes;
-      return Array.isArray(episodes) ? episodes.filter(isEpisode) : [];
+  private episodesOfTheLastRun(sessionsBeforeResume: Session[]): RememberedEpisode[] {
+    const fromCursors = this.deps.cursors.takeAll().flatMap(({ triggerId, value }): RememberedEpisode[] => {
+      const episodes = (value as { episodes?: unknown } | null)?.episodes;
+      return Array.isArray(episodes) ? episodes.filter(isEpisode).map((episode) => ({ episode, triggerId })) : [];
     });
-    const fromSessions = sessionsBeforeResume.flatMap((session): Episode[] => (isWaitableState(session.state) ? [{ sessionId: session.id, state: session.state, stateSince: session.stateSince }] : []));
-    const byKey = new Map([...fromCursors, ...fromSessions].map((episode) => [episodeKeyOf(episode), episode]));
-    return [...byKey.values()];
+    const fromSessions = sessionsBeforeResume.flatMap((session): RememberedEpisode[] => (isWaitableState(session.state) ? [{ episode: { sessionId: session.id, state: session.state, stateSince: session.stateSince } }] : []));
+    const byTriggerAndKey = new Map([...fromCursors, ...fromSessions].map((remembered) => [`${remembered.triggerId ?? '*'}|${episodeKeyOf(remembered.episode)}`, remembered]));
+    return [...byTriggerAndKey.values()];
   }
 
   /** The armed triggers that watch `state` for this session: it is a child of a manager of the project, and of the one the RUN names, if it names one. */
