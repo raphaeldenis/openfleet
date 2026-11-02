@@ -93,7 +93,7 @@ const graphInvalid = (message: string) => new OpenFleetError('playbook_graph_inv
 function assertWithinLimits(flow: PlaybookFlow): void {
   const isOverTheCellCap = flow.cells.length > MAX_PLAYBOOK_CELLS;
   if (isOverTheCellCap) throw new OpenFleetError('playbook_limit_exceeded', `a playbook holds at most ${MAX_PLAYBOOK_CELLS} cells.`);
-  const isOverTheSizeCap = JSON.stringify(flow).length > MAX_FLOW_BYTES;
+  const isOverTheSizeCap = Buffer.byteLength(JSON.stringify(flow), 'utf8') > MAX_FLOW_BYTES;
   if (isOverTheSizeCap) throw new OpenFleetError('playbook_limit_exceeded', `the flow of a playbook is at most ${MAX_FLOW_BYTES} bytes.`);
 }
 

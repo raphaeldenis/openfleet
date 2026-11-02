@@ -9,6 +9,7 @@ const CellsSchema = z.array(z.record(z.string(), z.unknown()));
 const RevisionSchema = z.int().min(1);
 
 const ListQuerySchema = z.object({ projectId: z.string().min(1) });
+const DeleteQuerySchema = z.object({ expectedRev: z.coerce.number().pipe(RevisionSchema) });
 const CreateBodySchema = z.strictObject({
   projectId: z.string().min(1), name: PlaybookNameSchema.optional(), inputs: z.unknown().optional(), cells: CellsSchema.optional(),
   policy: PlaybookPolicySchema.optional(), agentLocked: z.boolean().optional(),
@@ -25,8 +26,8 @@ const answerOf = (playbooks: PlaybookService, playbook: PlaybookRecord) => {
 };
 
 /**
- * The human side of the playbooks: every route sits under /api, behind the admin token; the only writer that ignores the lock `agentLocked`.
- * Each mutation is recorded as an action of the human by the router.
+ * The human side of the playbooks: every route sits under /api, behind the admin token, and a write names the revision it read (PUT in the body, DELETE in the query).
+ * The admin token is not a proof of a human, so these routes ignore `agentLocked`, which binds MCP agents only; each mutation is recorded as an action of the human by the router.
  */
 export function registerPlaybookRoutes(router: Router, deps: { playbooks: PlaybookService }): void {
   const { playbooks } = deps;
@@ -54,8 +55,9 @@ export function registerPlaybookRoutes(router: Router, deps: { playbooks: Playbo
     json(res, 200, answerOf(playbooks, playbooks.edit(params.id!, () => replacement, { writer: 'admin', expectedRev })));
   });
 
-  router.add('DELETE', '/api/playbooks/:id', ({ res, params }) => {
-    playbooks.delete(params.id!, { writer: 'admin' });
+  router.add('DELETE', '/api/playbooks/:id', ({ req, res, params }) => {
+    const { expectedRev } = DeleteQuerySchema.parse(queryParams(req));
+    playbooks.delete(params.id!, { writer: 'admin', expectedRev });
     json(res, 200, { deleted: params.id! });
   });
 }

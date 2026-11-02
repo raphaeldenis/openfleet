@@ -49,7 +49,7 @@ describe('the CRUD of playbooks', () => {
     const replaced = await jsonOf(await replace(f, playbook.id, {
       expectedRev: 1, name: 'Renamed', inputs: [{ name: 'env', type: 'string' }], cells: [scriptCell()], policy: { maxRunsToKeep: 10 },
     }));
-    const deleted = await f.api(`/api/playbooks/${playbook.id}`, { method: 'DELETE' });
+    const deleted = await f.api(`/api/playbooks/${playbook.id}?expectedRev=2`, { method: 'DELETE' });
 
     expect(playbook).toMatchObject({ projectId: OWN_PROJECT_ID, name: 'P1', contentRev: 1, origin: 'native', agentLocked: false, approvedDigest: null, flow: { cells: [] } });
     expect(listed.map((listedPlaybook) => listedPlaybook.id)).toEqual([playbook.id]);
@@ -93,6 +93,63 @@ describe('the CRUD of playbooks', () => {
     expect(await (await f.api('/api/playbooks/nope')).json()).toMatchObject({ error: 'playbook_not_found' });
     const unknownProject = await f.api('/api/playbooks', { method: 'POST', body: JSON.stringify({ projectId: 'nope' }) });
     expect(await unknownProject.json()).toMatchObject({ error: 'project_not_found' });
+  });
+});
+
+describe('the revision of a delete (F1)', () => {
+  it.each(['', '?expectedRev=0', '?expectedRev=abc', '?expectedRev=1.5'])('refuses DELETE%s with 400 and keeps the playbook', async (query) => {
+    const f = await boot();
+    const playbook = await createPlaybook(f);
+
+    const refused = await f.api(`/api/playbooks/${playbook.id}${query}`, { method: 'DELETE' });
+
+    expect(refused.status).toBe(400);
+    expect((await f.api(`/api/playbooks/${playbook.id}`)).status).toBe(200);
+  });
+
+  it('refuses a stale DELETE with 409 playbook_conflict and the current revision, and keeps the playbook', async () => {
+    const f = await boot();
+    const playbook = await createPlaybook(f);
+    await replace(f, playbook.id, { expectedRev: 1, name: 'Second' });
+
+    const stale = await f.api(`/api/playbooks/${playbook.id}?expectedRev=1`, { method: 'DELETE' });
+
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ error: 'playbook_conflict', detail: { currentRev: 2 } });
+    expect((await jsonOf(await f.api(`/api/playbooks/${playbook.id}`))).name).toBe('Second');
+  });
+
+  it('deletes with the current revision', async () => {
+    const f = await boot();
+    const playbook = await createPlaybook(f);
+
+    const deleted = await f.api(`/api/playbooks/${playbook.id}?expectedRev=1`, { method: 'DELETE' });
+
+    expect(deleted.status).toBe(200);
+    expect((await f.api(`/api/playbooks/${playbook.id}`)).status).toBe(404);
+  });
+});
+
+describe('the size caps count UTF-8 bytes (F2)', () => {
+  const kanjiHttpCell = (position: number) => ({ id: `h${position}`, kind: 'http', method: 'POST', url: 'https://example.com', body: '漢'.repeat(60000) });
+
+  it('stops 10 http cells of 60000 kanji (1 800 831 bytes) at the request body cap, before the playbook rules', async () => {
+    const f = await boot();
+    const playbook = await createPlaybook(f);
+
+    const refused = await replace(f, playbook.id, { expectedRev: 1, cells: Array.from({ length: 10 }, (_, position) => kanjiHttpCell(position)) });
+
+    expect(refused.status).toBe(413);
+    expect((await jsonOf(await f.api(`/api/playbooks/${playbook.id}`))).contentRev).toBe(1);
+  });
+
+  it('accepts 5 of them: 900 000 bytes, under the cap', async () => {
+    const f = await boot();
+    const playbook = await createPlaybook(f);
+
+    const accepted = await replace(f, playbook.id, { expectedRev: 1, cells: Array.from({ length: 5 }, (_, position) => kanjiHttpCell(position)) });
+
+    expect(accepted.status).toBe(200);
   });
 });
 
@@ -166,7 +223,7 @@ describe('the activity log of the REST writes', () => {
     const canary = `canary free text ${crypto.randomUUID()}`;
     const playbook = await createPlaybook(f, { name: canary });
     await replace(f, playbook.id, { expectedRev: 1, cells: [{ id: 'ask', kind: 'manual', prompt: canary }] });
-    await f.api(`/api/playbooks/${playbook.id}`, { method: 'DELETE' });
+    await f.api(`/api/playbooks/${playbook.id}?expectedRev=2`, { method: 'DELETE' });
 
     const rows = f.db.prepare("SELECT actor_kind, source, action, outcome FROM activity_log WHERE action LIKE '%playbooks%'").all();
 

@@ -49,7 +49,7 @@ const cellSummaryOf = (cell: PlaybookRecord['flow']['cells'][number], position: 
 });
 
 const playbookParameter = z.string().describe('Playbook id (from list_playbooks) or its exact name');
-const expectedRevParameter = z.number().optional().describe('The content_rev you read; the write is refused when the playbook has moved since');
+const expectedRevParameter = z.int().min(1).describe('The content_rev you read (get_playbook or list_playbook_cells); the write is refused when the playbook has moved since');
 const cellIdParameter = z.string().describe('Cell id (from list_playbook_cells)');
 const argsParameter = z.record(z.string(), z.unknown()).describe('The fields of the cell for its kind (get_playbook_schema)');
 
@@ -65,7 +65,7 @@ export function registerPlaybookTools(server: McpServer, { playbooks, caller }: 
   };
   const playbookOf = (reference: string): PlaybookRecord => playbooks.getInProject(projectIdOfCaller(), reference);
   const viewOf = (playbook: PlaybookRecord) => playbookView(playbook, playbooks.secretNamesOf(playbook));
-  const asAgent = (expectedRev: number | undefined) => ({ writer: 'agent' as const, expectedRev });
+  const asAgent = (expectedRev: number) => ({ writer: 'agent' as const, expectedRev });
 
   server.registerTool('get_playbook_schema', {
     description: 'The shapes the playbook tools validate against: cell kinds and their fields, the flow rules, tokens and the places each may stand, limits, inputs and policy. Read it before authoring a playbook.',
@@ -85,9 +85,12 @@ export function registerPlaybookTools(server: McpServer, { playbooks, caller }: 
     inputSchema: { name: z.string().optional().describe("Display name (default 'Untitled Playbook')") },
   }, async ({ name }) => ok(viewOf(playbooks.create({ projectId: projectIdOfCaller(), writer: 'agent', name }))));
 
-  server.registerTool('delete_playbook', { description: 'Delete a playbook. Irreversible.', inputSchema: { playbook: playbookParameter } }, async ({ playbook }) => {
+  server.registerTool('delete_playbook', {
+    description: 'Delete a playbook. Irreversible; refused when expected_rev is not the current content_rev.',
+    inputSchema: { playbook: playbookParameter, expected_rev: expectedRevParameter },
+  }, async ({ playbook, expected_rev }) => {
     const target = playbookOf(playbook);
-    playbooks.delete(target.id, { writer: 'agent' });
+    playbooks.delete(target.id, asAgent(expected_rev));
     return ok({ deleted: target.id });
   });
 

@@ -21,8 +21,21 @@ beforeEach(async () => {
 });
 afterEach(async () => { await fixture.close(); });
 
+const TOOLS_THAT_NEED_A_REVISION = new Set(['add_playbook_cell', 'update_playbook_cell', 'delete_playbook_cell', 'reorder_playbook_cells', 'set_playbook_inputs', 'delete_playbook']);
+const WITHOUT_REVISION = Symbol('without a revision');
+
+/** Calls a tool; a write tool that is given no expected_rev gets the current revision of its playbook, so a test states a revision only when it is the point. */
 const call = async (client: Client, name: string, args: Record<string, unknown> = {}) => {
-  const result = await client.callTool({ name, arguments: args });
+  const omitsTheRevision = args.expected_rev === WITHOUT_REVISION;
+  const needsTheCurrentRevision = TOOLS_THAT_NEED_A_REVISION.has(name) && args.expected_rev === undefined;
+  const currentRevision = async (): Promise<number> => {
+    const read = await client.callTool({ name: 'get_playbook', arguments: { playbook: args.playbook } });
+    const isMissing = read.isError === true;
+    return isMissing ? 1 : JSON.parse((read.content as { text: string }[])[0]!.text).content_rev;
+  };
+  const { expected_rev: _given, ...argsWithoutRevision } = args;
+  const sentArgs = omitsTheRevision ? argsWithoutRevision : needsTheCurrentRevision ? { ...args, expected_rev: await currentRevision() } : args;
+  const result = await client.callTool({ name, arguments: sentArgs });
   const text = (result.content as { text: string }[])[0]!.text;
   return { isError: result.isError === true, text, json: result.isError === true ? undefined : JSON.parse(text) };
 };
@@ -452,6 +465,79 @@ describe('the revision of a playbook (CAS)', () => {
     ];
 
     expect(results.map((result) => result.text.split(':')[0])).toEqual(Array(4).fill('error playbook_conflict'));
+  });
+});
+
+describe('the revision is required on every write (F1)', () => {
+  const writesWithoutRevision = (playbookId: string): [string, Record<string, unknown>][] => [
+    ['add_playbook_cell', { playbook: playbookId, kind: 'script', args: script() }],
+    ['update_playbook_cell', { playbook: playbookId, cell_id: 'a', args: { timeoutSeconds: 5 } }],
+    ['delete_playbook_cell', { playbook: playbookId, cell_id: 'a' }],
+    ['reorder_playbook_cells', { playbook: playbookId, order: ['a'] }],
+    ['set_playbook_inputs', { playbook: playbookId, inputs: [] }],
+    ['delete_playbook', { playbook: playbookId }],
+  ];
+
+  it.each(['add_playbook_cell', 'update_playbook_cell', 'delete_playbook_cell', 'reorder_playbook_cells', 'set_playbook_inputs', 'delete_playbook'])('refuses %s with no expected_rev and writes nothing', async (tool) => {
+    const playbook = await created();
+    await addCell(playbook.id, 'script', script(), { id: 'a' });
+    const before = await viewOf(playbook.id);
+    const [, args] = writesWithoutRevision(playbook.id).find(([name]) => name === tool)!;
+
+    const refused = await call(lead, tool, { ...args, expected_rev: WITHOUT_REVISION });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toMatch(/expected_rev/);
+    expect(await viewOf(playbook.id)).toEqual(before);
+  });
+
+  it.each([0, -1, 1.5])('refuses the revision %s', async (revision) => {
+    const playbook = await created();
+
+    const refused = await call(lead, 'set_playbook_inputs', { playbook: playbook.id, inputs: [], expected_rev: revision });
+
+    expect(refused.isError).toBe(true);
+    expect((await viewOf(playbook.id)).content_rev).toBe(1);
+  });
+
+  it('refuses a stale delete_playbook with playbook_conflict and keeps the playbook and its cells', async () => {
+    const playbook = await created();
+    await addCell(playbook.id, 'script', script(), { id: 'a' });
+
+    const stale = await call(lead, 'delete_playbook', { playbook: playbook.id, expected_rev: 1 });
+
+    expect(stale.text).toMatch(/^error playbook_conflict: .*current rev: 2/);
+    expect((await viewOf(playbook.id)).cells.map((cell) => cell.id)).toEqual(['a']);
+  });
+
+  it('deletes with the current revision', async () => {
+    const playbook = await created();
+
+    const deleted = await call(lead, 'delete_playbook', { playbook: playbook.id, expected_rev: 1 });
+
+    expect(deleted.json).toEqual({ deleted: playbook.id });
+  });
+});
+
+describe('the size caps count UTF-8 bytes (F2)', () => {
+  it('refuses a tool input of 6000 kanji, which is 18000 bytes over the 16384 cap but 6000 characters under it', async () => {
+    const playbook = await created();
+
+    const refused = await addCell(playbook.id, 'tool', { tool: 'list_notes', input: { query: '漢'.repeat(6000) } });
+
+    expect(refused.text).toMatch(/^error invalid_body:/);
+    expect((await viewOf(playbook.id)).cells).toEqual([]);
+  });
+
+  it('refuses the sixth http cell of 60000 kanji: the flow is 1 080 000 bytes, over 1 048 576, though only about 360 000 UTF-16 units', async () => {
+    const playbook = await created();
+    const kanjiCell = (position: number) => addCell(playbook.id, 'http', { method: 'POST', url: 'https://example.com', body: '漢'.repeat(60000) }, { id: `h${position}` });
+    for (let position = 0; position < 5; position += 1) expect((await kanjiCell(position)).isError, `cell ${position}`).toBe(false);
+
+    const refused = await kanjiCell(5);
+
+    expect(refused.text).toMatch(/^error playbook_limit_exceeded:/);
+    expect((await viewOf(playbook.id)).cells).toHaveLength(5);
   });
 });
 

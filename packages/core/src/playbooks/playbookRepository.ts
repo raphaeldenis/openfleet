@@ -56,8 +56,9 @@ export class PlaybookRepository {
     return rows.map(toRecord);
   }
 
-  delete(id: string): boolean {
-    return Number(this.db.prepare('DELETE FROM playbooks WHERE id = ?').run(id).changes) > 0;
+  /** Deletes the playbook when the revision is still `expectedRev`; false when it moved or the playbook is gone. */
+  delete(input: { id: string; expectedRev: number }): boolean {
+    return Number(this.db.prepare('DELETE FROM playbooks WHERE id = ? AND content_rev = ?').run(input.id, input.expectedRev).changes) > 0;
   }
 
   /** Replaces the content when the revision is still `expectedRev`, bumps the revision and clears any approval; false when the revision moved. */

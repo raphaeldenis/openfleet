@@ -12,6 +12,12 @@ import type { PlaybookContent, PlaybookRecord, PlaybookRepository } from './play
 /** Who writes: an agent through MCP, bound by the lock of the playbook, or the human through the admin REST. */
 export type PlaybookWriter = 'agent' | 'admin';
 
+/** Every write names the revision it read: a write on another revision is refused. */
+export interface WriteOptions {
+  writer: PlaybookWriter;
+  expectedRev: number;
+}
+
 export interface PlaybookServiceDeps {
   db: DatabaseSync;
   repository: PlaybookRepository;
@@ -83,11 +89,14 @@ export class PlaybookService {
   }
 
   /** Deletes the playbook and the declarations of its secrets that hold no value; a stored value keeps its declaration so a human can clear it. */
-  delete(id: string, { writer }: { writer: PlaybookWriter }): void {
+  delete(id: string, { writer, expectedRev }: WriteOptions): void {
     const playbook = this.getById(id);
     this.assertWriterMayWrite(playbook, writer);
+    const isOnAnOldRevision = expectedRev !== playbook.contentRev;
+    if (isOnAnOldRevision) throw conflict(playbook.contentRev);
     inTransaction(this.deps.db, 'playbook_delete', () => {
-      this.deps.repository.delete(id);
+      const wasDeleted = this.deps.repository.delete({ id, expectedRev });
+      if (!wasDeleted) throw conflict(this.getById(id).contentRev);
       this.declareReferencedSecrets(id, []);
     });
   }
@@ -100,11 +109,11 @@ export class PlaybookService {
   }
 
   /** Replaces the content, checks the whole playbook, bumps the revision and keeps the secret declarations equal to the secrets referenced. A write on a revision other than `expectedRev` is refused. */
-  edit(id: string, edit: ContentEdit, options: { writer: PlaybookWriter; expectedRev?: number }): PlaybookRecord {
+  edit(id: string, edit: ContentEdit, options: WriteOptions): PlaybookRecord {
     const { repository, clock } = this.deps;
     const current = this.getById(id);
     this.assertWriterMayWrite(current, options.writer);
-    const isOnAnOldRevision = options.expectedRev !== undefined && options.expectedRev !== current.contentRev;
+    const isOnAnOldRevision = options.expectedRev !== current.contentRev;
     if (isOnAnOldRevision) throw conflict(current.contentRev);
 
     const content = edit(current);
@@ -122,7 +131,7 @@ export class PlaybookService {
   }
 
   /** Adds a cell after the cell named by `after`, or at the end; the id is given or the first free `cN`. */
-  addCell(id: string, input: { cell: Record<string, unknown>; after?: string }, options: { writer: PlaybookWriter; expectedRev?: number }): PlaybookRecord {
+  addCell(id: string, input: { cell: Record<string, unknown>; after?: string }, options: WriteOptions): PlaybookRecord {
     return this.edit(id, (current) => {
       const cells = current.flow.cells;
       const isOverTheCap = cells.length >= MAX_PLAYBOOK_CELLS;
@@ -135,7 +144,7 @@ export class PlaybookService {
   }
 
   /** Merges the fields given into the cell; its id and kind do not change. */
-  updateCell(id: string, input: { cellId: string; changes: Record<string, unknown> }, options: { writer: PlaybookWriter; expectedRev?: number }): PlaybookRecord {
+  updateCell(id: string, input: { cellId: string; changes: Record<string, unknown> }, options: WriteOptions): PlaybookRecord {
     return this.edit(id, (current) => {
       const position = current.flow.cells.findIndex((cell) => cell.id === input.cellId);
       if (position < 0) throw cellNotFound();
@@ -147,7 +156,7 @@ export class PlaybookService {
     }, options);
   }
 
-  deleteCell(id: string, input: { cellId: string }, options: { writer: PlaybookWriter; expectedRev?: number }): PlaybookRecord {
+  deleteCell(id: string, input: { cellId: string }, options: WriteOptions): PlaybookRecord {
     return this.edit(id, (current) => {
       const exists = current.flow.cells.some((cell) => cell.id === input.cellId);
       if (!exists) throw cellNotFound();
@@ -156,7 +165,7 @@ export class PlaybookService {
   }
 
   /** Puts the cells in the order given; the order names every cell once. */
-  reorderCells(id: string, input: { order: string[] }, options: { writer: PlaybookWriter; expectedRev?: number }): PlaybookRecord {
+  reorderCells(id: string, input: { order: string[] }, options: WriteOptions): PlaybookRecord {
     return this.edit(id, (current) => {
       const cellById = new Map(current.flow.cells.map((cell) => [cell.id, cell]));
       const namesEveryCellOnce = input.order.length === cellById.size && new Set(input.order).size === cellById.size && input.order.every((cellId) => cellById.has(cellId));
@@ -165,7 +174,7 @@ export class PlaybookService {
     }, options);
   }
 
-  setInputs(id: string, input: { inputs: unknown }, options: { writer: PlaybookWriter; expectedRev?: number }): PlaybookRecord {
+  setInputs(id: string, input: { inputs: unknown }, options: WriteOptions): PlaybookRecord {
     const inputs: PlaybookInputDeclaration[] = PlaybookInputsSchema.parse(input.inputs);
     return this.edit(id, () => ({ inputs }), options);
   }
