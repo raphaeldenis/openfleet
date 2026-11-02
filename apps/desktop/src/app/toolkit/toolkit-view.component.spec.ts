@@ -3,7 +3,6 @@ import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { FleetApiService } from '../core/fleet-api.service';
-import { ToolkitActivityClient } from '../core/toolkit-activity-client';
 import { ToolkitViewComponent } from './toolkit-view.component';
 
 const TOOLS: ToolSummary[] = [
@@ -12,10 +11,9 @@ const TOOLS: ToolSummary[] = [
 ];
 
 async function renderToolkit(listTools: () => Promise<ToolSummary[]>) {
-  const api = { listTools: vi.fn(listTools) };
-  const activity = { readPage: vi.fn(() => Promise.resolve({ items: [] })) };
-  await render(ToolkitViewComponent, { providers: [{ provide: FleetApiService, useValue: api }, { provide: ToolkitActivityClient, useValue: activity }] });
-  return Object.assign(api, { activity });
+  const api = { listTools: vi.fn(listTools), listActivity: vi.fn(() => Promise.resolve({ items: [] })) };
+  await render(ToolkitViewComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
+  return api;
 }
 
 describe('ToolkitViewComponent', () => {
@@ -67,7 +65,7 @@ describe('ToolkitViewComponent', () => {
     await userEvent.click(screen.getByRole('button', { name: 'View calls →' }));
 
     expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true');
-    expect(api.activity.readPage).toHaveBeenCalledWith({ tool: 'create_session' });
+    expect(api.listActivity).toHaveBeenCalledWith({ actor: 'agent', action: 'create_session' });
   });
 
   it('shows all the calls again once the tool filter is cleared', async () => {
@@ -77,7 +75,7 @@ describe('ToolkitViewComponent', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: 'Clear tool filter create_session' }));
 
-    expect(api.activity.readPage).toHaveBeenLastCalledWith({});
+    expect(api.listActivity).toHaveBeenLastCalledWith({ actor: 'agent' });
   });
 
   it('reads the activity even when the tool list fails, since the log does not depend on it', async () => {
@@ -86,7 +84,7 @@ describe('ToolkitViewComponent', () => {
 
     await userEvent.click(screen.getByRole('tab', { name: 'Activity' }));
 
-    expect(api.activity.readPage).toHaveBeenCalled();
+    expect(api.listActivity).toHaveBeenCalled();
     expect(screen.queryByTestId('toolkit-error')).toBeNull();
   });
 

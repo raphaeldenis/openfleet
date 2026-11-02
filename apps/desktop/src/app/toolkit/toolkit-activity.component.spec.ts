@@ -3,7 +3,7 @@ import type { ActivityPage, ActivityRow } from '@openfleet/shared';
 import { render, screen, within } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { ToolkitActivityClient, type ToolkitActivityRequest } from '../core/toolkit-activity-client';
+import { FleetApiService, type ActivityQueryParams } from '../core/fleet-api.service';
 import { ToolkitActivityComponent } from './toolkit-activity.component';
 
 const row = (overrides: Partial<ActivityRow> = {}): ActivityRow => ({
@@ -20,10 +20,10 @@ const row = (overrides: Partial<ActivityRow> = {}): ActivityRow => ({
   ...overrides,
 });
 
-async function renderActivity(readPage: (request: ToolkitActivityRequest) => Promise<ActivityPage>, options: { tool?: string; onToolCleared?: () => void } = {}) {
-  const client = { readPage: vi.fn(readPage) };
+async function renderActivity(listActivity: (query: ActivityQueryParams) => Promise<ActivityPage>, options: { tool?: string; onToolCleared?: () => void } = {}) {
+  const client = { listActivity: vi.fn(listActivity) };
   await render(ToolkitActivityComponent, {
-    providers: [{ provide: ToolkitActivityClient, useValue: client }],
+    providers: [{ provide: FleetApiService, useValue: client }],
     bindings: [inputBinding('tool', () => options.tool), outputBinding('toolCleared', () => options.onToolCleared?.())],
   });
   return client;
@@ -78,7 +78,7 @@ describe('ToolkitActivityComponent', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByTestId('toolkit-activity-row-1')).toBeInTheDocument();
-    expect(client.readPage).toHaveBeenCalledTimes(2);
+    expect(client.listActivity).toHaveBeenCalledTimes(2);
   });
 
   it('reads only the errors when the user picks Errors only', async () => {
@@ -87,7 +87,7 @@ describe('ToolkitActivityComponent', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Errors only' }));
 
-    expect(client.readPage).toHaveBeenLastCalledWith({ outcome: 'error' });
+    expect(client.listActivity).toHaveBeenLastCalledWith({ actor: 'agent', outcome: 'error' });
     expect(screen.getByRole('button', { name: 'Errors only' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'false');
   });
@@ -98,14 +98,14 @@ describe('ToolkitActivityComponent', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Denied' }));
 
-    expect(client.readPage).toHaveBeenLastCalledWith({ outcome: 'denied' });
+    expect(client.listActivity).toHaveBeenLastCalledWith({ actor: 'agent', outcome: 'denied' });
   });
 
   it('reads the calls of the tool it is given and lets the user drop that filter', async () => {
     const onToolCleared = vi.fn();
     const client = await renderActivity(() => Promise.resolve({ items: [row()] }), { tool: 'create_note', onToolCleared });
     await screen.findByTestId('toolkit-activity-row-1');
-    expect(client.readPage).toHaveBeenCalledWith({ tool: 'create_note' });
+    expect(client.listActivity).toHaveBeenCalledWith({ actor: 'agent', action: 'create_note' });
 
     await userEvent.click(screen.getByRole('button', { name: 'Clear tool filter create_note' }));
 
@@ -124,7 +124,7 @@ describe('ToolkitActivityComponent', () => {
 
     expect(await screen.findByTestId('toolkit-activity-row-1')).toBeInTheDocument();
     expect(screen.getByTestId('toolkit-activity-row-2')).toBeInTheDocument();
-    expect(client.readPage).toHaveBeenLastCalledWith({ cursor: '2' });
+    expect(client.listActivity).toHaveBeenLastCalledWith({ actor: 'agent', cursor: '2' });
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   });
 

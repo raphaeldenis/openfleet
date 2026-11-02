@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, effect, inject, input, output, sign
 import type { ActivityRow } from '@openfleet/shared';
 import { showInvisibleControlsAsEscapes } from '../core/bidi-escapes';
 import { clockTimeOf } from '../core/clock-time';
-import { ToolkitActivityClient, type ToolkitActivityRequest } from '../core/toolkit-activity-client';
+import { FleetApiService, type ActivityQueryParams } from '../core/fleet-api.service';
 import { BannerComponent } from '../design/banner.component';
 
 type OutcomeFilter = 'all' | 'error' | 'denied';
@@ -16,6 +16,7 @@ const OUTCOME_FILTERS: ReadonlyArray<{ key: OutcomeFilter; label: string }> = [
 ];
 
 const NO_DURATION = '—';
+const AGENT_CALLS = 'agent';
 
 /** The MCP tool calls the activity log holds, newest first, with the marks of the log shown as they are. */
 @Component({
@@ -110,7 +111,7 @@ const NO_DURATION = '—';
   `,
 })
 export class ToolkitActivityComponent {
-  private readonly client = inject(ToolkitActivityClient);
+  private readonly api = inject(FleetApiService);
   readonly tool = input<string | undefined>(undefined);
   readonly toolCleared = output<void>();
 
@@ -146,7 +147,7 @@ export class ToolkitActivityComponent {
     this.load.set('loading');
     this.moreLoad.set('idle');
     try {
-      const page = await this.client.readPage(request);
+      const page = await this.api.listActivity(request);
       if (requestNumber !== this.latestRequest) return;
       this.rows.set(page.items);
       this.nextCursor.set(page.nextCursor);
@@ -162,7 +163,7 @@ export class ToolkitActivityComponent {
     const requestNumber = ++this.latestRequest;
     this.moreLoad.set('loading');
     try {
-      const page = await this.client.readPage({ ...this.requestForFirstPage(), cursor });
+      const page = await this.api.listActivity({ ...this.requestForFirstPage(), cursor });
       if (requestNumber !== this.latestRequest) return;
       this.rows.update((shown) => [...shown, ...page.items]);
       this.nextCursor.set(page.nextCursor);
@@ -172,9 +173,9 @@ export class ToolkitActivityComponent {
     }
   }
 
-  private requestForFirstPage(): ToolkitActivityRequest {
+  private requestForFirstPage(): ActivityQueryParams {
     const outcome = this.outcome();
     const tool = this.tool();
-    return { ...(outcome === 'all' ? {} : { outcome }), ...(tool === undefined ? {} : { tool }) };
+    return { actor: AGENT_CALLS, ...(outcome === 'all' ? {} : { outcome }), ...(tool === undefined ? {} : { action: tool }) };
   }
 }
