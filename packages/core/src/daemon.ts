@@ -72,6 +72,7 @@ import { staleInProgressRowLabelsOfProject } from './managers/staleRows.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import { refusingHumanProof, type HumanProofVerifier } from './triggers/humanProofVerifier.js';
 import { toSingleLineName } from './managers/singleLineName.js';
+import { SessionStateSource } from './triggers/sessionStateSource.js';
 import { FireBreaker } from './triggers/fireBreaker.js';
 import { FireLedger } from './triggers/fireLedger.js';
 import { createTriggerActions } from './triggers/triggerActions.js';
@@ -402,7 +403,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   });
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
   const triggerRepository = new TriggerRepository(db);
-  const triggers = new TriggerService({ repository: triggerRepository, humanProof: options.humanProof ?? refusingHumanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
+  const triggers = new TriggerService({ repository: triggerRepository, humanProof: options.humanProof ?? refusingHumanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId, onArmed: () => sessionStateSource.rescan() });
   const triggerClock = options.triggers?.clock ?? Date.now;
   const announceBreakerOpened = (trigger: { id: string; title: string }) => {
     log('warn', `trigger ${trigger.id} fired more than the cap in a minute and was disarmed`);
@@ -412,6 +413,9 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const triggerEngine = new TriggerEngine({
     triggers: triggerRepository, ledger: new FireLedger(db), actions: createTriggerActions({ sessions, managers: managerRepository, clock: triggerClock, announce: (notice) => bus.emit({ type: 'notification.trigger', category: 'triggerNotice', ...notice }) }), breaker: new FireBreaker(triggerClock),
     clock: triggerClock, newId, schedule: options.triggers?.schedule ?? scheduleOnRealClock, onBreakerOpened: announceBreakerOpened,
+  });
+  const sessionStateSource = new SessionStateSource({
+    bus, sessions, managers: managerRepository, triggers: triggerRepository, engine: triggerEngine, clock: triggerClock, schedule: options.triggers?.schedule ?? scheduleOnRealClock,
   });
   const server = await startServer({ ...config, triggers, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
@@ -426,6 +430,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     unwatchDatabase();
     pulseScheduler.stop();
     scheduledEvents.stop();
+    sessionStateSource.stop();
     triggerEngine.stop();
     childSilence.stop();
     arbiters.stop();
@@ -456,6 +461,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     await sessions.resumeAll({ onResumed: (session) => systemActivity.sessionResumed(session, lineageRootIdOf(sessions, session)) });
     arbiters.recover();
     triggerEngine.recover();
+    sessionStateSource.start();
     childSilence.restore();
     pulseScheduler.start();
     scheduledEvents.start();

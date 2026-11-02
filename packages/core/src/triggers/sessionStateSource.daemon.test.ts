@@ -1,0 +1,140 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MINUTE_MS, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
+
+let world: TriggerWorld | undefined;
+afterEach(async () => { await world?.close(); world = undefined; });
+
+/** The state of a session is stamped by the real clock a moment after the fake one started: a deadline is crossed with some room. */
+const MARGIN_MS = 30_000;
+const SESSION_START = { hook_event_name: 'SessionStart', source: 'startup' };
+const ASK_PERMISSION = { hook_event_name: 'Notification', notification_type: 'permission_prompt' };
+const START_TURN = { hook_event_name: 'UserPromptSubmit', prompt: 'work' };
+
+const worldWithLead = async () => {
+  world = await startTriggerWorld();
+  const lead = await world.createSession('Lead', { manager: world.managerSpec });
+  return { world, lead };
+};
+const promptLead = (title: string, when: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+  world!.createArmedTrigger({ title, when, run: { kind: 'prompt_manager', prompt: `${title} {{event.session.name}}` }, ...extra });
+/** What the triggers sent: the manager also receives the lines the daemon writes on its own, such as the one for an exited harness. */
+const bodiesTo = (sessionId: string) => world!.messagesTo(sessionId).map((message) => message.body).filter((body) => body.startsWith('trigger.fired'));
+
+describe('closed_with_error', () => {
+  it('fires once for a child of a manager whose process crashed, and the manager is prompted with the name of the child', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead, 'Crashy');
+    const triggerId = await promptLead('crash', { source: 'session_state', state: 'closed_with_error' });
+
+    world.crash(child.id);
+
+    await vi.waitFor(() => expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'completed' })]));
+    expect(bodiesTo(lead.id)).toHaveLength(1);
+    expect(bodiesTo(lead.id)[0]).toContain('crash Crashy');
+  });
+
+  it('does not fire for a session closed by the user, nor for a session that has no manager', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead, 'Closed by user');
+    const orphan = await world.createSession('Orphan');
+    const triggerId = await promptLead('crash', { source: 'session_state', state: 'closed_with_error' });
+
+    await world.api(`/api/sessions/${child.id}/close`, { method: 'POST', body: '{}' });
+    world.crash(orphan.id);
+    await vi.waitFor(() => expect((world.db.prepare('SELECT state FROM sessions WHERE id = ?').get(orphan.id) as { state: string }).state).toBe('closed'));
+
+    expect(world.firesOf(triggerId)).toEqual([]);
+  });
+
+  it('stays inside the project of the trigger', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead);
+    world.db.prepare("INSERT INTO projects (id, name, created_at) VALUES ('other', 'Other', 'now')").run();
+    const triggerId = await promptLead('crash', { source: 'session_state', state: 'closed_with_error' });
+    world.db.prepare("UPDATE sessions SET project_id = 'other' WHERE id = ?").run(child.id);
+
+    world.crash(child.id);
+    await vi.waitFor(() => expect((world.db.prepare('SELECT state FROM sessions WHERE id = ?').get(child.id) as { state: string }).state).toBe('closed'));
+
+    expect(world.firesOf(triggerId)).toEqual([]);
+  });
+});
+
+describe('idle for more than N minutes', () => {
+  it('fires when the child has been idle for the minutes, not before', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead);
+    await world.postHook(child.id, SESSION_START);
+    const triggerId = await promptLead('idle', { source: 'session_state', state: 'idle', minutes: 10 });
+
+    world.advanceMs(9 * MINUTE_MS);
+    const beforeDeadline = world.firesOf(triggerId).length;
+    world.advanceMs(MINUTE_MS + MARGIN_MS);
+    world.fireLivingTimers();
+
+    expect(beforeDeadline).toBe(0);
+    expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'completed' })]);
+    expect(bodiesTo(lead.id)).toHaveLength(1);
+  });
+
+  it('forgets the wait when the child works again before the deadline', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead);
+    await world.postHook(child.id, SESSION_START);
+    const triggerId = await promptLead('idle', { source: 'session_state', state: 'idle', minutes: 10 });
+    world.advanceMs(5 * MINUTE_MS);
+
+    await world.postHook(child.id, START_TURN);
+    const waitsLeftWhenItWorks = world.livingTimers().length;
+    world.advanceMs(10 * MINUTE_MS);
+    world.fireLivingTimers();
+
+    expect(waitsLeftWhenItWorks).toBe(0);
+    expect(world.firesOf(triggerId)).toEqual([]);
+  });
+
+  it('does not repeat the episode that fired when the daemon restarts: the ledger keeps its dedup key', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead);
+    await world.postHook(child.id, SESSION_START);
+    const triggerId = await promptLead('idle', { source: 'session_state', state: 'idle', minutes: 10 });
+    world.advanceMs(10 * MINUTE_MS + MARGIN_MS);
+    world.fireLivingTimers();
+    const [firstEpisode] = world.firesOf(triggerId);
+
+    await world.restart({ stoppedForMs: MINUTE_MS });
+
+    const firesOfFirstEpisode = world.firesOf(triggerId).filter((fire) => fire.dedup_key === firstEpisode!.dedup_key);
+    expect(firesOfFirstEpisode).toHaveLength(1);
+    expect(bodiesTo(lead.id).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('starts counting when a trigger is armed after the child went idle', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead);
+    await world.postHook(child.id, SESSION_START);
+    world.advanceMs(20 * MINUTE_MS);
+
+    const triggerId = await promptLead('idle', { source: 'session_state', state: 'idle', minutes: 10 });
+
+    expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'completed' })]);
+  });
+});
+
+describe('waiting_permission for more than N minutes', () => {
+  it('fires when the child sits on a permission prompt for the minutes', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead);
+    await world.postHook(child.id, SESSION_START);
+    await world.postHook(child.id, START_TURN);
+    await world.postHook(child.id, ASK_PERMISSION);
+    expect((world.db.prepare('SELECT state FROM sessions WHERE id = ?').get(child.id) as { state: string }).state).toBe('waiting_permission');
+    const triggerId = await promptLead('blocked', { source: 'session_state', state: 'waiting_permission', minutes: 5 });
+
+    world.advanceMs(5 * MINUTE_MS + MARGIN_MS);
+    world.fireLivingTimers();
+
+    expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'completed' })]);
+    expect(bodiesTo(lead.id)[0]).toContain('state=waiting_permission');
+  });
+});

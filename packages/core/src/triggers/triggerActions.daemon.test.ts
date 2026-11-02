@@ -159,10 +159,8 @@ describe('close_session', () => {
     const { child } = await makeChildOfManager(11 * MINUTE_MS);
     const triggerId = await world.createArmedTrigger({ when: { source: 'session_state', state: 'idle', minutes: 10 }, run: { kind: 'close_session', sessionId: child.id } });
 
-    const result = world.engine.submit({ triggerId, dedupKey: 'k', event: sessionEvent({ id: child.id }) });
-
-    expect(result).toMatchObject({ ledgerState: 'completed' });
     await vi.waitFor(() => expect(stateOf(child.id)).toBe('closed'));
+    expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'completed' })]);
   });
 
   it('refuses a child idle for less than the minutes, a session with no manager and a session that is not idle', async () => {

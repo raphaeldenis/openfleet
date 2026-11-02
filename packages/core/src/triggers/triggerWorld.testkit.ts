@@ -6,11 +6,11 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Session } from '@openfleet/shared';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
+import { FakeHarness } from '../harness/fakeHarness.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 
 export const PROJECT_ID = 'project-triggers';
 export const MINUTE_MS = 60_000;
-export const START_OF_WORLD = Date.parse('2026-11-02T10:00:00.000Z');
 const MANAGER_SPEC = { childrenCap: 2, mission: 'Lead the fleet', pulseSeconds: 3600 };
 
 export interface TriggerRecordView { id: string; contentRev: number; armedAt: string | null }
@@ -21,7 +21,8 @@ export async function startTriggerWorld() {
   const directories = createTempDirTracker();
   const config: Config = loadConfig({ OPENFLEET_HOME: directories.make('trigger-world-'), OPENFLEET_PORT: '0', OPENFLEET_E2E: '1' });
   const clients: Client[] = [];
-  let nowMs = START_OF_WORLD;
+  // The state of a session is stamped by the real clock: the fake clock starts there, so a delay computed from `stateSince` stays coherent.
+  let nowMs = Date.now();
   let daemon!: Daemon;
   const timers: { callback: () => void; delayMs: number; isCancelled: boolean }[] = [];
   const schedule = (callback: () => void, delayMs: number) => {
@@ -64,6 +65,29 @@ export async function startTriggerWorld() {
     return created.id;
   };
 
+  /** A child session of a manager, in the project of the world. */
+  const createChild = async (manager: Session, name = 'Child') => {
+    const child = await createSession(name);
+    daemon.db.prepare('UPDATE sessions SET parent_id = ? WHERE id = ?').run(manager.id, child.id);
+    return child;
+  };
+
+  /** A hook of the harness, as the CLI posts it; this is how a session really changes state. */
+  const postHook = async (sessionId: string, body: Record<string, unknown>) => {
+    const { hook_token } = daemon.db.prepare('SELECT hook_token FROM sessions WHERE id = ?').get(sessionId) as { hook_token: string };
+    const response = await fetch(`${daemon.server.url}/hooks/${hook_token}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: 'c', ...body }) });
+    if (response.status >= 300) throw new Error(`world: hook ${String(body.hook_event_name)} answered ${response.status}`);
+  };
+
+  /** The process of the session dies on its own after printing something: a crash. */
+  const crash = (sessionId: string) => {
+    const fakeHarness = daemon.harnesses.find((harness) => harness instanceof FakeHarness) as FakeHarness;
+    const launchIndex = fakeHarness.launches.map((launch) => launch.sessionId).lastIndexOf(sessionId);
+    const handle = fakeHarness.handles[launchIndex]!;
+    handle.emitData('working…');
+    handle.emitExit(137);
+  };
+
   const connect = async (sessionId: string) => {
     const { mcp_token } = daemon.db.prepare('SELECT mcp_token FROM sessions WHERE id = ?').get(sessionId) as { mcp_token: string };
     const client = new Client({ name: 'trigger-world', version: '1' });
@@ -96,7 +120,7 @@ export async function startTriggerWorld() {
     get engine() { return daemon.triggerEngine; },
     get nowMs() { return nowMs; },
     advanceMs: (ms: number) => { nowMs += ms; },
-    api, json, createSession, createArmedTrigger, connect, openSocket,
+    api, json, createSession, createChild, postHook, crash, createArmedTrigger, connect, openSocket,
     livingTimers: () => timers.filter((timer) => !timer.isCancelled),
     fireLivingTimers: () => { for (const timer of timers.filter((candidate) => !candidate.isCancelled)) { timer.isCancelled = true; timer.callback(); } },
     /** The session as a daemon that stopped and started again finds it. */

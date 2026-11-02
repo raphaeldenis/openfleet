@@ -52,6 +52,12 @@ export class TriggerRepository {
     return rows.map(toRecord);
   }
 
+  /** Every trigger a human armed, oldest first. */
+  listArmed(): TriggerRecord[] {
+    const rows = this.db.prepare(`SELECT ${COLUMNS} FROM triggers WHERE armed_at IS NOT NULL ORDER BY created_at, id`).all() as unknown as TriggerRow[];
+    return rows.map(toRecord);
+  }
+
   delete(id: string): boolean {
     return Number(this.db.prepare('DELETE FROM triggers WHERE id = ?').run(id).changes) > 0;
   }

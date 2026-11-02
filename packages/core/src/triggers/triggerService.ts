@@ -18,6 +18,8 @@ export interface TriggerServiceDeps {
   projectExists: (projectId: string) => boolean;
   clock: () => string;
   newId: () => string;
+  /** Called after a trigger is armed, so a source can look at what already is. */
+  onArmed?: (trigger: TriggerRecord) => void;
 }
 
 /** The content a caller edits, from the trigger as it stands: returns what to replace. */
@@ -145,7 +147,9 @@ export class TriggerService {
     const approvedGraphDigest = canonicalDigestOf(approvedGraphOf(trigger));
     const wasArmed = repository.arm({ id: trigger.id, approvedRev: input.approvedRev, approvedGraphDigest, now: clock() });
     if (!wasArmed) throw staleRevision(this.getById(trigger.id).contentRev);
-    return this.getById(trigger.id);
+    const armed = this.getById(trigger.id);
+    this.deps.onArmed?.(armed);
+    return armed;
   }
 
   disarm(id: string): TriggerRecord {
