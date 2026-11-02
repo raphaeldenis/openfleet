@@ -48,6 +48,8 @@ describe('the tool catalog', () => {
       'delete_data_store_row',
       'delete_data_store_view',
       'delete_note',
+      'delete_playbook',
+      'delete_playbook_cell',
       'delete_trigger',
       'delete_trigger_condition',
       'remove_worktree',
@@ -86,6 +88,18 @@ describe('the tool catalog', () => {
       ['add_trigger_condition', 'additive'], ['create_trigger', 'additive'], ['delete_trigger', 'destructive'], ['delete_trigger_condition', 'destructive'],
       ['get_trigger', 'read_only'], ['get_trigger_schema', 'read_only'], ['list_triggers', 'read_only'], ['set_trigger_policy', 'additive'],
       ['set_trigger_run', 'additive'], ['set_trigger_when', 'additive'], ['update_trigger_condition', 'additive'],
+    ]);
+  });
+
+  it('files the eleven playbook authoring tools under the playbooks domain: reads are read_only, creates and edits additive, deletes destructive', () => {
+    const authoringEntries = Object.entries(TOOL_CATALOG)
+      .filter(([name, entry]) => entry.domain === 'playbooks' && !name.endsWith('_secret') && !name.endsWith('_secret_statuses'))
+      .map(([name, entry]) => [name, entry.category]);
+
+    expect(authoringEntries.sort()).toEqual([
+      ['add_playbook_cell', 'additive'], ['create_playbook', 'additive'], ['delete_playbook', 'destructive'], ['delete_playbook_cell', 'destructive'],
+      ['get_playbook', 'read_only'], ['get_playbook_schema', 'read_only'], ['list_playbook_cells', 'read_only'], ['list_playbooks', 'read_only'],
+      ['reorder_playbook_cells', 'additive'], ['set_playbook_inputs', 'additive'], ['update_playbook_cell', 'additive'],
     ]);
   });
 

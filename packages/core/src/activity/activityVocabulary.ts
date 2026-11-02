@@ -1,7 +1,7 @@
 import {
   ACTIVITY_OUTCOMES, ARBITER_MODELS, ARBITER_ROLE, ASK_USER_GATES, ERROR_CODES, ERROR_KINDS, ESCALATION_STATUSES, HARNESSES, LAW_STATUSES, MANAGER_LOG_KINDS,
   MANAGER_MODES, MANAGER_ROLE, PERMISSION_MODES, PROPOSAL_KINDS, PROPOSAL_STATUSES, REOPEN_MODES, ROW_CHANGE_KINDS, SESSION_READINESS, SESSION_STATES,
-  PROMPT_MANAGER_ALIAS, SHIP_VERDICTS, STEP_FINDING_SEVERITIES, TODO_STATUSES, TRIGGER_BACKLOG_POLICIES, TRIGGER_BATCH_MODES, TRIGGER_CONDITION_JOINS, TRIGGER_CONDITION_OPERATORS,
+  PLAYBOOK_CELL_KINDS, PROMPT_MANAGER_ALIAS, SHIP_VERDICTS, STEP_FINDING_SEVERITIES, TODO_STATUSES, TRIGGER_BACKLOG_POLICIES, TRIGGER_BATCH_MODES, TRIGGER_CONDITION_JOINS, TRIGGER_CONDITION_OPERATORS,
   TRIGGER_INTEGRATION_EVENTS, TRIGGER_LEDGER_STATES, TRIGGER_RUN_KINDS, TRIGGER_SESSION_STATES, TRIGGER_STORE_EVENTS, TRIGGER_WHEN_SOURCES, WRAP_MODES,
 } from '@openfleet/shared';
 import type { Decision } from '../governance/governanceQueueService.js';
@@ -31,7 +31,7 @@ const closedSet = (...lists: readonly (readonly string[])[]): ReadonlySet<string
 /** The closed set of values kept under a key, by the last word of the key. */
 const VALUES_BY_KEY_WORD: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['status', closedSet(BOARD_ROW_STATUSES, TODO_STATUSES, PROPOSAL_STATUSES, LAW_STATUSES, ESCALATION_STATUSES, SESSION_STATES, SESSION_READINESS)],
-  ['kind', closedSet(PROPOSAL_KINDS, MANAGER_LOG_KINDS, ROW_CHANGE_KINDS, ERROR_KINDS, TRIGGER_WHEN_SOURCES, TRIGGER_RUN_KINDS, [PROMPT_MANAGER_ALIAS])],
+  ['kind', closedSet(PROPOSAL_KINDS, MANAGER_LOG_KINDS, ROW_CHANGE_KINDS, ERROR_KINDS, TRIGGER_WHEN_SOURCES, TRIGGER_RUN_KINDS, [PROMPT_MANAGER_ALIAS], PLAYBOOK_CELL_KINDS)],
   ['source', closedSet(TRIGGER_WHEN_SOURCES)],
   ['state', closedSet(TRIGGER_LEDGER_STATES, TRIGGER_SESSION_STATES)],
   ['event', closedSet(TRIGGER_STORE_EVENTS, TRIGGER_INTEGRATION_EVENTS)],
@@ -50,7 +50,7 @@ const VALUES_BY_KEY_WORD: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['code', ERROR_CODE_NAMES],
 ]);
 
-export const IDENTIFIER_KEY_WORDS: ReadonlySet<string> = new Set(['id', 'ids', 'ticket', 'tickets', 'ref', 'refs', 'note', 'store', 'project', 'playbook', 'manager', 'parent', 'target', 'trigger', 'run']);
+export const IDENTIFIER_KEY_WORDS: ReadonlySet<string> = new Set(['id', 'ids', 'ticket', 'tickets', 'ref', 'refs', 'note', 'store', 'project', 'playbook', 'manager', 'parent', 'target', 'trigger', 'run', 'playbook']);
 
 export const closedValuesOfKeyWord = (keyWord: string): ReadonlySet<string> | undefined => VALUES_BY_KEY_WORD.get(keyWord);
 
