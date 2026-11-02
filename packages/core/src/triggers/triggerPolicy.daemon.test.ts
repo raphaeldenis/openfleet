@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
 import { MINUTE_MS, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
 
 let world: TriggerWorld | undefined;
@@ -44,6 +45,36 @@ describe('maxFiresPerDay', () => {
 
     expect(states()).toEqual([['k1', 'completed', null], ['k2', 'completed', null], ['k3', 'cancelled', 'daily_cap'], ['k4', 'completed', null]]);
     expect(world.messagesTo(lead.id)).toHaveLength(3);
+  });
+
+  describe('around local midnight', () => {
+    const initialTimeZone = process.env.TZ;
+    afterEach(() => {
+      if (initialTimeZone === undefined) delete process.env.TZ;
+      else process.env.TZ = initialTimeZone;
+    });
+
+    it('counts a fire held across midnight on the day its effect starts: three effects never land on one local day', async () => {
+      process.env.TZ = 'Europe/Paris';
+      const { world, lead, fire, states } = await worldWithTrigger({ maxFiresPerDay: 2, cooldownSeconds: 60, batchMode: 'per_batch' });
+      const moveClockTo = (isoInstant: string) => world.advanceMs(Date.parse(isoInstant) - world.nowMs);
+
+      moveClockTo('2026-06-10T21:59:50Z');
+      fire('before-midnight');
+      moveClockTo('2026-06-10T21:59:55Z');
+      fire('held-over-midnight');
+      moveClockTo('2026-06-10T22:00:50Z');
+      world.fireLivingTimers();
+      moveClockTo('2026-06-10T22:02:00Z');
+      fire('after-midnight-1');
+      moveClockTo('2026-06-10T22:04:00Z');
+      fire('after-midnight-2');
+
+      expect(states()).toEqual([
+        ['before-midnight', 'completed', null], ['held-over-midnight', 'completed', null], ['after-midnight-1', 'completed', null], ['after-midnight-2', 'cancelled', 'daily_cap'],
+      ]);
+      expect(world.messagesTo(lead.id)).toHaveLength(3);
+    });
   });
 });
 

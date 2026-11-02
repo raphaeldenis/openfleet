@@ -4,9 +4,11 @@ import type { TriggerRecord } from './triggerRepository.js';
 
 export type PolicyVerdict = { verdict: 'proceed' } | { verdict: 'cancel'; reason: TriggerFireReason } | { verdict: 'hold'; waitMs: number };
 
-const startOfLocalDayIso = (now: number): string => {
+const localDayBoundsIso = (now: number): { fromIso: string; untilIso: string } => {
   const moment = new Date(now);
-  return new Date(moment.getFullYear(), moment.getMonth(), moment.getDate()).toISOString();
+  const fromIso = new Date(moment.getFullYear(), moment.getMonth(), moment.getDate()).toISOString();
+  const untilIso = new Date(moment.getFullYear(), moment.getMonth(), moment.getDate() + 1).toISOString();
+  return { fromIso, untilIso };
 };
 
 /** Judges a fire against the policy of its trigger: the daily cap first, then the cooldown, which a per_batch trigger turns into a wait. */
@@ -14,7 +16,7 @@ export function policyVerdictOf(input: { trigger: TriggerRecord; fire: TriggerFi
   const { trigger, fire, ledger, now } = input;
   const { maxFiresPerDay, cooldownSeconds, batchMode } = trigger.policy;
 
-  const firesToday = ledger.countReachedEffectSince({ triggerId: trigger.id, sinceIso: startOfLocalDayIso(now), exceptId: fire.id });
+  const firesToday = ledger.countEffectsStartedBetween({ triggerId: trigger.id, ...localDayBoundsIso(now), exceptId: fire.id });
   const isOverTheDailyCap = maxFiresPerDay !== undefined && firesToday >= maxFiresPerDay;
   if (isOverTheDailyCap) return { verdict: 'cancel', reason: 'daily_cap' };
 

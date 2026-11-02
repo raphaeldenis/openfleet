@@ -198,7 +198,7 @@ export class TriggerEngine {
   /** Writes `attempted`, runs the effect, then writes how it ended. */
   private run({ trigger, fire, batchSize }: { trigger: TriggerRecord; fire: TriggerFire; batchSize: number }): TriggerLedgerState {
     const { ledger, clock } = this.deps;
-    const stillOwnsTheFire = ledger.markAttempted(fire.id);
+    const stillOwnsTheFire = ledger.markAttempted({ id: fire.id, effectStartedAt: new Date(clock()).toISOString() });
     if (!stillOwnsTheFire) return ledger.get(fire.id)?.ledgerState ?? 'cancelled';
 
     const result = this.performSafely({ trigger, fire, batchSize });

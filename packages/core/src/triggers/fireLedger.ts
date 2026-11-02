@@ -78,9 +78,10 @@ export class FireLedger {
     return rows.map(toFire);
   }
 
-  /** Moves `accepted` to `attempted`; false when the fire is no longer accepted, so nothing runs for it. */
-  markAttempted(id: string): boolean {
-    return Number(this.db.prepare("UPDATE trigger_fires SET ledger_state = 'attempted' WHERE id = ? AND ledger_state = 'accepted'").run(id).changes) > 0;
+  /** Moves `accepted` to `attempted` and stamps when the effect starts, in one statement; false when the fire is no longer accepted, so nothing runs for it. */
+  markAttempted(input: { id: string; effectStartedAt: string }): boolean {
+    const result = this.db.prepare("UPDATE trigger_fires SET ledger_state = 'attempted', effect_started_at = ? WHERE id = ? AND ledger_state = 'accepted'").run(input.effectStartedAt, input.id);
+    return Number(result.changes) > 0;
   }
 
   /** Settles a fire that was `attempted` as `completed`. */
@@ -101,10 +102,10 @@ export class FireLedger {
     return Number(result.changes);
   }
 
-  /** The fires of a trigger that reached their effect since `sinceIso`, not counting `exceptId`. */
-  countReachedEffectSince(input: { triggerId: string; sinceIso: string; exceptId: string }): number {
-    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM trigger_fires WHERE trigger_id = ? AND fired_at >= ? AND id != ? AND ledger_state IN (${STATES_SQL_LIST})`)
-      .get(input.triggerId, input.sinceIso, input.exceptId) as { n: number };
+  /** The fires of a trigger whose effect started in `[fromIso, untilIso)`, not counting `exceptId`. */
+  countEffectsStartedBetween(input: { triggerId: string; fromIso: string; untilIso: string; exceptId: string }): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM trigger_fires WHERE trigger_id = ? AND effect_started_at >= ? AND effect_started_at < ? AND id != ? AND ledger_state IN (${STATES_SQL_LIST})`)
+      .get(input.triggerId, input.fromIso, input.untilIso, input.exceptId) as { n: number };
     return row.n;
   }
 
