@@ -1,11 +1,12 @@
 import { Injectable } from '@angular/core';
 import { DIAGNOSTICS_PATH, DOCS_ROOT_PATH, WorkingStateSectionsSchema, isErrorEnvelope } from '@openfleet/shared';
 import type {
-  Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DetectedRepository, DiagnosticsDocument, DocsRootView, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, EscalationAnswerBody, EscalationView, GovernanceProposalView, HandoffContent, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
+  ActivityPage, ActivityRow, Approval, CloseHandoffResult, CloseSessionRequest, CreateNoteRequest, CreateProjectRequest, DataStore, DataStoreDetail, DetectedRepository, DiagnosticsDocument, DocsRootView, DsRow, DsRowHistoryEntry, DsView, ErrorEnvelope, EscalationAnswerBody, EscalationView, GovernanceProposalView, HandoffContent, HandoffPreview, HandoffSummary, HandoffTarget, HarnessId, NoteSummary,
   LawView, ManagerGovernanceWithLawsView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   RemovedWorktree, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
+import { parseActivityPage } from './activity-page-parser';
 import { parseCloseHandoffResult, parseHandoffPreview, parseHandoffTarget } from './handoff-response-parser';
 import { parseManagerProfile } from './manager-profile-parser';
 import { parseProject } from './project-response-parser';
@@ -13,7 +14,21 @@ import { parseSessionTodos } from './session-todos-parser';
 import { parseTokenUsage, type TokenUsage } from './token-usage';
 import { parseUsageDaily, type UsageDailyRow } from './usage-daily-parser';
 
-export type PageRequest = Partial<Pick<Page<unknown>, 'limit' | 'offset'>>;
+/** The filters of GET /api/activity; `manager` is the root of a lineage, `since` and `until` are ISO 8601 instants. */
+export interface ActivityQueryParams {
+  actor?: ActivityRow['actorKind'];
+  outcome?: ActivityRow['outcome'];
+  action?: string;
+  session?: string;
+  manager?: string;
+  entity?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export type PageRequest =Partial<Pick<Page<unknown>, 'limit' | 'offset'>>;
 export type ProposalDecision = { decision: 'approve' } | { decision: 'deny'; reason: string };
 type NoteChange = Omit<UpdateNoteRequest, 'projectId'>;
 type NoteRestore = Omit<RestoreNoteRequest, 'projectId'>;
@@ -166,6 +181,13 @@ export class FleetApiService {
     const rows = parseUsageDaily(await this.call<unknown>(path));
     if (!rows) throw new ApiError(200, `GET ${path} → unreadable usage`);
     return rows;
+  }
+  /** One page of the activity log, newest first, narrowed by the filters; pass the previous page's `nextCursor` to read the one after. */
+  async listActivity(query: ActivityQueryParams): Promise<ActivityPage> {
+    const path = `/api/activity${queryString({ ...query })}`;
+    const page = parseActivityPage(await this.call<unknown>(path));
+    if (!page) throw new ApiError(200, `GET ${path} → unreadable activity`);
+    return page;
   }
   /** The last working state the session wrote, kept after it closes; undefined when it never wrote one. */
   async getWorkingState(id: string): Promise<WorkingState | undefined> {

@@ -6,13 +6,15 @@ import { ActivityRecorder } from './activityRecorder.js';
 import { ActivityRepository } from './activityRepository.js';
 
 const CALLS_MEASURED = 3000;
-const MAX_MEAN_MILLISECONDS_PER_CALL = 2;
+// Cold measure: ~0.1-0.2 ms per call. 10 ms leaves room for a machine under load (30+) and still
+// catches a change of shape, being 40x or more the cold measure.
+const MAX_MEAN_MILLISECONDS_PER_CALL = 10;
 
 const directories = createTempDirTracker();
 afterAll(() => directories.removeAll());
 
 describe('the cost of recording one action', () => {
-  it('stays under two milliseconds per call on a file database in WAL mode, masking and pruning included', () => {
+  it('stays within the per-call budget on a file database in WAL mode, masking and pruning included', () => {
     const db = openDatabase(join(directories.make('activity-latency-'), 'openfleet.db'));
     const recorder = new ActivityRecorder({ repository: new ActivityRepository(db), clock: () => new Date().toISOString(), onFailure: (error) => { throw error; } });
     const args = { project_id: 'p1', title: 'Plan', body_md: 'x'.repeat(2000), note: '--token abc123 Authorization: Bearer xyz', status: 'open' };
