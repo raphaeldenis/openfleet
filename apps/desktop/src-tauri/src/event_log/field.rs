@@ -645,6 +645,7 @@ const KNOWN_CODES: &[&str] = &[
   "db_stuck", "proposal_not_found", "governance_queue_full", "law_not_found", "law_revision_conflict", "law_withdrawn",
   "harness_binary_broken", "directory_not_in_project", "question_unclassified", "escalation_open", "criteria_stale", "escalation_not_found",
   "gh_unavailable", "gh_not_authenticated", "gh_bad_output", "gh_timeout", "too_many_watched_prs",
+  "secret_scope_not_found", "secret_not_declared", "secret_not_connected_on_this_device", "secret_store_unavailable", "secret_too_short", "secret_nonce_invalid",
 ];
 
 const OTHER_CODE: &str = "other";

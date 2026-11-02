@@ -3,6 +3,9 @@ use crate::daemon_status_line::StatusLine;
 use crate::event_log::{self, DesktopEvent, ExitCode, IoFailure, KnownPaths, Opaque, PathClass, Pid, SpawnFailure, Stream};
 use crate::daemon_version::DaemonVersion;
 use crate::log_file::{logs_dir, start_on_disk, DesktopLog};
+use crate::loopback_http::Loopback;
+use crate::macos_keychain::MacKeychain;
+use crate::secret_channel::{self, SecretLineFilter};
 use crate::path_repair::{repair_path, run_login_shell, PathSource, RepairedPath, LOGIN_SHELL_TIMEOUT};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -211,19 +214,43 @@ pub fn terminate_gracefully(signals: &impl Signals, pid: u32, grace: Duration, m
   StopOutcome::KilledAfterGrace
 }
 
+/// The stdin pipe of the sidecar. Holding it open keeps the daemon alive; `write_all` hands it a line.
+trait SidecarInput: Send {
+  /// True when every byte reached the pipe.
+  fn write_all(&mut self, bytes: &[u8]) -> bool;
+}
+
+impl SidecarInput for CommandChild {
+  fn write_all(&mut self, bytes: &[u8]) -> bool {
+    self.write(bytes).is_ok()
+  }
+}
+
+/// A holder that keeps something alive for as long as the child runs and cannot write to it; tests stand it in for the sidecar.
+#[cfg(test)]
+struct HeldOnly<T>(T);
+
+#[cfg(test)]
+impl<T: Send> SidecarInput for HeldOnly<T> {
+  fn write_all(&mut self, _bytes: &[u8]) -> bool {
+    false
+  }
+}
+
 /// The spawned sidecar; holding the plugin's handle keeps the child's stdin pipe open, and closing it asks the daemon to exit.
 pub struct RunningChild {
   pid: u32,
-  _stdin_holder: Box<dyn Send>,
+  stdin: Box<dyn SidecarInput>,
 }
 
 impl RunningChild {
   fn of_sidecar(child: CommandChild) -> Self {
-    Self::holding(child.pid(), child)
+    Self { pid: child.pid(), stdin: Box::new(child) }
   }
 
+  #[cfg(test)]
   fn holding(pid: u32, stdin_holder: impl Send + 'static) -> Self {
-    Self { pid, _stdin_holder: Box::new(stdin_holder) }
+    Self { pid, stdin: Box::new(HeldOnly(stdin_holder)) }
   }
 }
 
@@ -287,6 +314,11 @@ impl DaemonState {
     if let Some(daemon_log) = self.daemon_log() {
       daemon_log.mark_output_ended();
     }
+  }
+
+  /// Writes bytes to the stdin of the sidecar; false when no daemon of this app runs or the write failed.
+  pub fn write_to_daemon(&self, bytes: &[u8]) -> bool {
+    self.inner.lock().unwrap().child.as_mut().is_some_and(|child| child.stdin.write_all(bytes))
   }
 
   /// Returns the status as the webview sees it at `now`.
@@ -549,11 +581,27 @@ fn unix_seconds_now() -> u64 {
   SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
 }
 
+/// Answers one secret request of the daemon off the event loop: the keychain call may wait for the user.
+fn answer_secret_request(request_text: String) {
+  std::thread::spawn(move || {
+    let Some(request) = secret_channel::parse_request(&request_text) else { return };
+    let Ok(address) = HEALTH_ADDRESS.parse() else { return };
+    let _ = secret_channel::answer_request(&request, &MacKeychain, &Loopback::at(address));
+  });
+}
+
 async fn pipe_daemon_output(app: AppHandle, mut events: tauri::async_runtime::Receiver<CommandEvent>, daemon_log: DesktopLog) {
   let state = app.state::<DaemonState>();
+  let mut secret_lines = SecretLineFilter::default();
   while let Some(event) = events.recv().await {
     match event {
-      CommandEvent::Stdout(bytes) => daemon_log.ingest_daemon_chunk(Stream::Out, &bytes),
+      CommandEvent::Stdout(bytes) => {
+        let filtered = secret_lines.feed(&bytes);
+        if !filtered.passthrough.is_empty() {
+          daemon_log.ingest_daemon_chunk(Stream::Out, &filtered.passthrough);
+        }
+        filtered.requests.into_iter().for_each(answer_secret_request);
+      }
       CommandEvent::Stderr(bytes) => {
         daemon_log.ingest_daemon_chunk(Stream::Err, &bytes);
         state.on_stderr(&String::from_utf8_lossy(&bytes));
@@ -984,6 +1032,29 @@ mod tests {
     fn drop(&mut self) {
       self.0.store(true, Ordering::SeqCst);
     }
+  }
+
+  struct RecordingInput(Arc<Mutex<Vec<u8>>>);
+
+  impl SidecarInput for RecordingInput {
+    fn write_all(&mut self, bytes: &[u8]) -> bool {
+      self.0.lock().unwrap().extend_from_slice(bytes);
+      true
+    }
+  }
+
+  #[test]
+  fn writes_a_line_to_the_stdin_of_the_running_sidecar_and_refuses_when_none_runs() {
+    let state = DaemonState::new();
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let refused_without_a_child = !state.write_to_daemon(b"line\n");
+    state.record_spawn(RunningChild { pid: PID, stdin: Box::new(RecordingInput(written.clone())) }, RepairedPath { path: "/a".to_string(), source: PathSource::Shell }, Instant::now());
+
+    let reached_the_child = state.write_to_daemon(b"line\n");
+
+    assert!(refused_without_a_child);
+    assert!(reached_the_child);
+    assert_eq!(written.lock().unwrap().as_slice(), b"line\n");
   }
 
   fn state_holding_a_stdin_holder() -> (DaemonState, Arc<AtomicBool>) {
