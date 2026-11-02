@@ -33,3 +33,4 @@ export * from './activity.js';
 export * from './tools.js';
 export * from './mcpContract.js';
 export * from './teamPack.js';
+export * from './secrets.js';
