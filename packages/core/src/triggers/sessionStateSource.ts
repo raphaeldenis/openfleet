@@ -1,9 +1,9 @@
 import type { ServerEvent, Session, SessionCloseReason } from '@openfleet/shared';
 import type { EventBus } from '../events/eventBus.js';
 import { log } from '../logger.js';
-import { lineageRootIdOf } from '../managers/lineage.js';
 import type { ManagerRepository } from '../managers/managerRepository.js';
 import type { SessionService } from '../sessions/sessionService.js';
+import { isChildInScopeOfTrigger } from './sessionTriggerScope.js';
 import type { TriggerCursors } from './triggerCursors.js';
 import type { TriggerEngine } from './triggerEngine.js';
 import type { TriggerRecord, TriggerRepository } from './triggerRepository.js';
@@ -209,16 +209,7 @@ export class SessionStateSource {
 
   /** The armed triggers that watch `state` for this session: it is a child of a manager of the project, and of the one the RUN names, if it names one. */
   private triggersWatching(session: Session, state: string): SessionStateTrigger[] {
-    const managerId = session.parentId;
-    const manager = managerId === undefined ? undefined : this.deps.sessions.get(managerId);
-    const isChildOfAManager = managerId !== undefined && manager !== undefined && this.deps.managers.get(managerId) !== undefined;
-    if (!isChildOfAManager) return [];
-    return this.deps.triggers.listArmed().filter(isSessionStateTrigger).filter((trigger) => {
-      const isWatchingThisState = trigger.when.state === state;
-      const isInProject = trigger.projectId === session.projectId && trigger.projectId === manager.projectId;
-      const namesAnotherManager = trigger.run.kind === 'prompt_manager' && trigger.run.managerId !== undefined && trigger.run.managerId !== managerId;
-      const isOutsideTheLineageOfTheOwner = trigger.ownerManagerId !== null && trigger.ownerManagerId !== lineageRootIdOf(this.deps.sessions, session);
-      return isWatchingThisState && isInProject && !namesAnotherManager && !isOutsideTheLineageOfTheOwner;
-    });
+    return this.deps.triggers.listArmed().filter(isSessionStateTrigger)
+      .filter((trigger) => trigger.when.state === state && isChildInScopeOfTrigger(this.deps, trigger, session));
   }
 }
