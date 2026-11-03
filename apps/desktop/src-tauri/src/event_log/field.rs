@@ -647,6 +647,7 @@ const KNOWN_CODES: &[&str] = &[
   "gh_unavailable", "gh_not_authenticated", "gh_bad_output", "gh_timeout", "too_many_watched_prs",
   "trigger_not_found", "trigger_condition_not_found", "too_many_conditions", "trigger_field_prefix", "human_proof_required",
   "secret_scope_not_found", "secret_not_declared", "secret_not_connected_on_this_device", "secret_store_unavailable", "secret_too_short", "secret_nonce_invalid",
+  "breaker_open",
 ];
 
 const OTHER_CODE: &str = "other";

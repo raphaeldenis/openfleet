@@ -8,6 +8,7 @@ The daemon decides what happened; the desktop decides whether and how to show it
 | `needsInput` | `kind` (`permission` or `input`), `promptKey`, `toolName?` | the session enters a waiting state, once per prompt |
 | `toolCompletion` | `toolUseId`, `toolName` | a `PostToolUse` of a top-level agent names its `tool_use_id`, once per id |
 | `chatMessage` | `questionKey`, `questionCount` | `update_working_state` adds `questionsForHuman` lines the previous state did not hold |
+| `triggerNotice` | `triggerId`, `fireId` (no `sessionId`) | an armed trigger whose RUN is `notify` fires. The frame holds the two ids and no text: the desktop shows the fixed title "Trigger fired" and, as body, the title of the trigger read from `GET /api/triggers/:id`, on one line, without control characters, cut at 80 characters. It follows the master and mute switches, not a category switch, and opens the Inbox |
 
 ## toolCompletion
 

@@ -46,6 +46,7 @@
     { "name": "list_projects", "inputSchemaHash": "7a014b717a77aac9" },
     { "name": "list_row_changes", "inputSchemaHash": "c198a80c0f787453" },
     { "name": "list_sessions", "inputSchemaHash": "7a014b717a77aac9" },
+    { "name": "list_trigger_fires", "inputSchemaHash": "4116d4112011d373" },
     { "name": "list_triggers", "inputSchemaHash": "7a014b717a77aac9" },
     { "name": "list_watched_prs", "inputSchemaHash": "7a014b717a77aac9" },
     { "name": "list_worktrees", "inputSchemaHash": "38765eae9115169d" },

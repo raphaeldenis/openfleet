@@ -68,6 +68,7 @@ import { nodeHandoffFileReader } from '../notes/nodeHandoffFileReader.js';
 import { registerRestRoutes } from './restHandlers.js';
 import { HUMAN_PROOF_HEADER, registerTriggerRoutes } from './triggerRoutes.js';
 import type { TriggerService } from '../triggers/triggerService.js';
+import type { FireLedger } from '../triggers/fireLedger.js';
 import { decodeParams, json, readJson, redactedRequestPath, Router, type Handler } from './router.js';
 import { createWsHandler } from './wsHandler.js';
 import { createWsTicketStore, type WsTicketStore } from './wsTicketStore.js';
@@ -136,6 +137,7 @@ export interface ServerDeps {
   secrets?: { service: Pick<SecretService, 'statusOf' | 'set' | 'clear'>; nonces: Pick<NonceLedger, 'redeem'> };
   // Without it the /api/triggers routes do not exist.
   triggers?: TriggerService;
+  triggerFires?: FireLedger;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
@@ -214,7 +216,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.projects && deps.noteRepo) registerHandoffPickerRoutes(router, new HandoffSeed({ projects: deps.projects, notes: deps.noteRepo, files: nodeHandoffFileReader }));
   if (deps.stores && deps.storeRepo) registerDataStoreRoutes(router, { stores: deps.stores, storeRepo: deps.storeRepo });
   if (deps.handoff) registerHandoffRoutes(router, deps.handoff);
-  if (deps.triggers) registerTriggerRoutes(router, { triggers: deps.triggers });
+  if (deps.triggers && deps.triggerFires) registerTriggerRoutes(router, { triggers: deps.triggers, fires: deps.triggerFires });
   if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });
 
   const handleHook = hooksHandler(deps);
