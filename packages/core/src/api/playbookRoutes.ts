@@ -8,7 +8,9 @@ import { json, queryParams, type Router } from './router.js';
 const CellsSchema = z.array(z.record(z.string(), z.unknown()));
 const RevisionSchema = z.int().min(1);
 
-const ListQuerySchema = z.object({ projectId: z.string().min(1) });
+const RevisionParamSchema = z.coerce.number().pipe(RevisionSchema);
+const RestoreBodySchema = z.strictObject({ expectedRev: RevisionSchema });
+const ListQuerySchema =z.object({ projectId: z.string().min(1) });
 const DeleteQuerySchema = z.object({ expectedRev: z.coerce.number().pipe(RevisionSchema) });
 const CreateBodySchema = z.strictObject({
   projectId: z.string().min(1), name: PlaybookNameSchema.optional(), inputs: z.unknown().optional(), cells: CellsSchema.optional(),
@@ -55,7 +57,21 @@ export function registerPlaybookRoutes(router: Router, deps: { playbooks: Playbo
     json(res, 200, answerOf(playbooks, playbooks.edit(params.id!, () => replacement, { writer: 'admin', expectedRev })));
   });
 
-  router.add('DELETE', '/api/playbooks/:id', ({ req, res, params }) => {
+  router.add('GET', '/api/playbooks/:id/versions', ({ res, params }) => {
+    const current = playbooks.getById(params.id!);
+    json(res, 200, { currentContentRev: current.contentRev, versions: playbooks.listVersions(current.id).map(({ flow, inputs, policy, ...summary }) => ({ ...summary, cellCount: flow.cells.length })) });
+  });
+
+  router.add('GET', '/api/playbooks/:id/versions/:rev', ({ res, params }) => {
+    json(res, 200, playbooks.getVersion(params.id!, RevisionParamSchema.parse(params.rev)));
+  });
+
+  router.add('POST', '/api/playbooks/:id/versions/:rev/restore', ({ res, params, body }) => {
+    const { expectedRev } = RestoreBodySchema.parse(body);
+    json(res, 200, answerOf(playbooks, playbooks.restoreVersion(params.id!, { rev: RevisionParamSchema.parse(params.rev) }, { writer: 'admin', expectedRev })));
+  });
+
+  router.add('DELETE', '/api/playbooks/:id',({ req, res, params }) => {
     const { expectedRev } = DeleteQuerySchema.parse(queryParams(req));
     playbooks.delete(params.id!, { writer: 'admin', expectedRev });
     json(res, 200, { deleted: params.id! });

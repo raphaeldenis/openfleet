@@ -24,7 +24,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | --- | --- | --- |
 | `invalid_request` | 400 | 29 |
 | `unauthorized` | 401 | 3 |
-| `not_found` | 404 | 19 |
+| `not_found` | 404 | 20 |
 | `conflict` | 409 | 47 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 13 |
@@ -94,6 +94,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `trigger_condition_not_found` | 404 | `never` |
 | `playbook_not_found` | 404 | `never` |
 | `playbook_cell_not_found` | 404 | `never` |
+| `playbook_version_not_found` | 404 | `never` |
 | `escalation_not_found` | 404 | `never` |
 | `secret_scope_not_found` | 404 | `never` |
 | `secret_not_declared` | 404 | `never` |

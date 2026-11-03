@@ -77,6 +77,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   trigger_condition_not_found: { what: 'That trigger condition no longer exists' },
   playbook_not_found: { what: 'That playbook no longer exists' },
   playbook_cell_not_found: { what: 'That playbook cell no longer exists' },
+  playbook_version_not_found: { what: 'That version of the playbook is no longer kept', fix: 'pick one from the list of versions' },
   handoff_not_found: { what: 'That handoff is no longer in the docs folder', fix: 'pick another handoff or remove it' },
 
   session_closed: { what: 'The session is closed', fix: 'resume it first' },

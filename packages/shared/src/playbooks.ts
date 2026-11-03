@@ -34,6 +34,9 @@ export const MAX_NAME_CHARS = 200;
 export const MAX_FLOW_BYTES = 1024 * 1024;
 export const MAX_DATA_DEPTH = 6;
 export const MAX_DATA_BYTES = 16384;
+export const MAX_PLAYBOOK_VERSIONS = 10;
+export const PLAYBOOK_VERSION_SOURCES = ['edit', 'restore'] as const;
+export type PlaybookVersionSource = (typeof PLAYBOOK_VERSION_SOURCES)[number];
 export const MAX_RUNS_TO_KEEP = 1000;
 export const DEFAULT_MAX_RUNS_TO_KEEP = 50;
 
