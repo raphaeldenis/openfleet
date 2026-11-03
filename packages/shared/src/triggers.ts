@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { cronScheduleOf } from './cronExpression.js';
 import { isBlankText } from './isBlankText.js';
 
 export const TRIGGER_WHEN_SOURCES = ['session_state', 'silent_run', 'data_store_query', 'cron', 'integration_records'] as const;
@@ -55,7 +56,6 @@ const text = (maxChars = MAX_NAME_CHARS) => z.string().min(1).max(maxChars);
 const nonBlankText = (maxChars = MAX_TEXT_CHARS) => z.string().max(maxChars).refine((value) => !isBlankText(value), 'must not be blank');
 const minutes = z.int().min(1).max(MAX_MINUTES);
 
-export const MAX_CRON_EXPRESSION_CHARS = 100;
 export const MAX_TIME_ZONE_CHARS = 64;
 
 const isKnownTimeZone = (timeZone: string): boolean => {
@@ -68,12 +68,8 @@ const isKnownTimeZone = (timeZone: string): boolean => {
   }
 };
 
-const CRON_FIELD = /^[0-9A-Za-z*,/\-?]+$/;
-const isFiveFieldCron = (expression: string): boolean => {
-  if (expression.length > MAX_CRON_EXPRESSION_CHARS) return false;
-  const fields = expression.trim().split(/\s+/);
-  return fields.length === 5 && fields.every((field) => CRON_FIELD.test(field));
-};
+const isFiringCronExpression = (expression: string): boolean => cronScheduleOf(expression) !== undefined;
+export const DEFAULT_CRON_TIME_ZONE = 'Europe/Paris';
 
 export const MAX_RUN_INPUT_KEYS = 32;
 export const MAX_RUN_INPUT_DEPTH = 4;
@@ -134,8 +130,8 @@ const DataStoreQueryWhenSchema = z.strictObject({
 
 const CronWhenSchema = z.strictObject({
   source: z.literal('cron'),
-  expression: z.string().refine(isFiveFieldCron, 'must be a cron expression of five fields'),
-  timezone: z.string().refine(isKnownTimeZone, 'must be an IANA time zone'),
+  expression: z.string().refine(isFiringCronExpression, 'must be a cron expression of five fields that fires at least once'),
+  timezone: z.string().refine(isKnownTimeZone, 'must be an IANA time zone').default(DEFAULT_CRON_TIME_ZONE),
   catchUp: z.enum(TRIGGER_CRON_CATCH_UPS).default('skip'),
 });
 

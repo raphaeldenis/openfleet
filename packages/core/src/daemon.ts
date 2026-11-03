@@ -82,6 +82,7 @@ import { staleInProgressRowLabelsOfProject } from './managers/staleRows.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import type { HumanProofVerifier } from './triggers/humanProofVerifier.js';
 import { toSingleLineName } from './managers/singleLineName.js';
+import { CronSource } from './triggers/cronSource.js';
 import { SessionStateSource } from './triggers/sessionStateSource.js';
 import { TableSource } from './triggers/tableSource.js';
 import { FireBreaker } from './triggers/fireBreaker.js';
@@ -439,7 +440,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const secretChannel = { ignoredAnswerCount: () => secretBridge?.ignoredAnswerCount() ?? 0 };
   const humanProof = options.humanProof ?? createOperatorHumanProof(secretNonces);
   const triggerRepository = new TriggerRepository(db);
-  const triggers = new TriggerService({ repository: triggerRepository, humanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId, onArmed: (armed) => { sessionStateSource.rescan(); tableSource.startFromNow(armed); } });
+  const triggers = new TriggerService({ repository: triggerRepository, humanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId, onArmed: (armed) => { sessionStateSource.rescan(); tableSource.startFromNow(armed); cronSource.startFromNow(armed); }, onChanged: (triggerId) => cronSource.sync(triggerId) });
   const triggerClock = options.triggers?.clock ?? Date.now;
   const announceBreakerOpened = (trigger: { id: string; title: string }) => {
     log('warn', `trigger ${trigger.id} fired more than the cap in a minute and was disarmed`);
@@ -454,7 +455,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const triggerEngine = new TriggerEngine({
     onSettled: announceSettledFire,
     triggers: triggerRepository, ledger: fireLedger, actions: createTriggerActions({ sessions, managers: managerRepository, clock: triggerClock, announce: (notice) => bus.emit({ type: 'notification.trigger', category: 'triggerNotice', ...notice }) }), breaker: new FireBreaker(triggerClock),
-    clock: triggerClock, newId, schedule: options.triggers?.schedule ?? scheduleOnRealClock, onBreakerOpened: announceBreakerOpened,
+    clock: triggerClock, newId, schedule: options.triggers?.schedule ?? scheduleOnRealClock, onBreakerOpened: (trigger) => { announceBreakerOpened(trigger); cronSource.sync(trigger.id); },
   });
   const triggerCursors = new TriggerCursors(db);
   const sessionStateSource = new SessionStateSource({
@@ -464,6 +465,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     stores: storeRepo, triggers: triggerRepository, cursors: triggerCursors, engine: triggerEngine, sessions, ledger: fireLedger,
     schedule: options.triggers?.schedule ?? scheduleOnRealClock, onOfferSuppressedByCause: (triggerId) => systemActivity.triggerOfferSuppressed({ triggerId }),
   });
+  const cronSource = new CronSource({ triggers: triggerRepository, cursors: triggerCursors, engine: triggerEngine, clock: triggerClock, schedule: options.triggers?.schedule ?? scheduleOnRealClock });
   const playbooks = new PlaybookService({ db, repository: new PlaybookRepository(db), secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
   const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
@@ -480,6 +482,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     scheduledEvents.stop();
     sessionStateSource.stop();
     tableSource.stop();
+    cronSource.stop();
     triggerEngine.stop();
     childSilence.stop();
     arbiters.stop();
@@ -514,6 +517,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     triggerEngine.recover();
     sessionStateSource.start({ sessionsBeforeResume });
     tableSource.start();
+    cronSource.start();
     childSilence.restore();
     pulseScheduler.start();
     scheduledEvents.start();
