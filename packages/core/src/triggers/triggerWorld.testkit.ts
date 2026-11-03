@@ -51,7 +51,7 @@ export async function startTriggerWorld() {
 
   const createSession = async (name: string, extra: Record<string, unknown> = {}) => {
     const directory = join(config.home, name);
-    mkdirSync(directory);
+    mkdirSync(directory, { recursive: true });
     const created = await json<Session>(await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory, name, harness: 'fake', emoji: '🤖', ...extra }) }));
     daemon.db.prepare('UPDATE sessions SET project_id = ? WHERE id = ?').run(PROJECT_ID, created.id);
     return created;
@@ -63,6 +63,23 @@ export async function startTriggerWorld() {
     const armed = await api(`/api/triggers/${created.id}/arm`, { method: 'POST', body: JSON.stringify({ approvedRev: created.contentRev }), headers: { 'x-human-proof': 'proof' } });
     if (armed.status !== 200) throw new Error(`world: arming failed with ${armed.status} ${await armed.text()}`);
     return created.id;
+  };
+
+  /** A data store of the project with one text column per name; `columns` maps each name to its column id. */
+  const createTable = (columnNames: string[]) => {
+    const { stores } = daemon;
+    const store = stores.createStore({ projectId: PROJECT_ID, displayName: `Table ${columnNames.join('-')}` });
+    const columns = Object.fromEntries(columnNames.map((displayName) => [displayName, stores.addColumn(store.id, { projectId: PROJECT_ID, displayName, columnType: 'text' }).id]));
+    const human = { kind: 'human', label: 'world' } as const;
+    return {
+      storeId: store.id,
+      columns,
+      insert: (cells: Record<string, string>, actor: { kind: 'human' | 'agent' | 'trigger'; label: string } = human) =>
+        stores.insertRow(store.id, { projectId: PROJECT_ID, actor, data: Object.fromEntries(Object.entries(cells).map(([name, value]) => [columns[name]!, value])) }),
+      update: (rowId: string, cells: Record<string, string>, actor: { kind: 'human' | 'agent' | 'trigger'; label: string } = human) =>
+        stores.updateRow(store.id, rowId, { projectId: PROJECT_ID, actor, patch: Object.fromEntries(Object.entries(cells).map(([name, value]) => [columns[name]!, value])) }),
+      remove: (rowId: string) => stores.deleteRow(store.id, rowId, { projectId: PROJECT_ID, actor: human }),
+    };
   };
 
   /** A child session of a manager, in the project of the world. */
@@ -120,7 +137,7 @@ export async function startTriggerWorld() {
     get engine() { return daemon.triggerEngine; },
     get nowMs() { return nowMs; },
     advanceMs: (ms: number) => { nowMs += ms; },
-    api, json, createSession, createChild, postHook, crash, createArmedTrigger, connect, openSocket,
+    api, json, createSession, createChild, createTable, postHook, crash, createArmedTrigger, connect, openSocket,
     livingTimers: () => timers.filter((timer) => !timer.isCancelled),
     fireLivingTimers: () => { for (const timer of timers.filter((candidate) => !candidate.isCancelled)) { timer.isCancelled = true; timer.callback(); } },
     /** The session as a daemon that stopped and started again finds it. */
@@ -130,6 +147,10 @@ export async function startTriggerWorld() {
       daemon.db.close();
       nowMs += stoppedForMs;
       await boot();
+    },
+    cursorOf: (triggerId: string) => {
+      const row = daemon.db.prepare('SELECT cursor_json FROM trigger_cursors WHERE trigger_id = ?').get(triggerId) as { cursor_json: string } | undefined;
+      return row && JSON.parse(row.cursor_json) as { kind?: string; seq?: number; count?: number; tooLarge?: number };
     },
     messagesTo: (sessionId: string) => daemon.db.prepare('SELECT id, body FROM message_queue WHERE session_id = ? ORDER BY created_at, rowid').all(sessionId) as { id: string; body: string }[],
     firesOf: (triggerId: string) => daemon.db.prepare('SELECT id, dedup_key, ledger_state, settle_reason, fired_at FROM trigger_fires WHERE trigger_id = ? ORDER BY fired_at, rowid').all(triggerId) as unknown as FireRow[],

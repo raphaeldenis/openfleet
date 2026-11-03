@@ -24,3 +24,4 @@ usage_ingestion_lines_rejected usage ingestion: lines that no honest transcript 
 usage_ingestion_session_full usage ingestion: the session reached its message limit, ingesting nothing more for it
 activity_log_write_failed the activity log could not be written
 trigger_session_state_source_failed the session_state source failed on a session
+trigger_table_source_failed the table source failed on a trigger

@@ -24,6 +24,11 @@ export class SystemActivity {
     this.recorder.record({ actorKind: 'system', actorLabel: 'triggers', source: 'daemon', action: 'trigger.fired', entityKind: 'trigger', entityId: triggerId, outcome });
   }
 
+  /** A table change was not offered to a trigger because the message of that same trigger set its author going: the id of the trigger only. */
+  triggerOfferSuppressed({ triggerId }: { triggerId: string }): void {
+    this.recorder.record({ actorKind: 'system', actorLabel: 'triggers', source: 'daemon', action: 'trigger.offer_suppressed', entityKind: 'trigger', entityId: triggerId, outcome: 'denied' });
+  }
+
   sessionResumed(session: Pick<Session, 'id' | 'name'>, managerId: string): void {
     this.recorder.record({
       actorKind: 'system', actorLabel: 'daemon', source: 'daemon', action: 'session.resume', sessionId: session.id, managerId,

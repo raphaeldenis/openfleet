@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DatabaseSync } from 'node:sqlite';
 import { OpenFleetError, type AutoValue, ColumnConfig, ColumnFormat, ColumnType, ColumnWrap, DataStore, DsColumn, DsRow, DsRowChange, DsRowHistoryEntry, DsView, DsViewConfig, RowActorKind, RowChangeKind, RowChangeOrder, SelectOption, ViewType } from '@openfleet/shared';
-import { inTransaction as runInTransaction } from '../db/transaction.js';
+import { afterCommit, inTransaction as runInTransaction } from '../db/transaction.js';
 import { newId } from '../ids.js';
 
 export interface RowActor { kind: RowActorKind; label: string }
@@ -138,6 +138,7 @@ function diffCells(current: Record<string, unknown>, patch: Record<string, unkno
 
 export class DataStoreRepository {
   private readonly db: DatabaseSync;
+  private readonly changeListeners = new Set<(storeId: string) => void>();
 
   constructor(db: DatabaseSync) {
     this.db = db;
@@ -390,6 +391,24 @@ export class DataStoreRepository {
     if (unknownColumnIds.length > 0) throw new UnknownColumnError(unknownColumnIds);
   }
 
+  /** Calls `listener` with the store id after the transaction of each recorded change commits; returns the function that stops the calls. */
+  onChangeRecorded(listener: (storeId: string) => void): () => void {
+    this.changeListeners.add(listener);
+    return () => void this.changeListeners.delete(listener);
+  }
+
+  /** The position of the newest change of the store, 0 when it has none. */
+  latestSeq(storeId: string): number {
+    const { seq } = this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM ds_row_history WHERE store_id = ?').get(storeId) as { seq: number };
+    return seq;
+  }
+
+  /** The changes of the whole store after position `afterSeq`, oldest first, at most `limit`. */
+  changesAfter(storeId: string, afterSeq: number, limit: number): DsRowHistoryEntry[] {
+    const entries = this.db.prepare('SELECT * FROM ds_row_history WHERE store_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?').all(storeId, afterSeq, limit) as unknown as HistoryRow[];
+    return entries.map(toHistoryEntry);
+  }
+
   private recordChange(entry: { storeId: string; rowId: string; actor: RowActor; at: string; change: DsRowChange }): void {
     const { changes: entriesWritten } = this.db.prepare(
       `INSERT INTO ds_row_history (id, store_id, row_id, actor_kind, actor_label, change_json, created_at)
@@ -397,6 +416,7 @@ export class DataStoreRepository {
     ).run(newId(), entry.actor.kind, entry.actor.label, JSON.stringify(entry.change), entry.at, entry.rowId, entry.storeId);
     const rowDoesNotExist = Number(entriesWritten) === 0;
     if (rowDoesNotExist) throw new RowNotFoundError(entry.rowId);
+    afterCommit(this.db, () => this.changeListeners.forEach((listener) => listener(entry.storeId)));
   }
 
   /** Runs `work` atomically: a transaction of its own, or a savepoint when the caller already holds one. */
