@@ -129,15 +129,25 @@ export class PlaybookService {
     if (isOnAnOldRevision) throw conflict(current.contentRev);
 
     const content = edit(current);
-    const { name, inputs, flow, ...unchecked } = content;
-    const sound = { inputs: inputs ?? current.inputs, flow: flow ?? current.flow };
+    const { name, inputs, flow, policy, ...unchecked } = content;
+    const parsedInputs = inputs === undefined ? undefined : PlaybookInputsSchema.parse(inputs);
+    const parsedFlow = flow === undefined ? undefined : { ...flow, cells: flow.cells.map(parsePlaybookCell) };
+    const sound = { inputs: parsedInputs ?? current.inputs, flow: parsedFlow ?? current.flow };
     const { secretNames } = assertPlaybookIsSound(sound);
-    const checkedContent: PlaybookContent = { ...unchecked, ...(name !== undefined && { name: nameOf(name) }), ...(inputs !== undefined && { inputs }), ...(flow !== undefined && { flow }) };
+    const checkedContent: PlaybookContent = {
+      ...unchecked,
+      ...(name !== undefined && { name: nameOf(name) }),
+      ...(parsedInputs !== undefined && { inputs: parsedInputs }),
+      ...(parsedFlow !== undefined && { flow: parsedFlow }),
+      ...(policy !== undefined && { policy: PlaybookPolicySchema.parse(policy) }),
+    };
+    const clearsAnApproval = current.approvedDigest !== null;
+    const mustKeepCurrentVersion = replacesVersionedContent(checkedContent) || clearsAnApproval;
 
     inTransaction(this.deps.db, 'playbook_edit', () => {
       const wasReplaced = repository.replaceContent({ id, expectedRev: current.contentRev, content: checkedContent, now: clock() });
       if (!wasReplaced) throw conflict(this.getById(id).contentRev);
-      if (replacesVersionedContent(checkedContent)) this.keepVersionOf(current, options.versionSource ?? 'edit');
+      if (mustKeepCurrentVersion) this.keepVersionOf(current, options.versionSource ?? 'edit');
       this.declareReferencedSecrets(id, secretNames);
     });
     return this.getById(id);

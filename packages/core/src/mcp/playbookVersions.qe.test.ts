@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MAX_PLAYBOOK_VERSIONS } from '@openfleet/shared';
+import { MAX_PLAYBOOK_VERSIONS, MAX_SCRIPT_ARGUMENTS } from '@openfleet/shared';
 import { startGovernanceFixture, OTHER_PROJECT_ID, type GovernanceFixture } from '../governance/governanceQueue.testkit.js';
 import { ARBITER_TOOL_NAMES } from './arbiterTools.js';
 
@@ -59,12 +59,36 @@ describe('the snapshot taken at every replacement of the content', () => {
     expect((await versionsOf(playbook.id)).versions).toEqual([]);
   });
 
-  it('keeps nothing when only the lock changes, since the content did not', async () => {
+  it('keeps nothing when only the lock changes on a playbook that holds no approval', async () => {
     const playbook = await created();
 
     await lock(playbook);
 
     expect((await versionsOf(playbook.id)).versions).toEqual([]);
+  });
+
+  it('keeps the approved content when only the lock changes, since the lock clears the approval', async () => {
+    const playbook = await created();
+    approveViaSql(playbook.id);
+
+    await lock(playbook);
+
+    const { versions } = await versionsOf(playbook.id);
+    expect(versions.map((version) => [version.rev, version.approved])).toEqual([[1, true]]);
+    expect((await viewOf(playbook.id)).approved).toBe(false);
+  });
+
+  it('still protects the approved version a lock change snapshotted, past the cap', async () => {
+    const playbook = await created();
+    approveViaSql(playbook.id);
+    await lock(playbook);
+    await fixture.api(`/api/playbooks/${playbook.id}`, { method: 'PUT', body: JSON.stringify({ expectedRev: (await viewOf(playbook.id)).content_rev, agentLocked: false }) });
+    for (let position = 0; position < MAX_PLAYBOOK_VERSIONS + 2; position += 1) await addScript(playbook, `c${position}`);
+
+    const { versions } = await versionsOf(playbook.id);
+
+    expect(versions).toHaveLength(MAX_PLAYBOOK_VERSIONS);
+    expect(versions.filter((version) => version.approved).map((version) => version.rev)).toEqual([1]);
   });
 
   it('keeps nothing for an edit that is refused', async () => {
@@ -213,6 +237,21 @@ describe('restore_playbook_version', () => {
 
     expect(refused.text).toMatch(/^error secret_not_allowed_here:/);
     expect(await viewOf(playbook.id)).toEqual(before);
+  });
+
+  it('reparses the version with the current schemas: a script with more arguments than the cap is not restored', async () => {
+    const playbook = await created();
+    await addScript(playbook, 'a');
+    await addScript(playbook, 'b');
+    const tooManyArguments = Array.from({ length: MAX_SCRIPT_ARGUMENTS + 1 }, (_, position) => `arg${position}`);
+    fixture.db.prepare("UPDATE playbook_versions SET flow_json = ? WHERE playbook_id = ? AND rev = 2").run(JSON.stringify({ cells: [{ id: 'a', kind: 'script', program: 'scripts/verify.sh', args: tooManyArguments }] }), playbook.id);
+    const before = await viewOf(playbook.id);
+
+    const refused = await restore(playbook, 2);
+
+    expect(refused.isError).toBe(true);
+    expect(await viewOf(playbook.id)).toEqual(before);
+    expect((await versionsOf(playbook.id)).versions.map((version) => version.source)).not.toContain('restore');
   });
 
   it('keeps the secret declarations equal to the secrets of the restored content', async () => {
