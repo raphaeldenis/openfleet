@@ -67,9 +67,15 @@ export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
   };
 
   const promptManager = (trigger: TriggerRecord, fire: TriggerFire, batchSize: number, run: RunOf<'prompt_manager'>): ActionResult => {
-    const candidateIds = run.managerId === undefined ? sessionIdsOfEvent(fire.event) : [run.managerId];
+    const ownerId = ownerOf(trigger);
+    const sessionIdsOfTheEvent = sessionIdsOfEvent(fire.event);
+    const eventIsAboutNoSession = sessionIdsOfTheEvent.length === 0;
+    const managerIdsOfTheOwner = eventIsAboutNoSession && ownerId !== undefined ? [ownerId] : [];
+    const candidateIds = run.managerId === undefined ? [...sessionIdsOfTheEvent, ...managerIdsOfTheOwner] : [run.managerId];
     const manager = candidateIds.map((id) => sessions.get(id)).find((session) => isOpenSessionOfTheProject(trigger, session) && isManager(session.id));
     if (manager === undefined) return cancelled('target_unavailable');
+    const isOutsideTheLineageOfTheOwner = ownerId !== undefined && !isInLineageOf(ownerId, manager);
+    if (isOutsideTheLineageOfTheOwner) return cancelled('target_not_eligible');
     return send(manager, triggerMessageOf({ trigger, fire, prompt: run.prompt, batchSize }), fire);
   };
 
