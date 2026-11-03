@@ -68,21 +68,31 @@ export class TableSource {
   private unsubscribe: (() => void) | undefined;
   private readonly polling = new Set<string>();
   private readonly changedWhilePolling = new Set<string>();
-  private readonly pendingTicks = new Set<() => void>();
+  private readonly pendingTicks = new Map<string, () => void>();
+  /** The catch-ups under way, by trigger: the last change they must reach. Until they reach it the changes are judged as a backlog; after it, as live writes. */
+  private readonly catchUps = new Map<string, number>();
 
   constructor(private readonly deps: TableSourceDeps) {}
 
-  /** Offers what was written while the daemon was stopped, then follows the writes. */
+  /** Offers what was written while the daemon was stopped, as a catch-up that ends at the last change of the history, then follows the writes. */
   start(): void {
     this.unsubscribe = this.deps.stores.onChangeRecorded((storeId) => this.pollStore(storeId));
-    for (const trigger of this.armedTableTriggers()) this.guarded(() => this.poll(trigger, 'backlog'));
+    for (const trigger of this.armedTableTriggers()) {
+      this.guarded(() => {
+        const cursor = this.cursorOf(trigger);
+        const latestSeq = this.deps.stores.latestSeq(trigger.when.storeId);
+        if (cursor !== undefined && latestSeq > cursor.seq) this.catchUps.set(trigger.id, latestSeq);
+        this.poll(trigger, 'tick');
+      });
+    }
   }
 
   stop(): void {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
-    for (const cancel of this.pendingTicks) cancel();
+    for (const cancel of this.pendingTicks.values()) cancel();
     this.pendingTicks.clear();
+    this.catchUps.clear();
   }
 
   /** Puts the cursor of a trigger that was just armed at the end of the history: it never moves back, and what was written while the trigger was disarmed is not offered. */
@@ -92,6 +102,7 @@ export class TableSource {
       const { stores, cursors } = this.deps;
       const isStoreOfTheProject = stores.findStore(trigger.when.storeId)?.projectId === trigger.projectId;
       if (!isStoreOfTheProject) return;
+      this.catchUps.delete(trigger.id);
       const previous = this.cursorOf(trigger);
       const seq = Math.max(previous?.seq ?? 0, stores.latestSeq(trigger.when.storeId));
       cursors.save(trigger.id, { kind: TABLE_CURSOR_KIND, seq, count: stores.countRows(trigger.when.storeId), tooLarge: previous?.tooLarge ?? 0 } satisfies TableCursor);
@@ -111,11 +122,15 @@ export class TableSource {
   }
 
   private pollStore(storeId: string): void {
-    for (const trigger of this.armedTableTriggers().filter((candidate) => candidate.when.storeId === storeId)) this.guarded(() => this.poll(trigger, 'live'));
+    for (const trigger of this.armedTableTriggers().filter((candidate) => candidate.when.storeId === storeId)) this.guarded(() => this.poll(trigger, 'write'));
   }
 
-  /** A write that happens while the trigger is being polled is read in the next turn, never inside the current one. */
-  private poll(trigger: TableTrigger, mode: Mode): void {
+  /**
+   * A write that happens while the trigger is being polled is read in the next turn, never inside the current one. A write that happens during a catch-up
+   * is left to the tick that carries the catch-up on: it must not spend the rest of the backlog as single live offers.
+   */
+  private poll(trigger: TableTrigger, origin: 'write' | 'tick'): void {
+    if (origin === 'write' && this.catchUps.has(trigger.id)) return;
     if (this.polling.has(trigger.id)) {
       this.changedWhilePolling.add(trigger.id);
       return;
@@ -124,30 +139,48 @@ export class TableSource {
     try {
       do {
         this.changedWhilePolling.delete(trigger.id);
-        this.readChangesOf(trigger, mode);
+        this.readChangesOf(trigger);
       } while (this.changedWhilePolling.has(trigger.id));
     } finally {
       this.polling.delete(trigger.id);
     }
   }
 
-  private readChangesOf(trigger: TableTrigger, mode: Mode): void {
+  /** One run: reads pages within the budget; the changes up to the end of a catch-up are a backlog, the ones after it are live writes. */
+  private readChangesOf(trigger: TableTrigger): void {
     const { stores, cursors } = this.deps;
     const storeId = trigger.when.storeId;
     const isStoreOfTheProject = stores.findStore(storeId)?.projectId === trigger.projectId;
-    if (!isStoreOfTheProject) return;
+    if (!isStoreOfTheProject) return void this.catchUps.delete(trigger.id);
 
     const startingCursor = this.cursorOf(trigger);
     if (startingCursor === undefined) return this.startFromNow(trigger);
 
-    const keepsOnlyTheLatestOffer = mode === 'backlog' && trigger.policy.backlogPolicy === 'fire_latest_only';
     let cursor = startingCursor;
     let latestOffer: Offer | undefined;
+    let isHoldingTheLatestOffer = false;
     let pagesLeft = MAX_PAGES_PER_RUN;
     let offersLeft = MAX_OFFERS_PER_RUN;
     let reachedTheEnd = false;
+    const offerTheLatestOfTheCatchUp = () => {
+      if (!isHoldingTheLatestOffer) return;
+      this.offer(trigger, latestOffer === undefined ? [] : [latestOffer], 'backlog');
+      cursors.save(trigger.id, cursor);
+      latestOffer = undefined;
+      isHoldingTheLatestOffer = false;
+    };
+
     while (pagesLeft > 0 && offersLeft > 0) {
-      const changes = stores.changesAfter(storeId, cursor.seq, CHANGES_PER_PAGE);
+      const catchUpEnd = this.catchUps.get(trigger.id);
+      const isCatchingUp = catchUpEnd !== undefined && cursor.seq < catchUpEnd;
+      if (catchUpEnd !== undefined && !isCatchingUp) {
+        offerTheLatestOfTheCatchUp();
+        this.catchUps.delete(trigger.id);
+      }
+      const keepsOnlyTheLatestOffer = isCatchingUp && trigger.policy.backlogPolicy === 'fire_latest_only';
+      const pageSize = keepsOnlyTheLatestOffer ? CHANGES_PER_PAGE : Math.min(CHANGES_PER_PAGE, offersLeft);
+      const changesRead = stores.changesAfter(storeId, cursor.seq, pageSize);
+      const changes = isCatchingUp ? changesRead.filter((change) => change.seq <= (catchUpEnd ?? Infinity)) : changesRead;
       reachedTheEnd = changes.length === 0;
       if (reachedTheEnd) break;
       pagesLeft -= 1;
@@ -156,17 +189,17 @@ export class TableSource {
       cursor = page.cursor;
       if (keepsOnlyTheLatestOffer) {
         latestOffer = page.offers.filter((offer) => this.passesTheConditions(trigger, offer)).at(-1) ?? latestOffer;
+        isHoldingTheLatestOffer = true;
         continue;
       }
       offersLeft -= page.offers.length;
-      this.offer(trigger, page.offers, mode);
+      this.offer(trigger, page.offers, isCatchingUp ? 'backlog' : 'live');
       cursors.save(trigger.id, cursor);
     }
-    if (keepsOnlyTheLatestOffer) {
-      this.offer(trigger, latestOffer === undefined ? [] : [latestOffer], mode);
-      cursors.save(trigger.id, cursor);
-    }
-    if (!reachedTheEnd) this.continueOnTheNextTick(trigger.id, mode);
+    offerTheLatestOfTheCatchUp();
+    if (reachedTheEnd) return void this.catchUps.delete(trigger.id);
+    if (!this.catchUps.has(trigger.id)) this.catchUps.set(trigger.id, stores.latestSeq(storeId));
+    this.continueOnTheNextTick(trigger.id);
   }
 
   /** Hands a page to the engine; the ledger keeps what it accepts before the caller moves the cursor. */
@@ -179,13 +212,16 @@ export class TableSource {
     for (const offer of offers) engine.submit({ triggerId: trigger.id, dedupKey: offer.dedupKey, event: offer.event, ...(offer.causedByChainDepth !== undefined && { causedByChainDepth: offer.causedByChainDepth }) });
   }
 
-  private continueOnTheNextTick(triggerId: string, mode: Mode): void {
+  /** One tick per trigger at a time. */
+  private continueOnTheNextTick(triggerId: string): void {
+    if (this.pendingTicks.has(triggerId)) return;
     const cancel = this.deps.schedule(() => {
-      this.pendingTicks.delete(cancel);
+      this.pendingTicks.delete(triggerId);
       const trigger = this.armedTableTriggers().find((candidate) => candidate.id === triggerId);
-      if (trigger !== undefined) this.guarded(() => this.poll(trigger, mode));
+      if (trigger === undefined) return void this.catchUps.delete(triggerId);
+      this.guarded(() => this.poll(trigger, 'tick'));
     }, NEXT_TICK_DELAY_MS);
-    this.pendingTicks.add(cancel);
+    this.pendingTicks.set(triggerId, cancel);
   }
 
   private passesTheConditions(trigger: TableTrigger, offer: Offer): boolean {
@@ -209,7 +245,7 @@ export class TableSource {
       const event = this.eventOf(trigger, change, { countBefore, countAfter: count });
       if (event === undefined) continue;
 
-      const causes = this.causesOf(change, causesOfLabel);
+      const causes = this.causesOf(change, trigger.projectId, causesOfLabel);
       const isOwnEffect = causes.triggerIds.has(trigger.id);
       if (isOwnEffect) {
         this.deps.onOfferSuppressedByCause(trigger.id);
@@ -248,14 +284,14 @@ export class TableSource {
    * The triggers whose message set the author of a write going, and how deep their chain is. An agent writes as "<emoji> <name>": the sessions that carry that label and
    * their ancestors are the author; a fire that sent a message to one of them in the hour before the write is its cause.
    */
-  private causesOf(change: DsRowHistoryEntry, cache: Map<string, { triggerIds: Set<string>; chainDepth: number }>): { triggerIds: Set<string>; chainDepth: number } {
+  private causesOf(change: DsRowHistoryEntry, projectId: string, cache: Map<string, { triggerIds: Set<string>; chainDepth: number }>): { triggerIds: Set<string>; chainDepth: number } {
     const none = { triggerIds: new Set<string>(), chainDepth: 0 };
     if (change.actorKind !== 'agent') return none;
     const key = `${change.actorLabel}|${change.createdAt}`;
     const known = cache.get(key);
     if (known !== undefined) return known;
 
-    const authorIds = this.authorSessionIdsOf(change.actorLabel);
+    const authorIds = this.authorSessionIdsOf(change.actorLabel, projectId);
     const writtenAtMs = Date.parse(change.createdAt);
     const isDated = Number.isFinite(writtenAtMs) && authorIds.length > 0;
     const causes = isDated
@@ -266,12 +302,14 @@ export class TableSource {
     return result;
   }
 
-  private authorSessionIdsOf(actorLabel: string): string[] {
+  /** The sessions of the project that carry the label, and their ancestors of the same project. */
+  private authorSessionIdsOf(actorLabel: string, projectId: string): string[] {
     const { sessions } = this.deps;
-    const namesake = sessions.list().filter((session) => actorLabelOf(session) === actorLabel);
+    const isOfTheProject = (session: Session) => session.projectId === projectId;
+    const namesake = sessions.list().filter((session) => isOfTheProject(session) && actorLabelOf(session) === actorLabel);
     const withAncestors = new Set<string>();
     for (const session of namesake) {
-      for (let current: Session | undefined = session; current !== undefined && !withAncestors.has(current.id); current = current.parentId === undefined ? undefined : sessions.get(current.parentId)) {
+      for (let current: Session | undefined = session; current !== undefined && isOfTheProject(current) && !withAncestors.has(current.id); current = current.parentId === undefined ? undefined : sessions.get(current.parentId)) {
         withAncestors.add(current.id);
       }
     }

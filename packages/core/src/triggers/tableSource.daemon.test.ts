@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAX_PAGES_PER_RUN } from './tableSource.js';
+import { MAX_OFFERS_PER_RUN, MAX_PAGES_PER_RUN } from './tableSource.js';
 import { TriggerEngine } from './triggerEngine.js';
-import { MINUTE_MS, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
+import { MINUTE_MS, PROJECT_ID, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
 
 let world: TriggerWorld | undefined;
 afterEach(async () => { await world?.close(); world = undefined; });
@@ -243,6 +243,70 @@ describe('the causal loop guard', () => {
   });
 });
 
+describe('the attribution of a write to the message that set its author going', () => {
+  it('holds when the event is old and the message goes out much later: an event of three hours ago, sent at boot, still causes the write that follows', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' } });
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * MINUTE_MS).toISOString();
+
+    await world.restart({
+      whileStopped: (db) => {
+        db.prepare("INSERT INTO ds_rows (id, store_id, data_json, created_at, updated_at) VALUES ('old-row', ?, '{}', ?, ?)").run(table.storeId, threeHoursAgo, threeHoursAgo);
+        db.prepare("INSERT INTO ds_row_history (id, store_id, row_id, actor_kind, actor_label, change_json, created_at) VALUES ('old-change', ?, 'old-row', 'human', 'world', '{\"kind\":\"create\"}', ?)").run(table.storeId, threeHoursAgo);
+      },
+    });
+    const leadClient = await world.connect(lead.id);
+    await writeThroughMcp(leadClient, table, 'written by the manager after the late prompt');
+
+    expect(statesOf(triggerId)).toEqual(['completed']);
+    expect(suppressedOffersOf(triggerId)).toBe(1);
+  });
+
+  it('holds when a cooldown kept the fire back and the message went out afterwards', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({
+      storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' }, policy: { cooldownSeconds: 600, batchMode: 'per_batch' },
+    });
+    const leadClient = await world.connect(lead.id);
+
+    table.insert({ status: 'first' });
+    table.insert({ status: 'held by the cooldown' });
+    world.advanceMs(11 * MINUTE_MS);
+    world.fireLivingTimers();
+    await writeThroughMcp(leadClient, table, 'written after the late prompt');
+
+    expect(world.firesOf(triggerId).filter((fire) => fire.ledger_state === 'completed')).toHaveLength(2);
+    expect(suppressedOffersOf(triggerId)).toBe(1);
+  });
+
+  it('ignores a session of the same name in another project: it causes nothing', async () => {
+    const { world, lead } = await worldWithLead();
+    world.db.prepare("INSERT INTO projects (id, name, created_at) VALUES ('other', 'Other', 'now')").run();
+    const otherStore = world.daemon.stores.createStore({ projectId: 'other', displayName: 'Other table' });
+    const namesake = await world.createSession('Lead', { manager: world.managerSpec });
+    world.db.prepare("UPDATE sessions SET project_id = 'other' WHERE id = ?").run(namesake.id);
+    const created = await world.json<{ id: string; contentRev: number }>(await world.api('/api/triggers', {
+      method: 'POST',
+      body: JSON.stringify({
+        projectId: 'other', ownerManagerId: null, title: 'other', when: { source: 'data_store_query', storeId: otherStore.id, event: 'new_matching_rows' },
+        conditions: [], run: { kind: 'prompt_manager', managerId: namesake.id, prompt: 'other table changed' },
+      }),
+    }));
+    await world.api(`/api/triggers/${created.id}/arm`, { method: 'POST', body: JSON.stringify({ approvedRev: created.contentRev }), headers: { 'x-human-proof': 'proof' } });
+    world.daemon.stores.insertRow(otherStore.id, { projectId: 'other', actor: { kind: 'human', label: 'world' }, data: {} });
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' } });
+    const leadClient = await world.connect(lead.id);
+
+    await writeThroughMcp(leadClient, table, 'written by the manager of this project');
+
+    expect(world.messagesTo(namesake.id).filter((message) => message.body.startsWith('trigger.fired'))).toHaveLength(1);
+    expect(chainDepthsOf(triggerId)).toEqual([1]);
+  });
+});
+
 describe('a backlog that crashes between the offers and the cursor', () => {
   const writeWhileStopped = (storeId: string, db: import('node:sqlite').DatabaseSync, id: string, at: string) => {
     db.prepare("INSERT INTO ds_rows (id, store_id, data_json, created_at, updated_at) VALUES (?, ?, '{}', ?, ?)").run(id, storeId, at, at);
@@ -269,8 +333,7 @@ describe('a backlog that crashes between the offers and the cursor', () => {
 });
 
 describe('a long history written while the daemon was stopped', () => {
-  const writeManyWhileStopped = (storeId: string, db: import('node:sqlite').DatabaseSync, count: number) => {
-    const at = new Date().toISOString();
+  const writeManyWhileStopped = (storeId: string, db: import('node:sqlite').DatabaseSync, count: number, at = new Date().toISOString()) => {
     const insertRow = db.prepare("INSERT INTO ds_rows (id, store_id, data_json, created_at, updated_at) VALUES (?, ?, '{}', ?, ?)");
     const insertChange = db.prepare("INSERT INTO ds_row_history (id, store_id, row_id, actor_kind, actor_label, change_json, created_at) VALUES (?, ?, ?, 'human', 'world', '{\"kind\":\"create\"}', ?)");
     db.exec('BEGIN');
@@ -297,6 +360,41 @@ describe('a long history written while the daemon was stopped', () => {
     expect(firesAfterBoot).toBe(1);
     expect(world.cursorOf(triggerId)?.seq).toBe(latestSeq());
     expect(world.firesOf(triggerId)).toHaveLength(Math.ceil(changes / (MAX_PAGES_PER_RUN * 200)));
+  });
+
+  it('keeps the policy of the catch-up when a live write arrives before the next tick: no burst of single offers, the breaker stays shut', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' }, policy: { backlogPolicy: 'fire_latest_only' } });
+    const changes = MAX_PAGES_PER_RUN * 200 + 500;
+    const latestSeq = () => (world.db.prepare('SELECT MAX(seq) AS seq FROM ds_row_history').get() as { seq: number }).seq;
+
+    await world.restart({ whileStopped: (db) => writeManyWhileStopped(table.storeId, db, changes) });
+    const firesAfterBoot = world.firesOf(triggerId).length;
+    world.daemon.stores.insertRow(table.storeId, { projectId: PROJECT_ID, actor: { kind: 'human', label: 'world' }, data: {} });
+    const firesAfterTheLiveWrite = world.firesOf(triggerId).length;
+    for (let tick = 0; tick < 10 && (world.cursorOf(triggerId)?.seq ?? 0) < latestSeq(); tick += 1) world.fireLivingTimers();
+
+    expect(firesAfterBoot).toBe(1);
+    expect(firesAfterTheLiveWrite).toBe(firesAfterBoot);
+    expect(world.cursorOf(triggerId)?.seq).toBe(latestSeq());
+    expect(world.firesOf(triggerId).filter((fire) => fire.settle_reason === 'breaker_open')).toEqual([]);
+    expect((world.db.prepare('SELECT armed_at FROM triggers WHERE id = ?').get(triggerId) as { armed_at: string | null }).armed_at).not.toBeNull();
+    expect(world.firesOf(triggerId).length).toBeLessThanOrEqual(3);
+  });
+
+  it('offers exactly the budget of offers in a run: 1000 changes make 500 fires per run', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' }, policy: { backlogPolicy: 'discard_stale' } });
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * MINUTE_MS).toISOString();
+
+    await world.restart({ whileStopped: (db) => writeManyWhileStopped(table.storeId, db, 1000, threeHoursAgo) });
+    const firesAfterBoot = world.firesOf(triggerId).length;
+    world.fireLivingTimers();
+
+    expect(firesAfterBoot).toBe(MAX_OFFERS_PER_RUN);
+    expect(world.firesOf(triggerId)).toHaveLength(1000);
   });
 
   it('counts, and does not offer, a change whose event is too large', async () => {

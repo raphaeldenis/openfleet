@@ -122,13 +122,13 @@ export class FireLedger {
     return rows.map(toFire);
   }
 
-  /** The fires whose message went to one of the sessions in `[sinceIso, untilIso]`: the triggers that may have set those sessions going, with the depth of their chain. */
+  /** The fires whose message was queued for one of the sessions in `[sinceIso, untilIso]`: the triggers that may have set those sessions going, with the depth of their chain. The date is the one of the message, not of the event: a fire made while the daemon was stopped, or held back, sends its message later. */
   causesOf(input: { sessionIds: readonly string[]; sinceIso: string; untilIso: string }): { triggerId: string; chainDepth: number }[] {
     if (input.sessionIds.length === 0) return [];
     const placeholders = input.sessionIds.map(() => '?').join(', ');
     const rows = this.db.prepare(
       `SELECT DISTINCT f.trigger_id AS triggerId, f.chain_depth AS chainDepth FROM trigger_fires f JOIN message_queue m ON m.id = f.id
-       WHERE m.session_id IN (${placeholders}) AND f.fired_at >= ? AND f.fired_at <= ? AND f.ledger_state IN (${STATES_SQL_LIST})`,
+       WHERE m.session_id IN (${placeholders}) AND m.created_at >= ? AND m.created_at <= ? AND f.ledger_state IN (${STATES_SQL_LIST})`,
     ).all(...input.sessionIds, input.sinceIso, input.untilIso) as unknown as { triggerId: string; chainDepth: number }[];
     return rows;
   }
