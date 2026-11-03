@@ -51,7 +51,7 @@ export async function startTriggerWorld() {
 
   const createSession = async (name: string, extra: Record<string, unknown> = {}) => {
     const directory = join(config.home, name);
-    mkdirSync(directory);
+    mkdirSync(directory, { recursive: true });
     const created = await json<Session>(await api('/api/sessions', { method: 'POST', body: JSON.stringify({ directory, name, harness: 'fake', emoji: '🤖', ...extra }) }));
     daemon.db.prepare('UPDATE sessions SET project_id = ? WHERE id = ?').run(PROJECT_ID, created.id);
     return created;
@@ -150,7 +150,7 @@ export async function startTriggerWorld() {
     },
     cursorOf: (triggerId: string) => {
       const row = daemon.db.prepare('SELECT cursor_json FROM trigger_cursors WHERE trigger_id = ?').get(triggerId) as { cursor_json: string } | undefined;
-      return row && JSON.parse(row.cursor_json) as { kind?: string; seq?: number; met?: boolean };
+      return row && JSON.parse(row.cursor_json) as { kind?: string; seq?: number; count?: number; tooLarge?: number };
     },
     messagesTo: (sessionId: string) => daemon.db.prepare('SELECT id, body FROM message_queue WHERE session_id = ? ORDER BY created_at, rowid').all(sessionId) as { id: string; body: string }[],
     firesOf: (triggerId: string) => daemon.db.prepare('SELECT id, dedup_key, ledger_state, settle_reason, fired_at FROM trigger_fires WHERE trigger_id = ? ORDER BY fired_at, rowid').all(triggerId) as unknown as FireRow[],

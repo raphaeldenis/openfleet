@@ -68,6 +68,8 @@ export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
 
   const promptManager = (trigger: TriggerRecord, fire: TriggerFire, batchSize: number, run: RunOf<'prompt_manager'>): ActionResult => {
     const ownerId = ownerOf(trigger);
+    const ownerIsGone = trigger.ownerManagerId !== null && ownerId === undefined;
+    if (ownerIsGone) return cancelled('target_not_eligible');
     const sessionIdsOfTheEvent = sessionIdsOfEvent(fire.event);
     const eventIsAboutNoSession = sessionIdsOfTheEvent.length === 0;
     const managerIdsOfTheOwner = eventIsAboutNoSession && ownerId !== undefined ? [ownerId] : [];

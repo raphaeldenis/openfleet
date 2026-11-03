@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { PROJECT_ID, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MAX_PAGES_PER_RUN } from './tableSource.js';
+import { TriggerEngine } from './triggerEngine.js';
+import { MINUTE_MS, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
 
 let world: TriggerWorld | undefined;
 afterEach(async () => { await world?.close(); world = undefined; });
@@ -141,28 +143,241 @@ describe('row_count', () => {
   });
 });
 
-describe('the loop guard', () => {
-  it('ignores the rows written by the trigger itself, and still reacts to those written by another trigger', async () => {
+/** The manager writes a row through the MCP tool of the daemon, as an agent does after a trigger prompted it. */
+const writeThroughMcp = async (writer: Awaited<ReturnType<TriggerWorld['connect']>>, table: ReturnType<TriggerWorld['createTable']>, status: string) => {
+  const result = await writer.callTool({ name: 'insert_data_store_rows', arguments: { store: table.storeId, rows: [{ [table.columns.status!]: status }] } });
+  expect(result.isError ?? false).toBe(false);
+};
+const suppressedOffersOf = (triggerId: string) =>
+  (world!.db.prepare("SELECT COUNT(*) AS n FROM activity_log WHERE action = 'trigger.offer_suppressed' AND entity_id = ?").get(triggerId) as { n: number }).n;
+const chainDepthsOf = (triggerId: string) =>
+  (world!.db.prepare('SELECT chain_depth FROM trigger_fires WHERE trigger_id = ? ORDER BY fired_at, rowid').all(triggerId) as { chain_depth: number }[]).map((row) => row.chain_depth);
+
+describe('the causal loop guard', () => {
+  it('does not offer to a trigger the rows its own message made the manager write', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' } });
+    const leadClient = await world.connect(lead.id);
+
+    table.insert({ status: 'by a human' });
+    await writeThroughMcp(leadClient, table, 'written by the manager after the prompt');
+
+    expect(statesOf(triggerId)).toEqual(['completed']);
+    expect(suppressedOffersOf(triggerId)).toBe(1);
+  });
+
+  it('attributes the write of a child to the trigger that prompted its manager', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await world.createChild(lead, 'Worker');
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' } });
+    const childClient = await world.connect(child.id);
+
+    table.insert({ status: 'by a human' });
+    await writeThroughMcp(childClient, table, 'written by the child');
+
+    expect(statesOf(triggerId)).toEqual(['completed']);
+  });
+
+  it('considers every session of the name of the author: two managers called alike', async () => {
+    const { world, lead } = await worldWithLead();
+    const twin = await world.createSession('Lead', { manager: world.managerSpec });
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: twin.id, when: { event: 'new_matching_rows' } });
+    const leadClient = await world.connect(lead.id);
+
+    table.insert({ status: 'by a human' });
+    await writeThroughMcp(leadClient, table, 'written by the namesake');
+
+    expect(statesOf(triggerId)).toEqual(['completed']);
+  });
+
+  it('never attributes the write of a human to a trigger, even under the label of a session that was prompted', async () => {
     const { world, lead } = await worldWithLead();
     const table = world.createTable(['status']);
     const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' } });
 
-    table.insert({ status: 'by me' }, { kind: 'trigger', label: triggerId });
-    const afterOwnWrite = world.firesOf(triggerId).length;
-    table.insert({ status: 'by another' }, { kind: 'trigger', label: 'another-trigger' });
+    table.insert({ status: 'first' });
+    table.insert({ status: 'second, by a human who signs as the manager' }, { kind: 'human', label: `${lead.emoji} ${lead.name}` });
 
-    expect(afterOwnWrite).toBe(0);
+    expect(statesOf(triggerId)).toEqual(['completed', 'completed']);
+    expect(suppressedOffersOf(triggerId)).toBe(0);
+  });
+
+  it('stops a loop through two tables: the trigger that prompted the manager is not offered the rows it made the manager write', async () => {
+    const { world, lead } = await worldWithLead();
+    const first = world.createTable(['status']);
+    const second = world.createTable(['status', 'extra']);
+    const triggerA = await armTableTrigger({ storeId: first.storeId, managerId: lead.id, when: { event: 'new_matching_rows' } });
+    const triggerB = await armTableTrigger({ storeId: second.storeId, managerId: lead.id, when: { event: 'new_matching_rows' } });
+    const leadClient = await world.connect(lead.id);
+
+    first.insert({ status: 'start' });
+    await writeThroughMcp(leadClient, second, 'A made me write this');
+    await writeThroughMcp(leadClient, first, 'B made me write this');
+
+    expect(statesOf(triggerA)).toEqual(['completed']);
+    expect(statesOf(triggerB)).toEqual(['completed']);
+    expect(chainDepthsOf(triggerB)).toEqual([2]);
+  });
+
+  it('cancels at the depth cap a fire that is the third link of a chain of triggers', async () => {
+    const { world, lead } = await worldWithLead();
+    const tables = [world.createTable(['status', 'first']), world.createTable(['status', 'second']), world.createTable(['status', 'third'])] as const;
+    const [triggerA, triggerB, triggerC] = [
+      await armTableTrigger({ storeId: tables[0].storeId, managerId: lead.id, when: { event: 'new_matching_rows' } }),
+      await armTableTrigger({ storeId: tables[1].storeId, managerId: lead.id, when: { event: 'new_matching_rows' } }),
+      await armTableTrigger({ storeId: tables[2].storeId, managerId: lead.id, when: { event: 'new_matching_rows' } }),
+    ];
+    const leadClient = await world.connect(lead.id);
+
+    tables[0].insert({ status: 'start' });
+    await writeThroughMcp(leadClient, tables[1], 'second link');
+    await writeThroughMcp(leadClient, tables[2], 'third link');
+
+    expect(statesOf(triggerA)).toEqual(['completed']);
+    expect(statesOf(triggerB)).toEqual(['completed']);
+    expect(world.firesOf(triggerC)).toEqual([expect.objectContaining({ ledger_state: 'cancelled', settle_reason: 'chain_depth' })]);
+    expect(chainDepthsOf(triggerC)).toEqual([3]);
+  });
+});
+
+describe('a backlog that crashes between the offers and the cursor', () => {
+  const writeWhileStopped = (storeId: string, db: import('node:sqlite').DatabaseSync, id: string, at: string) => {
+    db.prepare("INSERT INTO ds_rows (id, store_id, data_json, created_at, updated_at) VALUES (?, ?, '{}', ?, ?)").run(id, storeId, at, at);
+    db.prepare("INSERT INTO ds_row_history (id, store_id, row_id, actor_kind, actor_label, change_json, created_at) VALUES (?, ?, ?, 'human', 'world', '{\"kind\":\"create\"}', ?)").run(`change-${id}`, storeId, id, at);
+  };
+
+  it('loses no offer and fires none twice when the second instance starts', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' } });
+    const crashOnTheFirstBacklog = vi.spyOn(TriggerEngine.prototype, 'submitBacklog').mockImplementationOnce(() => { throw new Error('the daemon stopped here'); });
+
+    await world.restart({ whileStopped: (db) => writeWhileStopped(table.storeId, db, 'late-row', new Date(world.nowMs).toISOString()) });
+    const firesAfterTheCrash = world.firesOf(triggerId).length;
+    const cursorAfterTheCrash = world.cursorOf(triggerId)?.seq;
+    await world.restart();
+    crashOnTheFirstBacklog.mockRestore();
+
+    expect(firesAfterTheCrash).toBe(0);
+    expect(cursorAfterTheCrash).toBeLessThan(world.cursorOf(triggerId)?.seq ?? 0);
+    expect(statesOf(triggerId)).toEqual(['completed']);
+    expect(bodiesTo(lead.id)).toHaveLength(1);
+  });
+});
+
+describe('a long history written while the daemon was stopped', () => {
+  const writeManyWhileStopped = (storeId: string, db: import('node:sqlite').DatabaseSync, count: number) => {
+    const at = new Date().toISOString();
+    const insertRow = db.prepare("INSERT INTO ds_rows (id, store_id, data_json, created_at, updated_at) VALUES (?, ?, '{}', ?, ?)");
+    const insertChange = db.prepare("INSERT INTO ds_row_history (id, store_id, row_id, actor_kind, actor_label, change_json, created_at) VALUES (?, ?, ?, 'human', 'world', '{\"kind\":\"create\"}', ?)");
+    db.exec('BEGIN');
+    for (let index = 0; index < count; index += 1) {
+      insertRow.run(`bulk-${index}`, storeId, at, at);
+      insertChange.run(`bulk-change-${index}`, storeId, `bulk-${index}`, at);
+    }
+    db.exec('COMMIT');
+  };
+
+  it('is read within a budget per run and finished on the next ticks, offering the latest change only once per run with fire_latest_only', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const changes = 5000;
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' }, policy: { backlogPolicy: 'fire_latest_only' } });
+    const latestSeq = () => (world.db.prepare('SELECT MAX(seq) AS seq FROM ds_row_history').get() as { seq: number }).seq;
+
+    await world.restart({ whileStopped: (db) => writeManyWhileStopped(table.storeId, db, changes) });
+    const cursorAfterBoot = world.cursorOf(triggerId)?.seq ?? 0;
+    const firesAfterBoot = world.firesOf(triggerId).length;
+    for (let tick = 0; tick < 10 && (world.cursorOf(triggerId)?.seq ?? 0) < latestSeq(); tick += 1) world.fireLivingTimers();
+
+    expect(cursorAfterBoot).toBeLessThan(latestSeq());
+    expect(firesAfterBoot).toBe(1);
+    expect(world.cursorOf(triggerId)?.seq).toBe(latestSeq());
+    expect(world.firesOf(triggerId)).toHaveLength(Math.ceil(changes / (MAX_PAGES_PER_RUN * 200)));
+  });
+
+  it('counts, and does not offer, a change whose event is too large', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'new_matching_rows' } });
+
+    table.insert({ status: 'x'.repeat(9000) });
+    table.insert({ status: 'small' });
+
+    expect(statesOf(triggerId)).toEqual(['completed']);
+    expect(world.cursorOf(triggerId)?.tooLarge).toBe(1);
+  });
+});
+
+describe('row_count read from the journal', () => {
+  const countFires = { event: 'row_count', op: 'gte', value: 1 } as const;
+  const createdAt = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+  const journal = (storeId: string, db: import('node:sqlite').DatabaseSync, steps: { kind: 'create' | 'delete'; id: string; at?: string }[]) => {
+    for (const step of steps) {
+      const at = step.at ?? createdAt(0);
+      if (step.kind === 'create') db.prepare("INSERT INTO ds_rows (id, store_id, data_json, created_at, updated_at) VALUES (?, ?, '{}', ?, ?)").run(step.id, storeId, at, at);
+      else db.prepare('DELETE FROM ds_rows WHERE id = ?').run(step.id);
+      db.prepare('INSERT INTO ds_row_history (id, store_id, row_id, actor_kind, actor_label, change_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(`${step.kind}-${step.id}`, storeId, step.id, 'human', 'world', JSON.stringify({ kind: step.kind }), at);
+    }
+  };
+
+  it('fires for a threshold crossed and left again while the daemon was stopped', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: countFires });
+
+    await world.restart({ whileStopped: (db) => journal(table.storeId, db, [{ kind: 'create', id: 'a' }, { kind: 'delete', id: 'a' }]) });
+
     expect(statesOf(triggerId)).toEqual(['completed']);
   });
 
-  it('does not let a crossing of the count caused only by its own writes fire the trigger', async () => {
+  it('offers one fire per crossing, each dated by the change that crossed: 1, 2, 1, 0, 1 gives two with fire_all', async () => {
     const { world, lead } = await worldWithLead();
     const table = world.createTable(['status']);
-    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: { event: 'row_count', op: 'gte', value: 1 } });
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: countFires });
 
-    table.insert({ status: 'by me' }, { kind: 'trigger', label: triggerId });
+    await world.restart({
+      whileStopped: (db) => journal(table.storeId, db, [
+        { kind: 'create', id: 'a' }, { kind: 'create', id: 'b' }, { kind: 'delete', id: 'b' }, { kind: 'delete', id: 'a' }, { kind: 'create', id: 'c' },
+      ]),
+    });
 
-    expect(world.firesOf(triggerId)).toEqual([]);
+    expect(statesOf(triggerId)).toEqual(['completed', 'completed']);
+    expect(world.db.prepare('SELECT dedup_key FROM trigger_fires WHERE trigger_id = ?').all(triggerId)).toHaveLength(2);
+  });
+
+  it('judges an old crossing by its own date with discard_stale, even when a recent update follows it', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, managerId: lead.id, when: countFires, policy: { backlogPolicy: 'discard_stale' } });
+    const threeHoursAgo = createdAt(-3 * 60 * MINUTE_MS);
+
+    await world.restart({
+      whileStopped: (db) => {
+        journal(table.storeId, db, [{ kind: 'create', id: 'old', at: threeHoursAgo }]);
+        db.prepare("INSERT INTO ds_row_history (id, store_id, row_id, actor_kind, actor_label, change_json, created_at) VALUES ('recent-update', ?, 'old', 'human', 'world', '{\"col\":{\"from\":1,\"to\":2}}', ?)")
+          .run(table.storeId, createdAt(0));
+      },
+    });
+
+    expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'cancelled', settle_reason: 'stale' })]);
+  });
+});
+
+describe('an owner that is no longer a manager', () => {
+  it('cancels the fire as not eligible, even though the RUN names a manager', async () => {
+    const { world, lead } = await worldWithLead();
+    const table = world.createTable(['status']);
+    const triggerId = await armTableTrigger({ storeId: table.storeId, ownerManagerId: lead.id, managerId: lead.id, when: { event: 'new_matching_rows' } });
+    world.db.prepare('DELETE FROM managers WHERE session_id = ?').run(lead.id);
+
+    table.insert({ status: 'a' });
+
+    expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'cancelled', settle_reason: 'target_not_eligible' })]);
   });
 });
 
