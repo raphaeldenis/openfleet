@@ -17,6 +17,8 @@ export function isChildInScopeOfTrigger({ sessions, managers }: SessionTriggerSc
   if (!isChildOfAManager) return false;
   const isInProject = trigger.projectId === session.projectId && trigger.projectId === manager.projectId;
   const namesAnotherManager = trigger.run.kind === 'prompt_manager' && trigger.run.managerId !== undefined && trigger.run.managerId !== managerId;
-  const isOutsideTheLineageOfTheOwner = trigger.ownerManagerId !== null && trigger.ownerManagerId !== lineageRootIdOf(sessions, session);
+  const ownerManagerId = trigger.ownerManagerId;
+  const isOwnerAnExistingManager = ownerManagerId !== null && sessions.get(ownerManagerId) !== undefined && managers.get(ownerManagerId) !== undefined;
+  const isOutsideTheLineageOfTheOwner = ownerManagerId !== null && (!isOwnerAnExistingManager || ownerManagerId !== lineageRootIdOf(sessions, session));
   return isInProject && !namesAnotherManager && !isOutsideTheLineageOfTheOwner;
 }

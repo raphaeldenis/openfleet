@@ -163,6 +163,82 @@ describe('a generating child with no sign of life', () => {
   });
 });
 
+describe('the transcript of the child', () => {
+  const ONE_MINUTE = 1;
+  const POLL_IN_MINUTES = SILENT_RUN_POLL_MS / MINUTE_MS;
+  const letOnePollPass = () => letSilenceLast(POLL_IN_MINUTES);
+  const setTranscriptOf = (child: { id: string }, cursor: { identity: string; offset: number } | undefined) => { handleOf(child.id).transcriptCursor = cursor; };
+
+  it('takes a transcript that appears after the first look as the base: what it grows by afterwards is a sign of life', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await generatingChild(lead);
+    const triggerId = await promptLeadOnSilence(ONE_MINUTE);
+
+    for (const offset of [100, 200, 300, 400]) {
+      setTranscriptOf(child, { identity: 'transcript', offset });
+      letOnePollPass();
+    }
+
+    expect(world.firesOf(triggerId)).toEqual([]);
+  });
+
+  it('does not take the appearance of the transcript for a sign of life', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await generatingChild(lead);
+    const triggerId = await promptLeadOnSilence(ONE_MINUTE);
+
+    setTranscriptOf(child, { identity: 'transcript', offset: 100 });
+    letOnePollPass();
+    letOnePollPass();
+
+    expect(world.firesOf(triggerId)).toHaveLength(1);
+  });
+
+  it('takes a transcript file that changes identity as a new base: not a silence reset, not a sign of life', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await generatingChild(lead);
+    setTranscriptOf(child, { identity: 'first-file', offset: 10 });
+    const triggerId = await promptLeadOnSilence(ONE_MINUTE);
+
+    setTranscriptOf(child, { identity: 'second-file', offset: 500 });
+    letOnePollPass();
+    letOnePollPass();
+
+    expect(world.firesOf(triggerId)).toHaveLength(1);
+  });
+
+  it('sees a sign of life in the growth of the file that replaced the first one', async () => {
+    const { world, lead } = await worldWithLead();
+    const child = await generatingChild(lead);
+    setTranscriptOf(child, { identity: 'first-file', offset: 10 });
+    const triggerId = await promptLeadOnSilence(ONE_MINUTE);
+
+    setTranscriptOf(child, { identity: 'second-file', offset: 500 });
+    letOnePollPass();
+    setTranscriptOf(child, { identity: 'second-file', offset: 600 });
+    letOnePollPass();
+
+    expect(world.firesOf(triggerId)).toEqual([]);
+  });
+});
+
+describe('the clock', () => {
+  it('goes back without a sign of life: the silence ends when the clock passes its end again', async () => {
+    const { world, lead } = await worldWithLead();
+    await generatingChild(lead);
+    const triggerId = await promptLeadOnSilence();
+    letSilenceLast(SILENT_MINUTES - 1);
+
+    world.setNowMs(world.nowMs - 10 * MINUTE_MS);
+    letSilenceLast(SILENT_MINUTES);
+    const firesWhileTheClockCatchesUp = world.firesOf(triggerId).length;
+    letSilenceLast(SILENT_MINUTES + 2);
+
+    expect(firesWhileTheClockCatchesUp).toBe(0);
+    expect(world.firesOf(triggerId)).toHaveLength(1);
+  });
+});
+
 describe('scope', () => {
   it('stays inside the project of the trigger', async () => {
     const { world, lead } = await worldWithLead();
@@ -193,6 +269,21 @@ describe('scope', () => {
     const otherLead = await world.createSession('Other lead', { manager: world.managerSpec });
     await generatingChild(otherLead, 'Not mine');
     const triggerId = await promptLeadOnSilence(SILENT_MINUTES, { ownerManagerId: lead.id });
+
+    letSilenceLast(SILENT_MINUTES * 2);
+
+    expect(world.firesOf(triggerId)).toEqual([]);
+  });
+
+  it('ignores a child whose lineage reaches a deleted owner through a living intermediate manager', async () => {
+    const { world, lead: owner } = await worldWithLead();
+    const intermediate = await world.createSession('Intermediate', { manager: world.managerSpec });
+    world.db.prepare('UPDATE sessions SET parent_id = ? WHERE id = ?').run(owner.id, intermediate.id);
+    await generatingChild(intermediate, 'Orphaned lineage');
+    const triggerId = await promptLeadOnSilence(SILENT_MINUTES, { ownerManagerId: owner.id });
+    world.db.prepare('UPDATE sessions SET parent_id = NULL WHERE parent_id = ? AND id != ?').run(owner.id, intermediate.id);
+    world.db.prepare('PRAGMA foreign_keys = OFF').run();
+    world.db.prepare('DELETE FROM sessions WHERE id = ?').run(owner.id);
 
     letSilenceLast(SILENT_MINUTES * 2);
 
@@ -264,6 +355,40 @@ describe('the cause of the silence', () => {
     letSilenceLast(SILENT_MINUTES + 1);
 
     expect(world.firesOf(triggerId)).toEqual([expect.objectContaining({ ledger_state: 'cancelled', settle_reason: 'target_not_eligible' })]);
+  });
+});
+
+describe('a slow cycle between two triggers', () => {
+  const SLOW_MINUTES = 61;
+  /** The message queue stamps the real clock; the ledger and the source live on the fake one. */
+  const dateTriggerMessagesByTheFakeClock = () =>
+    world!.db.prepare('UPDATE message_queue SET created_at = (SELECT fired_at FROM trigger_fires WHERE trigger_fires.id = message_queue.id) WHERE id IN (SELECT id FROM trigger_fires)').run();
+
+  it('keeps the depth of the chain across silences longer than the hour the engine looks back on, and stops at the ceiling', async () => {
+    const { world, lead } = await worldWithLead();
+    const first = await generatingChild(lead, 'First');
+    const second = await world.createChild(lead, 'Second');
+    await world.postHook(second.id, SESSION_START);
+    const promptTheOtherOnSilenceOf = (silent: { id: string }, other: { id: string }) => world.createArmedTrigger({
+      when: { source: 'silent_run', minutes: SLOW_MINUTES }, conditions: [{ lhs: 'event.session.id', op: 'eq', rhs: silent.id }],
+      ownerManagerId: lead.id, run: { kind: 'prompt_session', sessionId: other.id, prompt: 'look' },
+    });
+    const triggerOnFirst = await promptTheOtherOnSilenceOf(first, second);
+    const triggerOnSecond = await promptTheOtherOnSilenceOf(second, first);
+
+    letSilenceLast(SLOW_MINUTES + 1);
+    dateTriggerMessagesByTheFakeClock();
+    await world.postHook(second.id, START_TURN);
+    letSilenceLast(SLOW_MINUTES + 1);
+    dateTriggerMessagesByTheFakeClock();
+    await world.postHook(first.id, USE_TOOL);
+    letSilenceLast(SLOW_MINUTES + 1);
+
+    expect(world.firesOf(triggerOnSecond)).toEqual([expect.objectContaining({ ledger_state: 'completed' })]);
+    expect(world.firesOf(triggerOnFirst)).toEqual([
+      expect.objectContaining({ ledger_state: 'completed' }), expect.objectContaining({ ledger_state: 'cancelled', settle_reason: 'chain_depth' }),
+    ]);
+    expect(bodiesTo(second.id)).toHaveLength(1);
   });
 });
 

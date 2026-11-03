@@ -45,6 +45,9 @@ const observationOf = (session: Session, progress: RuntimeProgress, silentSinceM
 const hasTranscriptGrown = (before: TranscriptCursor | undefined, now: TranscriptCursor | undefined): boolean =>
   before !== undefined && now !== undefined && now.identity === before.identity && now.offset > before.offset;
 
+/** The cursor the next poll compares against: the one just read, or the previous one while the probe reads none. The first cursor read and a file that changes identity become the base without being a sign of life. */
+const transcriptBaseAfter = (before: TranscriptCursor | undefined, now: TranscriptCursor | undefined): TranscriptCursor | undefined => now ?? before;
+
 /** A sign of life since the observation: a new process, a new turn, a hook of the harness or a transcript that grew. */
 function showsSignOfLife(observation: Observation, session: Session, progress: RuntimeProgress): boolean {
   const isAnotherLaunch = progress.launchId !== observation.launchId;
@@ -169,6 +172,7 @@ export class SilentRunSource {
         watch.observationsBySessionId.set(session.id, observationOf(session, progress, now));
         continue;
       }
+      observation.transcriptCursor = transcriptBaseAfter(observation.transcriptCursor, progress.transcriptCursor);
       if (observation.hasBeenOffered) continue;
       if (hasSlept) {
         observation.silentSinceMs = now;
@@ -179,24 +183,26 @@ export class SilentRunSource {
       if (offersLeft === 0) break;
 
       observation.hasBeenOffered = true;
-      if (this.isSetGoingByTheMessageOf(trigger, session, observation, now)) {
+      const causes = this.causesOfTheSilence(session, observation, now);
+      if (causes.some((cause) => cause.triggerId === trigger.id)) {
         this.deps.onOfferSuppressedByCause(trigger.id);
         continue;
       }
       offersLeft -= 1;
+      const causedByChainDepth = Math.max(0, ...causes.map((cause) => cause.chainDepth));
       this.deps.engine.submit({
         triggerId: trigger.id, dedupKey: `silent_run:${session.id}:${new Date(observation.silentSinceMs).toISOString()}`, event: silentRunEventOf(session, trigger.when.minutes),
+        ...(causedByChainDepth > 0 && { causedByChainDepth }),
       });
     }
   }
 
-  /** True when a fire of this trigger sent a message to the child in the hour before its silence began: the silence is the child's answer to the trigger. */
-  private isSetGoingByTheMessageOf(trigger: SilentRunTrigger, session: Session, observation: Observation, now: number): boolean {
-    const causes = this.deps.ledger.causesOf({
+  /** The fires that sent a message to the child in the hour before its silence began: the silence is the child's answer to them. */
+  private causesOfTheSilence(session: Session, observation: Observation, now: number): { triggerId: string; chainDepth: number }[] {
+    return this.deps.ledger.causesOf({
       sessionIds: [session.id],
       sinceIso: new Date(observation.silentSinceMs - CHAIN_CAUSE_WINDOW_MINUTES * MINUTE_MS).toISOString(),
       untilIso: new Date(now).toISOString(),
     });
-    return causes.some((cause) => cause.triggerId === trigger.id);
   }
 }
