@@ -26,6 +26,11 @@ export class SecretRefRepository {
     this.db.prepare("INSERT OR IGNORE INTO secret_refs (id, scope_kind, scope_id, name, status) VALUES (?, ?, ?, ?, 'missing')").run(newId(), scope.kind, scope.id, name);
   }
 
+  /** Removes the declaration of a name that holds no value; a name with a stored value stays, so a human can still clear it. */
+  undeclareWhenMissing(scope: SecretScope, name: string): void {
+    this.db.prepare("DELETE FROM secret_refs WHERE scope_kind = ? AND scope_id = ? AND name = ? AND status = 'missing'").run(scope.kind, scope.id, name);
+  }
+
   isScopeKnown(scope: SecretScope): boolean {
     return this.db.prepare('SELECT 1 AS known FROM secret_refs WHERE scope_kind = ? AND scope_id = ? LIMIT 1').get(scope.kind, scope.id) !== undefined;
   }

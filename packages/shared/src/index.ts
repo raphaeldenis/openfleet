@@ -34,4 +34,5 @@ export * from './tools.js';
 export * from './mcpContract.js';
 export * from './teamPack.js';
 export * from './triggers.js';
+export * from './playbooks.js';
 export * from './secrets.js';

@@ -38,6 +38,17 @@ export const ERROR_CODES = {
   too_many_conditions: { kind: 'invalid_request' },
   trigger_field_prefix: { kind: 'invalid_request' },
 
+  // A playbook is refused at save: a cell kind that is reserved or unsupported, a graph that does not hold together, a size over a cap, or a template in a place that may not hold it.
+  cell_kind_reserved: { kind: 'invalid_request' },
+  cell_kind_unsupported: { kind: 'invalid_request' },
+  playbook_graph_invalid: { kind: 'invalid_request' },
+  playbook_limit_exceeded: { kind: 'invalid_request' },
+  secret_not_allowed_here: { kind: 'invalid_request' },
+  untrusted_reference: { kind: 'invalid_request' },
+  non_canonical_url: { kind: 'invalid_request' },
+  unknown_token: { kind: 'invalid_request' },
+  invalid_secret_name: { kind: 'invalid_request' },
+
   unauthorized: { kind: 'unauthorized' },
   // Arming a trigger is a gesture of a human: the admin token alone is not the proof, a single-use proof minted by the desktop app is.
   human_proof_required: { kind: 'unauthorized' },
@@ -58,6 +69,13 @@ export const ERROR_CODES = {
   // A trigger of another project reads exactly like one that does not exist.
   trigger_not_found: { kind: 'not_found' },
   trigger_condition_not_found: { kind: 'not_found' },
+  // A playbook of another project reads exactly like one that does not exist.
+  playbook_not_found: { kind: 'not_found' },
+  playbook_cell_not_found: { kind: 'not_found' },
+
+  // The playbook moved since it was read: reloading it shows the current revision. A locked playbook takes writes from the desktop app only.
+  playbook_conflict: { kind: 'conflict', retry: 'after_refresh' },
+  playbook_locked: { kind: 'conflict', retry: 'never' },
 
   // The fire breaker disarmed a trigger that fired more than 30 times in a minute: only a human arms it again.
   breaker_open: { kind: 'conflict', retry: 'never' },

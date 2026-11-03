@@ -22,10 +22,10 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Kind | HTTP status | Codes |
 | --- | --- | --- |
-| `invalid_request` | 400 | 20 |
+| `invalid_request` | 400 | 29 |
 | `unauthorized` | 401 | 3 |
-| `not_found` | 404 | 17 |
-| `conflict` | 409 | 45 |
+| `not_found` | 404 | 19 |
+| `conflict` | 409 | 47 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 13 |
 | `internal` | 500 | 4 |
@@ -52,6 +52,15 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `docs_root_forbidden` | 400 | `never` |
 | `too_many_conditions` | 400 | `never` |
 | `trigger_field_prefix` | 400 | `never` |
+| `cell_kind_reserved` | 400 | `never` |
+| `cell_kind_unsupported` | 400 | `never` |
+| `playbook_graph_invalid` | 400 | `never` |
+| `playbook_limit_exceeded` | 400 | `never` |
+| `secret_not_allowed_here` | 400 | `never` |
+| `untrusted_reference` | 400 | `never` |
+| `non_canonical_url` | 400 | `never` |
+| `unknown_token` | 400 | `never` |
+| `invalid_secret_name` | 400 | `never` |
 | `question_unclassified` | 400 | `never` |
 | `row_guard_violation` | 400 | `never` |
 | `message_held_for_review` | 400 | `never` |
@@ -83,6 +92,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `law_not_found` | 404 | `never` |
 | `trigger_not_found` | 404 | `never` |
 | `trigger_condition_not_found` | 404 | `never` |
+| `playbook_not_found` | 404 | `never` |
+| `playbook_cell_not_found` | 404 | `never` |
 | `escalation_not_found` | 404 | `never` |
 | `secret_scope_not_found` | 404 | `never` |
 | `secret_not_declared` | 404 | `never` |
@@ -91,6 +102,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Code | HTTP status | Retry |
 | --- | --- | --- |
+| `playbook_conflict` | 409 | `after_refresh` |
+| `playbook_locked` | 409 | `never` |
 | `breaker_open` | 409 | `never` |
 | `session_closed` | 409 | `never` |
 | `stale_revision` | 409 | `after_refresh` |

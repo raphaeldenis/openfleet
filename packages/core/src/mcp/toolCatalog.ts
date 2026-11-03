@@ -100,8 +100,19 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
 
   search_knowledge: { domain: 'knowledge', category: 'read_only' },
 
+  add_playbook_cell: { domain: 'playbooks', category: 'additive' },
   clear_playbook_secret: { domain: 'playbooks', category: 'destructive' },
+  create_playbook: { domain: 'playbooks', category: 'additive' },
+  delete_playbook: { domain: 'playbooks', category: 'destructive' },
+  delete_playbook_cell: { domain: 'playbooks', category: 'destructive' },
+  get_playbook: { domain: 'playbooks', category: 'read_only' },
+  get_playbook_schema: { domain: 'playbooks', category: 'read_only' },
+  list_playbook_cells: { domain: 'playbooks', category: 'read_only' },
   list_playbook_secret_statuses: { domain: 'playbooks', category: 'read_only' },
+  list_playbooks: { domain: 'playbooks', category: 'read_only' },
+  reorder_playbook_cells: { domain: 'playbooks', category: 'additive' },
+  set_playbook_inputs: { domain: 'playbooks', category: 'additive' },
+  update_playbook_cell: { domain: 'playbooks', category: 'additive' },
 
   get_working_state: { domain: 'working_state', category: 'read_only' },
   update_working_state: { domain: 'working_state', category: 'destructive' },
