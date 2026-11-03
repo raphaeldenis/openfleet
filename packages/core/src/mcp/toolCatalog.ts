@@ -123,6 +123,7 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
   delete_trigger_condition: { domain: 'triggers', category: 'destructive' },
   get_trigger: { domain: 'triggers', category: 'read_only' },
   get_trigger_schema: { domain: 'triggers', category: 'read_only' },
+  list_trigger_fires: { domain: 'triggers', category: 'read_only' },
   list_triggers: { domain: 'triggers', category: 'read_only' },
   set_trigger_policy: { domain: 'triggers', category: 'additive' },
   set_trigger_run: { domain: 'triggers', category: 'additive' },

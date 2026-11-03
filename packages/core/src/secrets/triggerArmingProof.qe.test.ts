@@ -17,7 +17,7 @@ const api = (path: string, init: RequestInit = {}) =>
   fetch(`${daemon.server.url}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${config.adminToken}`, ...init.headers } });
 
 const createTrigger = async (title: string): Promise<string> => {
-  const response = await api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: PROJECT_ID, title }) });
+  const response = await api('/api/triggers', { method: 'POST', body: JSON.stringify({ projectId: PROJECT_ID, ownerManagerId: null, title }) });
   return ((await response.json()) as { id: string }).id;
 };
 
@@ -101,7 +101,7 @@ describe('a daemon started without the desktop app', () => {
     const standaloneDaemon = await startDaemon(standalone);
     standaloneDaemon.db.prepare("INSERT INTO projects (id, name, created_at) VALUES (?, 'Arming', 'now')").run(PROJECT_ID);
     const headers = { 'content-type': 'application/json', authorization: `Bearer ${standalone.adminToken}` };
-    const created = await fetch(`${standaloneDaemon.server.url}/api/triggers`, { method: 'POST', headers, body: JSON.stringify({ projectId: PROJECT_ID, title: 'Nightly' }) });
+    const created = await fetch(`${standaloneDaemon.server.url}/api/triggers`, { method: 'POST', headers, body: JSON.stringify({ projectId: PROJECT_ID, ownerManagerId: null, title: 'Nightly' }) });
     const { id } = (await created.json()) as { id: string };
 
     const response = await fetch(`${standaloneDaemon.server.url}/api/triggers/${id}/arm`, { method: 'POST', headers: { ...headers, [HUMAN_PROOF_HEADER]: 'any-proof-at-all' }, body: JSON.stringify({ approvedRev: 1 }) });

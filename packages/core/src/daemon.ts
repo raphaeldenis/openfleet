@@ -19,7 +19,7 @@ import { CriteriaStatusGuard } from './escalation/criteriaStatusGuard.js';
 import { EscalationRepository } from './escalation/escalationRepository.js';
 import { EscalationService } from './escalation/escalationService.js';
 import { GovernanceQueueService } from './governance/governanceQueueService.js';
-import type { EscalationView } from '@openfleet/shared';
+import { OpenFleetError, type EscalationView } from '@openfleet/shared';
 import { decisionNotification, escalationAnswerNotification } from './governance/decisionNotification.js';
 import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
@@ -81,6 +81,13 @@ import { createGhPullRequestPort, type GhPullRequestPort } from './github/ghPull
 import { staleInProgressRowLabelsOfProject } from './managers/staleRows.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import type { HumanProofVerifier } from './triggers/humanProofVerifier.js';
+import { toSingleLineName } from './managers/singleLineName.js';
+import { SessionStateSource } from './triggers/sessionStateSource.js';
+import { FireBreaker } from './triggers/fireBreaker.js';
+import { FireLedger } from './triggers/fireLedger.js';
+import { createTriggerActions } from './triggers/triggerActions.js';
+import { TriggerCursors } from './triggers/triggerCursors.js';
+import { TriggerEngine, type SettledFire } from './triggers/triggerEngine.js';
 import { TriggerRepository } from './triggers/triggerRepository.js';
 import { TriggerService } from './triggers/triggerService.js';
 import { PlaybookRepository } from './playbooks/playbookRepository.js';
@@ -149,6 +156,8 @@ export interface Daemon {
   governanceQueue: GovernanceQueueService;
   scheduledEvents: ScheduledEventService;
   ciWatch: CiWatchService;
+  /** The entry point of the trigger sources: they offer events, the engine fires. */
+  triggerEngine: TriggerEngine;
   askUserGate: AskUserGate;
   criteriaStatusGuard: CriteriaStatusGuard;
   harnesses: Harness[];
@@ -204,6 +213,8 @@ export interface DaemonOptions {
   };
   /** Tells whether a proof of arming was minted by a human gesture; absent, no proof is good and no trigger can be armed. */
   humanProof?: HumanProofVerifier;
+  /** Replaces the clock of the trigger engine (epoch milliseconds), so a test decides when a fire is accepted, how old a backlog is and which day it is. */
+  triggers?: { clock?: () => number; schedule?: (callback: () => void, delayMs: number) => () => void };
   power?: {
     api?: PowerApi;
     clock?: () => number;
@@ -424,9 +435,29 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const secrets = new SecretService({ refs: new SecretRefRepository(db), store: options.secrets?.store ?? secretBridge ?? createUnavailableSecretStore(), clock: options.secrets?.clock ?? Date.now });
   const secretChannel = { ignoredAnswerCount: () => secretBridge?.ignoredAnswerCount() ?? 0 };
   const humanProof = options.humanProof ?? createOperatorHumanProof(secretNonces);
-  const triggers = new TriggerService({ repository: new TriggerRepository(db), humanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
+  const triggerRepository = new TriggerRepository(db);
+  const triggers = new TriggerService({ repository: triggerRepository, humanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId, onArmed: () => sessionStateSource.rescan() });
+  const triggerClock = options.triggers?.clock ?? Date.now;
+  const announceBreakerOpened = (trigger: { id: string; title: string }) => {
+    log('warn', `trigger ${trigger.id} fired more than the cap in a minute and was disarmed`);
+    const error = describeError(new OpenFleetError('breaker_open', `the trigger "${toSingleLineName(trigger.title)}" fired too often in a minute and was disarmed.`, { hint: 'Check what fires it, then arm it again from the Triggers screen.' }));
+    bus.emit({ type: 'error', scope: 'broadcast', error });
+  };
+  const fireLedger = new FireLedger(db);
+  const announceSettledFire = ({ triggerId, fireId, ledgerState, reason }: SettledFire) => {
+    bus.emit({ type: 'trigger.fired', triggerId, fireId, ledgerState, ...(reason !== undefined && { reason }) });
+    systemActivity.triggerFired({ triggerId, ledgerState, reason });
+  };
+  const triggerEngine = new TriggerEngine({
+    onSettled: announceSettledFire,
+    triggers: triggerRepository, ledger: fireLedger, actions: createTriggerActions({ sessions, managers: managerRepository, clock: triggerClock, announce: (notice) => bus.emit({ type: 'notification.trigger', category: 'triggerNotice', ...notice }) }), breaker: new FireBreaker(triggerClock),
+    clock: triggerClock, newId, schedule: options.triggers?.schedule ?? scheduleOnRealClock, onBreakerOpened: announceBreakerOpened,
+  });
+  const sessionStateSource = new SessionStateSource({
+    bus, sessions, managers: managerRepository, triggers: triggerRepository, cursors: new TriggerCursors(db), engine: triggerEngine, clock: triggerClock, schedule: options.triggers?.schedule ?? scheduleOnRealClock,
+  });
   const playbooks = new PlaybookService({ db, repository: new PlaybookRepository(db), secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
-  const server = await startServer({ ...config, triggers, playbooks, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, playbooks, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -439,6 +470,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     unwatchDatabase();
     pulseScheduler.stop();
     scheduledEvents.stop();
+    sessionStateSource.stop();
+    triggerEngine.stop();
     childSilence.stop();
     arbiters.stop();
     await ciWatch.stop();
@@ -465,8 +498,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     docsFolders.start();
     sleepGuard.start();
     systemActivity.daemonStarted(DAEMON_VERSION);
+    // Resuming writes a new state time: the source reads the episodes a killed daemon left before that.
+    const sessionsBeforeResume = sessions.list();
     await sessions.resumeAll({ onResumed: (session) => systemActivity.sessionResumed(session, lineageRootIdOf(sessions, session)) });
     arbiters.recover();
+    triggerEngine.recover();
+    sessionStateSource.start({ sessionsBeforeResume });
     childSilence.restore();
     pulseScheduler.start();
     scheduledEvents.start();
@@ -478,5 +515,5 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     throw error;
   }
 
-  return { server, db, degraded, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, harnesses, secrets, secretChannel, close };
+  return { server, db, degraded, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, triggerEngine, harnesses, secrets, secretChannel, close };
 }

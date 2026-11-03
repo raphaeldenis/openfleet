@@ -58,6 +58,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   invalid_secret_name: { what: 'A secret name has only letters, digits and underscores, and does not start with a digit', fix: 'rename it' },
 
   unauthorized: { what: 'The daemon refused the app’s credentials', fix: 'check the admin token' },
+  breaker_open: { what: 'A trigger fired too often and was disarmed', fix: 'check what fires it, then arm it again from the Triggers screen' },
   human_proof_required: { what: 'Arming a trigger needs a human confirmation in the desktop app', fix: 'confirm it there' },
 
   not_found: { what: 'That item no longer exists' },

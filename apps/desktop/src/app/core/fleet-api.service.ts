@@ -128,6 +128,8 @@ export class FleetApiService {
     return { ok: true, version: reportedVersion };
   }
   diagnostics() { return this.call<DiagnosticsDocument>(DIAGNOSTICS_PATH); }
+  /** The title of a trigger, which the banner of a `notify` trigger shows. */
+  getTrigger(triggerId: string) { return this.call<{ id: string; title: string }>(`/api/triggers/${encodeURIComponent(triggerId)}`); }
   listSessions() { return this.getWithin<Session[]>('/api/sessions', DAEMON_ANSWER_TIMEOUT_MS); }
   models() { return this.call<Record<string, string>>('/api/models'); }
   availableModels() { return this.call<{ models: string[] }>('/api/models/available'); }

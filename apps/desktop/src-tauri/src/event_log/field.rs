@@ -649,6 +649,7 @@ const KNOWN_CODES: &[&str] = &[
   "cell_kind_reserved", "cell_kind_unsupported", "playbook_graph_invalid", "playbook_limit_exceeded", "secret_not_allowed_here", "untrusted_reference",
   "non_canonical_url", "unknown_token", "invalid_secret_name", "playbook_not_found", "playbook_cell_not_found", "playbook_conflict", "playbook_locked",
   "secret_scope_not_found", "secret_not_declared", "secret_not_connected_on_this_device", "secret_store_unavailable", "secret_too_short", "secret_nonce_invalid",
+  "breaker_open",
 ];
 
 const OTHER_CODE: &str = "other";

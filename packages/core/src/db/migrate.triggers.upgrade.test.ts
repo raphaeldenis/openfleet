@@ -67,11 +67,36 @@ describe('the triggers migration', () => {
     expect(db.prepare('SELECT (SELECT COUNT(*) FROM trigger_fires) AS fires, (SELECT COUNT(*) FROM trigger_cursors) AS cursors').get()).toEqual({ fires: 0, cursors: 0 });
   });
 
-  it('ships a down migration outside the migrations folder that removes the three tables', () => {
+  it('keeps the event of a fire, the reason it ended and its depth in a chain, with no reason and a depth of 1 by default', () => {
+    const db = openMigratedDatabase();
+    insertTrigger(db);
+    insertFire(db);
+
+    expect(db.prepare('SELECT event_json, settle_reason, chain_depth FROM trigger_fires').get()).toEqual({ event_json: '{}', settle_reason: null, chain_depth: 1 });
+  });
+
+  it('starts a trigger with no owner and a fire with no effect start', () => {
+    const db = openMigratedDatabase();
+    insertTrigger(db);
+    insertFire(db);
+
+    expect(db.prepare('SELECT owner_manager_id FROM triggers').get()).toEqual({ owner_manager_id: null });
+    expect(db.prepare('SELECT effect_started_at FROM trigger_fires').get()).toEqual({ effect_started_at: null });
+  });
+
+  it('ships down migrations outside the migrations folder that remove the added columns, then the three tables', () => {
     const db = openMigratedDatabase();
 
+    db.exec(readFileSync(new URL('066_trigger_fire_events.down.sql', migrationsDownDirectory), 'utf8'));
+    const columnsAfterFirstDown = (db.prepare("SELECT name FROM pragma_table_info('trigger_fires')").all() as { name: string }[]).map((column) => column.name);
+    const triggerColumnsAfterFirstDown = (db.prepare("SELECT name FROM pragma_table_info('triggers')").all() as { name: string }[]).map((column) => column.name);
     db.exec(readFileSync(new URL('064_triggers.down.sql', migrationsDownDirectory), 'utf8'));
 
+    expect(triggerColumnsAfterFirstDown).not.toContain('owner_manager_id');
+    expect(columnsAfterFirstDown).not.toContain('effect_started_at');
+    expect(columnsAfterFirstDown).not.toContain('event_json');
+    expect(columnsAfterFirstDown).not.toContain('settle_reason');
+    expect(columnsAfterFirstDown).not.toContain('chain_depth');
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'trigger%'").all()).toEqual([]);
   });
 });

@@ -75,6 +75,14 @@ describe('ServerEvent', () => {
     expect([quotingQuestion, leakingTool]).toHaveLength(2);
   });
 
+  it('announces a fired notify trigger by its two ids, with no field for the title or the message of the trigger', () => {
+    const notice: ServerEvent = { type: 'notification.trigger', category: 'triggerNotice', triggerId: 't1', fireId: 'f1' };
+    // @ts-expect-error a trigger notice names the trigger, never quotes its title or message
+    const quoting: ServerEvent = { type: 'notification.trigger', category: 'triggerNotice', triggerId: 't1', fireId: 'f1', title: 'Wake the lead' };
+
+    expect([notice, quoting]).toHaveLength(2);
+  });
+
   it('has no field to carry tool input or transcript text', () => {
     // @ts-expect-error a trigger names the tool, never its input
     const leaking: ServerEvent = { type: 'notification.trigger', category: 'needsInput', sessionId: 's1', kind: 'permission', promptKey: 'k', toolInput: { command: 'rm' } };

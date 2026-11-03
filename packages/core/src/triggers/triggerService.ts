@@ -3,13 +3,15 @@ import {
   type TriggerCondition, type TriggerPolicy, type TriggerRun, type TriggerWhen,
 } from '@openfleet/shared';
 import { canonicalDigestOf } from '../playbooks/kernel/canonicalDigest.js';
-import { evaluateConditions, type Condition } from '../playbooks/kernel/conditionEvaluator.js';
+import { evaluateConditions } from '../playbooks/kernel/conditionEvaluator.js';
 import { KernelError } from '../playbooks/kernel/kernelError.js';
 import type { HumanProofVerifier } from './humanProofVerifier.js';
+import { kernelConditionsOf } from './kernelConditions.js';
 import type { TriggerContent, TriggerRecord, TriggerRepository } from './triggerRepository.js';
 
 const DEFAULT_TITLE = 'Untitled Trigger';
 const MAX_TITLE_CHARS = 200;
+const NUL = String.fromCharCode(0);
 
 export interface TriggerServiceDeps {
   repository: TriggerRepository;
@@ -17,6 +19,8 @@ export interface TriggerServiceDeps {
   projectExists: (projectId: string) => boolean;
   clock: () => string;
   newId: () => string;
+  /** Called after a trigger is armed, so a source can look at what already is. */
+  onArmed?: (trigger: TriggerRecord) => void;
 }
 
 /** The content a caller edits, from the trigger as it stands: returns what to replace. */
@@ -25,14 +29,10 @@ type ContentEdit = (current: TriggerRecord) => TriggerContent;
 const notFound = () => new OpenFleetError('trigger_not_found', 'trigger not found');
 const staleRevision = (currentRev: number) => new OpenFleetError('stale_revision', `the trigger revision is stale, current rev: ${currentRev}.`, { hint: 'Reload the trigger, then write again.' });
 
-const kernelConditionOf = (condition: TriggerCondition): Condition => ({
-  path: condition.lhs, operator: condition.op, value: condition.rhs, caseInsensitive: condition.caseInsensitive, join: condition.join,
-});
-
 /** The conditions the evaluator of the kernel accepts: its own checks (operator, cap) run against an empty event. */
 function assertEvaluableByTheKernel(conditions: TriggerCondition[]): void {
   try {
-    evaluateConditions(conditions.map(kernelConditionOf), {});
+    evaluateConditions(kernelConditionsOf(conditions), {});
   } catch (error) {
     if (error instanceof KernelError) throw new OpenFleetError('invalid_body', error.message);
     throw error;
@@ -64,26 +64,27 @@ export const withFirstJoinForced = (conditions: TriggerCondition[]): TriggerCond
   conditions.map((condition, position) => (position === 0 ? { ...condition, join: 'and' as const } : condition));
 
 function titleOf(requested: string | undefined): string {
-  const title = requested?.trim() || DEFAULT_TITLE;
+  // SQLite reads a text column up to its first NUL: a title is stored without them.
+  const title = requested?.replaceAll(NUL, '').trim() || DEFAULT_TITLE;
   if (title.length > MAX_TITLE_CHARS) throw new OpenFleetError('invalid_body', `a title holds at most ${MAX_TITLE_CHARS} characters.`);
   return title;
 }
 
 /** The part of a trigger that a human approves when arming it. */
-export const approvedGraphOf = (trigger: Pick<TriggerRecord, 'when' | 'conditions' | 'run' | 'policy'>) =>
-  ({ when: trigger.when, conditions: trigger.conditions, run: trigger.run, policy: trigger.policy });
+export const approvedGraphOf = (trigger: Pick<TriggerRecord, 'ownerManagerId' | 'when' | 'conditions' | 'run' | 'policy'>) =>
+  ({ ownerManagerId: trigger.ownerManagerId, when: trigger.when, conditions: trigger.conditions, run: trigger.run, policy: trigger.policy });
 
 export class TriggerService {
   constructor(private readonly deps: TriggerServiceDeps) {}
 
-  create(input: { projectId: string; title?: string; when?: TriggerWhen; conditions?: Record<string, unknown>[]; run?: TriggerRun; policy?: Partial<TriggerPolicy> }): TriggerRecord {
+  create(input: { projectId: string; ownerManagerId: string | null; title?: string; when?: TriggerWhen; conditions?: Record<string, unknown>[]; run?: TriggerRun; policy?: Partial<TriggerPolicy> }): TriggerRecord {
     const { repository, projectExists, clock, newId } = this.deps;
     if (!projectExists(input.projectId)) throw new OpenFleetError('project_not_found', 'project not found');
     const when = input.when ?? DEFAULT_TRIGGER_WHEN;
     const conditions = this.conditionsWithIds(input.conditions ?? []);
     assertDocumentIsSound({ when, conditions });
     const id = newId();
-    repository.insert({ id, projectId: input.projectId, title: titleOf(input.title), when, conditions, run: input.run ?? DEFAULT_TRIGGER_RUN, policy: TriggerPolicySchema.parse(input.policy ?? {}), createdAt: clock() });
+    repository.insert({ id, projectId: input.projectId, ownerManagerId: input.ownerManagerId, title: titleOf(input.title), when, conditions, run: input.run ?? DEFAULT_TRIGGER_RUN, policy: TriggerPolicySchema.parse(input.policy ?? {}), createdAt: clock() });
     return this.getById(id);
   }
 
@@ -148,7 +149,9 @@ export class TriggerService {
     const approvedGraphDigest = canonicalDigestOf(approvedGraphOf(trigger));
     const wasArmed = repository.arm({ id: trigger.id, approvedRev: input.approvedRev, approvedGraphDigest, now: clock() });
     if (!wasArmed) throw staleRevision(this.getById(trigger.id).contentRev);
-    return this.getById(trigger.id);
+    const armed = this.getById(trigger.id);
+    this.deps.onArmed?.(armed);
+    return armed;
   }
 
   disarm(id: string): TriggerRecord {

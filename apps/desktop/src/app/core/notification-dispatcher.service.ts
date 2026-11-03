@@ -1,6 +1,7 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { MANAGER_ROLE, type NotificationTrigger, type Session } from '@openfleet/shared';
+import { FleetApiService } from './fleet-api.service';
 import { FleetEventsService } from './fleet-events.service';
 import { NativeNotifications, type NativeNotification } from './native-notifications.service';
 import { NotificationPrefsStore } from './notification-prefs.store';
@@ -10,8 +11,24 @@ const TOOL_COMPLETION_WINDOW_MS = 15_000;
 const INBOX_ROUTE = '/inbox';
 const MAX_REMEMBERED_PROMPTS = 500;
 
+const TRIGGER_BANNER_TITLE = 'Trigger fired';
+const TRIGGER_BANNER_FALLBACK_BODY = 'A trigger fired';
+const MAX_TRIGGER_BANNER_BODY_CHARS = 80;
+const CONTROL_OR_FORMAT_CHARACTERS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu;
+
+/** The title of a trigger as a banner body: one line, no control characters, at most 80 characters. */
+const triggerBannerBodyOf = (title: string | undefined): string => {
+  const oneLine = (title ?? '').replace(CONTROL_OR_FORMAT_CHARACTERS, ' ').trim();
+  if (oneLine === '') return TRIGGER_BANNER_FALLBACK_BODY;
+  const characters = Array.from(oneLine);
+  return characters.length <= MAX_TRIGGER_BANNER_BODY_CHARS ? oneLine : `${characters.slice(0, MAX_TRIGGER_BANNER_BODY_CHARS).join('')}…`;
+};
+
+/** The notifications that are about a session; a trigger notice is about a trigger and is announced on its own. */
+type SessionNotification = Exclude<NotificationTrigger, { category: 'triggerNotice' }>;
+type TriggerNotice = Extract<NotificationTrigger, { category: 'triggerNotice' }>;
 const KNOWN_CATEGORIES = ['agentFinished', 'needsInput', 'toolCompletion', 'chatMessage'] as const satisfies readonly NotificationTrigger['category'][];
-type TriggerCategory = NotificationTrigger['category'];
+type TriggerCategory = SessionNotification['category'];
 
 const isKnownCategory = (category: string): category is TriggerCategory => (KNOWN_CATEGORIES as readonly string[]).includes(category);
 
@@ -32,7 +49,7 @@ const BURST_SUMMARY_OF_CATEGORY: Record<TriggerCategory, (count: number) => stri
 const sessionRouteOf = (session: Session | undefined, sessionId: string): string =>
   session?.role === MANAGER_ROLE ? `/manager/${sessionId}` : `/session/${sessionId}`;
 
-function bodyOf(trigger: NotificationTrigger): string {
+function bodyOf(trigger: SessionNotification): string {
   if (trigger.category === 'agentFinished') return 'Finished';
   if (trigger.category === 'chatMessage') return trigger.questionCount === 1 ? 'Asked you a question' : `Asked you ${trigger.questionCount} questions`;
   if (trigger.category === 'toolCompletion') return `${trigger.toolName} finished`;
@@ -46,8 +63,10 @@ export class NotificationDispatcher {
   private readonly notifications = inject(NativeNotifications);
   private readonly prefs = inject(NotificationPrefsStore);
   private readonly router = inject(Router);
+  private readonly api = inject(FleetApiService);
   private readonly refusedByTheSystem = signal(false);
-  private readonly pendingByCategory = new Map<TriggerCategory, NotificationTrigger[]>();
+  private readonly pendingByCategory = new Map<TriggerCategory, SessionNotification[]>();
+  private readonly announcedFireIds = new Set<string>();
   private readonly announcedPromptKeys = new Set<string>();
 
   /** True once the system refused to show banners for this app. */
@@ -58,6 +77,7 @@ export class NotificationDispatcher {
   }
 
   private receive(trigger: NotificationTrigger): void {
+    if (trigger.category === 'triggerNotice') return void this.announceTriggerNotice(trigger);
     if (!isKnownCategory(trigger.category)) return;
     if (this.isSilenced(trigger)) return;
     if (this.isAlreadyAnnounced(trigger)) return;
@@ -75,7 +95,22 @@ export class NotificationDispatcher {
     setTimeout(() => this.flush(trigger.category), windowMs);
   }
 
-  private isSilenced(trigger: NotificationTrigger): boolean {
+  /** The banner is fixed: only the title of the trigger, read from the admin API and never from the event, fills its body. */
+  private async announceTriggerNotice({ triggerId, fireId }: TriggerNotice): Promise<void> {
+    const { enabled, muted } = this.prefs.prefs();
+    if (!enabled || muted || this.hasAnnouncedFire(fireId)) return;
+    const title = await this.api.getTrigger(triggerId).then((trigger) => trigger.title, () => undefined);
+    await this.show({ title: TRIGGER_BANNER_TITLE, body: triggerBannerBodyOf(title), route: INBOX_ROUTE });
+  }
+
+  private hasAnnouncedFire(fireId: string): boolean {
+    if (this.announcedFireIds.has(fireId)) return true;
+    if (this.announcedFireIds.size >= MAX_REMEMBERED_PROMPTS) this.announcedFireIds.clear();
+    this.announcedFireIds.add(fireId);
+    return false;
+  }
+
+  private isSilenced(trigger: SessionNotification): boolean {
     const choices = this.prefs.prefs();
     const { enabled, muted } = choices;
     const isCategoryOn = choices[PREF_OF_CATEGORY[trigger.category]];
@@ -83,7 +118,7 @@ export class NotificationDispatcher {
     return !enabled || muted || !isCategoryOn || isAppInFrontOnThatSession;
   }
 
-  private isAlreadyAnnounced(trigger: NotificationTrigger): boolean {
+  private isAlreadyAnnounced(trigger: SessionNotification): boolean {
     if (trigger.category !== 'needsInput' && trigger.category !== 'chatMessage') return false;
     const eventKey = trigger.category === 'needsInput' ? trigger.promptKey : trigger.questionKey;
     const promptKey = `${trigger.category}@${trigger.sessionId}@${eventKey}`;
@@ -105,7 +140,7 @@ export class NotificationDispatcher {
     void this.show(banner);
   }
 
-  private bannerOf(trigger: NotificationTrigger, { toolCount = 1 }: { toolCount?: number } = {}): NativeNotification {
+  private bannerOf(trigger: SessionNotification, { toolCount = 1 }: { toolCount?: number } = {}): NativeNotification {
     const session = this.sessionOf(trigger.sessionId);
     const title = session ? `${session.emoji} ${session.name}` : 'OpenFleet';
     const hasMultipleTools = trigger.category === 'toolCompletion' && toolCount > 1;
