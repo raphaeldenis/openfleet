@@ -43,7 +43,7 @@ The header is written by the daemon from ids and enumerations. The prompt, with 
 
 ## Sources
 
-The engine runs two sources: `session_state` and `data_store_query`. For `session_state`, a wait that ends while the daemon is stopped is not lost. A daemon that stops cleanly writes its pending waits to `trigger_cursors`; at boot the source captures the sessions as the database holds them before `resumeAll` (resuming writes a new state time), and reads the cursors and offers the episodes after it. The episodes come from those cursors and from the captured sessions a killed daemon left idle or on a permission prompt; the ones already due are offered with their real deadline as the date of the fire. A cursor is handed back to the trigger it was written for and to no other; an episode read from a session is offered to every trigger that watches it. A cursor date must be an ISO 8601 date with a time and an offset (`2026-11-02T10:00:00.000Z`); an episode with any other date is ignored. Reading the cursors deletes only those that parse: a cursor that is not valid JSON is logged and left in place, so it does not cost the other triggers their episodes, and the next clean stop of that trigger overwrites it. The backlog policy judges them like the fires left `accepted`: `fire_all` fires each, `fire_latest_only` keeps the latest, `discard_stale` cancels as `stale` what is older than `backlogMaxAgeMinutes` (60 by default) counted from the deadline. An episode already fired is a duplicate. A session that closed with an error while the daemon was stopped, after the trigger was armed, is offered once. A wait not yet due at boot is not restored: resuming starts a new episode.
+The engine runs three sources: `session_state`, `data_store_query` and `cron`. For `session_state`, a wait that ends while the daemon is stopped is not lost. A daemon that stops cleanly writes its pending waits to `trigger_cursors`; at boot the source captures the sessions as the database holds them before `resumeAll` (resuming writes a new state time), and reads the cursors and offers the episodes after it. The episodes come from those cursors and from the captured sessions a killed daemon left idle or on a permission prompt; the ones already due are offered with their real deadline as the date of the fire. A cursor is handed back to the trigger it was written for and to no other; an episode read from a session is offered to every trigger that watches it. A cursor date must be an ISO 8601 date with a time and an offset (`2026-11-02T10:00:00.000Z`); an episode with any other date is ignored. Reading the cursors deletes only those that parse: a cursor that is not valid JSON is logged and left in place, so it does not cost the other triggers their episodes, and the next clean stop of that trigger overwrites it. The backlog policy judges them like the fires left `accepted`: `fire_all` fires each, `fire_latest_only` keeps the latest, `discard_stale` cancels as `stale` what is older than `backlogMaxAgeMinutes` (60 by default) counted from the deadline. An episode already fired is a duplicate. A session that closed with an error while the daemon was stopped, after the trigger was armed, is offered once. A wait not yet due at boot is not restored: resuming starts a new episode.
 
 `data_store_query` reads the change history of a data store (`ds_row_history`) from a position kept in `trigger_cursors`, `{ kind: 'table', seq, count, tooLarge }`, one row per trigger: `seq` is the last change dealt with, `count` the row count of the store at that change, `tooLarge` the number of changes not offered because their event was too large. It does not run queries.
 
@@ -66,4 +66,55 @@ The engine runs two sources: `session_state` and `data_store_query`. For `sessio
 - Text: the prompt takes no token from a row (the allow-list of `data_store_query` is empty), the header holds ids only, and the row is not written to the activity log. The event, with the cells, is kept in the ledger row of the fire (`event_json`, 8192 characters at most). `row_updated` reads the row as it stands when the source reads the change, not as it was at that change: a later write can show in `event.row`; `event.previous` holds only the values before this change.
 - Conditions read column ids, not display names.
 
-`silent_run`, `cron` and `integration_records` are accepted by the schema and do not fire yet. The RUN `run_playbook` does not run either.
+## Source `cron`
+
+A cron trigger fires at the slots of a five-field expression (`minute hour day-of-month month day-of-week`) read in an IANA time zone. No dependency is used: the parser is `packages/shared/src/cronExpression.ts`, the zone arithmetic uses `Intl.DateTimeFormat` (`packages/core/src/triggers/cronCalendar.ts`), the source is `cronSource.ts`.
+
+### The WHEN
+
+| field | rule |
+|---|---|
+| `expression` | at most 100 characters, five fields. Lists (`1,15`), ranges (`8-10`), steps (`*/20`, `10-30/5`), names (`JAN`..`DEC`, `SUN`..`SAT`, any case), `7` is Sunday, `?` is `*` in the day fields. A step is between 1 and the size of the field. |
+| `timezone` | IANA name, at most 64 characters, default `Europe/Paris`. |
+| `catchUp` | `skip` (default), `run_once` or `run_all`: see below. |
+
+The schema refuses, when the trigger is created or edited, an expression that never fires (`0 0 30 2 *`, `0 0 31 4 *`, `0 0 31 4,6,11 *`). `0 0 29 2 *` is valid and fires on leap days. Five fields have a one-minute resolution, so an expression never fires more than once a minute. When both day fields are restricted either may match (`0 0 15 * MON`: the 15th or a Monday), as in Vixie cron; when one is `*` both must match.
+
+The conditions read `event.slot.at` (the slot in UTC, ISO 8601), `event.slot.localDate` (`YYYY-MM-DD`) and `event.slot.localTime` (`HH:mm`), in the zone of the trigger. `event.record.*` and any other prefix are refused. The prompt takes no token from the event. The header holds ids only.
+
+### Slots, dedup and the cursor
+
+- A slot is an instant. The dedup key is `cron:<slot as ISO 8601 UTC>`, so a slot offered twice (a cursor rewound, a restart between the offer and the cursor write) is one fire.
+- The cursor of a trigger is a row of `trigger_cursors`, `{ kind: 'cron', through }`: every slot at or before `through` is dealt with. Arming sets it to the present (never behind where it was), so the slots of the time the trigger was disarmed are not offered. A wake offers the slots in `(through, now]` and then moves `through` to the newest of them: the cursor never goes back, and `takeAll` at boot leaves it in place, as it does the cursor of a table.
+- A trigger that is armed but has no cursor at boot (armed before the cursors existed) starts from `armed_at`: the slots between then and now are missed slots, judged by `catchUp` and the backlog policy. A trigger armed while the daemon runs starts at the present.
+- One timer per armed trigger, set to the next slot and never for more than an hour (`MAX_WAIT_MS`); a wake that finds nothing due sets the next one, after reading the arming again (a fire that trips the breaker leaves no timer). The timer is cancelled when the daemon stops, and when the trigger is edited, disarmed (by a human or by the breaker) or deleted (`TriggerService` calls `onChanged`).
+- Scope: the owner scopes what the trigger does, as for the other sources. A slot is about no session, so `close_session` is cancelled `target_not_eligible`, `prompt_manager` reaches the owner when it names no manager, and a named manager outside the lineage of the owner is `target_not_eligible`.
+- The activity log gets the ids and the enumerations of every trigger (`trigger.fired`), nothing of the expression or the prompt.
+
+### Time changes (tested on a fake clock in `Europe/Paris`)
+
+- **The clock goes back** (2026-10-25, 03:00 CEST becomes 02:00 CET at 01:00Z): the local hour 02:xx is read twice. An expression with a fixed hour (`30 2 * * *`) fires once, at the first reading (00:30Z). An expression that runs in every hour of the day (`0 * * * *`, `* * * * *`) fires at each real occurrence, so it does not lose a real hour (00:00Z and 01:00Z both fire).
+- **The clock jumps** (2026-03-29, 02:00 CET becomes 03:00 CEST at 01:00Z): the local hour 02:xx does not exist. A slot that falls in it fires once, at the first instant after the gap (03:00 local, 01:00Z). All the slots of the missing hour have that same instant, so they are one fire with one dedup key, and an expression that also names 03:00 does not fire twice.
+
+Zones with an offset that is not a whole number of hours work the same way and are tested: `Asia/Kathmandu` (+5:45, `0 9 * * *` is 03:15Z) and `Australia/Lord_Howe` (+10:30 / +11, a 30-minute shift: on 2026-04-05 `45 1 * * *` fires once and `* * * * *` fires at each of the 60 real minutes of the repeated half hour; on 2026-10-04 `15 2 * * *` fires once at 02:30 local, 2026-10-03T15:30Z). `?` is read as `*` before the expression is analysed, so `?/2` and `*/2` are the same in the day fields.
+
+### Catching up after a stop
+
+A wake splits the slots in `(cursor, now]` in two before anything is chosen. A slot found within two minutes of its instant (`ON_TIME_WITHIN_MS`) is **live**: it is always offered, whatever `catchUp` says. An older slot is **missed**: the daemon was stopped or asleep. Two settings judge the missed slots, in this order:
+
+1. `when.catchUp` chooses which missed slots are offered: `skip` none, `run_once` the newest, `run_all` the newest five (`RUN_ALL_CAP`). It never removes a live slot. Missed slots beyond the five are dropped; the cursor moves to the newest slot in all cases. One wake therefore offers five missed slots and the live ones (three at most) however long the stop was: there is no unbounded burst, and the 500-offer budget of the table source is not needed. Example: `* * * * *`, cursor at 10:00Z, woken at 10:05:30Z: 10:04 and 10:05 are live, 10:01 to 10:03 are missed; `skip` offers 10:04 and 10:05, `run_once` offers 10:03, 10:04 and 10:05, `run_all` offers 10:01 to 10:05.
+2. The offered slots reach the engine as a backlog, each dated with its slot, and the backlog policy of the trigger judges them like the other sources: `fire_all` fires each, `fire_latest_only` fires the newest and cancels the others `superseded`, `discard_stale` cancels as `stale` what is older than `backlogMaxAgeMinutes` (60 by default).
+
+Examples for an hourly trigger (`0 * * * *`) armed at 10:30 and restarted at 13:30 (missed: 11:00, 12:00, 13:00):
+
+| `catchUp` | `backlogPolicy` | result |
+|---|---|---|
+| `skip` | any | nothing fires; the cursor moves to 13:00 |
+| `run_once` | any | 13:00 fires |
+| `run_all` | `fire_all` | 11:00, 12:00 and 13:00 fire, in order |
+| `run_all` | `fire_latest_only` | 13:00 fires; 11:00 and 12:00 are cancelled `superseded` |
+| `run_all` | `discard_stale`, `backlogMaxAgeMinutes: 90` | 11:00 is cancelled `stale` (150 minutes old); 12:00 (90) and 13:00 fire |
+
+After a 20 hour stop, `run_all` offers the newest five slots only.
+
+`silent_run` and `integration_records` are accepted by the schema and do not fire yet. The RUN `run_playbook` does not run either.

@@ -21,6 +21,8 @@ export interface TriggerServiceDeps {
   newId: () => string;
   /** Called after a trigger is armed, so a source can look at what already is. */
   onArmed?: (trigger: TriggerRecord) => void;
+  /** Called after a trigger is edited, disarmed or deleted, so a source can drop what it holds for it. */
+  onChanged?: (triggerId: string) => void;
 }
 
 /** The content a caller edits, from the trigger as it stands: returns what to replace. */
@@ -112,6 +114,7 @@ export class TriggerService {
   delete(id: string): void {
     const wasDeleted = this.deps.repository.delete(id);
     if (!wasDeleted) throw notFound();
+    this.deps.onChanged?.(id);
   }
 
   /** Replaces the content, checks it, bumps the revision and clears the arming. A write on a revision other than `expectedRev` is refused. */
@@ -127,6 +130,7 @@ export class TriggerService {
     if (content.title !== undefined) content.title = titleOf(content.title);
     const wasReplaced = repository.replaceContent({ id, expectedRev: current.contentRev, content, now: clock() });
     if (!wasReplaced) throw staleRevision(this.getById(id).contentRev);
+    this.deps.onChanged?.(id);
     return this.getById(id);
   }
 
@@ -157,6 +161,7 @@ export class TriggerService {
   disarm(id: string): TriggerRecord {
     this.getById(id);
     this.deps.repository.disarm(id);
+    this.deps.onChanged?.(id);
     return this.getById(id);
   }
 }

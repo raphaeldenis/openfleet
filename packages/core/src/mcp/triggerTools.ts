@@ -27,7 +27,7 @@ const FIELDS_BY_SOURCE = {
   session_state: { required: ['state'], optional: ['minutes (required unless state is closed_with_error)'] },
   silent_run: { required: ['minutes'], optional: [] },
   data_store_query: { required: ['storeId', 'event'], optional: ['op', 'value (op and value are required for row_count)'] },
-  cron: { required: ['expression', 'timezone'], optional: ['catchUp'] },
+  cron: { required: ['expression'], optional: ['timezone (IANA name, default Europe/Paris)', 'catchUp (skip, run_once or run_all; default skip)'] },
   integration_records: { required: ['itemId', 'event'], optional: ['field (required for field_changed)'] },
 } as const;
 

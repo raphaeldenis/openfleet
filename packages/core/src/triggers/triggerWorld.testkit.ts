@@ -137,6 +137,7 @@ export async function startTriggerWorld() {
     get engine() { return daemon.triggerEngine; },
     get nowMs() { return nowMs; },
     advanceMs: (ms: number) => { nowMs += ms; },
+    setNowMs: (ms: number) => { nowMs = ms; },
     api, json, createSession, createChild, createTable, postHook, crash, createArmedTrigger, connect, openSocket,
     livingTimers: () => timers.filter((timer) => !timer.isCancelled),
     fireLivingTimers: () => { for (const timer of timers.filter((candidate) => !candidate.isCancelled)) { timer.isCancelled = true; timer.callback(); } },
