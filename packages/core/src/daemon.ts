@@ -93,6 +93,7 @@ import { TriggerEngine, type SettledFire } from './triggers/triggerEngine.js';
 import { TriggerRepository } from './triggers/triggerRepository.js';
 import { TriggerService } from './triggers/triggerService.js';
 import { PlaybookRepository } from './playbooks/playbookRepository.js';
+import { PlaybookVersionRepository } from './playbooks/playbookVersionRepository.js';
 import { PlaybookService } from './playbooks/playbookService.js';
 import { pendingPermissionViewOf } from './mcp/pendingPermissionView.js';
 import { KnowledgeRepository } from './knowledge/knowledgeRepository.js';
@@ -466,7 +467,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     schedule: options.triggers?.schedule ?? scheduleOnRealClock, onOfferSuppressedByCause: (triggerId) => systemActivity.triggerOfferSuppressed({ triggerId }),
   });
   const cronSource = new CronSource({ triggers: triggerRepository, cursors: triggerCursors, engine: triggerEngine, clock: triggerClock, schedule: options.triggers?.schedule ?? scheduleOnRealClock });
-  const playbooks = new PlaybookService({ db, repository: new PlaybookRepository(db), secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
+  const playbooks = new PlaybookService({ db, repository: new PlaybookRepository(db), versions: new PlaybookVersionRepository(db),secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
   const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 

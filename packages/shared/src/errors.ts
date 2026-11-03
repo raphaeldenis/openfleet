@@ -72,6 +72,8 @@ export const ERROR_CODES = {
   // A playbook of another project reads exactly like one that does not exist.
   playbook_not_found: { kind: 'not_found' },
   playbook_cell_not_found: { kind: 'not_found' },
+  // The revision was never kept, or was dropped when the playbook went over its ten versions.
+  playbook_version_not_found: { kind: 'not_found' },
 
   // The playbook moved since it was read: reloading it shows the current revision. A locked playbook takes writes from the desktop app only.
   playbook_conflict: { kind: 'conflict', retry: 'after_refresh' },

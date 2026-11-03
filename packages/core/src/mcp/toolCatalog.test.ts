@@ -91,15 +91,15 @@ describe('the tool catalog', () => {
     ]);
   });
 
-  it('files the eleven playbook authoring tools under the playbooks domain: reads are read_only, creates and edits additive, deletes destructive', () => {
+  it('files the playbook authoring and version tools under the playbooks domain: reads are read_only, creates, edits and restores additive, deletes destructive', () => {
     const authoringEntries = Object.entries(TOOL_CATALOG)
       .filter(([name, entry]) => entry.domain === 'playbooks' && !name.endsWith('_secret') && !name.endsWith('_secret_statuses'))
       .map(([name, entry]) => [name, entry.category]);
 
     expect(authoringEntries.sort()).toEqual([
       ['add_playbook_cell', 'additive'], ['create_playbook', 'additive'], ['delete_playbook', 'destructive'], ['delete_playbook_cell', 'destructive'],
-      ['get_playbook', 'read_only'], ['get_playbook_schema', 'read_only'], ['list_playbook_cells', 'read_only'], ['list_playbooks', 'read_only'],
-      ['reorder_playbook_cells', 'additive'], ['set_playbook_inputs', 'additive'], ['update_playbook_cell', 'additive'],
+      ['get_playbook', 'read_only'], ['get_playbook_schema', 'read_only'], ['get_playbook_version', 'read_only'], ['list_playbook_cells', 'read_only'], ['list_playbook_versions', 'read_only'],
+      ['list_playbooks', 'read_only'], ['reorder_playbook_cells', 'additive'], ['restore_playbook_version', 'additive'], ['set_playbook_inputs', 'additive'], ['update_playbook_cell', 'additive'],
     ]);
   });
 

@@ -1,12 +1,14 @@
 import {
-  DEFAULT_MAX_RUNS_TO_KEEP, HTTP_AUTH_TYPES, HTTP_METHODS, MAX_BODY_CHARS, MAX_EDGES_PER_CELL, MAX_PLAYBOOK_CELLS, MAX_PLAYBOOK_INPUTS, MAX_PROMPT_CHARS, MAX_SCRIPT_ARGUMENTS,
+  DEFAULT_MAX_RUNS_TO_KEEP, HTTP_AUTH_TYPES, HTTP_METHODS, MAX_BODY_CHARS, MAX_EDGES_PER_CELL, MAX_PLAYBOOK_CELLS, MAX_PLAYBOOK_INPUTS, MAX_PLAYBOOK_VERSIONS, MAX_PROMPT_CHARS, MAX_SCRIPT_ARGUMENTS,
   MAX_SCRIPT_ENV_ENTRIES, MAX_TEMPLATE_CHARS, OpenFleetError, PLAYBOOK_CELL_COMMON_FIELDS, PLAYBOOK_CELL_FIELDS, PLAYBOOK_CELL_KINDS, PLAYBOOK_VALUE_TYPES,
   RESERVED_PLAYBOOK_CELL_KINDS, type Session,
 } from '@openfleet/shared';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { PlaybookRecord } from '../playbooks/playbookRepository.js';
+import { secretNamesReferencedBy } from '../playbooks/playbookRules.js';
 import type { PlaybookService } from '../playbooks/playbookService.js';
+import type { PlaybookVersion } from '../playbooks/playbookVersionRepository.js';
 import { ok } from './toolResults.js';
 
 /** A playbook as an agent reads it. Secrets appear by name only: no value exists in the daemon to show. */
@@ -44,13 +46,26 @@ const playbookSchemaView = () => ({
   policy: { fields: ['browserAutoGrant', 'autoDistill', 'maxRunsToKeep'], defaults: { browserAutoGrant: false, autoDistill: false, maxRunsToKeep: DEFAULT_MAX_RUNS_TO_KEEP } },
 });
 
-const cellSummaryOf = (cell: PlaybookRecord['flow']['cells'][number], position: number) => ({
+/** A version in the list: no content, only what tells one from another. */
+export const versionSummaryView = (version: PlaybookVersion) => ({
+  rev: version.rev, name: version.name, sha256: version.sha256, source: version.source, cell_count: version.flow.cells.length,
+  approved: version.approvedDigest !== null, created_at: version.createdAt,
+});
+
+/** A version with its content. Secrets appear as tokens in the cells and by name in `secrets`: a version never holds a value. */
+export const versionView = (version: PlaybookVersion) => ({
+  ...versionSummaryView(version), inputs: version.inputs, cells: version.flow.cells, policy: version.policy,
+  secrets: secretNamesReferencedBy({ inputs: version.inputs, flow: version.flow }),
+});
+
+const cellSummaryOf =(cell: PlaybookRecord['flow']['cells'][number], position: number) => ({
   position, id: cell.id, kind: cell.kind, ...(cell.label !== undefined && { label: cell.label }), has_explicit_next: cell.next !== undefined,
 });
 
 const playbookParameter = z.string().describe('Playbook id (from list_playbooks) or its exact name');
 const expectedRevParameter = z.int().min(1).describe('The content_rev you read (get_playbook or list_playbook_cells); the write is refused when the playbook has moved since');
-const cellIdParameter = z.string().describe('Cell id (from list_playbook_cells)');
+const versionRevParameter = z.int().min(1).describe('The rev of a version (rev in list_playbook_versions)');
+const cellIdParameter =z.string().describe('Cell id (from list_playbook_cells)');
 const argsParameter = z.record(z.string(), z.unknown()).describe('The fields of the cell for its kind (get_playbook_schema)');
 
 export interface PlaybookToolDeps {
@@ -129,6 +144,26 @@ export function registerPlaybookTools(server: McpServer, { playbooks, caller }: 
     inputSchema: { playbook: playbookParameter, order: z.array(z.string()), expected_rev: expectedRevParameter },
   }, async ({ playbook, order, expected_rev }) =>
     ok(viewOf(playbooks.reorderCells(playbookOf(playbook).id, { order }, asAgent(expected_rev)))),
+  );
+
+  server.registerTool('list_playbook_versions', {
+    description: `The ${MAX_PLAYBOOK_VERSIONS} most recent versions kept of a playbook, newest first: the content that each edit replaced (rev, name, sha256, source edit|restore, cell_count, approved). No content: read one with get_playbook_version. Echo current_content_rev as expected_rev when restoring.`,
+    inputSchema: { playbook: playbookParameter },
+  }, async ({ playbook }) => {
+    const target = playbookOf(playbook);
+    return ok({ playbook_id: target.id, current_content_rev: target.contentRev, versions: playbooks.listVersions(target.id).map(versionSummaryView) });
+  });
+
+  server.registerTool('get_playbook_version', {
+    description: 'The full content of one kept version: inputs, cells, policy. Secrets are {{secret:NAME}} tokens and their names, never a value. Read it, compare it with get_playbook, then restore it.',
+    inputSchema: { playbook: playbookParameter, rev: versionRevParameter },
+  }, async ({ playbook, rev }) => ok(versionView(playbooks.getVersion(playbookOf(playbook).id, rev))));
+
+  server.registerTool('restore_playbook_version', {
+    description: 'Make a kept version the content again. NON-DESTRUCTIVE: the current content is kept as a version first and the restore is a new revision. It goes through the same checks as any write, is refused when expected_rev is not the current content_rev or the playbook is locked, and clears the approval: the restored playbook stays inert until a human approves it.',
+    inputSchema: { playbook: playbookParameter, rev: versionRevParameter, expected_rev: expectedRevParameter },
+  }, async ({ playbook, rev, expected_rev }) =>
+    ok(viewOf(playbooks.restoreVersion(playbookOf(playbook).id, { rev }, asAgent(expected_rev)))),
   );
 
   server.registerTool('set_playbook_inputs', {

@@ -1,13 +1,15 @@
 import {
-  DEFAULT_PLAYBOOK_NAME, MAX_PLAYBOOK_CELLS, OpenFleetError, PlaybookInputsSchema, PlaybookNameSchema, PlaybookPolicySchema,
-  type PlaybookCell, type PlaybookInputDeclaration, type PlaybookOrigin, type PlaybookPolicy, type SecretScope,
+  DEFAULT_PLAYBOOK_NAME, MAX_PLAYBOOK_CELLS, MAX_PLAYBOOK_VERSIONS, OpenFleetError, PlaybookInputsSchema, PlaybookNameSchema, PlaybookPolicySchema,
+  type PlaybookCell, type PlaybookInputDeclaration, type PlaybookOrigin, type PlaybookPolicy, type PlaybookVersionSource, type SecretScope,
 } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
 import type { SecretRefRepository } from '../secrets/secretRefRepository.js';
 import { parsePlaybookCell } from './cellParsing.js';
+import { canonicalDigestOf } from './kernel/canonicalDigest.js';
 import { assertPlaybookIsSound, secretNamesReferencedBy } from './playbookRules.js';
 import type { PlaybookContent, PlaybookRecord, PlaybookRepository } from './playbookRepository.js';
+import type { PlaybookVersion, PlaybookVersionRepository } from './playbookVersionRepository.js';
 
 /** Who writes: an agent through MCP, bound by the lock of the playbook, or the human through the admin REST. */
 export type PlaybookWriter = 'agent' | 'admin';
@@ -16,11 +18,14 @@ export type PlaybookWriter = 'agent' | 'admin';
 export interface WriteOptions {
   writer: PlaybookWriter;
   expectedRev: number;
+  /** How the content that this write replaces is recorded in the history; an ordinary write is an `edit`. */
+  versionSource?: PlaybookVersionSource;
 }
 
 export interface PlaybookServiceDeps {
   db: DatabaseSync;
   repository: PlaybookRepository;
+  versions: PlaybookVersionRepository;
   secretRefs: SecretRefRepository;
   projectExists: (projectId: string) => boolean;
   clock: () => string;
@@ -48,6 +53,13 @@ const freshCellId = (cells: readonly PlaybookCell[]): string => {
 };
 
 const nameOf = (requested: string | undefined): string => PlaybookNameSchema.parse(requested?.trim() || DEFAULT_PLAYBOOK_NAME);
+
+const versionNotFound = () => new OpenFleetError('playbook_version_not_found', 'that version of the playbook is not kept.', { hint: 'List the versions with list_playbook_versions.' });
+
+const replacesVersionedContent = (content: PlaybookContent): boolean =>
+  content.name !== undefined || content.inputs !== undefined || content.flow !== undefined || content.policy !== undefined;
+
+const versionedContentOf = ({ name, inputs, flow, policy }: PlaybookRecord) => ({ name, inputs, flow, policy });
 
 export class PlaybookService {
   constructor(private readonly deps: PlaybookServiceDeps) {}
@@ -125,9 +137,38 @@ export class PlaybookService {
     inTransaction(this.deps.db, 'playbook_edit', () => {
       const wasReplaced = repository.replaceContent({ id, expectedRev: current.contentRev, content: checkedContent, now: clock() });
       if (!wasReplaced) throw conflict(this.getById(id).contentRev);
+      if (replacesVersionedContent(checkedContent)) this.keepVersionOf(current, options.versionSource ?? 'edit');
       this.declareReferencedSecrets(id, secretNames);
     });
     return this.getById(id);
+  }
+
+  /** The versions kept for a playbook, newest first. */
+  listVersions(id: string): PlaybookVersion[] {
+    this.getById(id);
+    return this.deps.versions.listOf(id);
+  }
+
+  getVersion(id: string, rev: number): PlaybookVersion {
+    this.getById(id);
+    const version = this.deps.versions.get(id, rev);
+    if (version === undefined) throw versionNotFound();
+    return version;
+  }
+
+  /** Puts the content of a kept version back through the path of every write: the same checks, the same revision guard, a new revision, the approval cleared; the content it replaces is kept as a version first. */
+  restoreVersion(id: string, input: { rev: number }, options: WriteOptions): PlaybookRecord {
+    const { name, inputs, flow, policy } = this.getVersion(id, input.rev);
+    return this.edit(id, () => ({ name, inputs, flow, policy }), { ...options, versionSource: 'restore' });
+  }
+
+  private keepVersionOf(replaced: PlaybookRecord, source: PlaybookVersionSource): void {
+    const { versions, clock } = this.deps;
+    versions.insert({
+      playbookId: replaced.id, rev: replaced.contentRev, ...versionedContentOf(replaced), sha256: canonicalDigestOf(versionedContentOf(replaced)),
+      source, approvedDigest: replaced.approvedDigest, createdAt: clock(),
+    });
+    versions.purgeOldestBeyond(replaced.id, MAX_PLAYBOOK_VERSIONS);
   }
 
   /** Adds a cell after the cell named by `after`, or at the end; the id is given or the first free `cN`. */
