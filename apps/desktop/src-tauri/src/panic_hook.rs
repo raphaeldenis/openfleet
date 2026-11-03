@@ -28,6 +28,7 @@ fn record_panic(daemon_log: &DesktopLog, location: Option<&Location>) {
 mod tests {
   use super::*;
   use crate::log_file::{start_on_disk, LOG_FILE_NAME};
+  use std::sync::atomic::{AtomicUsize, Ordering};
   use std::time::Duration;
 
   struct ScratchFolder(std::path::PathBuf);
@@ -38,8 +39,11 @@ mod tests {
     }
   }
 
+  static NEXT_FOLDER_NUMBER: AtomicUsize = AtomicUsize::new(0);
+
   fn scratch_folder(name: &str) -> ScratchFolder {
-    let folder = std::env::temp_dir().join(format!("of-panic-hook-{name}-{}", std::process::id()));
+    let folder_number = NEXT_FOLDER_NUMBER.fetch_add(1, Ordering::Relaxed);
+    let folder = std::env::temp_dir().join(format!("of-panic-hook-{name}-{}-{folder_number}", std::process::id()));
     let _ = std::fs::remove_dir_all(&folder);
     std::fs::create_dir_all(&folder).unwrap();
     ScratchFolder(folder)
@@ -70,5 +74,21 @@ mod tests {
     let lines = stored_lines_after_a_panic_at(None);
 
     assert_eq!(lines[0], "1970-01-01T00:00:00Z error panic_recorded line=0 column=0");
+  }
+
+  #[test]
+  fn concurrent_panics_never_share_a_log() {
+    for _ in 0..50 {
+      let located = std::thread::spawn(|| stored_lines_after_a_panic_at(Some(Location::caller())));
+      let unlocated = std::thread::spawn(|| stored_lines_after_a_panic_at(None));
+
+      let located_lines = located.join().unwrap();
+      let unlocated_lines = unlocated.join().unwrap();
+
+      let panic_lines_of = |lines: &[String]| lines.iter().filter(|line| line.contains("panic_recorded")).count();
+      assert_eq!(unlocated_lines[0], "1970-01-01T00:00:00Z error panic_recorded line=0 column=0");
+      assert_eq!(panic_lines_of(&unlocated_lines), 1);
+      assert_eq!(panic_lines_of(&located_lines), 1);
+    }
   }
 }
