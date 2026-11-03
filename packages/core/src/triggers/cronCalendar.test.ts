@@ -68,6 +68,32 @@ describe('the clock jumps on 2026-03-29 in Europe/Paris (02:00 CET becomes 03:00
   });
 });
 
+describe('zones whose offset is not a whole number of hours', () => {
+  it('Asia/Kathmandu is 5:45 ahead of UTC', () => {
+    const next = calendarOf('0 9 * * *', 'Asia/Kathmandu').nextAfter(at('2026-06-10T00:00:00Z'));
+
+    expect(isoOf(next)).toBe('2026-06-10T03:15:00.000Z');
+  });
+
+  it('Australia/Lord_Howe fires a fixed time once when its clock goes back half an hour (2026-04-05, 02:00 +11 becomes 01:30 +10:30)', () => {
+    const slots = calendarOf('45 1 * * *', 'Australia/Lord_Howe').newestBetween({ afterMs: at('2026-04-04T00:00:00Z'), atMs: at('2026-04-05T12:00:00Z'), limit: 10 });
+
+    expect(slots.map(isoOf)).toEqual(['2026-04-04T14:45:00.000Z']);
+  });
+
+  it('Australia/Lord_Howe fires at each real occurrence of an every-minute expression in the repeated half hour', () => {
+    const slots = calendarOf('* * * * *', 'Australia/Lord_Howe').newestBetween({ afterMs: at('2026-04-04T14:44:00Z'), atMs: at('2026-04-04T15:44:00Z'), limit: 200 });
+
+    expect(slots).toHaveLength(60);
+  });
+
+  it('Australia/Lord_Howe fires once at the end of the half-hour gap (2026-10-04, 02:00 +10:30 becomes 02:30 +11)', () => {
+    const next = calendarOf('15 2 * * *', 'Australia/Lord_Howe').nextAfter(at('2026-10-03T12:00:00Z'));
+
+    expect(isoOf(next)).toBe('2026-10-03T15:30:00.000Z');
+  });
+});
+
 describe('searching backward and far ahead', () => {
   it('returns the newest slots first, at most the limit', () => {
     const slots = calendarOf('0 * * * *').newestBetween({ afterMs: at('2026-06-10T00:00:00Z'), atMs: at('2026-06-10T12:00:00Z'), limit: 3 });

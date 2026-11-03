@@ -70,6 +70,24 @@ describe('daySatisfies', () => {
   });
 });
 
+describe('? in the day fields', () => {
+  const tuesdayThe3rd = { month: 11, dayOfMonth: 3, weekday: 2 };
+
+  it('reads ?/2 exactly as */2: the day of month is a wildcard, so both day fields must match', () => {
+    const withQuestionMark = parse('0 0 ?/2 * MON')!;
+    const withStar = parse('0 0 */2 * MON')!;
+
+    expect(daySatisfies(withStar, tuesdayThe3rd)).toBe(false);
+    expect(daySatisfies(withQuestionMark, tuesdayThe3rd)).toBe(false);
+    expect(sorted(withQuestionMark.daysOfMonth)).toEqual(sorted(withStar.daysOfMonth));
+    expect(withQuestionMark.isDayOfMonthWildcard).toBe(true);
+  });
+
+  it('reads ? as * in the day of week', () => {
+    expect(parse('0 0 15 * ?')).toEqual(parse('0 0 15 * *'));
+  });
+});
+
 describe('the cron WHEN schema', () => {
   const cron = (when: Record<string, unknown>) => TriggerWhenSchema.safeParse({ source: 'cron', ...when });
 

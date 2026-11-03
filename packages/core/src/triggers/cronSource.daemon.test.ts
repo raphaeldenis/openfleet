@@ -203,6 +203,35 @@ describe('the daemon was stopped for three hours across the slots of an hourly t
     expect(keysOf(triggerId)).toEqual(['cron:2026-06-10T11:00:00.000Z']);
   });
 
+  describe('an every-minute trigger woken at 10:05:30Z with its cursor at 10:00Z: 10:04 and 10:05 are live, 10:01 to 10:03 are missed', () => {
+    it.each([
+      ['skip', ['10:04', '10:05']],
+      ['run_once', ['10:03', '10:04', '10:05']],
+      ['run_all', ['10:01', '10:02', '10:03', '10:04', '10:05']],
+    ])('catchUp %s always offers the live slots and judges the missed ones', async (catchUp, expectedMinutes) => {
+      const { world, lead } = await worldWithLead();
+      world.setNowMs(at('2026-06-10T10:00:00Z'));
+      const triggerId = await armCron({ managerId: lead.id, when: { expression: '* * * * *', catchUp } });
+
+      world.setNowMs(at('2026-06-10T10:05:30Z'));
+      world.fireLivingTimers();
+
+      expect(keysOf(triggerId)).toEqual(expectedMinutes.map((minutes) => `cron:2026-06-10T${minutes}:00.000Z`));
+    });
+  });
+
+  it('starts a trigger that has no cursor from the moment it was armed: the slots since then are missed slots', async () => {
+    const { world, lead } = await worldWithLead();
+    world.setNowMs(at('2026-06-10T10:30:00Z'));
+    const triggerId = await armCron({ managerId: lead.id, when: { expression: '0 * * * *', catchUp: 'run_all' } });
+    world.db.prepare('UPDATE triggers SET armed_at = ? WHERE id = ?').run('2026-06-10T10:30:00.000Z', triggerId);
+    world.db.prepare('DELETE FROM trigger_cursors WHERE trigger_id = ?').run(triggerId);
+
+    await world.restart({ stoppedForMs: 3 * HOUR_MS });
+
+    expect(keysOf(triggerId)).toEqual(['cron:2026-06-10T11:00:00.000Z', 'cron:2026-06-10T12:00:00.000Z', 'cron:2026-06-10T13:00:00.000Z']);
+  });
+
   it('keeps the cursor of the trigger across the boot, which forgets the cursors of the waits', async () => {
     const { world, triggerId } = await missedThreeSlots({ catchUp: 'run_once' });
 
@@ -311,6 +340,20 @@ describe('timers', () => {
 
     expect(livingAfterStop).toBe(0);
     expect(world.livingTimers()).toHaveLength(1);
+  });
+
+  it('sets no timer when the breaker disarms the trigger during the wake itself', async () => {
+    const { world, lead } = await worldWithLead();
+    world.setNowMs(at('2026-06-10T06:59:00Z'));
+    const triggerId = await armCron({ managerId: lead.id, when: { expression: '0 9 * * *' }, run: { kind: 'notify', title: 'tick', message: 'tick' } });
+    const breakerCap = 30;
+    world.setNowMs(at('2026-06-10T06:59:30Z'));
+    for (let offer = 0; offer < breakerCap; offer += 1) world.engine.submit({ triggerId, dedupKey: `burst:${offer}`, event: { slot: {} } });
+
+    tickTo('2026-06-10T07:00:00Z');
+
+    expect(world.firesOf(triggerId).at(-1)?.settle_reason).toBe('breaker_open');
+    expect(world.livingTimers()).toHaveLength(0);
   });
 
   it('cancels the timer of a trigger the breaker disarmed', async () => {

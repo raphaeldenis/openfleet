@@ -23,7 +23,7 @@ const DAY_OF_WEEK: FieldSpec = { min: 0, max: 7, names: ['SUN', 'MON', 'TUE', 'W
 
 /** The days of each month, February at its leap length: the longest the month ever is. */
 const LONGEST_MONTH_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
-const FIELD_CHARACTERS = /^[0-9A-Za-z*,/\-?]+$/;
+const FIELD_CHARACTERS = /^[0-9A-Za-z*,/\-]+$/;
 
 function valueOf(token: string, spec: FieldSpec): number | undefined {
   if (/^\d+$/.test(token)) return Number(token);
@@ -32,7 +32,7 @@ function valueOf(token: string, spec: FieldSpec): number | undefined {
 }
 
 function rangeOf(base: string, spec: FieldSpec): [number, number] | undefined {
-  if (base === '*' || base === '?') return [spec.min, spec.max];
+  if (base === '*') return [spec.min, spec.max];
   const [first, last, ...rest] = base.split('-');
   const from = first === undefined ? undefined : valueOf(first, spec);
   const to = last === undefined ? from : valueOf(last, spec);
@@ -47,7 +47,7 @@ function itemValuesOf(item: string, spec: FieldSpec): number[] | undefined {
   const span = spec.max - spec.min + 1;
   const isStepSound = step >= 1 && step <= span;
   const range = rangeOf(base, spec);
-  const isSingleValueWithStep = stepText !== undefined && range !== undefined && !base.includes('-') && base !== '*' && base !== '?';
+  const isSingleValueWithStep = stepText !== undefined && range !== undefined && !base.includes('-') && base !== '*';
   const [from, to] = isSingleValueWithStep ? [range[0], spec.max] : range ?? [];
   if (!isStepSound || from === undefined || to === undefined) return undefined;
   const values: number[] = [];
@@ -66,7 +66,10 @@ function fieldValuesOf(field: string, spec: FieldSpec): Set<number> | undefined 
   return values;
 }
 
-const isWildcard = (field: string): boolean => field.startsWith('*') || field === '?';
+const isWildcard = (field: string): boolean => field.startsWith('*');
+
+/** `?` is another way to write `*`: the expression is read with only one of them from here on. */
+const withQuestionMarksAsStars = (expression: string): string => expression.replaceAll('?', '*');
 
 /** True when some day of one of the months exists, so the expression fires at least once in a leap cycle. */
 function daysOfMonthEverExist(daysOfMonth: ReadonlySet<number>, months: ReadonlySet<number>): boolean {
@@ -79,7 +82,7 @@ function daysOfMonthEverExist(daysOfMonth: ReadonlySet<number>, months: Readonly
  */
 export function cronScheduleOf(expression: string): CronSchedule | undefined {
   if (expression.length > MAX_CRON_EXPRESSION_CHARS) return undefined;
-  const fields = expression.trim().split(/\s+/);
+  const fields = withQuestionMarksAsStars(expression).trim().split(/\s+/);
   if (fields.length !== 5) return undefined;
   const [minuteField, hourField, dayOfMonthField, monthField, dayOfWeekField] = fields as [string, string, string, string, string];
 
