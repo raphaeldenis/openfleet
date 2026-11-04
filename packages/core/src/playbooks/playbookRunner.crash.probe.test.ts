@@ -73,15 +73,15 @@ describe('probe: a daemon killed with kill -9 in the middle of a step', () => {
     await killedWithSigkill(first.child);
     const second = await bootDaemon(home, adminToken);
     const afterRestart = await (await second.api(`/api/playbook-runs/${runId}`)).json() as { status: string; errorCode: string; steps: { status: string; errorCode: string }[] };
+    expect(afterRestart.status).toBe('needs_review');
+    expect(afterRestart.errorCode).toBe('interrupted');
+    expect(afterRestart.steps.map((step) => [step.status, step.errorCode])).toEqual([['needs_review', 'interrupted']]);
     await sleepMs(1500);
     const startsOfTheScriptAfterRecovery = readFileSync(join(markers, 'ran'), 'utf8');
     const newRun = await second.api(`/api/playbooks/${playbook.id}/run`, { method: 'POST', body: JSON.stringify({}) });
     await waitUntil('the script of the new run to start', () => readFileSync(join(markers, 'ran'), 'utf8') === 'xx');
     orphanScriptPids.push(Number(readFileSync(join(markers, 'pid'), 'utf8')));
 
-    expect(afterRestart.status).toBe('needs_review');
-    expect(afterRestart.errorCode).toBe('interrupted');
-    expect(afterRestart.steps.map((step) => [step.status, step.errorCode])).toEqual([['needs_review', 'interrupted']]);
     expect(startsOfTheScriptAfterRecovery).toBe('x');
     expect(newRun.status).toBe(202);
     await killedWithSigkill(second.child);

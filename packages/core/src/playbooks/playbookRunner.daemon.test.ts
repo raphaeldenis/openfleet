@@ -150,6 +150,18 @@ describe('what a human approves is exactly what runs', () => {
     expect(await refused.json()).toMatchObject({ error: 'playbook_unapproved' });
   });
 
+  it('refuses a playbook that holds an approved digest but no pinned scripts', async () => {
+    const f = await boot();
+    writeScript('hello.sh', 'printf hello');
+    const playbook = await createPlaybook(f, [scriptCell('say', 'hello.sh')]);
+    f.db.prepare("UPDATE playbooks SET approved_digest = 'digest', approved_by = 'human', approved_at = 'now' WHERE id = ?").run(playbook.id);
+
+    const refused = await startRun(f, playbook.id);
+
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: 'playbook_unapproved' });
+  });
+
   it('refuses a playbook whose stored content no longer matches its approved digest', async () => {
     const f = await boot();
     writeScript('hello.sh', 'printf hello');
@@ -319,7 +331,7 @@ describe('a script run is journaled before it runs and answers what it printed',
     writeScript('on-ok.sh', `touch ${marker('on-ok')}`);
     writeScript('on-other.sh', `touch ${marker('on-other')}`);
     const playbook = await createApprovedPlaybook(f, [
-      scriptCell('probe', 'exit-zero.sh', { next: [{ to: 'ok', when: [{ lhs: 'steps.probe.output', op: 'eq', rhs: 'ok', join: 'and' }] }, { to: 'other' }] }),
+      scriptCell('probe', 'exit-zero.sh', { next: [{ to: 'other', when: [{ lhs: 'steps.probe.output', op: 'eq', rhs: 'nope', join: 'and' }] }, { to: 'ok', when: [{ lhs: 'steps.probe.output', op: 'eq', rhs: 'ok', join: 'and' }] }] }),
       scriptCell('other', 'on-other.sh', { next: [] }),
       scriptCell('ok', 'on-ok.sh', { next: [] }),
     ]);
@@ -480,6 +492,7 @@ describe('the limits of a run', () => {
 
     expect(run.status).toBe('succeeded');
     expect(run.steps[0]?.output?.output?.length).toBeLessThanOrEqual(256 * 1024 + 64);
+    expect(run.steps[0]?.output?.output?.endsWith('[truncated]')).toBe(true);
   });
 
   it('answers 404 playbook_run_not_found for a run that does not exist', async () => {
@@ -493,6 +506,19 @@ describe('the limits of a run', () => {
 });
 
 describe('a daemon that stops during a step', () => {
+  it('refuses to start a run once it is stopping, and writes no run', async () => {
+    const f = await boot();
+    writeScript('hello.sh', 'printf hello');
+    const playbook = await createApprovedPlaybook(f, [scriptCell('say', 'hello.sh')]);
+    await f.daemon.playbookRunner.stop();
+
+    const refused = await startRun(f, playbook.id);
+
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: 'playbook_run_busy' });
+    expect(runCount(f)).toBe(0);
+  });
+
   it('kills the script, journals the step as needs_review and never replays it', async () => {
     const f = await boot();
     writeScript('hang.sh', `printf '%s' "$$" > ${marker('pid')}\nprintf x >> ${marker('ran')}\nsleep 30`);
