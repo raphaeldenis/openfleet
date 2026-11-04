@@ -114,6 +114,14 @@ PLAY-00, the playbook entity and its authoring tools (contract 15 is untagged, s
 - Thirteen wire error codes: `cell_kind_reserved`, `cell_kind_unsupported`, `playbook_graph_invalid`, `playbook_limit_exceeded`, `secret_not_allowed_here`, `untrusted_reference`, `non_canonical_url`, `unknown_token`, `invalid_secret_name`, `playbook_not_found`, `playbook_cell_not_found`, `playbook_conflict`, `playbook_locked` (see [docs/errors.md](docs/errors.md)).
 - Activity log: `playbook` is an identifier word and the cell kinds join the closed values of `kind`; the playbook tools keep no free text.
 
+PBK-P2, the versions of a playbook (contract 15 is untagged, so the three tools below join it and the pin goes from 96 to 99 tools). Nothing runs a playbook in this release.
+
+- `list_playbook_versions`, `get_playbook_version` (read only); `restore_playbook_version` (additive: a new revision, the history is never rewritten). Same names as Scape; the version is named by `rev`, an integer, and the restore takes `expected_rev` like every write. None is in the reviewer or the arbiter set.
+- Every replacement of the name, the inputs, the cells or the policy keeps the content it replaces as a version (revision, name, sha256 of the canonical content, source `edit` or `restore`, whether it was approved). A change of the lock alone keeps nothing. At most 10 versions are kept per playbook; the oldest goes first, and the newest version that was approved is never dropped. A version holds `{{secret:NAME}}` tokens and names, never a value.
+- `restore_playbook_version` goes through the same checks and the same revision guard as a write: `playbook_conflict` when `expected_rev` is stale, `playbook_locked` for an agent on a locked playbook, the same refusals as a save when the rules refuse the old content. The current content is kept as a version first (source `restore`), the approval is cleared, so an agent's restore stays inert until a human approves the digest. The lock and the origin of the playbook do not change.
+- REST (admin token, not in the pin): `GET /api/playbooks/:id/versions`, `GET /api/playbooks/:id/versions/:rev`, `POST /api/playbooks/:id/versions/:rev/restore` with `{ expectedRev }` (the admin ignores the agent lock, as for `PUT`).
+- Migration 068 `playbook_versions` (down script alongside). New wire error code `playbook_version_not_found` (404): the revision was never kept or was dropped.
+
 ## 14 — 2026-10-29
 
 TABLES-ROW-CAS01, optimistic concurrency on table row writes: the last write no longer wins silently when a writer says which revision it read.

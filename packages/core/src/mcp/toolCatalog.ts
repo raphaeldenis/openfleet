@@ -108,9 +108,12 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
   get_playbook: { domain: 'playbooks', category: 'read_only' },
   get_playbook_schema: { domain: 'playbooks', category: 'read_only' },
   list_playbook_cells: { domain: 'playbooks', category: 'read_only' },
+  get_playbook_version: { domain: 'playbooks', category: 'read_only' },
   list_playbook_secret_statuses: { domain: 'playbooks', category: 'read_only' },
+  list_playbook_versions: { domain: 'playbooks', category: 'read_only' },
   list_playbooks: { domain: 'playbooks', category: 'read_only' },
   reorder_playbook_cells: { domain: 'playbooks', category: 'additive' },
+  restore_playbook_version: { domain: 'playbooks', category: 'additive' }, // a new revision; the replaced content is kept as a version
   set_playbook_inputs: { domain: 'playbooks', category: 'additive' },
   update_playbook_cell: { domain: 'playbooks', category: 'additive' },
 
