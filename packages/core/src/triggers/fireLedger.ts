@@ -28,8 +28,14 @@ const toFire = (row: FireRow): TriggerFire => ({
   settleReason: row.settle_reason, runId: row.run_id, eventDigest: row.event_digest, event: JSON.parse(row.event_json), chainDepth: row.chain_depth,
 });
 
+const sqlListOf = (states: readonly TriggerLedgerState[]) => states.map((state) => `'${state}'`).join(', ');
+
 const STATES_THAT_REACHED_THE_EFFECT: readonly TriggerLedgerState[] = ['attempted', 'completed', 'needs_review'];
-const STATES_SQL_LIST = STATES_THAT_REACHED_THE_EFFECT.map((state) => `'${state}'`).join(', ');
+const STATES_SQL_LIST = sqlListOf(STATES_THAT_REACHED_THE_EFFECT);
+
+/** The only states a fire never leaves and no one still waits on: the others are replayed, or need a human's review. */
+const STATES_THAT_CAN_BE_FORGOTTEN: readonly TriggerLedgerState[] = ['completed', 'cancelled'];
+const FORGETTABLE_STATES_SQL_LIST = sqlListOf(STATES_THAT_CAN_BE_FORGOTTEN);
 
 export type AcceptResult = { wasAccepted: true; fire: TriggerFire } | { wasAccepted: false; fire: TriggerFire };
 
@@ -99,6 +105,16 @@ export class FireLedger {
   /** Every fire left `attempted` by a stopped daemon becomes `needs_review`: its effect may or may not have happened, so it never runs again. Returns how many. */
   markInterruptedForReview(settledAt: string): number {
     const result = this.db.prepare("UPDATE trigger_fires SET ledger_state = 'needs_review', settled_at = ?, settle_reason = 'interrupted' WHERE ledger_state = 'attempted'").run(settledAt);
+    return Number(result.changes);
+  }
+
+  /** Removes at most `batchSize` of the oldest `completed` or `cancelled` fires that ended before `settledBefore`; returns how many it removed. A fire in any other state is never removed. */
+  pruneSettled(input: { settledBefore: string; batchSize: number }): number {
+    const result = this.db.prepare(
+      `DELETE FROM trigger_fires WHERE rowid IN (
+         SELECT rowid FROM trigger_fires WHERE ledger_state IN (${FORGETTABLE_STATES_SQL_LIST}) AND settled_at < ? ORDER BY rowid LIMIT ?
+       )`,
+    ).run(input.settledBefore, input.batchSize);
     return Number(result.changes);
   }
 

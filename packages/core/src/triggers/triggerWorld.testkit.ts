@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -17,9 +17,10 @@ export interface TriggerRecordView { id: string; contentRev: number; armedAt: st
 export interface FireRow { id: string; dedup_key: string; ledger_state: string; settle_reason: string | null; fired_at: string }
 
 /** A real daemon on a throwaway home, with a fake clock, that can be stopped and started again on the same home the way a crash and a reboot do. */
-export async function startTriggerWorld() {
+export async function startTriggerWorld({ configJson }: { configJson?: Record<string, unknown> } = {}) {
   const directories = createTempDirTracker();
   const config: Config = loadConfig({ OPENFLEET_HOME: directories.make('trigger-world-'), OPENFLEET_PORT: '0', OPENFLEET_E2E: '1' });
+  if (configJson !== undefined) writeFileSync(join(config.home, 'config.json'), JSON.stringify(configJson));
   const clients: Client[] = [];
   // The state of a session is stamped by the real clock: the fake clock starts there, so a delay computed from `stateSince` stays coherent.
   let nowMs = Date.now();

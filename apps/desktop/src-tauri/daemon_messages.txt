@@ -27,3 +27,4 @@ trigger_session_state_source_failed the session_state source failed on a session
 trigger_table_source_failed the table source failed on a trigger
 trigger_cron_source_failed the cron source failed on a trigger
 trigger_silent_run_source_failed the silent_run source failed on a trigger
+trigger_fires_prune_failed the trigger fires could not be pruned
