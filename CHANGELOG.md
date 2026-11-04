@@ -122,6 +122,15 @@ PBK-P2, the versions of a playbook (contract 15 is untagged, so the three tools 
 - REST (admin token, not in the pin): `GET /api/playbooks/:id/versions`, `GET /api/playbooks/:id/versions/:rev`, `POST /api/playbooks/:id/versions/:rev/restore` with `{ expectedRev }` (the admin ignores the agent lock, as for `PUT`).
 - Migration 068 `playbook_versions` (down script alongside). New wire error code `playbook_version_not_found` (404): the revision was never kept or was dropped.
 
+PBK-P3a, the runner of playbooks, script cells only (no MCP tool is added or changed: the pin stays at 99 tools and `CONTRACT_VERSION` stays 15; `run_playbook` comes with PBK-P4). Details in [docs/playbook-runs.md](docs/playbook-runs.md).
+
+- REST (admin token, not in the pin): `GET /api/playbooks/:id/approval` (the digest a human reads), `POST /api/playbooks/:id/approve` with `{ digest }`, `POST /api/playbooks/:id/run` with `{ inputs }` (answers 202 with the run as journaled), `GET /api/playbook-runs?playbookId=`, `GET /api/playbook-runs/:id`. No MCP tool approves or runs a playbook.
+- A run needs an approval: the digest covers the content of the playbook and the sha256 of every script file it names. An edit clears it. At launch and again before each step a changed script is refused with `script_changed`. A program is a literal path under a script root (`playbooks.scriptRoots` of `config.json`, absolute paths, none by default), owned by the daemon's user, not writable by group or others; no shell.
+- Every step is written `running` before it starts and settled after. A run or step found running at boot becomes `needs_review` (`interrupted`) and is never started again. A script that outlives its step is killed with its process group at the timeout (10 minutes by default, `timeoutSeconds` per cell) and at shutdown.
+- Masking: the values of the secrets a playbook references are resolved when the run starts and replaced by `[secret:NAME]` in every output and in the stored inputs, before anything is written or answered; the rest of an output stays readable. Limits: 1000 step executions per run, 4 runs at once and one per playbook (`playbook_run_busy`), 256 KiB of output per step, `maxRunsToKeep` finished runs per playbook.
+- This runner executes script cells that follow their edges (`when` conditions included). A playbook with another kind of cell, a `retry` or a `forEach` is refused with `playbook_not_runnable` before anything is written.
+- Migration 069 `playbook_runs` (down script alongside): `playbook_runs`, `playbook_run_steps` and `playbooks.approved_scripts_json`. Seven wire error codes: `playbook_run_not_found`, `playbook_unapproved`, `approval_digest_mismatch`, `script_changed`, `script_not_allowed`, `playbook_not_runnable`, `playbook_run_busy`. Activity log: a system row `playbook.run.started` and `playbook.run.ended` with the id of the run only.
+
 ## 14 — 2026-10-29
 
 TABLES-ROW-CAS01, optimistic concurrency on table row writes: the last write no longer wins silently when a writer says which revision it read.

@@ -19,7 +19,7 @@ import { CriteriaStatusGuard } from './escalation/criteriaStatusGuard.js';
 import { EscalationRepository } from './escalation/escalationRepository.js';
 import { EscalationService } from './escalation/escalationService.js';
 import { GovernanceQueueService } from './governance/governanceQueueService.js';
-import { OpenFleetError, type EscalationView } from '@openfleet/shared';
+import { MAX_CONCURRENT_RUNS, MAX_STEP_EXECUTIONS_PER_RUN, OpenFleetError, type EscalationView } from '@openfleet/shared';
 import { decisionNotification, escalationAnswerNotification } from './governance/decisionNotification.js';
 import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
@@ -96,6 +96,10 @@ import { TriggerService } from './triggers/triggerService.js';
 import { PlaybookRepository } from './playbooks/playbookRepository.js';
 import { PlaybookVersionRepository } from './playbooks/playbookVersionRepository.js';
 import { PlaybookService } from './playbooks/playbookService.js';
+import { PlaybookApprovals } from './playbooks/playbookApprovals.js';
+import { PlaybookRunner } from './playbooks/playbookRunner.js';
+import { PlaybookRunRepository } from './playbooks/playbookRunRepository.js';
+import { ScriptLocator } from './playbooks/scriptLocator.js';
 import { pendingPermissionViewOf } from './mcp/pendingPermissionView.js';
 import { KnowledgeRepository } from './knowledge/knowledgeRepository.js';
 import { KnowledgeRepoScope } from './knowledge/knowledgeRepoScope.js';
@@ -169,6 +173,8 @@ export interface Daemon {
   harnesses: Harness[];
   /** The secrets service the REST routes use; a playbook run resolves its values through it. */
   secrets: SecretService;
+  /** Runs the approved script cells of playbooks; its steps are journaled and a step found running at boot is never started again. */
+  playbookRunner: PlaybookRunner;
   /** The health of the line to the desktop app: how many answers it ignored because no request in flight claimed them. */
   secretChannel: { ignoredAnswerCount: () => number };
   close: () => Promise<void>;
@@ -227,6 +233,11 @@ export interface DaemonOptions {
     schedule?: (callback: () => void, delayMs: number) => () => void;
   };
   /**
+   * The runner of playbooks. `scriptRoots` replaces the `playbooks.scriptRoots` of config.json (the directories a script cell may run files from);
+   * `maxStepExecutions` and `maxConcurrentRuns` replace the caps of 1000 step executions per run and 4 runs at once, so a test reaches them with a few steps.
+   */
+  playbooks?: { scriptRoots?: string[]; maxStepExecutions?: number; maxConcurrentRuns?: number };
+  /**
    * The secrets of playbooks. `parent` is the line to the desktop app that spawned the daemon (stdout and stdin of the sidecar); with it the keychain of the app holds the values.
    * `store` replaces the keychain adapter with another holder, so a test needs no desktop app. `clock` and `exchangeTimeoutMs` replace the clock of the nonces and the wait for the app's answer.
    * Without `parent` and `store` nothing can be set or read: the typed error is secret_store_unavailable.
@@ -264,7 +275,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   approvals.expireAllPending('daemon restarted');
   const modelConfigPath = join(config.home, 'config.json');
   const modelTable = readingConfigFile(() => loadModelTable(modelConfigPath));
-  const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings, findingsGate: findingsGateSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
+  const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings, findingsGate: findingsGateSettings, playbooks: playbookSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
   const powerSettings = readingConfigFile(() => loadPowerSettings(modelConfigPath));
   const reportPowerUnavailable = () => degraded.mark('power_assertion_unavailable', 'Idle sleep protection is unavailable or its helper cannot be stopped.');
   const powerApi = options.power?.api ?? new CaffeinatePowerApi({ onPowerUnavailable: reportPowerUnavailable });
@@ -472,8 +483,18 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     sessions, managers: managerRepository, triggers: triggerRepository, engine: triggerEngine, ledger: fireLedger, clock: triggerClock,
     schedule: options.triggers?.schedule ?? scheduleOnRealClock, onOfferSuppressedByCause: (triggerId) => systemActivity.triggerOfferSuppressed({ triggerId }),
   });
-  const playbooks = new PlaybookService({ db, repository: new PlaybookRepository(db), versions: new PlaybookVersionRepository(db),secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
-  const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const playbookRepository = new PlaybookRepository(db);
+  const playbooks = new PlaybookService({ db, repository: playbookRepository, versions: new PlaybookVersionRepository(db),secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
+  const playbookRuns = new PlaybookRunRepository(db);
+  const scriptLocator = new ScriptLocator(options.playbooks?.scriptRoots ?? playbookSettings.scriptRoots);
+  const playbookApprovals = new PlaybookApprovals({ repository: playbookRepository, locator: scriptLocator, clock: () => new Date().toISOString() });
+  const playbookRunner = new PlaybookRunner({
+    playbooks, approvals: playbookApprovals, runs: playbookRuns, secrets, clock: () => new Date().toISOString(), newId,
+    limits: { maxStepExecutions: options.playbooks?.maxStepExecutions ?? MAX_STEP_EXECUTIONS_PER_RUN, maxConcurrentRuns: options.playbooks?.maxConcurrentRuns ?? MAX_CONCURRENT_RUNS },
+    observer: { runStarted: (run) => systemActivity.playbookRunStarted(run), runEnded: (run) => systemActivity.playbookRunEnded(run) },
+  });
+  playbookRunner.recover();
+  const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, playbookRunning: { approvals: playbookApprovals, runner: playbookRunner, runs: playbookRuns }, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -491,6 +512,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     cronSource.stop();
     silentRunSource.stop();
     triggerEngine.stop();
+    await playbookRunner.stop();
     childSilence.stop();
     arbiters.stop();
     await ciWatch.stop();
@@ -537,5 +559,5 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     throw error;
   }
 
-  return { server, db, degraded, stores, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, triggerEngine, harnesses, secrets, secretChannel, close };
+  return { server, db, degraded, stores, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, triggerEngine, harnesses, secrets, playbookRunner, secretChannel, close };
 }

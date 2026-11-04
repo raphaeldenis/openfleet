@@ -648,7 +648,7 @@ const KNOWN_CODES: &[&str] = &[
   "trigger_not_found", "trigger_condition_not_found", "too_many_conditions", "trigger_field_prefix", "human_proof_required",
   "cell_kind_reserved", "cell_kind_unsupported", "playbook_graph_invalid", "playbook_limit_exceeded", "secret_not_allowed_here", "untrusted_reference",
   "non_canonical_url", "unknown_token", "invalid_secret_name", "playbook_not_found", "playbook_cell_not_found", "playbook_conflict", "playbook_locked",
-  "playbook_version_not_found",
+  "playbook_version_not_found", "playbook_run_not_found", "playbook_unapproved", "approval_digest_mismatch", "script_changed", "script_not_allowed", "playbook_not_runnable", "playbook_run_busy",
   "secret_scope_not_found", "secret_not_declared", "secret_not_connected_on_this_device", "secret_store_unavailable", "secret_too_short", "secret_nonce_invalid",
   "breaker_open",
 ];

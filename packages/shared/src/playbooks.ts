@@ -37,6 +37,14 @@ export const MAX_DATA_BYTES = 16384;
 export const MAX_PLAYBOOK_VERSIONS = 10;
 export const PLAYBOOK_VERSION_SOURCES = ['edit', 'restore'] as const;
 export type PlaybookVersionSource = (typeof PLAYBOOK_VERSION_SOURCES)[number];
+export const PLAYBOOK_RUN_STATUSES = ['running', 'succeeded', 'failed', 'needs_review'] as const;
+export type PlaybookRunStatus = (typeof PLAYBOOK_RUN_STATUSES)[number];
+export const PLAYBOOK_RUN_ACTOR_KINDS = ['admin'] as const;
+export type PlaybookRunActorKind = (typeof PLAYBOOK_RUN_ACTOR_KINDS)[number];
+export const MAX_STEP_EXECUTIONS_PER_RUN = 1000;
+export const DEFAULT_STEP_TIMEOUT_SECONDS = 600;
+export const MAX_STEP_OUTPUT_BYTES = 256 * 1024;
+export const MAX_CONCURRENT_RUNS = 4;
 export const MAX_RUNS_TO_KEEP = 1000;
 export const DEFAULT_MAX_RUNS_TO_KEEP = 50;
 
