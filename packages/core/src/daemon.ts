@@ -222,6 +222,8 @@ export interface DaemonOptions {
   humanProof?: HumanProofVerifier;
   /** Replaces the clock of the trigger engine (epoch milliseconds), so a test decides when a fire is accepted, how old a backlog is and which day it is. */
   triggers?: { clock?: () => number; schedule?: (callback: () => void, delayMs: number) => () => void };
+  /** Replaces the timer of the daily purge of the trigger fires, apart from `triggers.schedule` so that a test counting the timers of the sources does not see it. */
+  fireRetention?: { schedule?: (callback: () => void, delayMs: number) => () => void };
   power?: {
     api?: PowerApi;
     clock?: () => number;
@@ -452,10 +454,10 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   };
   const fireLedger = new FireLedger(db);
   const fireRetention = new FireRetention({
-    ledger: fireLedger, clock: triggerClock, retentionDays: triggerSettings.fireRetentionDays, onFailure: (error) => log('warn', 'the trigger fires could not be pruned', error),
+    ledger: fireLedger, clock: triggerClock, schedule: options.fireRetention?.schedule ?? scheduleOnRealClock, retentionDays: triggerSettings.fireRetentionDays,
+    onFailure: (error) => log('warn', 'the trigger fires could not be pruned', error),
   });
   const announceSettledFire = ({ triggerId, fireId, ledgerState, reason }: SettledFire) => {
-    fireRetention.pruneWhenDue();
     bus.emit({ type: 'trigger.fired', triggerId, fireId, ledgerState, ...(reason !== undefined && { reason }) });
     systemActivity.triggerFired({ triggerId, ledgerState, reason });
   };
@@ -496,6 +498,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     cronSource.stop();
     silentRunSource.stop();
     triggerEngine.stop();
+    fireRetention.stop();
     childSilence.stop();
     arbiters.stop();
     await ciWatch.stop();
@@ -527,7 +530,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     await sessions.resumeAll({ onResumed: (session) => systemActivity.sessionResumed(session, lineageRootIdOf(sessions, session)) });
     arbiters.recover();
     triggerEngine.recover();
-    fireRetention.pruneAtBoot();
+    await fireRetention.forgetOldEvents();
+    fireRetention.start();
     sessionStateSource.start({ sessionsBeforeResume });
     tableSource.start();
     cronSource.start();

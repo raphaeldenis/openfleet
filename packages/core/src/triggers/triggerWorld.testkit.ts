@@ -31,6 +31,12 @@ export async function startTriggerWorld({ configJson }: { configJson?: Record<st
     timers.push(timer);
     return () => { timer.isCancelled = true; };
   };
+  const retentionTimers: typeof timers = [];
+  const scheduleRetention = (callback: () => void, delayMs: number) => {
+    const timer = { callback, delayMs, isCancelled: false };
+    retentionTimers.push(timer);
+    return () => { timer.isCancelled = true; };
+  };
   const sockets: WebSocket[] = [];
 
   const boot = async () => {
@@ -39,6 +45,7 @@ export async function startTriggerWorld({ configJson }: { configJson?: Record<st
       power: { api: { acquire: () => ({ release: () => {} }) } },
       humanProof: { consume: () => true },
       triggers: { clock: () => nowMs, schedule },
+      fireRetention: { schedule: scheduleRetention },
     });
   };
   await boot();
@@ -141,6 +148,8 @@ export async function startTriggerWorld({ configJson }: { configJson?: Record<st
     setNowMs: (ms: number) => { nowMs = ms; },
     api, json, createSession, createChild, createTable, postHook, crash, createArmedTrigger, connect, openSocket,
     livingTimers: () => timers.filter((timer) => !timer.isCancelled),
+    /** The daily timers of the fire retention, apart from the others so that the tests counting the timers of the sources are not disturbed. */
+    livingRetentionTimers: () => retentionTimers.filter((timer) => !timer.isCancelled),
     fireLivingTimers: () => { for (const timer of timers.filter((candidate) => !candidate.isCancelled)) { timer.isCancelled = true; timer.callback(); } },
     /** The session as a daemon that stopped and started again finds it. */
     restart: async ({ stoppedForMs = 0, whileStopped = () => {} }: { stoppedForMs?: number; whileStopped?: (db: DatabaseSync) => void } = {}) => {

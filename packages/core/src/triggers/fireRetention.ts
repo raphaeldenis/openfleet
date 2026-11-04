@@ -4,51 +4,67 @@ export const DEFAULT_FIRE_RETENTION_DAYS = 90;
 export const FIRE_PRUNE_BATCH_SIZE = 1000;
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 export const FIRE_PRUNE_INTERVAL_MS = MILLISECONDS_PER_DAY;
+const FROM_THE_FIRST_ROW = 0;
 
-/** How much a prune did: the fires it removed, in how many batches (the last one finds less than a full batch). */
+/** How much a purge did: the events it forgot, in how many batches (the last one finds less than a full batch). */
 export interface FirePruneReport {
-  removed: number;
+  forgotten: number;
   batches: number;
 }
 
-/** Forgets the fires that ended a long time ago, a batch at a time, and never lets a failure reach its caller. */
+const letTheEventLoopRun = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/** Forgets the events of the fires that ended a long time ago, a batch at a time, once a day; it hands the event loop back between two batches and never lets a failure reach its caller. */
 export class FireRetention {
-  private lastPrunedAtMs: number | undefined;
+  private cancelNextRun: (() => void) | undefined;
+  private isStopped = false;
 
   constructor(private readonly deps: {
-    ledger: Pick<FireLedger, 'pruneSettled'>;
+    ledger: Pick<FireLedger, 'forgetSettledEvents'>;
     clock: () => number;
+    schedule: (callback: () => void, delayMs: number) => () => void;
     retentionDays: number;
     onFailure: (error: unknown) => void;
   }) {}
 
-  pruneAtBoot(): FirePruneReport {
-    return this.prune();
+  /** Arms the daily run; the first one is a day from now. */
+  start(): void {
+    this.isStopped = false;
+    this.scheduleNextRun();
   }
 
-  /** Prunes when a day has passed since the last prune; a call in between costs one comparison. */
-  pruneWhenDue(): void {
-    const { clock } = this.deps;
-    const isPruneDue = this.lastPrunedAtMs === undefined || clock() - this.lastPrunedAtMs >= FIRE_PRUNE_INTERVAL_MS;
-    if (isPruneDue) this.prune();
+  /** Cancels the next run and ends a purge under way at its next batch. */
+  stop(): void {
+    this.isStopped = true;
+    this.cancelNextRun?.();
+    this.cancelNextRun = undefined;
   }
 
-  private prune(): FirePruneReport {
+  async forgetOldEvents(): Promise<FirePruneReport> {
     const { ledger, clock, retentionDays, onFailure } = this.deps;
-    const now = clock();
-    this.lastPrunedAtMs = now;
-    const settledBefore = new Date(now - retentionDays * MILLISECONDS_PER_DAY).toISOString();
-    const report: FirePruneReport = { removed: 0, batches: 0 };
+    const settledBefore = new Date(clock() - retentionDays * MILLISECONDS_PER_DAY).toISOString();
+    const report: FirePruneReport = { forgotten: 0, batches: 0 };
+    let afterRowid = FROM_THE_FIRST_ROW;
     try {
-      let removedInBatch: number;
-      do {
-        removedInBatch = ledger.pruneSettled({ settledBefore, batchSize: FIRE_PRUNE_BATCH_SIZE });
-        report.removed += removedInBatch;
+      let isLastBatch = false;
+      while (!isLastBatch && !this.isStopped) {
+        const batch = ledger.forgetSettledEvents({ settledBefore, afterRowid, batchSize: FIRE_PRUNE_BATCH_SIZE });
+        afterRowid = batch.lastRowid;
+        isLastBatch = batch.forgotten < FIRE_PRUNE_BATCH_SIZE;
+        report.forgotten += batch.forgotten;
         report.batches += 1;
-      } while (removedInBatch === FIRE_PRUNE_BATCH_SIZE);
+        await letTheEventLoopRun();
+      }
     } catch (error) {
       onFailure(error);
     }
     return report;
+  }
+
+  private scheduleNextRun(): void {
+    this.cancelNextRun = this.deps.schedule(() => {
+      this.scheduleNextRun();
+      void this.forgetOldEvents();
+    }, FIRE_PRUNE_INTERVAL_MS);
   }
 }

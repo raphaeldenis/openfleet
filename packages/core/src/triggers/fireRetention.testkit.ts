@@ -12,7 +12,7 @@ export interface FireToLeave { ledgerState: TriggerLedgerState; settledAt: strin
 /** Leaves one fire row per entry in the ledger of a trigger, the way a daemon that ran for months would have written them. */
 export function leaveFires(db: DatabaseSync, triggerId: string, fires: Iterable<FireToLeave>): string[] {
   const insert = db.prepare(
-    `INSERT INTO trigger_fires (id, trigger_id, dedup_key, ledger_state, fired_at, settled_at, event_json) VALUES (?, ?, ?, ?, ?, ?, '{}')`,
+    `INSERT INTO trigger_fires (id, trigger_id, dedup_key, ledger_state, fired_at, settled_at, event_json) VALUES (?, ?, ?, ?, ?, ?, '{"session":{"name":"Left"}}')`,
   );
   const ids: string[] = [];
   db.exec('BEGIN');
@@ -38,4 +38,8 @@ export function leaveTrigger(db: DatabaseSync, triggerId = 'trigger-retention'):
 export const remainingFireIds = (db: DatabaseSync): string[] =>
   (db.prepare('SELECT id FROM trigger_fires ORDER BY rowid').all() as { id: string }[]).map((row) => row.id);
 
-export const fireCount = (db: DatabaseSync): number => Number((db.prepare('SELECT COUNT(*) AS total FROM trigger_fires').get() as { total: number }).total);
+/** The fires whose event the ledger has forgotten: the witness rows that keep a dedup key and a settling date. */
+export const forgottenFireIds = (db: DatabaseSync): string[] =>
+  (db.prepare("SELECT id FROM trigger_fires WHERE event_json = '{}' ORDER BY rowid").all() as { id: string }[]).map((row) => row.id);
+
+export const fireCount =(db: DatabaseSync): number => Number((db.prepare('SELECT COUNT(*) AS total FROM trigger_fires').get() as { total: number }).total);

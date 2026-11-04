@@ -33,6 +33,9 @@ const sqlListOf = (states: readonly TriggerLedgerState[]) => states.map((state) 
 const STATES_THAT_REACHED_THE_EFFECT: readonly TriggerLedgerState[] = ['attempted', 'completed', 'needs_review'];
 const STATES_SQL_LIST = sqlListOf(STATES_THAT_REACHED_THE_EFFECT);
 
+/** The event of a fire whose payload the ledger has forgotten; also the default of a fire written before events were stored. */
+const FORGOTTEN_EVENT_JSON = '{}';
+
 /** The only states a fire never leaves and no one still waits on: the others are replayed, or need a human's review. */
 const STATES_THAT_CAN_BE_FORGOTTEN: readonly TriggerLedgerState[] = ['completed', 'cancelled'];
 const FORGETTABLE_STATES_SQL_LIST = sqlListOf(STATES_THAT_CAN_BE_FORGOTTEN);
@@ -108,14 +111,19 @@ export class FireLedger {
     return Number(result.changes);
   }
 
-  /** Removes at most `batchSize` of the oldest `completed` or `cancelled` fires that ended before `settledBefore`; returns how many it removed. A fire in any other state is never removed. */
-  pruneSettled(input: { settledBefore: string; batchSize: number }): number {
-    const result = this.db.prepare(
-      `DELETE FROM trigger_fires WHERE rowid IN (
-         SELECT rowid FROM trigger_fires WHERE ledger_state IN (${FORGETTABLE_STATES_SQL_LIST}) AND settled_at < ? ORDER BY rowid LIMIT ?
-       )`,
-    ).run(input.settledBefore, input.batchSize);
-    return Number(result.changes);
+  /**
+   * Empties the event of at most `batchSize` `completed` or `cancelled` fires that ended before `settledBefore`, among the rows after `afterRowid`, oldest rows first.
+   * The row stays: its dedup key keeps an old event from running again, and its dates keep a cooldown counting it. A fire in any other state is never touched.
+   * Returns how many events it emptied and the last row it emptied (`afterRowid` when none).
+   */
+  forgetSettledEvents(input: { settledBefore: string; afterRowid: number; batchSize: number }): { forgotten: number; lastRowid: number } {
+    const rows = this.db.prepare(
+      `UPDATE trigger_fires SET event_json = '${FORGOTTEN_EVENT_JSON}' WHERE rowid IN (
+         SELECT rowid FROM trigger_fires WHERE rowid > ? AND ledger_state IN (${FORGETTABLE_STATES_SQL_LIST}) AND settled_at < ? AND event_json <> '${FORGOTTEN_EVENT_JSON}' ORDER BY rowid LIMIT ?
+       ) RETURNING rowid`,
+    ).all(input.afterRowid, input.settledBefore, input.batchSize) as unknown as { rowid: number }[];
+    const lastRowid = rows.reduce((last, row) => Math.max(last, Number(row.rowid)), input.afterRowid);
+    return { forgotten: rows.length, lastRowid };
   }
 
   /** The fires of a trigger whose effect started in `[fromIso, untilIso)`, not counting `exceptId`. */
