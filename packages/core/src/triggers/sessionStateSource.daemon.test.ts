@@ -60,6 +60,25 @@ describe('closed_with_error', () => {
   });
 });
 
+describe('scope of the owner', () => {
+  it('has no effect for a child whose lineage reaches a deleted owner through a living intermediate manager, even for a notify RUN', async () => {
+    const { world, lead: owner } = await worldWithLead();
+    const intermediate = await world.createSession('Intermediate', { manager: world.managerSpec });
+    world.db.prepare('UPDATE sessions SET parent_id = ? WHERE id = ?').run(owner.id, intermediate.id);
+    const child = await world.createChild(intermediate, 'Orphaned lineage');
+    const triggerId = await world.createArmedTrigger({
+      when: { source: 'session_state', state: 'closed_with_error' }, ownerManagerId: owner.id, run: { kind: 'notify', title: 'Crash', message: 'A child crashed.' },
+    });
+    world.db.prepare('PRAGMA foreign_keys = OFF').run();
+    world.db.prepare('DELETE FROM sessions WHERE id = ?').run(owner.id);
+
+    world.crash(child.id);
+    await vi.waitFor(() => expect((world.db.prepare('SELECT state FROM sessions WHERE id = ?').get(child.id) as { state: string }).state).toBe('closed'));
+
+    expect(world.firesOf(triggerId)).toEqual([]);
+  });
+});
+
 describe('idle for more than N minutes', () => {
   it('fires when the child has been idle for the minutes, not before', async () => {
     const { world, lead } = await worldWithLead();
