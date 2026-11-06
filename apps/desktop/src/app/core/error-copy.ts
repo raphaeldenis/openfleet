@@ -154,6 +154,11 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   secret_store_unavailable: { what: 'The secret store of the desktop app is not available', fix: 'unlock the keychain and keep the desktop app open' },
   secret_too_short: { what: 'A secret value holds at least 8 characters', fix: 'enter a longer value' },
   secret_nonce_invalid: { what: 'The confirmation of the desktop app is missing or expired', fix: 'confirm the action again in the desktop app' },
+  integration_provider_unknown: { what: 'OpenFleet does not know that integration provider', fix: 'pick one of the providers it lists' },
+  integration_host_not_allowed: { what: 'That host is not one the provider may reach', fix: 'use a host name of the provider, with no path or port' },
+  integration_not_found: { what: 'That integration does not exist in this project' },
+  integration_connection_not_found: { what: 'That integration connection does not exist' },
+  integration_refresh_cooldown: { what: 'This integration was refreshed a moment ago', fix: 'wait for the cooldown to end' },
 
   internal_error: { what: 'The daemon hit an unexpected error' },
   launch_failed: { what: 'The agent failed to launch' },

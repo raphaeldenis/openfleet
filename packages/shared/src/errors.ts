@@ -49,6 +49,10 @@ export const ERROR_CODES = {
   unknown_token: { kind: 'invalid_request' },
   invalid_secret_name: { kind: 'invalid_request' },
 
+  // A connection names a provider the daemon does not know, or a host the provider does not allow: a provider reaches its own hosts only, never a free url.
+  integration_provider_unknown: { kind: 'invalid_request' },
+  integration_host_not_allowed: { kind: 'invalid_request' },
+
   unauthorized: { kind: 'unauthorized' },
   // Arming a trigger is a gesture of a human: the admin token alone is not the proof, a single-use proof minted by the desktop app is.
   human_proof_required: { kind: 'unauthorized' },
@@ -74,10 +78,16 @@ export const ERROR_CODES = {
   playbook_cell_not_found: { kind: 'not_found' },
   // The revision was never kept, or was dropped when the playbook went over its ten versions.
   playbook_version_not_found: { kind: 'not_found' },
+  // An integration of another project reads exactly like one that does not exist.
+  integration_not_found: { kind: 'not_found' },
+  integration_connection_not_found: { kind: 'not_found' },
 
   // The playbook moved since it was read: reloading it shows the current revision. A locked playbook takes writes from the desktop app only.
   playbook_conflict: { kind: 'conflict', retry: 'after_refresh' },
   playbook_locked: { kind: 'conflict', retry: 'never' },
+
+  // The integration was probed a moment ago: the refresh is not repeated before its cooldown ends, so a loop of refreshes cannot hammer a provider or lock out an account.
+  integration_refresh_cooldown: { kind: 'conflict', retry: 'later' },
 
   // The fire breaker disarmed a trigger that fired more than 30 times in a minute: only a human arms it again.
   breaker_open: { kind: 'conflict', retry: 'never' },
