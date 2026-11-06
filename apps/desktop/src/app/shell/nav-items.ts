@@ -32,7 +32,7 @@ const helmSectionsFor = ({ currentManagerId }: HelmNavContext): ReadonlyArray<{ 
   { key: 'calendar', glyph: '▤', label: 'Calendar', route: null },
   { key: 'notes', glyph: '¶', label: 'Notes', route: '/notes' },
   { key: 'tables', glyph: '▦', label: 'Tables', route: '/tables' },
-  { key: 'triggers', glyph: '⚡', label: 'Triggers & Playbooks', route: null },
+  { key: 'triggers', glyph: '⚡', label: 'Triggers & Playbooks', route: '/triggers' },
   { key: 'integrations', glyph: '⇄', label: 'Integrations', route: null },
   { key: 'usage', glyph: '$', label: 'Usage', route: '/usage' },
   { key: 'components', glyph: '◈', label: 'Component sheet', route: '/components' },

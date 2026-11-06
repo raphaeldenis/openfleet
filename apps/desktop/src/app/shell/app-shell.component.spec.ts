@@ -137,9 +137,15 @@ describe('AppShellComponent', () => {
   it('says "Coming soon" on every section that has no screen yet', async () => {
     const { root } = await setUp();
 
-    for (const key of ['profiles', 'triggers', 'integrations']) {
+    for (const key of ['profiles', 'integrations']) {
       expect(root.querySelector(`[data-testid="nav-${key}"]`), key).toHaveTextContent('Coming soon');
     }
+  });
+
+  it('opens Triggers & Playbooks as a section with a screen', async () => {
+    const { root } = await setUp();
+
+    expect(root.querySelector('[data-testid="nav-triggers"]')).not.toHaveTextContent('Coming soon');
   });
 
   it('never shows a development phase in the navigation', async () => {
