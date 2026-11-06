@@ -195,7 +195,7 @@ The repo has no known violation: `.dependency-cruiser-known-violations.json` (`-
 
 ### Pre-push hook
 
-`pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm arch`, `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It also re-runs the core tests without `claude` in `PATH` (CI has none; skipped when `claude` is not installed), runs blocking `cargo test --lib` with the exact `Cargo.toml` Rust version and advisory `cargo +stable clippy --all-targets` when the push touches `apps/desktop/src-tauri`, and runs the e2e when it touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` (on free ports, whatever your dev server holds; `OPENFLEET_PREPUSH_E2E=1` forces it, `=0` skips it). `OPENFLEET_PREPUSH_DRYRUN=1 sh scripts/pre-push.sh` lists the steps without running them. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
+`pnpm install` installs a husky `pre-push` hook (`scripts/pre-push.sh`) that runs what CI runs: `pnpm arch`, `pnpm typecheck`, `pnpm test`, `pnpm --filter @openfleet/desktop test`, stopping at the first failure. It also re-runs the core tests without `claude` in `PATH` (CI has none; skipped when `claude` is not installed), runs blocking `cargo test --lib` with the exact `Cargo.toml` Rust version and blocking `cargo +1.99.0 clippy --all-targets -- -D warnings` when the push touches `apps/desktop/src-tauri`, and runs the e2e when it touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src` (on free ports, whatever your dev server holds; `OPENFLEET_PREPUSH_E2E=1` forces it, `=0` skips it). `OPENFLEET_PREPUSH_DRYRUN=1 sh scripts/pre-push.sh` lists the steps without running them. It puts `/opt/homebrew/bin` first in `PATH` when present and refuses a Node older than 26.
 
 The e2e runs automatically when the pushed range touches `apps/desktop/src`, `packages/core/src/api` or `packages/shared/src`, on free ports picked at run time; `OPENFLEET_PREPUSH_E2E=1 git push` forces it, `OPENFLEET_PREPUSH_E2E=0` skips it.
 
@@ -225,8 +225,8 @@ CI runs on `pull_request` and on pushes to `main`: a branch push with an open PR
 
 ### Autonomous Claude Code sessions (local opt-in only)
 
-The repo ships no `.claude/settings.json` and no auto-approve hook: a clone of this public repo must not grant any agent a permission bypass by default. If you want an autonomous session in your own checkout, add your own `.claude/settings.local.json` (already gitignored) with a `permissions.defaultMode` and any `PreToolUse`/`PermissionRequest` hook you're comfortable with — it stays local to your machine and is never committed.
+The tracked `.claude/settings.json` only installs the `PreToolUse` hook `block-dangerous-git` (a deny hook, see [docs/git-guardrails.md](docs/git-guardrails.md)) and ships no auto-approve hook: a clone of this public repo must not grant any agent a permission bypass by default. If you want an autonomous session in your own checkout, add your own `.claude/settings.local.json` (already gitignored) with a `permissions.defaultMode` and any `PreToolUse`/`PermissionRequest` hook you're comfortable with — it stays local to your machine and is never committed.
 
-OpenFleet-launched `claude` sessions ignore a project's `.claude/settings.json` (and `settings.local.json`) entirely (AUD-28), so the file above has no effect on them; a per-project reconcile/import of those settings is planned (AUD-29).
+OpenFleet-launched `claude` sessions ignore a project's `.claude/settings.json` (and `settings.local.json`) entirely (AUD-28), so the tracked hook has no effect on them; a per-project reconcile/import of those settings is planned (AUD-29).
 
 Live smoke checklist (needs a real `claude` subscription, not run in CI): `docs/phase1-smoke.md`.
