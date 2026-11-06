@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { basicEnvironment, killProcessGroup } from '../git/scriptProcess.js';
 
 export interface ScriptStepRun {
@@ -8,7 +9,8 @@ export interface ScriptStepRun {
   env: Readonly<Record<string, string>>;
   workingDirectory: string;
   timeoutMs: number;
-  maxOutputBytes: number;
+  /** The most characters of stdout and stderr together that the step keeps in memory; the caller adds the length of its longest secret, so that a secret across its cap stays whole. */
+  maxRetainedChars: number;
   /** Aborting kills the process group of the script. */
   signal: AbortSignal;
 }
@@ -21,32 +23,39 @@ export type ScriptStepOutcome =
 
 const TERMINATION_GRACE_MS = 2_000;
 const STREAMS_CLOSE_GRACE_MS = 200;
-const TRUNCATION_MARKER = '\n[truncated]';
 const UNRENDERABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
-const readableOutput = (chunks: Buffer[], wasTruncated: boolean): string => {
-  const decoded = Buffer.concat(chunks).toString('utf8');
-  const withoutControlCharacters = decoded.replace(UNRENDERABLE, (character) => (character === '\n' || character === '\t' ? character : ''));
-  return wasTruncated ? withoutControlCharacters + TRUNCATION_MARKER : withoutControlCharacters;
-};
+const withoutControlCharacters = (text: string): string => text.replace(UNRENDERABLE, (character) => (character === '\n' || character === '\t' ? character : ''));
+
+const SPAWN_FAILED: ScriptStepOutcome = { kind: 'spawn_failed', output: '' };
+
+/** The child process, or undefined when `spawn` throws (a variable holding a NUL, for one): the error carries the offending value, so it is dropped here. */
+function spawnedProcess(run: ScriptStepRun): ChildProcess | undefined {
+  try {
+    return spawn(run.path, [...run.args], { cwd: run.workingDirectory, env: { ...basicEnvironment(process.env), ...run.env }, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Starts the file with no shell, in its own process group, with the daemon's basic environment plus the variables given, and answers how it ended. It never throws.
- * Stdout and stderr are kept together up to `maxOutputBytes`; the rest is dropped and the output ends with a truncation marker.
- * At the timeout, or when the signal aborts, the group gets SIGTERM, then SIGKILL after a grace period.
+ * Stdout and stderr are decoded as they arrive and kept together up to `maxRetainedChars`; the rest is dropped, so a script that never stops printing holds a bounded amount of memory.
+ * When the script ends (exit, timeout or abort) every process left in its group is killed before the answer. At the timeout, or when the signal aborts, the group first gets SIGTERM, then SIGKILL after a grace period.
  */
 export function runScriptStep(run: ScriptStepRun): Promise<ScriptStepOutcome> {
   return new Promise<ScriptStepOutcome>((resolve) => {
-    const chunks: Buffer[] = [];
-    let keptBytes = 0;
-    let wasTruncated = false;
+    const child = spawnedProcess(run);
+    if (child === undefined) return resolve(SPAWN_FAILED);
+
+    const pieces: string[] = [];
+    let retainedChars = 0;
     let timedOut = false;
     let wasAborted = false;
     let isFinished = false;
     let exit: { code: number | null } | undefined;
 
-    const child = spawn(run.path, [...run.args], { cwd: run.workingDirectory, env: { ...basicEnvironment(process.env), ...run.env }, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const output = () => readableOutput(chunks, wasTruncated);
+    const output = () => pieces.join('');
     const outcomeAfterExit = (): ScriptStepOutcome => {
       if (wasAborted) return { kind: 'aborted', output: output() };
       if (timedOut) return { kind: 'timeout', output: output() };
@@ -71,26 +80,32 @@ export function runScriptStep(run: ScriptStepRun): Promise<ScriptStepOutcome> {
       hardKill.unref();
     };
 
-    const keep = (chunk: Buffer): void => {
-      const room = run.maxOutputBytes - keptBytes;
-      if (chunk.length > room) wasTruncated = true;
+    const retain = (text: string): void => {
+      const room = run.maxRetainedChars - retainedChars;
       if (room <= 0) return;
-      const kept = chunk.subarray(0, room);
-      chunks.push(kept);
-      keptBytes += kept.length;
+      const kept = text.slice(0, room);
+      pieces.push(kept);
+      retainedChars += kept.length;
     };
-    child.stdout?.on('data', keep);
-    child.stderr?.on('data', keep);
+    const retainStream = (stream: NodeJS.ReadableStream | null): void => {
+      const decoder = new StringDecoder('utf8');
+      stream?.on('data', (chunk: Buffer) => retain(withoutControlCharacters(decoder.write(chunk))));
+      stream?.on('end', () => retain(withoutControlCharacters(decoder.end())));
+    };
+    retainStream(child.stdout);
+    retainStream(child.stderr);
 
     const timeoutTimer = setTimeout(() => { timedOut = true; terminate(); }, run.timeoutMs);
     const abort = (): void => { wasAborted = true; terminate(); };
     if (run.signal.aborted) abort();
     else run.signal.addEventListener('abort', abort, { once: true });
 
-    child.on('error', () => finish({ kind: 'spawn_failed', output: '' }));
+    child.on('error', () => finish(SPAWN_FAILED));
     child.on('exit', (code) => {
       exit = { code };
-      // A script that leaves a background process holding its output open must not hold the run: wait briefly for the streams, then answer.
+      // Whatever the script left running in its group dies with the step, whether it succeeded or not.
+      killProcessGroup(child.pid!, 'SIGKILL');
+      // A process that escaped the group and holds the output open must not hold the run: wait briefly for the streams, then answer.
       setTimeout(() => finish(outcomeAfterExit()), STREAMS_CLOSE_GRACE_MS);
     });
     child.on('close', () => finish(outcomeAfterExit()));

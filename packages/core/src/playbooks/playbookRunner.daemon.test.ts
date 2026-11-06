@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { recentLogLines } from '../logger.js';
 import { OWN_PROJECT_ID, startGovernanceFixture, type GovernanceFixture } from '../governance/governanceQueue.testkit.js';
 import { createInMemorySecretStore, type InMemorySecretStore } from '../secrets/inMemorySecretStore.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
@@ -534,4 +535,82 @@ describe('a daemon that stops during a step', () => {
     await waitUntil('the script to be gone', () => { try { process.kill(Number(readFileSync(marker('pid'), 'utf8')), 0); return false; } catch { return true; } });
     expect(readFileSync(marker('ran'), 'utf8')).toBe('x');
   }, 25_000);
+});
+
+describe('a secret cut by the cap of the output, or split on its way in', () => {
+  const OUTPUT_CAP_CHARS = 256 * 1024;
+  const TRUNCATION_MARKER = '[truncated]';
+  const multibyteSecretValue = `ça-vaut-€-${randomUUID()}`;
+
+  const approvedPlaybookPrinting = async (f: GovernanceFixture, { script, value }: { script: string; value: string }) => {
+    writeScript('print.sh', script);
+    const playbook = await createApprovedPlaybook(f, [scriptCell('print', 'print.sh', { env: { [SECRET_NAME]: `{{secret:${SECRET_NAME}}}` } })]);
+    await secretStore.set({ kind: 'playbook', id: playbook.id }, SECRET_NAME, value);
+    return playbook;
+  };
+  const flood = (chars: number) => `head -c ${chars} /dev/zero | tr '\\0' 'z'`;
+  const printsSecretAfterFlood = ({ floodChars, stream }: { floodChars: number; stream: 'stdout' | 'stderr' }) => {
+    const redirection = stream === 'stderr' ? ' >&2' : '';
+    return `{\n${flood(floodChars)}\nprintf '%s' "$${SECRET_NAME}"\n}${redirection}`;
+  };
+
+  describe.each(['stdout', 'stderr'] as const)('on %s', (stream) => {
+    it.each([1, 20, 42])('leaves no piece of a secret that starts %i characters before the cap', async (charactersBeforeTheCap) => {
+      const f = await boot();
+      const script = printsSecretAfterFlood({ floodChars: OUTPUT_CAP_CHARS - charactersBeforeTheCap, stream });
+      const playbook = await approvedPlaybookPrinting(f, { script, value: secretValue });
+
+      const run = await runToTheEnd(f, playbook.id);
+
+      expect(run.steps[0]?.output?.output).toBe('z'.repeat(OUTPUT_CAP_CHARS - charactersBeforeTheCap) + TRUNCATION_MARKER);
+    });
+
+    it('leaves no piece of a multibyte secret that starts before the cap', async () => {
+      const f = await boot();
+      const script = printsSecretAfterFlood({ floodChars: OUTPUT_CAP_CHARS - 3, stream });
+      const playbook = await approvedPlaybookPrinting(f, { script, value: multibyteSecretValue });
+
+      const run = await runToTheEnd(f, playbook.id);
+
+      expect(run.steps[0]?.output?.output).toBe('z'.repeat(OUTPUT_CAP_CHARS - 3) + TRUNCATION_MARKER);
+    });
+  });
+
+  it('masks a secret that ends exactly at the cap', async () => {
+    const f = await boot();
+    const script = printsSecretAfterFlood({ floodChars: OUTPUT_CAP_CHARS - secretValue.length, stream: 'stdout' });
+    const playbook = await approvedPlaybookPrinting(f, { script, value: secretValue });
+
+    const run = await runToTheEnd(f, playbook.id);
+
+    expect(run.steps[0]?.output?.output).toBe(`${'z'.repeat(OUTPUT_CAP_CHARS - secretValue.length)}[secret:${SECRET_NAME}]`);
+  });
+
+  it('masks a multibyte secret whose first character arrives in two chunks', async () => {
+    const f = await boot();
+    const script = `printf '%s' "$${SECRET_NAME}" | { dd bs=1 count=1 2>/dev/null; sleep 0.2; cat; }`;
+    const playbook = await approvedPlaybookPrinting(f, { script, value: multibyteSecretValue });
+
+    const run = await runToTheEnd(f, playbook.id);
+
+    expect(run.steps[0]?.output?.output).toBe(`[secret:${SECRET_NAME}]`);
+  });
+});
+
+describe('a script that cannot be spawned', () => {
+  const printsNothing = 'printf never';
+
+  it('fails the step with script_spawn_failed, and the value of the secret is in no log, row or answer, when a variable holds a NUL', async () => {
+    const f = await boot();
+    writeScript('hello.sh', printsNothing);
+    const playbook = await createApprovedPlaybook(f, [scriptCell('say', 'hello.sh', { env: { [SECRET_NAME]: `{{secret:${SECRET_NAME}}}\u0000` } })]);
+    await secretStore.set({ kind: 'playbook', id: playbook.id }, SECRET_NAME, secretValue);
+
+    const run = await runToTheEnd(f, playbook.id);
+    const answers = [await (await f.api(`/api/playbook-runs/${run.id}`)).text(), await (await f.api(`/api/playbook-runs?playbookId=${playbook.id}`)).text()].join('');
+
+    expect(run).toMatchObject({ status: 'failed', errorCode: 'script_spawn_failed' });
+    expect(run.steps.map((step) => [step.status, step.errorCode])).toEqual([['failed', 'script_spawn_failed']]);
+    for (const trace of [everythingPersistedByRuns(f), answers, recentLogLines().join('\n')]) expect(trace).not.toContain(secretValue);
+  });
 });

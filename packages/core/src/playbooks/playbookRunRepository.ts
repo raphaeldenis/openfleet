@@ -100,9 +100,9 @@ export class PlaybookRunRepository {
     });
   }
 
-  /** Deletes the oldest finished runs of the playbook beyond the `keep` newest. */
+  /** Deletes the oldest succeeded and failed runs of the playbook beyond the `keep` newest. A run that is running or needs review is never deleted here: its journal is the only evidence of an effect nobody has examined. */
   pruneFinishedBeyond(playbookId: string, keep: number): void {
-    this.db.prepare(`DELETE FROM playbook_runs WHERE playbook_id = ? AND status <> 'running' AND id NOT IN (
-        SELECT id FROM playbook_runs WHERE playbook_id = ? AND status <> 'running' ORDER BY started_at DESC, id DESC LIMIT ?)`).run(playbookId, playbookId, keep);
+    this.db.prepare(`DELETE FROM playbook_runs WHERE playbook_id = ? AND status IN ('succeeded', 'failed') AND id NOT IN (
+        SELECT id FROM playbook_runs WHERE playbook_id = ? AND status IN ('succeeded', 'failed') ORDER BY started_at DESC, id DESC LIMIT ?)`).run(playbookId, playbookId, keep);
   }
 }

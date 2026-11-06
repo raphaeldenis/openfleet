@@ -101,9 +101,12 @@ const maskedLeaves = (value: unknown, masker: SecretMasker): unknown => {
 const conditionsOf = (edgeConditions: NonNullable<PlaybookEdge['when']>): Condition[] =>
   edgeConditions.map((condition) => ({ path: condition.lhs, operator: condition.op, value: condition.rhs, caseInsensitive: condition.caseInsensitive, join: condition.join }));
 
-const verdictOfFailure = (error: unknown): Verdict => {
+const describedByStackOrMessage = (error: unknown): string => (error instanceof Error ? (error.stack ?? error.message) : String(error));
+
+/** The verdict of a failure; an unexpected error is logged as text with the secrets of the run masked, never as the raw error. */
+const verdictOfFailure = (error: unknown, masker: SecretMasker): Verdict => {
   if (error instanceof KernelError || error instanceof OpenFleetError) return { status: 'failed', errorCode: error.code };
-  log('error', 'a playbook step failed unexpectedly', error);
+  log('error', 'a playbook step failed unexpectedly', masker.mask(describedByStackOrMessage(error)));
   return { status: 'failed', errorCode: 'internal_error' };
 };
 
@@ -173,7 +176,7 @@ export class PlaybookRunner {
 
   private maskerOf(secretValues: ReadonlyMap<string, string>): SecretMasker {
     try {
-      return createSecretMasker([...secretValues].map(([name, value]) => ({ name, value })));
+      return createSecretMasker([...secretValues].map(([name, value]) => ({ name, value })), { maxInputChars: MAX_STEP_OUTPUT_BYTES });
     } catch (error) {
       if (error instanceof KernelError) throw wireErrorOf(error);
       throw error;
@@ -187,7 +190,7 @@ export class PlaybookRunner {
     try {
       verdict = await this.walk(context);
     } catch (error) {
-      verdict = verdictOfFailure(error);
+      verdict = verdictOfFailure(error, context.masker);
     }
     runs.settleRun({ id: run.id, status: verdict.status, errorCode: verdict.errorCode, endedAt: clock() });
     runs.pruneFinishedBeyond(playbook.id, playbook.policy.maxRunsToKeep);
@@ -230,7 +233,7 @@ export class PlaybookRunner {
       if (!isScriptCell(cell)) throw notRunnable(`the cell ${cell.id} is not a script cell.`);
       return await this.runScriptCell(cell, context, steps);
     } catch (error) {
-      return { verdict: verdictOfFailure(error) };
+      return { verdict: verdictOfFailure(error, context.masker) };
     }
   }
 
@@ -241,7 +244,8 @@ export class PlaybookRunner {
 
     const outcome = await runScriptStep({
       path: script.path, args, env, workingDirectory: dirname(script.path), signal: this.shutdown.signal,
-      timeoutMs: (cell.timeoutSeconds ?? DEFAULT_STEP_TIMEOUT_SECONDS) * 1000, maxOutputBytes: MAX_STEP_OUTPUT_BYTES,
+      timeoutMs: (cell.timeoutSeconds ?? DEFAULT_STEP_TIMEOUT_SECONDS) * 1000,
+      maxRetainedChars: MAX_STEP_OUTPUT_BYTES + context.masker.longestSpellingLength,
     });
 
     // The shape-based layer runs first: it would read the marker `[secret:NAME]` as a secret-named key and hide the name.

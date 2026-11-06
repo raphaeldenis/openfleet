@@ -15,6 +15,8 @@ export type SecretMasker = {
    * The marker `[secret:NAME]` is plain text: an agent output can forge it, so it never proves that a value was masked.
    */
   mask: (text: string) => string;
+  /** The length in characters of the longest spelling of any secret, at least 1: a text cut shorter than this beyond the ceiling can hide the start of a secret from `mask`. */
+  longestSpellingLength: number;
 };
 
 type Match = { start: number; end: number; name: string };
@@ -173,5 +175,5 @@ export const createSecretMasker = (secrets: readonly SecretToMask[], { maxInputC
     const matchesBeforeTheCut = matches.filter((match) => match.end <= cut);
     return maskedWith(text.slice(0, cut), matchesBeforeTheCut) + TRUNCATION_MARKER;
   };
-  return { mask };
+  return { mask, longestSpellingLength: longestSpelling };
 };

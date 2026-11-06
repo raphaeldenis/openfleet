@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { applyMigrations } from './migrate.js';
 
+const migrationsDirectory = new URL('./migrations/', import.meta.url);
 const migrationsDownDirectory = new URL('./migrations-down/', import.meta.url);
 
 const openMigratedDatabase = () => {
@@ -27,6 +28,24 @@ describe('the playbook runs migration', () => {
     const db = openMigratedDatabase();
 
     expect(db.prepare('SELECT approved_scripts_json FROM playbooks').get()).toEqual({ approved_scripts_json: null });
+  });
+
+  it('keeps the playbooks, their approval and their versions of a database populated at 068', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('PRAGMA foreign_keys = ON;');
+    const migrationFiles = readdirSync(migrationsDirectory).filter((file) => file.endsWith('.sql')).sort();
+    const sourcesUpTo068 = migrationFiles.filter((file) => file < '069').map((file) => ({ version: file.replace(/\.sql$/, ''), sql: readFileSync(new URL(file, migrationsDirectory), 'utf8') }));
+    applyMigrations(db, sourcesUpTo068);
+    db.prepare("INSERT INTO projects (id, name, created_at) VALUES ('p1', 'One', 't0')").run();
+    db.prepare("INSERT INTO playbooks (id, project_id, name, inputs_json, flow_json, policy_json, origin, created_at, updated_at, approved_digest, approved_by, approved_at) VALUES ('old', 'p1', 'Old', '[{\"name\":\"who\",\"type\":\"string\"}]', '{\"cells\":[{\"id\":\"a\",\"kind\":\"manual\",\"prompt\":\"Check\"}]}', '{\"maxRunsToKeep\":7}', 'native', 'n', 'n', 'digest-68', 'human', 'then')").run();
+    const before = db.prepare("SELECT * FROM playbooks WHERE id = 'old'").get() as Record<string, unknown>;
+
+    applyMigrations(db);
+
+    const after = db.prepare("SELECT * FROM playbooks WHERE id = 'old'").get() as Record<string, unknown>;
+    expect(after).toEqual({ ...before, approved_scripts_json: null });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name IN ('playbook_runs', 'playbook_run_steps')").get()).toEqual({ n: 2 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM playbook_runs").get()).toEqual({ n: 0 });
   });
 
   it('refuses a run status outside running, succeeded, failed and needs_review', () => {
