@@ -293,7 +293,16 @@ describe('createSecretMasker: input ceiling', () => {
 });
 
 describe('createSecretMasker: a secret too long for one regular expression', () => {
-  const hugeValue = 'ab/cd ef'.repeat(40_000);
+  const HUGE_VALUE_CHARS = 320_000;
+  const ALPHABET = 'abcdefghij/ ';
+  const nonPeriodicValue = (length: number): string => {
+    let state = 12345;
+    return Array.from({ length }, () => {
+      state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+      return ALPHABET[state % ALPHABET.length];
+    }).join('');
+  };
+  const hugeValue = nonPeriodicValue(HUGE_VALUE_CHARS);
   const CEILING_ABOVE_EVERY_FORM = 10_000_000;
   const hugeMasker = () => createSecretMasker([{ name: 'HUGE', value: hugeValue }, { name: 'JIRA_TOKEN', value: jiraValue }], { maxInputChars: CEILING_ABOVE_EVERY_FORM });
 
