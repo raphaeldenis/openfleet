@@ -22,6 +22,7 @@ export const routes: Routes = [
       // --- end Tables ---
       { path: 'usage', loadComponent: () => import('./usage/usage-view.component').then((m) => m.UsageViewComponent) },
       { path: 'toolkit', loadComponent: () => import('./toolkit/toolkit-view.component').then((m) => m.ToolkitViewComponent) },
+      { path: 'triggers', loadComponent: () => import('./triggers/triggers-view.component').then((m) => m.TriggersViewComponent) },
       { path: 'audit', loadComponent: () => import('./audit/audit-view.component').then((m) => m.AuditViewComponent) },
       { path: 'project', loadComponent: () => import('./projects/project-home.component').then((m) => m.ProjectHomeComponent) },
       { path: 'project/:id', loadComponent: () => import('./projects/project-home.component').then((m) => m.ProjectHomeComponent) },
