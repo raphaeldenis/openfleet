@@ -102,6 +102,7 @@ describe('listing pull requests through gh', () => {
   it.each([
     ['text that is not JSON', 'not json'],
     ['JSON of another shape', '{"items":[]}'],
+    ['a repository that could read as an option', JSON.stringify([searchedPullRequest({ repo: '--web/widgets' })])],
     ['an entry without a repository', JSON.stringify([{ number: 1, title: 't', author: { login: 'a' }, isDraft: false, url: 'u' }])],
   ])('answers gh_bad_output for %s', async (_label, stdout) => {
     const { reader } = readerWith({ stdout });
