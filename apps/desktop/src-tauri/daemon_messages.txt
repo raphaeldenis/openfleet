@@ -29,3 +29,4 @@ trigger_cron_source_failed the cron source failed on a trigger
 trigger_silent_run_source_failed the silent_run source failed on a trigger
 playbook_runs_interrupted playbook runs left running by a stopped daemon were marked needs_review
 playbook_step_failed_unexpectedly a playbook step failed unexpectedly
+trigger_fires_prune_failed the trigger fires could not be pruned

@@ -88,6 +88,7 @@ import { SilentRunSource } from './triggers/silentRunSource.js';
 import { TableSource } from './triggers/tableSource.js';
 import { FireBreaker } from './triggers/fireBreaker.js';
 import { FireLedger } from './triggers/fireLedger.js';
+import { FireRetention } from './triggers/fireRetention.js';
 import { createTriggerActions } from './triggers/triggerActions.js';
 import { TriggerCursors } from './triggers/triggerCursors.js';
 import { TriggerEngine, type SettledFire } from './triggers/triggerEngine.js';
@@ -227,6 +228,8 @@ export interface DaemonOptions {
   humanProof?: HumanProofVerifier;
   /** Replaces the clock of the trigger engine (epoch milliseconds), so a test decides when a fire is accepted, how old a backlog is and which day it is. */
   triggers?: { clock?: () => number; schedule?: (callback: () => void, delayMs: number) => () => void };
+  /** Replaces the timer of the daily purge of the trigger fires, apart from `triggers.schedule` so that a test counting the timers of the sources does not see it. */
+  fireRetention?: { schedule?: (callback: () => void, delayMs: number) => () => void };
   power?: {
     api?: PowerApi;
     clock?: () => number;
@@ -275,7 +278,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   approvals.expireAllPending('daemon restarted');
   const modelConfigPath = join(config.home, 'config.json');
   const modelTable = readingConfigFile(() => loadModelTable(modelConfigPath));
-  const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings, findingsGate: findingsGateSettings, playbooks: playbookSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
+  const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings, findingsGate: findingsGateSettings, playbooks: playbookSettings, triggers: triggerSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
   const powerSettings = readingConfigFile(() => loadPowerSettings(modelConfigPath));
   const reportPowerUnavailable = () => degraded.mark('power_assertion_unavailable', 'Idle sleep protection is unavailable or its helper cannot be stopped.');
   const powerApi = options.power?.api ?? new CaffeinatePowerApi({ onPowerUnavailable: reportPowerUnavailable });
@@ -461,6 +464,10 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     bus.emit({ type: 'error', scope: 'broadcast', error });
   };
   const fireLedger = new FireLedger(db);
+  const fireRetention = new FireRetention({
+    ledger: fireLedger, clock: triggerClock, schedule: options.fireRetention?.schedule ?? scheduleOnRealClock, retentionDays: triggerSettings.fireRetentionDays,
+    onFailure: (error) => log('warn', 'the trigger fires could not be pruned', error),
+  });
   const announceSettledFire = ({ triggerId, fireId, ledgerState, reason }: SettledFire) => {
     bus.emit({ type: 'trigger.fired', triggerId, fireId, ledgerState, ...(reason !== undefined && { reason }) });
     systemActivity.triggerFired({ triggerId, ledgerState, reason });
@@ -513,6 +520,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     silentRunSource.stop();
     triggerEngine.stop();
     await playbookRunner.stop();
+    fireRetention.stop();
     childSilence.stop();
     arbiters.stop();
     await ciWatch.stop();
@@ -544,6 +552,8 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     await sessions.resumeAll({ onResumed: (session) => systemActivity.sessionResumed(session, lineageRootIdOf(sessions, session)) });
     arbiters.recover();
     triggerEngine.recover();
+    await fireRetention.forgetOldEvents();
+    fireRetention.start();
     sessionStateSource.start({ sessionsBeforeResume });
     tableSource.start();
     cronSource.start();
