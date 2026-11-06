@@ -11,7 +11,7 @@
 | Run | `POST /api/playbooks/:id/run` `{ inputs }` | no tool until PBK-P4 |
 | Read a run | `GET /api/playbook-runs/:id`, `GET /api/playbook-runs?playbookId=` | no tool until PBK-P4 |
 
-The admin token is not a proof of a human gesture: any process of the user can read `admin.token`. The approval stops an agent that has only its MCP token, as `agent_locked` does; the desktop app is where a human reads the digest before confirming it.
+The admin token is not a proof of a human gesture, by design: whoever holds it, an agent that can read `admin.token` included, can read the digest, approve and run a playbook it wrote itself, and the daemon cannot tell it from a human (there is no desktop nonce on these routes). The approval separates the admin from the MCP token and nothing more: it stops an agent that has only its MCP token, as `agent_locked` does. Treat the admin token as the authority to run the scripts under the script roots; the desktop app is where a human is expected to read the digest before confirming it.
 
 ## The approval
 
@@ -23,7 +23,7 @@ A run checks the approval twice: at launch (the digest of the content as stored,
 
 A script cell names a `program`: a literal path, relative to a script root or absolute inside one. A token in it is refused: an approval cannot pin it. The real path, after symlinks, stays inside the root; the file belongs to the daemon's user, is not writable by group or others and is executable. The roots are `playbooks.scriptRoots` of `config.json` (absolute paths, at most 16); with none, no script runs.
 
-The script starts with the basic environment of the daemon (`PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TMPDIR`, `SHELL`, `LC_*`) plus the `env` of the cell, in its own process group, in the folder of the file. At the timeout of the cell (`timeoutSeconds`, 10 minutes by default) and at the shutdown of the daemon the group is killed.
+The script starts with the basic environment of the daemon (`PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TMPDIR`, `SHELL`, `LC_*`) plus the `env` of the cell, in its own process group, in the folder of the file. The group is killed when the step ends, whatever the way it ends: after an exit (0 or not) every process the script left running dies with it, so a script cannot leave background work behind; at the timeout of the cell (`timeoutSeconds`, 10 minutes by default) and at the shutdown of the daemon the group gets SIGTERM, then SIGKILL. The run slot is released after that kill. A process that leaves the group on its own (`setsid`) is out of reach. A script whose `spawn` fails, for instance because a variable holds a NUL, fails the step with `script_spawn_failed`; the error of the system, which can carry the value of a variable, is neither logged nor stored.
 
 Known limit: the hash is read, then the file is started; a file that changes in between is not seen. The owner and permission checks narrow that window to the user's own processes.
 
@@ -35,10 +35,10 @@ At boot every run and step left `running` is marked `needs_review` with the code
 
 ## Masking
 
-The values of the secrets the playbook references are resolved when the run starts (`secret_not_connected_on_this_device` refuses the run, and nothing is written, when this device holds none). The output of a step goes through the shape-based layer of `redact.ts`, then through the value-based masker: the plain, URL-encoded, base64 and JSON-escaped forms of each value become `[secret:NAME]`. The inputs of the run are masked the same way before they are stored. A script that hashes, splits or re-encodes the value defeats the masker; the approved script is the control.
+The values of the secrets the playbook references are resolved when the run starts (`secret_not_connected_on_this_device` refuses the run, and nothing is written, when this device holds none). The output of a step goes through the shape-based layer of `redact.ts`, then through the value-based masker: the plain, URL-encoded, base64 and JSON-escaped forms of each value become `[secret:NAME]`. The inputs of the run are masked the same way before they are stored. A script that hashes, splits or re-encodes the value defeats the masker; the approved script is the control. The cap of the output never cuts a secret: the step keeps the cap plus the length of the longest spelling of the secrets of the run, and the cut moves back before a secret that crosses it, on stdout and on stderr alike. An unexpected error of a step is masked with the values of the run before it is logged.
 
 ## Limits
 
-1000 step executions per run (a flow stored outside the save path with an undocumented loop stops there with `step_limit_exceeded`), 4 runs at once and one per playbook (`playbook_run_busy`), 256 KiB of output per step (the rest is dropped and the output ends with `[truncated]`), `maxRunsToKeep` finished runs per playbook.
+1000 step executions per run (a flow stored outside the save path with an undocumented loop stops there with `step_limit_exceeded`), 4 runs at once and one per playbook (`playbook_run_busy`), 256 Ki characters of output per step, stdout and stderr together (the rest is dropped as it arrives, so memory stays bounded, and the output ends with `[truncated]`), `maxRunsToKeep` succeeded or failed runs per playbook. A run that `needs_review` is not pruned and does not count in `maxRunsToKeep`: its journal is the evidence of an effect nobody has examined. No route resolves it yet; it goes away only with its playbook.
 
 A token is checked in its place again at run time: the output of a step never reaches the arguments or the environment of a script, whatever the way the flow was stored.

@@ -28,8 +28,9 @@ const scriptChanged = (program: string) => new OpenFleetError('script_changed', 
 
 /**
  * The approval of the code a playbook runs. The digest covers the content of the playbook and the sha256 of every script file it names, so a changed cell or a changed file is a different digest.
- * It is written through the admin REST only: no MCP tool approves, so an agent never approves what it wrote. The admin token is not a proof of a human gesture (any process of the user can read it),
- * the same as for `agent_locked`: the approval stops an agent that has no admin token, and the desktop app is where a human reads the digest before confirming it.
+ * It is written through the admin REST only: no MCP tool approves, so an agent with its MCP token alone never approves what it wrote.
+ * By design the admin token is not a proof of a human gesture (any process of the user can read it): whoever holds it can read the digest, approve and run a playbook it wrote itself,
+ * the same as for `agent_locked`. The approval separates the admin from the MCP token and nothing more; the desktop app is where a human is expected to read the digest before confirming it.
  * An edit of the playbook clears the approval (the repository does it in the same statement).
  */
 export class PlaybookApprovals {
