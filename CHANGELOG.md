@@ -123,6 +123,14 @@ PBK-P2, the versions of a playbook (contract 15 is untagged, so the three tools 
 - REST (admin token, not in the pin): `GET /api/playbooks/:id/versions`, `GET /api/playbooks/:id/versions/:rev`, `POST /api/playbooks/:id/versions/:rev/restore` with `{ expectedRev }` (the admin ignores the agent lock, as for `PUT`).
 - Migration 068 `playbook_versions` (down script alongside). New wire error code `playbook_version_not_found` (404): the revision was never kept or was dropped.
 
+INT-I1, the foundations of integrations (contract 15 is untagged, so the three tools below join it and the pin goes from 100 to 103 tools; details in [docs/integrations.md](docs/integrations.md)):
+
+- `list_integrations` and `get_integration_health` (read only); `refresh_integration` (execution_external: one call to the provider). An integration is a connection used by one project; the tools take an integration id and nothing else, and answer ids, the status of the credential (`stored` or `missing`) and a typed health (`ok`, `auth_failed`, `unreachable`, `rate_limited`, `unknown` before any refresh). No tool creates a connection, names a host or a url, sets a credential or returns one, and none is in the reviewer or the arbiter set. `get_integration_health` makes no network call; the answer of a provider is never returned.
+- `refresh_integration` probes the one read-only path of the provider on the first allowed host of the connection, with the credential read from the secret store for the length of the call. A redirect is not followed. A second refresh of the same integration within 60 seconds, or while one runs, is refused `integration_refresh_cooldown`.
+- Migration 070 `integrations` (down script alongside; 069 is PBK-P3a's): `integration_connections`, `integration_profiles`, `integration_health`. No column holds a credential: its value is in the secret store under the scope `connection:<id>`, name `TOKEN`.
+- REST (admin token, not in the pin): `GET` and `POST /api/integration-connections`, `GET /api/integrations?projectId=` and `POST /api/integrations`. A creation body that carries a field it does not know, a `token` included, is refused `invalid_body`. A host must be a bare host name that the provider itself allows (`jira_cloud`: `<tenant>.atlassian.net`; `github`: `api.github.com`).
+- Five wire error codes: `integration_provider_unknown`, `integration_host_not_allowed` (400), `integration_not_found`, `integration_connection_not_found` (404), `integration_refresh_cooldown` (409, retry later). Activity log: `integration` and `connection` join the identifier words.
+
 ## 14 — 2026-10-29
 
 TABLES-ROW-CAS01, optimistic concurrency on table row writes: the last write no longer wins silently when a writer says which revision it read.

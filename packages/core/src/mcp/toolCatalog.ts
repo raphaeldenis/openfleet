@@ -8,7 +8,7 @@ export { TOOL_CATEGORIES, type ToolCategory };
  * destructive: removes data, or overwrites content or settings in place without history.
  * execution_external: runs git or a process, or delivers a message into a session.
  */
-export type ToolDomain = 'data_stores' | 'notes' | 'sessions' | 'managers' | 'governance' | 'escalation' | 'review' | 'worktrees' | 'projects' | 'knowledge' | 'working_state' | 'triggers' | 'playbooks';
+export type ToolDomain = 'data_stores' | 'notes' | 'sessions' | 'managers' | 'governance' | 'escalation' | 'review' | 'worktrees' | 'projects' | 'knowledge' | 'working_state' | 'triggers' | 'playbooks' | 'integrations';
 
 export interface ToolCatalogEntry {
   domain: ToolDomain;
@@ -116,6 +116,10 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
   restore_playbook_version: { domain: 'playbooks', category: 'additive' }, // a new revision; the replaced content is kept as a version
   set_playbook_inputs: { domain: 'playbooks', category: 'additive' },
   update_playbook_cell: { domain: 'playbooks', category: 'additive' },
+
+  get_integration_health: { domain: 'integrations', category: 'read_only' },
+  list_integrations: { domain: 'integrations', category: 'read_only' },
+  refresh_integration: { domain: 'integrations', category: 'execution_external' }, // calls the provider once, inside a cooldown
 
   get_working_state: { domain: 'working_state', category: 'read_only' },
   update_working_state: { domain: 'working_state', category: 'destructive' },

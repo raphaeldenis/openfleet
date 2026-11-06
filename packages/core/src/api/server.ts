@@ -44,6 +44,8 @@ import { registerCommandPolicyRoutes } from './commandPolicyRoutes.js';
 import { registerActivityRoutes } from './activityRoutes.js';
 import { registerToolRoutes } from './toolRoutes.js';
 import { registerSecretRoutes } from './secretRoutes.js';
+import { registerIntegrationRoutes } from './integrationRoutes.js';
+import type { IntegrationService } from '../integrations/integrationService.js';
 import type { NonceLedger } from '../secrets/nonceLedger.js';
 import type { SecretService } from '../secrets/secretService.js';
 import { recordedAsHumanAction } from './recordedAsHumanAction.js';
@@ -142,6 +144,8 @@ export interface ServerDeps {
   triggerFires?: FireLedger;
   // Without it the /api/playbooks routes do not exist.
   playbooks?: PlaybookService;
+  // Without it the /api/integration-connections and /api/integrations routes do not exist.
+  integrations?: IntegrationService;
 }
 
 function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
@@ -222,6 +226,7 @@ export async function startServer(deps: ServerDeps): Promise<{ url: string; rout
   if (deps.handoff) registerHandoffRoutes(router, deps.handoff);
   if (deps.triggers && deps.triggerFires) registerTriggerRoutes(router, { triggers: deps.triggers, fires: deps.triggerFires });
   if (deps.playbooks) registerPlaybookRoutes(router, { playbooks: deps.playbooks });
+  if (deps.integrations) registerIntegrationRoutes(router, { integrations: deps.integrations });
   if (deps.notes && deps.noteRepo && deps.docs) registerNoteRoutes(router, { notes: deps.notes, noteRepo: deps.noteRepo, docs: deps.docs });
 
   const handleHook = hooksHandler(deps);
