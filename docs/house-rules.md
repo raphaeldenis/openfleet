@@ -5,7 +5,7 @@ Rules for anyone changing this repository. Each one restates what the repo alrea
 ## No secrets in the repo
 
 - Tokens, passwords and `.env` files are never committed. The daemon's database files (`*.db`, `*.db-wal`, `*.db-shm`), `.mcp.json` and `.claude/settings.local.json` are gitignored (`.gitignore`) because they can hold tokens or local permissions.
-- The repo ships no `.claude/settings.json` and no auto-approve hook: a clone must not grant an agent a permission bypass. An autonomous session is a local opt-in through your own `.claude/settings.local.json` (README, "Autonomous Claude Code sessions").
+- The repo's tracked `.claude/settings.json` only installs the `PreToolUse` hook `block-dangerous-git` (a deny hook, `docs/git-guardrails.md`) and ships no auto-approve hook: a clone must not grant an agent a permission bypass. An autonomous session is a local opt-in through your own `.claude/settings.local.json` (README, "Autonomous Claude Code sessions").
 - The daemon logs carry no token and no hook URL (Fable audit of 2026-09-28, positive findings). A change that logs a request, a header or a command line keeps that property.
 
 ## Hooks and CI
