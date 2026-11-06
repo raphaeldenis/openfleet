@@ -41,6 +41,12 @@ Migrations: `054_project_shared_repo`: `projects.shared_repo`. `058_session_atte
 
 One page gathers the changes of contract 15, the BREAKING entries vs 14, the new variables and the migrations: [docs/contract-15.md](docs/contract-15.md). Several contract 15 entries sit in the section "Unreleased" above; the entries below and above stay the record.
 
+INT-G1, the GitHub read tools (contract 15 is untagged, so the two tools below join it and the pin goes from 100 to 102 tools; `contract_version` stays 15; no migration, no new error code: `gh_not_authenticated` and the other `gh_*` codes exist since `watch_pr`):
+
+- `list_github_prs` added: `{ filter: 'review_requested' | 'authored', repo?, limit? }`, answers `{ pull_requests: [{ repo, number, url, is_draft, untrusted: { title, author } }] }`. It reads the open pull requests with the user's GitHub CLI (`gh search prs --review-requested=@me` or `--author=@me`, fixed argument list, no shell, PATH and HOME only, the daemon reads no token). `repo` is `owner/name`, `limit` a whole number from 1 to 50 (default 50); anything else, a `repo` that could read as an option included, is refused with `invalid_body` before gh runs.
+- `get_github_pr` added: `{ repo, number }`, answers `{ repo, number, url, is_draft, state, head_sha, review_decision, check_outcomes, untrusted: { title, author, head_branch, base_branch } }`. No description, comment or check name is read. The number follows `--` in the argument list.
+- Both: the answer of gh is checked by a schema (a shape gh does not print is `gh_bad_output`), the output of gh is bounded to 1 MiB (over it: `gh_bad_output`), and the text a person wrote (title, author, branch names) is stripped of control characters, cut to 200 characters and kept under `untrusted`; it is never an instruction. A gh that is not signed in fails the call with `gh_not_authenticated` (run `gh auth login`). The tools are read-only and absent from the reviewer and arbiter tool sets; a read tool leaves no row in the activity log.
+
 ESCALATION-LADDER01, the escalation ladder: a manager sends its questions to the daemon, which answers the ones it can, asks an arbiter for the ones that need a second opinion and puts only the ones that need a human on the human list.
 
 - `submit_plan_questions` (manager): sends the questions of a plan note, each with a class; the daemon routes every question to the manager itself, to the arbiter or to the human. Answers the batch id and the route of each question.
