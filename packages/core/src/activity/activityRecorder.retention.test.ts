@@ -45,7 +45,10 @@ const withStatementRunsCounted = (db: DatabaseSync) => {
   const countingDb = {
     prepare: (sql: string) => {
       const statement = db.prepare(sql);
-      return { run: (...values: SQLInputValue[]) => { statementRuns += 1; return statement.run(...values); } };
+      return {
+        run: (...values: SQLInputValue[]) => { statementRuns += 1; return statement.run(...values); },
+        all: (...values: SQLInputValue[]) => { statementRuns += 1; return statement.all(...values); },
+      };
     },
   } as unknown as DatabaseSync;
   return { countingDb, statementRuns: () => statementRuns };
