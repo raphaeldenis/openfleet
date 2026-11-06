@@ -10,6 +10,8 @@ export interface FakeGhBehaviour {
   exitCode?: number;
   /** Seconds the fake sleeps before answering, to provoke a timeout. */
   sleepSeconds?: number;
+  /** Seconds after which a background child of the fake writes the survivor marker, silent on stdout and stderr. */
+  descendantWritesMarkerAfterSeconds?: number;
 }
 
 export interface FakeGh {
@@ -18,6 +20,8 @@ export interface FakeGh {
   invocations(): string[][];
   /** The environment variable names the fake saw. */
   environmentNames(): string[];
+  /** True once a descendant of the fake has written its marker. */
+  descendantWroteMarker(): boolean;
   setBehaviour(behaviour: FakeGhBehaviour): void;
 }
 
@@ -30,12 +34,15 @@ export function createFakeGh(initial: FakeGhBehaviour = {}): FakeGh {
   const sleepFile = join(directory, 'sleep-seconds');
   const argvLog = join(directory, 'argv.log');
   const environmentLog = join(directory, 'environment.log');
+  const descendantSecondsFile = join(directory, 'descendant-seconds');
+  const descendantMarker = join(directory, 'descendant-marker');
 
   writeFileSync(executable, [
     '#!/bin/sh',
     `printf '%s\\n' "$@" >> '${argvLog}'`,
     `printf '%s\\n' '${END_OF_CALL}' >> '${argvLog}'`,
     `env | cut -d= -f1 >> '${environmentLog}'`,
+    `if [ "$(cat '${descendantSecondsFile}')" != "0" ]; then ( sleep "$(cat '${descendantSecondsFile}')"; echo survived > '${descendantMarker}' ) >/dev/null 2>&1 & fi`,
     `if [ "$(cat '${sleepFile}')" != "0" ]; then exec sleep "$(cat '${sleepFile}')"; fi`,
     `cat '${payloadFile}'`,
     `exit "$(cat '${exitCodeFile}')"`,
@@ -43,10 +50,11 @@ export function createFakeGh(initial: FakeGhBehaviour = {}): FakeGh {
   ].join('\n'));
   chmodSync(executable, 0o755);
 
-  const setBehaviour = ({ stdout = '', exitCode = 0, sleepSeconds = 0 }: FakeGhBehaviour): void => {
+  const setBehaviour = ({ stdout = '', exitCode = 0, sleepSeconds = 0, descendantWritesMarkerAfterSeconds = 0 }: FakeGhBehaviour): void => {
     writeFileSync(payloadFile, stdout);
     writeFileSync(exitCodeFile, String(exitCode));
     writeFileSync(sleepFile, String(sleepSeconds));
+    writeFileSync(descendantSecondsFile, String(descendantWritesMarkerAfterSeconds));
   };
   setBehaviour(initial);
 
@@ -57,7 +65,9 @@ export function createFakeGh(initial: FakeGhBehaviour = {}): FakeGh {
   };
   const environmentNames = (): string[] => (existsSync(environmentLog) ? readFileSync(environmentLog, 'utf8').split('\n').filter((name) => name !== '') : []);
 
-  return { executable, invocations, environmentNames, setBehaviour };
+  const descendantWroteMarker = (): boolean => existsSync(descendantMarker);
+
+  return { executable, invocations, environmentNames, descendantWroteMarker, setBehaviour };
 }
 
 /** A gh answer for one pull request, with the check shapes gh prints. */

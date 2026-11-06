@@ -12,6 +12,8 @@ const DETAIL_FIELDS = 'number,title,state,isDraft,author,headRefName,baseRefName
 const FLAG_BY_FILTER = { review_requested: '--review-requested=@me', authored: '--author=@me' } as const;
 const CHARACTERS_THAT_CAN_FORGE_STRUCTURE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
+const REVIEW_DECISIONS = ['APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED'] as const;
+
 export type PullRequestFilter = keyof typeof FLAG_BY_FILTER;
 
 export interface PullRequestQuery {
@@ -36,7 +38,7 @@ export interface PullRequestDetail extends ListedPullRequest {
   headBranch: string;
   baseBranch: string;
   headSha: string;
-  reviewDecision: string | null;
+  reviewDecision: (typeof REVIEW_DECISIONS)[number] | null;
   checkOutcomes: CheckOutcome[];
 }
 
@@ -61,7 +63,9 @@ const searchedPullRequestSchema = z.object({
 });
 const searchResultsSchema = z.array(searchedPullRequestSchema);
 
-const detailSchema = z.object({
+const reviewDecisionSchema = z.enum(['', ...REVIEW_DECISIONS]).transform((decision) => (decision === '' ? null : decision));
+
+const detailSchema =z.object({
   title: boundedTextSchema,
   state: pullRequestStateSchema,
   isDraft: z.boolean(),
@@ -69,7 +73,7 @@ const detailSchema = z.object({
   headRefName: boundedTextSchema,
   baseRefName: boundedTextSchema,
   headRefOid: headShaSchema,
-  reviewDecision: z.string(),
+  reviewDecision: reviewDecisionSchema,
   statusCheckRollup: checkOutcomesSchema,
 });
 
@@ -104,11 +108,10 @@ export function createGhPullRequestReader(options: GhProcessOptions = {}): GhPul
       const { repo, number } = requirePullRequestRef(pullRequest);
       const stdout = await runGh(['pr', 'view', '--repo', repo, '--json', DETAIL_FIELDS, '--', String(number)]);
       const detail = parseGhJson(stdout, detailSchema);
-      const hasReviewDecision = detail.reviewDecision !== '';
       return {
         repo, number, url: pullRequestUrlOf({ repo, number }), title: detail.title, author: detail.author, isDraft: detail.isDraft,
         state: detail.state, headBranch: detail.headRefName, baseBranch: detail.baseRefName, headSha: detail.headRefOid,
-        reviewDecision: hasReviewDecision ? detail.reviewDecision : null, checkOutcomes: detail.statusCheckRollup,
+        reviewDecision: detail.reviewDecision, checkOutcomes: detail.statusCheckRollup,
       };
     },
   };
