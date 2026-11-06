@@ -206,8 +206,6 @@ What the code does today against the rules above. Listed, not corrected, with no
 10. The service graph is rebuilt by hand in the `beforeEach` of many API and MCP suites (`packages/core/src/mcp/mcp.test.ts`, `packages/core/src/api/routeErrors.qe.test.ts`, `packages/core/src/api/errorEnvelope.hostile.test.ts`) rather than through one shared testkit; the `.daemon.test.ts` suites use `startDaemon` instead.
 11. `apps/desktop/src/app/shell/todos/todos.adapter.ts` is a pure re-export (a pass-through by the deletion test).
 12. One `any` in a test helper (`packages/core/src/mcp/tableTools.testkit.ts`); none found in production sources on 2026-11-04.
-13. Documentation that no longer matches the tree, reported here and left to the owners of those pages: `docs/house-rules.md` ("No secrets in the repo") and README ("Autonomous Claude Code sessions") say the repo ships no `.claude/settings.json`, while `.claude/settings.json` is tracked and installs the `PreToolUse` git guardrail hook (a deny hook, not an auto-approve one); `docs/ci.md` ("Known gaps") says no pull request template and no CONTRIBUTING file exist; `docs/architecture.md` counts migrations 001 to 062 while the tree holds 068; README reads Clippy as advisory in one paragraph and blocking in the next (already noted in `docs/ci.md`).
-
 ## 5. What we do not do
 
 - No linter beyond `tsc`, dependency-cruiser, Clippy and the source-scan tests; no ESLint or Biome configuration (1.6).

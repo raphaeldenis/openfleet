@@ -120,5 +120,3 @@ Other facts that help:
 ## Known gaps
 
 - Required checks and branch protection: UNVERIFIED, see above.
-- `README.md:132` says Clippy is advisory with `cargo +stable`; `README.md:140`, `ci.yml:41-42` and `pre-push.sh:62,64` show it blocking on 1.99.0. The code is the reference. The README line is stale.
-- No pull request template and no CONTRIBUTING file exist in the repo (`.github/` holds only `workflows/`).

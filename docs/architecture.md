@@ -53,7 +53,7 @@ Every claim below cites `file:line` on `main` (a43c0797). `UNVERIFIED` marks wha
 
 **MCP.** `/mcp` is a streamable-HTTP transport (`mcp/mcpServer.ts:3,116`); `daemon.ts:377` hands it the services. The tool contract carries `CONTRACT_VERSION = 15` (`shared/src/mcpContract.ts:2`). See [MCP contract](mcp-contract.md), [contract 15](contract-15.md), [session aliases](mcp-session-aliases.md), [note writes](note-writes.md).
 
-**Database.** `node:sqlite` `DatabaseSync` (`db/database.ts:3,17`) with WAL, foreign keys on and a 5 s busy timeout (`:77`). Migrations are `db/migrations/NNN_*.sql`, 001 to 062 (`062_child_silence_checks.sql`), recorded in `schema_migrations` (`migrate.ts:244`), never run inside their own transaction (`:252`), and refused if an applied file was edited (`:217-222`). Pending migrations trigger a backup first; checklist and rollback: [db/README.md](../packages/core/src/db/README.md).
+**Database.** `node:sqlite` `DatabaseSync` (`db/database.ts:3,17`) with WAL, foreign keys on and a 5 s busy timeout (`:77`). Migrations are `db/migrations/NNN_*.sql`, 001 to 068 (`068_playbook_versions.sql`), recorded in `schema_migrations` (`migrate.ts:244`), never run inside their own transaction (`:252`), and refused if an applied file was edited (`:217-222`). Pending migrations trigger a backup first; checklist and rollback: [db/README.md](../packages/core/src/db/README.md).
 
 ## Desktop app and Tauri
 
