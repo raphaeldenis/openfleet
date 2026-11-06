@@ -44,7 +44,7 @@ describe('the wire contract of the registry', () => {
     unauthorized: 'unauthorized/never', human_proof_required: 'unauthorized/never',
     trigger_not_found: 'not_found/never', trigger_condition_not_found: 'not_found/never', playbook_not_found: 'not_found/never', playbook_cell_not_found: 'not_found/never', playbook_version_not_found: 'not_found/never', playbook_run_not_found: 'not_found/never',
     playbook_conflict: 'conflict/after_refresh', playbook_locked: 'conflict/never',
-    playbook_unapproved: 'conflict/never', approval_digest_mismatch: 'conflict/after_refresh', script_changed: 'conflict/never', script_not_allowed: 'conflict/never', playbook_not_runnable: 'conflict/never', playbook_run_busy: 'conflict/later',
+    playbook_unapproved: 'conflict/never', approval_digest_mismatch: 'conflict/after_refresh', script_changed: 'conflict/never', script_not_allowed: 'conflict/never', playbook_not_runnable: 'conflict/never', playbook_run_busy: 'conflict/later', playbook_review_backlog: 'conflict/never',
     not_found: 'not_found/never', project_not_found: 'not_found/never', no_state: 'not_found/never', session_not_found: 'not_found/never',
     note_not_found: 'not_found/never', store_not_found: 'not_found/never', view_not_found: 'not_found/never', row_not_found: 'not_found/never',
     manager_not_found: 'not_found/never', proposal_not_found: 'not_found/never',

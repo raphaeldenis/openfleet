@@ -87,6 +87,10 @@ export class PlaybookRunRepository {
     return (this.db.prepare("SELECT COUNT(*) AS n FROM playbook_runs WHERE status = 'running'").get() as { n: number }).n;
   }
 
+  countNeedingReview(): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM playbook_runs WHERE status = 'needs_review'").get() as { n: number }).n;
+  }
+
   isRunning(playbookId: string): boolean {
     return this.db.prepare("SELECT 1 AS running FROM playbook_runs WHERE playbook_id = ? AND status = 'running' LIMIT 1").get(playbookId) !== undefined;
   }

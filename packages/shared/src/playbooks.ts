@@ -45,6 +45,7 @@ export const MAX_STEP_EXECUTIONS_PER_RUN = 1000;
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 600;
 export const MAX_STEP_OUTPUT_BYTES = 256 * 1024;
 export const MAX_CONCURRENT_RUNS = 4;
+export const MAX_RUNS_NEEDING_REVIEW = 50;
 export const MAX_RUNS_TO_KEEP = 1000;
 export const DEFAULT_MAX_RUNS_TO_KEEP = 50;
 

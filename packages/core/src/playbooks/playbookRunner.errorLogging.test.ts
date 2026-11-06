@@ -26,7 +26,7 @@ const arrangeRunnerWhoseScriptLookupFails = (failure: () => never) => {
     playbooks: { getById: () => playbook } as never,
     approvals: { assertStillApproved: () => ({}), locatePinned: failure },
     runs, secrets: { resolve: async () => secretValue }, clock: () => new Date().toISOString(), newId: () => 'run-1',
-    limits: { maxStepExecutions: 10, maxConcurrentRuns: 4 }, observer: { runStarted: () => {}, runEnded },
+    limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: 50 }, observer: { runStarted: () => {}, runEnded },
   });
   return { db, runs, runner, ended };
 };

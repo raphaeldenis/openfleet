@@ -90,6 +90,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   script_not_allowed: { what: 'A script is outside the script roots or unsafe to start', fix: 'put the file under a script root, owned by you and writable by you only' },
   playbook_not_runnable: { what: 'This playbook has a cell the runner does not execute yet', fix: 'only script cells run for now' },
   playbook_run_busy: { what: 'A run is already in progress', fix: 'wait for it to end, then start again' },
+  playbook_review_backlog: { what: 'Too many runs await a review', fix: 'examine the interrupted runs before starting another' },
   playbook_locked: { what: 'This playbook is locked: agents cannot write to it', fix: 'edit it here, or unlock it' },
   file_backed: { what: 'This note lives in a file', fix: 'edit the file instead' },
   file_unreadable: { what: 'The daemon cannot read the note file right now' },

@@ -132,11 +132,110 @@ describe('what a step prints is retained up to a cap, as it arrives', () => {
     expect(outcome.output).toBe('é\n');
   });
 
-  it('drops the control characters of the output and keeps the newline and the tab', async () => {
-    const script = arrangeScript("printf 'a\\033[31mb\\tc\\nd\\000e'");
+  it('retains the control characters as printed, so that a secret holding one is still whole for the masker', async () => {
+    const script = arrangeScript("printf 'a\\033[31mb\\tc\\nd\\000e\\015f'");
 
     const outcome = await runScriptStep(runOf(script));
 
-    expect(outcome.output).toBe('a[31mb\tc\nde');
+    expect(outcome.output).toBe('a\u001b[31mb\tc\nd\u0000e\rf');
   });
+});
+
+describe('a flood of characters that decode to nothing useful', () => {
+  const SIXTY_FOUR_MIB = 64 * 1024 * 1024;
+  const CAP = 1_000;
+  const MOST_PIECES_A_CAPPED_COLLECTOR_KEEPS = 5;
+
+  const stringsPushedWhile = async (action: () => Promise<unknown>): Promise<string[]> => {
+    const originalPush = Array.prototype.push;
+    const strings: string[] = [];
+    Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
+      for (const item of items) if (typeof item === 'string') strings.push(item);
+      return originalPush.apply(this, items);
+    };
+    try {
+      await action();
+    } finally {
+      Array.prototype.push = originalPush;
+    }
+    return strings;
+  };
+
+  it('keeps no piece beyond the cap: 64 MiB of NUL with a cap of 1000 grows no array', async () => {
+    const script = arrangeScript(`head -c ${SIXTY_FOUR_MIB} /dev/zero`);
+    let outcome: Awaited<ReturnType<typeof runScriptStep>> | undefined;
+
+    const pushedStrings = await stringsPushedWhile(async () => { outcome = await runScriptStep(runOf(script, { maxRetainedChars: CAP, timeoutMs: 60_000 })); });
+
+    expect(outcome?.output).toBe('\u0000'.repeat(CAP));
+    expect(pushedStrings.length).toBeLessThanOrEqual(MOST_PIECES_A_CAPPED_COLLECTOR_KEEPS);
+  }, 90_000);
+});
+
+describe('the signals a step sends to its process group', () => {
+  const SIGNALS_ARE_DUE_WITHIN_THE_GRACE_AND_A_LITTLE_MORE_MS = 2_600;
+
+  const signalsAfterResolution = async (start: () => Promise<unknown>): Promise<string[]> => {
+    const originalKill = process.kill;
+    let resolvedAt = Number.POSITIVE_INFINITY;
+    const late: string[] = [];
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid < 0 && Date.now() > resolvedAt) late.push(String(signal));
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+    try {
+      await start();
+      resolvedAt = Date.now();
+      await sleepMs(SIGNALS_ARE_DUE_WITHIN_THE_GRACE_AND_A_LITTLE_MORE_MS);
+    } finally {
+      process.kill = originalKill;
+    }
+    return late;
+  };
+
+  it('sends none after a timeout resolved the step', async () => {
+    const script = arrangeScript('sleep 30');
+
+    const late = await signalsAfterResolution(() => runScriptStep(runOf(script, { timeoutMs: 40 })));
+
+    expect(late).toEqual([]);
+  }, 15_000);
+
+  it('sends none after an abort resolved the step', async () => {
+    const script = arrangeScript('sleep 30');
+    const abort = new AbortController();
+
+    const late = await signalsAfterResolution(async () => {
+      const running = runScriptStep(runOf(script, { signal: abort.signal }));
+      await sleepMs(100);
+      abort.abort();
+      await running;
+    });
+
+    expect(late).toEqual([]);
+  }, 15_000);
+
+  it('sends none after a script that ignores SIGTERM and ends by itself resolved the step, though the timeout and an abort both asked it to stop', async () => {
+    const script = arrangeScript('');
+    const readyMarker = `${script.marker}-ready`;
+    writeFileSync(script.path, `#!${process.execPath}\nprocess.on('SIGTERM', () => {});\nrequire('node:fs').writeFileSync(${JSON.stringify(readyMarker)}, '1');\nsetTimeout(() => {}, 1200);\n`);
+    const abort = new AbortController();
+
+    const late = await signalsAfterResolution(async () => {
+      const running = runScriptStep(runOf(script, { signal: abort.signal, timeoutMs: 800 }));
+      while (!existsSync(readyMarker)) await sleepMs(10);
+      abort.abort();
+      await running;
+    });
+
+    expect(late).toEqual([]);
+  }, 15_000);
+
+  it('sends none after a script that exited 0 resolved the step', async () => {
+    const script = arrangeScript('exit 0');
+
+    const late = await signalsAfterResolution(() => runScriptStep(runOf(script)));
+
+    expect(late).toEqual([]);
+  }, 15_000);
 });

@@ -16,7 +16,7 @@ import type { PlaybookRecord } from './playbookRepository.js';
 import { secretNamesReferencedBy, wireErrorOf } from './playbookRules.js';
 import type { PlaybookRunRecord, PlaybookRunRepository } from './playbookRunRepository.js';
 import type { PlaybookService } from './playbookService.js';
-import { runScriptStep } from './scriptStepProcess.js';
+import { runScriptStep, withoutControlCharacters } from './scriptStepProcess.js';
 
 export interface PlaybookRunnerDeps {
   playbooks: Pick<PlaybookService, 'getById'>;
@@ -25,7 +25,7 @@ export interface PlaybookRunnerDeps {
   secrets: Pick<SecretService, 'resolve'>;
   clock: () => string;
   newId: () => string;
-  limits: { maxStepExecutions: number; maxConcurrentRuns: number };
+  limits: { maxStepExecutions: number; maxConcurrentRuns: number; maxRunsNeedingReview: number };
   /** Told once a run is journaled as started and once it is settled, with ids and the status only. */
   observer?: { runStarted: (run: { runId: string; playbookId: string }) => void; runEnded: (run: { runId: string; playbookId: string; status: Settled }) => void };
 }
@@ -51,7 +51,9 @@ const INTERRUPTED = 'interrupted';
 const SECRET_SCOPE_KIND = 'playbook';
 
 const busy = (reason: string) => new OpenFleetError('playbook_run_busy', reason, { hint: 'Wait for a run to end, then start again.' });
-const notRunnable = (reason: string) => new OpenFleetError('playbook_not_runnable', reason);
+const reviewBacklogFull = (limit: number) =>
+  new OpenFleetError('playbook_review_backlog', `${limit} runs interrupted at an unknown point still await a review: no new run starts, and none of them is deleted.`, { hint: 'Examine the interrupted runs, then start again.' });
+const notRunnable =(reason: string) => new OpenFleetError('playbook_not_runnable', reason);
 const invalidInput = (reason: string) => new OpenFleetError('invalid_body', reason);
 
 const isScriptCell = (cell: PlaybookCell): cell is ScriptCell => cell.kind === 'script';
@@ -137,7 +139,7 @@ export class PlaybookRunner {
   /**
    * Validates the run, journals it as running, and starts executing it in the background: the answer is the run as journaled, not its result.
    * Nothing is written when the run is refused. Throws playbook_not_found, playbook_not_runnable, playbook_unapproved, script_changed, invalid_body,
-   * secret_not_connected_on_this_device (this device holds no value for a secret the playbook uses) or playbook_run_busy.
+   * secret_not_connected_on_this_device (this device holds no value for a secret the playbook uses), playbook_run_busy or playbook_review_backlog (the runs awaiting a review reach their cap).
    */
   async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind }): Promise<PlaybookRunRecord> {
     const isStopping = this.shutdown.signal.aborted;
@@ -166,6 +168,8 @@ export class PlaybookRunner {
     const { runs, limits } = this.deps;
     if (runs.isRunning(playbookId)) throw busy('this playbook is already running.');
     if (runs.countRunning() >= limits.maxConcurrentRuns) throw busy(`${limits.maxConcurrentRuns} runs are already in progress.`);
+    const isReviewBacklogFull = runs.countNeedingReview() >= limits.maxRunsNeedingReview;
+    if (isReviewBacklogFull) throw reviewBacklogFull(limits.maxRunsNeedingReview);
   }
 
   private async resolveSecretsOf(playbook: PlaybookRecord): Promise<Map<string, string>> {
@@ -248,8 +252,9 @@ export class PlaybookRunner {
       maxRetainedChars: MAX_STEP_OUTPUT_BYTES + context.masker.longestSpellingLength,
     });
 
-    // The shape-based layer runs first: it would read the marker `[secret:NAME]` as a secret-named key and hide the name.
-    const output = context.masker.mask(maskedSecrets(outcome.output));
+    // The shape-based layer runs before the masker: it would read the marker `[secret:NAME]` as a secret-named key and hide the name.
+    // The control characters go last: a secret that holds one must reach the masker as printed.
+    const output = withoutControlCharacters(context.masker.mask(maskedSecrets(outcome.output)));
     if (outcome.kind === 'aborted') return { verdict: { status: 'needs_review', errorCode: INTERRUPTED }, output: { output } };
     if (outcome.kind === 'spawn_failed') return { verdict: { status: 'failed', errorCode: 'script_spawn_failed' } };
     if (outcome.kind === 'timeout') return { verdict: { status: 'failed', errorCode: 'script_timeout' }, output: { output } };

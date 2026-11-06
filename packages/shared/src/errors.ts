@@ -84,6 +84,7 @@ export const ERROR_CODES = {
   script_not_allowed: { kind: 'conflict', retry: 'never' },
   playbook_not_runnable: { kind: 'conflict', retry: 'never' },
   playbook_run_busy: { kind: 'conflict', retry: 'later' },
+  playbook_review_backlog: { kind: 'conflict', retry: 'never' },
 
   // The playbook moved since it was read: reloading it shows the current revision. A locked playbook takes writes from the desktop app only.
   playbook_conflict: { kind: 'conflict', retry: 'after_refresh' },

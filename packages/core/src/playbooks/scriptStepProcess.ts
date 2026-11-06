@@ -25,7 +25,8 @@ const TERMINATION_GRACE_MS = 2_000;
 const STREAMS_CLOSE_GRACE_MS = 200;
 const UNRENDERABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
-const withoutControlCharacters = (text: string): string => text.replace(UNRENDERABLE, (character) => (character === '\n' || character === '\t' ? character : ''));
+/** Drops the characters a screen cannot render and keeps the newline and the tab. Applied after masking: a secret may hold such a character. */
+export const withoutControlCharacters = (text: string): string => text.replace(UNRENDERABLE, (character) => (character === '\n' || character === '\t' ? character : ''));
 
 const SPAWN_FAILED: ScriptStepOutcome = { kind: 'spawn_failed', output: '' };
 
@@ -40,22 +41,24 @@ function spawnedProcess(run: ScriptStepRun): ChildProcess | undefined {
 
 /**
  * Starts the file with no shell, in its own process group, with the daemon's basic environment plus the variables given, and answers how it ended. It never throws.
- * Stdout and stderr are decoded as they arrive and kept together up to `maxRetainedChars`; the rest is dropped, so a script that never stops printing holds a bounded amount of memory.
+ * Stdout and stderr are decoded as they arrive and kept as printed, control characters included, together up to `maxRetainedChars`; the rest is dropped, so a script that never stops printing holds a bounded amount of memory.
  * When the script ends (exit, timeout or abort) every process left in its group is killed before the answer. At the timeout, or when the signal aborts, the group first gets SIGTERM, then SIGKILL after a grace period.
+ * Every timer is cancelled when the step is answered: no signal reaches the group afterwards.
  */
 export function runScriptStep(run: ScriptStepRun): Promise<ScriptStepOutcome> {
   return new Promise<ScriptStepOutcome>((resolve) => {
     const child = spawnedProcess(run);
     if (child === undefined) return resolve(SPAWN_FAILED);
 
-    const pieces: string[] = [];
-    let retainedChars = 0;
+    let retained = '';
     let timedOut = false;
     let wasAborted = false;
     let isFinished = false;
     let exit: { code: number | null } | undefined;
+    let hardKillTimer: NodeJS.Timeout | undefined;
+    let streamsGraceTimer: NodeJS.Timeout | undefined;
 
-    const output = () => pieces.join('');
+    const output = () => retained;
     const outcomeAfterExit = (): ScriptStepOutcome => {
       if (wasAborted) return { kind: 'aborted', output: output() };
       if (timedOut) return { kind: 'timeout', output: output() };
@@ -65,32 +68,33 @@ export function runScriptStep(run: ScriptStepRun): Promise<ScriptStepOutcome> {
       if (isFinished) return;
       isFinished = true;
       clearTimeout(timeoutTimer);
+      clearTimeout(hardKillTimer);
+      clearTimeout(streamsGraceTimer);
       run.signal.removeEventListener('abort', abort);
       child.stdout?.destroy();
       child.stderr?.destroy();
       resolve(outcome);
     };
     const terminate = (): void => {
-      if (child.pid === undefined) return;
+      const isAlreadyTerminating = hardKillTimer !== undefined;
+      if (child.pid === undefined || isAlreadyTerminating) return;
       killProcessGroup(child.pid, 'SIGTERM');
-      const hardKill = setTimeout(() => {
+      hardKillTimer = setTimeout(() => {
         killProcessGroup(child.pid!, 'SIGKILL');
         finish(outcomeAfterExit());
       }, TERMINATION_GRACE_MS);
-      hardKill.unref();
+      hardKillTimer.unref();
     };
 
     const retain = (text: string): void => {
-      const room = run.maxRetainedChars - retainedChars;
-      if (room <= 0) return;
-      const kept = text.slice(0, room);
-      pieces.push(kept);
-      retainedChars += kept.length;
+      const room = run.maxRetainedChars - retained.length;
+      if (room <= 0 || text === '') return;
+      retained += text.slice(0, room);
     };
     const retainStream = (stream: NodeJS.ReadableStream | null): void => {
       const decoder = new StringDecoder('utf8');
-      stream?.on('data', (chunk: Buffer) => retain(withoutControlCharacters(decoder.write(chunk))));
-      stream?.on('end', () => retain(withoutControlCharacters(decoder.end())));
+      stream?.on('data', (chunk: Buffer) => retain(decoder.write(chunk)));
+      stream?.on('end', () => retain(decoder.end()));
     };
     retainStream(child.stdout);
     retainStream(child.stderr);
@@ -106,7 +110,7 @@ export function runScriptStep(run: ScriptStepRun): Promise<ScriptStepOutcome> {
       // Whatever the script left running in its group dies with the step, whether it succeeded or not.
       killProcessGroup(child.pid!, 'SIGKILL');
       // A process that escaped the group and holds the output open must not hold the run: wait briefly for the streams, then answer.
-      setTimeout(() => finish(outcomeAfterExit()), STREAMS_CLOSE_GRACE_MS);
+      streamsGraceTimer = setTimeout(() => finish(outcomeAfterExit()), STREAMS_CLOSE_GRACE_MS);
     });
     child.on('close', () => finish(outcomeAfterExit()));
   });
