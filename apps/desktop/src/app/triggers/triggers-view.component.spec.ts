@@ -1,4 +1,5 @@
 import type { Project, TriggerFireView } from '@openfleet/shared';
+import type { ComponentFixture } from '@angular/core/testing';
 import { render, screen } from '@testing-library/angular/zoneless';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -7,7 +8,6 @@ import type { PlaybookVersionContent, PlaybookVersionList, PlaybookView, Trigger
 import { TriggersViewComponent } from './triggers-view.component';
 
 const PROJECT = { id: 'p1', name: 'Alpha' } as Project;
-const RENDER_FLUSH_MS = 50;
 
 const playbook = (overrides: Partial<PlaybookView> = {}): PlaybookView => ({
   id: 'pb1', projectId: 'p1', name: 'Déployer', inputs: [], flow: { cells: [{ id: 'build', kind: 'script', program: 'scripts/build.sh', args: [], env: {} }] }, contentRev: 3,
@@ -37,20 +37,36 @@ type FakeApi = Partial<Record<keyof FleetApiService, ReturnType<typeof vi.fn>>>;
 
 const never = () => new Promise<never>(() => undefined);
 
+const versionContent = (): PlaybookVersionContent => ({ ...versions().versions[1], inputs: [], flow: { cells: [{ id: 'old-step', kind: 'manual', prompt: 'ok' }] } } as unknown as PlaybookVersionContent);
+
+/** An answer the test settles itself, in the order it wants. */
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (reason: unknown) => void = () => undefined;
+  const promise = new Promise<T>((onResolve, onReject) => { resolve = onResolve; reject = onReject; });
+  return { promise, resolve, reject };
+}
+
+/** Barrier: a zero-delay macrotask runs after every queued microtask, so each pending answer has been consumed; then Angular renders. */
+async function letPendingAnswersLand(fixture: ComponentFixture<unknown>): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await fixture.whenStable();
+}
+
 async function renderScreen(overrides: FakeApi = {}) {
   const api = {
     listProjects: vi.fn(() => Promise.resolve({ items: [PROJECT], total: 1, limit: 200, offset: 0 })),
     listPlaybooks: vi.fn(() => Promise.resolve([playbook()])),
     listPlaybookVersions: vi.fn(() => Promise.resolve(versions())),
-    getPlaybookVersion: vi.fn(() => Promise.resolve({ ...versions().versions[1], inputs: [], flow: { cells: [{ id: 'old-step', kind: 'manual', prompt: 'ok' }] } } as unknown as PlaybookVersionContent)),
+    getPlaybookVersion: vi.fn(() => Promise.resolve(versionContent())),
     restorePlaybookVersion: vi.fn(() => Promise.resolve(playbook())),
     getPlaybookSecretStatus: vi.fn((_id: string, name: string) => Promise.resolve({ scopeKind: 'playbook', scopeId: 'pb1', name, status: 'missing' })),
     listTriggers: vi.fn(() => Promise.resolve([trigger()])),
     listTriggerFires: vi.fn(() => Promise.resolve([fire()])),
     ...overrides,
   };
-  await render(TriggersViewComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
-  return api;
+  const { fixture } = await render(TriggersViewComponent, { providers: [{ provide: FleetApiService, useValue: api }] });
+  return { api, fixture };
 }
 
 describe('TriggersViewComponent: playbooks', () => {
@@ -68,7 +84,7 @@ describe('TriggersViewComponent: playbooks', () => {
 
   it('tells the user the playbooks are unavailable in French and reads again on Réessayer', async () => {
     let attempts = 0;
-    const api = await renderScreen({ listPlaybooks: vi.fn(() => (++attempts === 1 ? Promise.reject(new ApiError(500, 'boom')) : Promise.resolve([playbook()]))) });
+    const { api } = await renderScreen({ listPlaybooks: vi.fn(() => (++attempts === 1 ? Promise.reject(new ApiError(500, 'boom')) : Promise.resolve([playbook()]))) });
     expect(await screen.findByTestId('playbooks-error')).toHaveTextContent('Playbooks indisponibles');
 
     await userEvent.click(screen.getByRole('button', { name: 'Réessayer' }));
@@ -98,7 +114,7 @@ describe('TriggersViewComponent: playbooks', () => {
   });
 
   it('reads a version without restoring it', async () => {
-    const api = await renderScreen();
+    const { api } = await renderScreen();
     await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
 
     await userEvent.click(await screen.findByRole('button', { name: 'Lire la révision 2' }));
@@ -108,7 +124,7 @@ describe('TriggersViewComponent: playbooks', () => {
   });
 
   it('restores a version against the revision it read', async () => {
-    const api = await renderScreen();
+    const { api } = await renderScreen();
     await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
 
     await userEvent.click(await screen.findByRole('button', { name: 'Restaurer la révision 2' }));
@@ -135,17 +151,15 @@ describe('TriggersViewComponent: playbooks', () => {
   });
 
   it('shows the detail of the last playbook chosen when an earlier answer arrives late', async () => {
-    let answerFirst: (value: PlaybookVersionList) => void = () => undefined;
-    const lateFirst = new Promise<PlaybookVersionList>((resolve) => { answerFirst = resolve; });
-    const secondVersions = { currentContentRev: 9, versions: [{ ...versions().versions[0], rev: 9 }] };
-    const listPlaybookVersions = vi.fn((id: string) => (id === 'pb1' ? lateFirst : Promise.resolve(secondVersions)));
-    await renderScreen({ listPlaybooks: vi.fn(() => Promise.resolve([playbook(), playbook({ id: 'pb2', name: 'Livrer', secrets: [] })])), listPlaybookVersions });
+    const lateFirst = deferred<PlaybookVersionList>();
+    const listPlaybookVersions = vi.fn((id: string) => (id === 'pb1' ? lateFirst.promise : Promise.resolve(versionsOfSecondPlaybook())));
+    const { fixture } = await renderScreen({ listPlaybooks: vi.fn(() => Promise.resolve([playbook(), secondPlaybook()])), listPlaybookVersions });
     await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
     await userEvent.click(screen.getByRole('button', { name: /Livrer/ }));
     await screen.findByRole('button', { name: 'Lire la révision 9' });
 
-    answerFirst(versions());
-    await new Promise((resolve) => setTimeout(resolve, RENDER_FLUSH_MS));
+    lateFirst.resolve(versions());
+    await letPendingAnswersLand(fixture);
 
     expect(screen.getByRole('heading', { name: 'Livrer' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Lire la révision 9' })).toBeInTheDocument();
@@ -153,11 +167,155 @@ describe('TriggersViewComponent: playbooks', () => {
   });
 });
 
+const secondPlaybook = () => playbook({ id: 'pb2', name: 'Livrer', secrets: [] });
+const versionsOfSecondPlaybook = (): PlaybookVersionList => ({ currentContentRev: 9, versions: [{ ...versions().versions[0], rev: 9 }] });
+const playbookOfOtherProject = () => playbook({ id: 'pb3', projectId: 'p2', name: 'Publier', secrets: [] });
+const OTHER_PROJECT = { id: 'p2', name: 'Beta' } as Project;
+
+async function renderTwoProjects(overrides: FakeApi = {}) {
+  const listPlaybooks = vi.fn((projectId: string) => Promise.resolve(projectId === 'p1' ? [playbook(), secondPlaybook()] : [playbookOfOtherProject()]));
+  const listProjects = vi.fn(() => Promise.resolve({ items: [PROJECT, OTHER_PROJECT], total: 2, limit: 200, offset: 0 }));
+  const listPlaybookVersions = vi.fn((id: string) => Promise.resolve(id === 'pb2' ? versionsOfSecondPlaybook() : versions()));
+  return renderScreen({ listProjects, listPlaybooks, listPlaybookVersions, ...overrides });
+}
+
+async function openFirstPlaybookAndReadItsOldVersion() {
+  await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Lire la révision 2' }));
+}
+
+async function chooseSecondPlaybook() {
+  await userEvent.click(screen.getByRole('button', { name: /Livrer/ }));
+  await screen.findByRole('button', { name: 'Lire la révision 9' });
+}
+
+async function chooseOtherProjectAndItsPlaybook() {
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Projet' }), 'p2');
+  await userEvent.click(await screen.findByRole('button', { name: /Publier/ }));
+  await screen.findByRole('button', { name: 'Lire la révision 2' });
+}
+
+describe('TriggersViewComponent: answers that arrive after the user moved on', () => {
+  describe('reading a version', () => {
+    it('does not open the version of the previous playbook under the one now chosen', async () => {
+      const lateVersion = deferred<PlaybookVersionContent>();
+      const { fixture } = await renderTwoProjects({ getPlaybookVersion: vi.fn(() => lateVersion.promise) });
+      await openFirstPlaybookAndReadItsOldVersion();
+      await chooseSecondPlaybook();
+
+      lateVersion.resolve(versionContent());
+      await letPendingAnswersLand(fixture);
+
+      expect(screen.queryByTestId('opened-version')).toBeNull();
+    });
+
+    it('does not show the read error of the previous playbook under the one now chosen', async () => {
+      const lateVersion = deferred<PlaybookVersionContent>();
+      const { fixture } = await renderTwoProjects({ getPlaybookVersion: vi.fn(() => lateVersion.promise) });
+      await openFirstPlaybookAndReadItsOldVersion();
+      await chooseSecondPlaybook();
+
+      lateVersion.reject(new ApiError(500, 'boom'));
+      await letPendingAnswersLand(fixture);
+
+      expect(screen.queryByTestId('version-error')).toBeNull();
+    });
+
+    it('does not open a version read in another project under a playbook of the new project', async () => {
+      const lateVersion = deferred<PlaybookVersionContent>();
+      const { fixture } = await renderTwoProjects({ getPlaybookVersion: vi.fn(() => lateVersion.promise) });
+      await openFirstPlaybookAndReadItsOldVersion();
+      await chooseOtherProjectAndItsPlaybook();
+
+      lateVersion.resolve(versionContent());
+      await letPendingAnswersLand(fixture);
+
+      expect(screen.queryByTestId('opened-version')).toBeNull();
+    });
+  });
+
+  describe('restoring a version', () => {
+    async function startRestoringFirstPlaybook(restoreAnswer: ReturnType<typeof deferred<PlaybookView>>) {
+      const rendered = await renderTwoProjects({ restorePlaybookVersion: vi.fn(() => restoreAnswer.promise) });
+      await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Restaurer la révision 2' }));
+      return rendered;
+    }
+
+    it('keeps the playbook chosen meanwhile when the restoration succeeds late', async () => {
+      const restoreAnswer = deferred<PlaybookView>();
+      const { api, fixture } = await startRestoringFirstPlaybook(restoreAnswer);
+      await chooseSecondPlaybook();
+
+      restoreAnswer.resolve(playbook());
+      await letPendingAnswersLand(fixture);
+
+      expect(screen.getByRole('heading', { name: 'Livrer' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Lire la révision 9' })).toBeInTheDocument();
+      expect(api.listPlaybooks).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not report a late restoration failure under the playbook chosen meanwhile', async () => {
+      const restoreAnswer = deferred<PlaybookView>();
+      const { fixture } = await startRestoringFirstPlaybook(restoreAnswer);
+      await chooseSecondPlaybook();
+
+      restoreAnswer.reject(new ApiError(409, 'conflict', 'playbook_conflict'));
+      await letPendingAnswersLand(fixture);
+
+      expect(screen.queryByTestId('restore-error')).toBeNull();
+    });
+
+    it('leaves the project chosen meanwhile alone when the restoration succeeds late', async () => {
+      const restoreAnswer = deferred<PlaybookView>();
+      const { api, fixture } = await startRestoringFirstPlaybook(restoreAnswer);
+      await chooseOtherProjectAndItsPlaybook();
+
+      restoreAnswer.resolve(playbook());
+      await letPendingAnswersLand(fixture);
+
+      expect(screen.getByRole('heading', { name: 'Publier' })).toBeInTheDocument();
+      expect(api.listPlaybooks).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('keyboard focus after a restoration', () => {
+    it('lands on the heading of the playbook once its restored versions are shown', async () => {
+      const restoreAnswer = deferred<PlaybookView>();
+      const afterRestore: PlaybookVersionList = { currentContentRev: 4, versions: [{ ...versions().versions[0], rev: 4, source: 'restore' }, ...versions().versions] };
+      let restored = false;
+      const { fixture } = await renderScreen({
+        restorePlaybookVersion: vi.fn(() => { restored = true; return restoreAnswer.promise; }),
+        listPlaybookVersions: vi.fn(() => Promise.resolve(restored ? afterRestore : versions())),
+      });
+      await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Restaurer la révision 2' }));
+
+      restoreAnswer.resolve(playbook({ contentRev: 4 }));
+      await screen.findByRole('button', { name: 'Lire la révision 4' });
+      await fixture.whenStable();
+
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Déployer' }));
+    });
+
+    it('lands on the announced error when the restoration fails', async () => {
+      const { fixture } = await renderScreen({ restorePlaybookVersion: vi.fn(() => Promise.reject(new ApiError(409, 'conflict', 'playbook_conflict'))) });
+      await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Restaurer la révision 2' }));
+
+      const announcedError = await screen.findByTestId('restore-error');
+      await fixture.whenStable();
+
+      expect(document.activeElement).toBe(announcedError);
+    });
+  });
+});
+
 describe('TriggersViewComponent: triggers', () => {
   async function openTriggers(overrides: FakeApi = {}) {
-    const api = await renderScreen(overrides);
+    const rendered = await renderScreen(overrides);
     await userEvent.click(screen.getByRole('tab', { name: 'Triggers' }));
-    return api;
+    return rendered;
   }
 
   it('shows a loading state, then says there is no trigger', async () => {
@@ -251,7 +409,7 @@ describe('TriggersViewComponent: screen', () => {
 
   it('reads the playbooks of another project when the user changes the project', async () => {
     const other = { id: 'p2', name: 'Beta' } as Project;
-    const api = await renderScreen({ listProjects: vi.fn(() => Promise.resolve({ items: [PROJECT, other], total: 2, limit: 200, offset: 0 })) });
+    const { api } = await renderScreen({ listProjects: vi.fn(() => Promise.resolve({ items: [PROJECT, other], total: 2, limit: 200, offset: 0 })) });
     await screen.findByRole('button', { name: /Déployer/ });
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Projet' }), 'p2');

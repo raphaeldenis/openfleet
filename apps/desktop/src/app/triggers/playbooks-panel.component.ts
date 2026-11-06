@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, untracked, viewChild, type Signal } from '@angular/core';
 import { FleetApiService } from '../core/fleet-api.service';
 import { copyFor } from '../core/error-copy';
 import type { PlaybookSecretStatus, PlaybookVersionContent, PlaybookVersionList, PlaybookView } from '../core/playbook-trigger-views';
@@ -13,7 +13,10 @@ interface PlaybookDetail {
 const ORIGIN_LABELS = { native: 'Créé ici', imported: 'Importé', agent: 'Écrit par un agent' } as const;
 const SOURCE_LABELS = { edit: 'Modification', restore: 'Restauration' } as const;
 
-/** The playbooks of a project: the list, then for the chosen one its cells, the status of its secrets and its versions. */
+/**
+ * The playbooks of a project: the list, then for the chosen one its cells, the status of its secrets and its versions.
+ * Restoring a version is the only write of this screen; it always sends `expectedRev`, the current revision the screen read.
+ */
 @Component({
   selector: 'of-playbooks-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -50,7 +53,7 @@ const SOURCE_LABELS = { edit: 'Modification', restore: 'Restauration' } as const
       <section class="detail" aria-live="polite" data-testid="playbook-detail">
         @if (selected(); as playbook) {
           <header>
-            <h2>{{ playbook.name }}</h2>
+            <h2 #playbookHeading tabindex="-1">{{ playbook.name }}</h2>
             <p class="meta">
               {{ originLabel(playbook) }} · révision {{ playbook.contentRev }}
               @if (playbook.agentLocked) { · verrouillé aux agents }
@@ -95,7 +98,7 @@ const SOURCE_LABELS = { edit: 'Modification', restore: 'Restauration' } as const
             }
 
             <h3>Versions</h3>
-            @if (restoreError(); as message) { <p class="error" role="alert" data-testid="restore-error">{{ message }}</p> }
+            @if (restoreError(); as message) { <p #restoreAlert tabindex="-1" class="error" role="alert" data-testid="restore-error">{{ message }}</p> }
             <ul class="versions" aria-label="Versions du playbook">
               @for (version of loaded.versions.versions; track version.rev) {
                 <li>
@@ -152,6 +155,9 @@ export class PlaybooksPanelComponent {
   readonly projectId = input.required<string>();
 
   private readonly api = inject(FleetApiService);
+  private readonly injector = inject(Injector);
+  private readonly playbookHeading = viewChild<ElementRef<HTMLElement>>('playbookHeading');
+  private readonly restoreAlert = viewChild<ElementRef<HTMLElement>>('restoreAlert');
   protected readonly playbooks = signal<Load<PlaybookView[]>>(LOADING);
   protected readonly selectedId = signal<string | undefined>(undefined);
   protected readonly detail = signal<Load<PlaybookDetail>>(LOADING);
@@ -168,7 +174,7 @@ export class PlaybooksPanelComponent {
   protected readonly openedVersionFailure = computed(() => { const opened = this.openedVersion(); return opened.status === 'failed' ? opened.message : ''; });
 
   private latestListRequest = 0;
-  private latestDetailRequest = 0;
+  private latestSelectionRequest = 0;
   private latestVersionRequest = 0;
 
   constructor() {
@@ -182,10 +188,16 @@ export class PlaybooksPanelComponent {
   }
 
   private forgetSelection(): void {
-    this.latestDetailRequest += 1;
+    this.invalidateRequestsOfPreviousSelection();
     this.selectedId.set(undefined);
     this.openedVersion.set({ status: 'closed' });
     this.restoreError.set(undefined);
+  }
+
+  /** Detail, version reads and restoration continuations started under an earlier selection find their token outdated. */
+  private invalidateRequestsOfPreviousSelection(): number {
+    this.latestVersionRequest += 1;
+    return ++this.latestSelectionRequest;
   }
 
   protected async reload(): Promise<void> {
@@ -204,7 +216,7 @@ export class PlaybooksPanelComponent {
   protected sourceLabel(source: keyof typeof SOURCE_LABELS): string { return SOURCE_LABELS[source]; }
 
   protected async select(playbookId: string): Promise<void> {
-    const request = ++this.latestDetailRequest;
+    const request = this.invalidateRequestsOfPreviousSelection();
     this.selectedId.set(playbookId);
     this.detail.set(LOADING);
     this.openedVersion.set({ status: 'closed' });
@@ -212,10 +224,10 @@ export class PlaybooksPanelComponent {
     const playbook = this.loadedPlaybooks()?.find((candidate) => candidate.id === playbookId);
     try {
       const [versions, secrets] = await Promise.all([this.api.listPlaybookVersions(playbookId), this.secretStatusesOf(playbookId, playbook?.secrets ?? [])]);
-      if (request !== this.latestDetailRequest) return;
+      if (request !== this.latestSelectionRequest) return;
       this.detail.set({ status: 'loaded', value: { versions, secrets } });
     } catch (error) {
-      if (request === this.latestDetailRequest) this.detail.set(failedLoadOf(error));
+      if (request === this.latestSelectionRequest) this.detail.set(failedLoadOf(error));
     }
   }
 
@@ -240,16 +252,27 @@ export class PlaybooksPanelComponent {
   protected async restore(playbookId: string, rev: number): Promise<void> {
     const versions = this.loadedDetail()?.versions;
     if (versions === undefined || this.isRestoring()) return;
+    const selectionAtStart = this.latestSelectionRequest;
+    const isStillOnSelectionAtStart = () => selectionAtStart === this.latestSelectionRequest;
     this.isRestoring.set(true);
     this.restoreError.set(undefined);
     try {
       await this.api.restorePlaybookVersion({ playbookId, rev, expectedRev: versions.currentContentRev });
+      if (!isStillOnSelectionAtStart()) return;
       await this.reload();
+      if (!isStillOnSelectionAtStart()) return;
       await this.select(playbookId);
+      if (this.selectedId() === playbookId) this.focusAfterRender(this.playbookHeading);
     } catch (error) {
+      if (!isStillOnSelectionAtStart()) return;
       this.restoreError.set(copyFor(error, { action: 'generic' }).text);
+      this.focusAfterRender(this.restoreAlert);
     } finally {
       this.isRestoring.set(false);
     }
+  }
+
+  private focusAfterRender(target: Signal<ElementRef<HTMLElement> | undefined>): void {
+    afterNextRender(() => target()?.nativeElement.focus(), { injector: this.injector });
   }
 }
