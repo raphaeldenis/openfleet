@@ -286,6 +286,15 @@ describe('refresh_integration', () => {
     expect([status, JSON.stringify(stored.json)]).toEqual([400, expect.stringContaining('"status":"missing"')]);
   });
 
+  it('refuses cleanly a shorter token set over a stored one, which stays the credential presented to the provider', async () => {
+    const { connection, integration, value } = await connectedIntegration(`ada@example.com:${makeCanary()}`);
+
+    const status = await setTokenAsHuman(connection.id, 'ada@example.com:1234567');
+    await tool(lead, 'refresh_integration', { integration: integration.id });
+
+    expect([status, provider.seen.map((request) => request.authorization)]).toEqual([400, [`Bearer ${value}`]]);
+  });
+
   it('accepts a token whose part after the colon has exactly the minimum length', async () => {
     const connection = await createConnection();
     await createIntegration(connection.id);
