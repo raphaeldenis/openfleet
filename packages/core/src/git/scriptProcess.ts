@@ -57,7 +57,7 @@ function readableTail(tail: Buffer, wasCut: boolean, maxBytes: number): string {
   return maskedSecrets(withoutControlCharacters).slice(-maxBytes);
 }
 
-const killProcessGroup = (pid: number, signal: NodeJS.Signals): void => {
+export const killProcessGroup = (pid: number, signal: NodeJS.Signals): void => {
   try {
     process.kill(-pid, signal);
   } catch {

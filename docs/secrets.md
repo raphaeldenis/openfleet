@@ -74,7 +74,7 @@ A playbook, an integration connection or a trigger declares the names of the sec
 | Set a value | yes: `PUT /api/secrets/:scopeKind/:scopeId/:name`, admin token **and** an operator nonce | no tool exists |
 | Clear a value | yes: `DELETE`, same two proofs | `clear_playbook_secret` (destructive) |
 | Read the status | yes: `GET` | `list_playbook_secret_statuses` (`stored` or `missing` only) |
-| Read a value | no route | no tool; only the runner of a playbook resolves one, in the daemon, for the length of a step |
+| Read a value | no route | no tool; only the runner of a playbook resolves one, in the daemon, for the length of a run ([docs/playbook-runs.md](playbook-runs.md)) |
 
 A scope is known when a name is declared under it. An unknown scope answers `404 secret_scope_not_found`, an undeclared name `404 secret_not_declared`. A declared name with no value in the keychain of this device fails at resolution with `secret_not_connected_on_this_device` ("the secret NAME is not connected on this device"). A value under 8 characters is refused (`400 secret_too_short`): the masker of a run could not mask it without destroying the output.
 

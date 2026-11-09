@@ -13,6 +13,8 @@ export interface PlaybookRecord {
   approvedDigest: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
+  /** The sha256 of each script file the approval pinned, by the program the cell names; null when nothing is approved. */
+  approvedScripts: Record<string, string> | null;
   origin: PlaybookOrigin;
   createdAt: string;
   updatedAt: string;
@@ -23,15 +25,15 @@ export type PlaybookContent = Partial<Pick<PlaybookRecord, 'name' | 'inputs' | '
 
 interface PlaybookRow {
   id: string; project_id: string; name: string; inputs_json: string; flow_json: string; content_rev: number; agent_locked: number; policy_json: string;
-  approved_digest: string | null; approved_by: string | null; approved_at: string | null; origin: PlaybookOrigin; created_at: string; updated_at: string;
+  approved_digest: string | null; approved_by: string | null; approved_at: string | null; approved_scripts_json: string | null; origin: PlaybookOrigin; created_at: string; updated_at: string;
 }
 
-const COLUMNS = 'id, project_id, name, inputs_json, flow_json, content_rev, agent_locked, policy_json, approved_digest, approved_by, approved_at, origin, created_at, updated_at';
+const COLUMNS = 'id, project_id, name, inputs_json, flow_json, content_rev, agent_locked, policy_json, approved_digest, approved_by, approved_at, approved_scripts_json, origin, created_at, updated_at';
 
 const toRecord = (row: PlaybookRow): PlaybookRecord => ({
   id: row.id, projectId: row.project_id, name: row.name, inputs: JSON.parse(row.inputs_json), flow: JSON.parse(row.flow_json), contentRev: row.content_rev,
   agentLocked: row.agent_locked === 1, policy: JSON.parse(row.policy_json), approvedDigest: row.approved_digest, approvedBy: row.approved_by,
-  approvedAt: row.approved_at, origin: row.origin, createdAt: row.created_at, updatedAt: row.updated_at,
+  approvedAt: row.approved_at, approvedScripts: row.approved_scripts_json === null ? null : JSON.parse(row.approved_scripts_json), origin: row.origin, createdAt: row.created_at, updatedAt: row.updated_at,
 });
 
 const json = (value: unknown): string | null => (value === undefined ? null : JSON.stringify(value));
@@ -61,13 +63,20 @@ export class PlaybookRepository {
     return Number(this.db.prepare('DELETE FROM playbooks WHERE id = ? AND content_rev = ?').run(input.id, input.expectedRev).changes) > 0;
   }
 
+  /** Records the approval of the revision `expectedRev`; false when the playbook moved or is gone. */
+  approve(input: { id: string; expectedRev: number; digest: string; scripts: Record<string, string>; by: string; at: string }): boolean {
+    const result = this.db.prepare('UPDATE playbooks SET approved_digest = ?, approved_by = ?, approved_at = ?, approved_scripts_json = ? WHERE id = ? AND content_rev = ?')
+      .run(input.digest, input.by, input.at, JSON.stringify(input.scripts), input.id, input.expectedRev);
+    return Number(result.changes) > 0;
+  }
+
   /** Replaces the content when the revision is still `expectedRev`, bumps the revision and clears any approval; false when the revision moved. */
   replaceContent(input: { id: string; expectedRev: number; content: PlaybookContent; now: string }): boolean {
     const { id, expectedRev, content, now } = input;
     const result = this.db.prepare(`UPDATE playbooks SET
         name = COALESCE(?, name), inputs_json = COALESCE(?, inputs_json), flow_json = COALESCE(?, flow_json),
         policy_json = COALESCE(?, policy_json), agent_locked = COALESCE(?, agent_locked),
-        content_rev = content_rev + 1, approved_digest = NULL, approved_by = NULL, approved_at = NULL, updated_at = ?
+        content_rev = content_rev + 1, approved_digest = NULL, approved_by = NULL, approved_at = NULL, approved_scripts_json = NULL, updated_at = ?
       WHERE id = ? AND content_rev = ?`)
       .run(content.name ?? null, json(content.inputs), json(content.flow), json(content.policy), flag(content.agentLocked), now, id, expectedRev);
     return Number(result.changes) > 0;
