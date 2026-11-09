@@ -14,15 +14,12 @@ describe('masking what a provider echoes of a credential', () => {
     ['the token alone, after the colon of an email:token credential', TOKEN],
     ['the whole Authorization header value', AUTHORIZATION],
     ['the base64 of the credential, as it travels in a Basic header', Buffer.from(CREDENTIAL).toString('base64')],
-    ['the base64 of the token alone', Buffer.from(TOKEN).toString('base64')],
+    ['the base64 of the token alone, its padding aside', Buffer.from(TOKEN).toString('base64').replace(/=+$/, '')],
     ['the credential URL-encoded', encodeURIComponent(CREDENTIAL)],
   ])('masks %s', (_label, echo) => {
     const masked = maskOfJira()(`before ${echo} after`);
 
-    expect(masked).not.toContain(echo);
-    expect(masked).toContain(MARKER);
-    expect(masked.startsWith('before ')).toBe(true);
-    expect(masked.endsWith(' after')).toBe(true);
+    expect(masked).toBe(`before ${MARKER} after`);
   });
 
   it('masks a bearer credential and the bearer header that carries it', () => {

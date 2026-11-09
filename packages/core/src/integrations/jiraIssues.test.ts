@@ -139,6 +139,14 @@ describe('masking what a provider echoes while reading its issues', () => {
     expect(textOf(issue!)).toBe('echo [masked]');
   });
 
+  it('masks a value that the cleaning itself would alter, such as one holding two blanks in a row', () => {
+    const maskBlankedValue = (text: string) => text.replaceAll('blank  value', '[masked]');
+
+    const [issue] = issuesOfSearchBody({ issues: [issueOf({ fields: { summary: 'echo blank  value' } })] }, ORIGIN, { maskText: maskBlankedValue })!;
+
+    expect(issue!.untrusted.summary).toBe('echo [masked]');
+  });
+
   it('masks a value that only appears once the invisible characters between its halves are removed', () => {
     const splitByZeroWidthSpace = `${SECRET.slice(0, 6)}​${SECRET.slice(6)}`;
 
