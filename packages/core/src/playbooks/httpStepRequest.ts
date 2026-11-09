@@ -1,5 +1,5 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type ClientRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { StringDecoder } from 'node:string_decoder';
@@ -34,6 +34,8 @@ export interface HttpStepNetwork {
   resolveAddresses: (hostname: string) => Promise<{ address: string; family: 4 | 6 }[]>;
   /** True for an address a host NAME may never resolve to. A literal address written in the allowed hosts is the human's choice and is not checked. */
   isForbiddenAddress: (address: string, family: 4 | 6) => boolean;
+  /** Calls `onElapsed` once after `delayMs` and returns the function that cancels it; tests inject a clock they drive by hand. */
+  startTimer?: (onElapsed: () => void, delayMs: number) => () => void;
 }
 
 const LOOPBACK_ADDRESSES = new BlockList();
@@ -77,12 +79,18 @@ async function pinAddressOf(hostname: string, network: HttpStepNetwork): Promise
 /** The scheme `http` is reserved for a loopback address (a local fake server); every other host is reached over `https`. */
 const schemeIsAcceptedFor = (url: URL, target: Pinned): boolean => url.protocol === 'https:' || (url.protocol === 'http:' && isLoopback(target.address));
 
-const hostnameOf = (url: URL): string => url.hostname.replace(/^\[|\]$/g, '');
+const startRealTimer = (onElapsed: () => void, delayMs: number): (() => void) => {
+  const timer = setTimeout(onElapsed, delayMs);
+  return () => clearTimeout(timer);
+};
+
+const hostnameOf =(url: URL): string => url.hostname.replace(/^\[|\]$/g, '');
 
 /**
  * Sends one request and answers how it ended. It never throws and never carries the text of a system error, which can quote a header.
  * The host must be in the allowed list; its name is resolved once, the address is checked, and the connection goes to that very address
  * (no second resolution, so a DNS answer that changes between the check and the connection has no effect). TLS and the Host header keep the host name.
+ * The deadline and the abort signal are armed before the resolution and cover it as much as the transport; an answer of the DNS that comes after the step ended is ignored.
  * A redirect is never followed. The response body is kept up to `maxRetainedChars`; the rest is dropped and the connection is closed.
  */
 export async function sendHttpStep(request: HttpStepRequest, network: HttpStepNetwork = REAL_HTTP_STEP_NETWORK): Promise<HttpStepOutcome> {
@@ -90,63 +98,70 @@ export async function sendHttpStep(request: HttpStepRequest, network: HttpStepNe
   const isHostAllowed = request.allowedHosts.includes(hostname);
   if (!isHostAllowed) return { kind: 'host_not_allowed' };
 
-  let pinning: Pinning;
-  try {
-    pinning = await pinAddressOf(hostname, network);
-  } catch {
-    return { kind: 'failed' };
-  }
-  if (pinning.kind === 'refused') return pinning.outcome;
-  const { target } = pinning;
-  if (!schemeIsAcceptedFor(request.url, target)) return { kind: 'host_not_allowed' };
-  if (request.signal.aborted) return { kind: 'aborted' };
+  const isAlreadyAborted = request.signal.aborted;
+  if (isAlreadyAborted) return { kind: 'aborted' };
 
   return new Promise<HttpStepOutcome>((resolve) => {
-    let retained = '';
     let isFinished = false;
-    const decoder = new StringDecoder('utf8');
-    const send = request.url.protocol === 'https:' ? httpsRequest : httpRequest;
+    let outgoing: ClientRequest | undefined;
+    const startTimer = network.startTimer ?? startRealTimer;
 
     const finish = (outcome: HttpStepOutcome): void => {
       if (isFinished) return;
       isFinished = true;
-      clearTimeout(timeoutTimer);
+      cancelTimer();
       request.signal.removeEventListener('abort', onAbort);
-      outgoing.destroy();
+      outgoing?.destroy();
       resolve(outcome);
     };
-    const outgoing = send(request.url, {
-      method: request.method,
-      headers: request.headers,
-      agent: false,
-      lookup: (_name, options, callback) => {
-        const answer = { address: target.address, family: target.family };
-        if ((options as { all?: boolean }).all) (callback as (error: null, addresses: typeof answer[]) => void)(null, [answer]);
-        else callback(null, answer.address, answer.family);
-      },
-    });
-    const timeoutTimer = setTimeout(() => finish({ kind: 'timeout' }), request.timeoutMs);
+    const cancelTimer = startTimer(() => finish({ kind: 'timeout' }), request.timeoutMs);
     const onAbort = (): void => finish({ kind: 'aborted' });
     request.signal.addEventListener('abort', onAbort, { once: true });
 
-    outgoing.on('error', () => finish({ kind: 'failed' }));
-    outgoing.on('response', (response) => {
-      const status = response.statusCode ?? 0;
-      const isRedirect = status >= 300 && status < 400;
-      if (isRedirect) return finish({ kind: 'redirect_refused' });
+    pinAddressOf(hostname, network)
+      .then((pinning) => {
+        const isSettledMeanwhile = isFinished;
+        if (isSettledMeanwhile) return;
+        if (pinning.kind === 'refused') return finish(pinning.outcome);
+        if (!schemeIsAcceptedFor(request.url, pinning.target)) return finish({ kind: 'host_not_allowed' });
+        outgoing = connectTo(pinning.target);
+      })
+      .catch(() => finish({ kind: 'failed' }));
 
-      const keep = (text: string): void => {
-        const room = request.maxRetainedChars - retained.length;
-        if (room > 0) retained += text.slice(0, room);
-      };
-      response.on('data', (chunk: Buffer) => {
-        keep(decoder.write(chunk));
-        const isFull = retained.length >= request.maxRetainedChars;
-        if (isFull) finish({ kind: 'response', status, body: retained });
+    function connectTo(target: Pinned): ClientRequest {
+      let retained = '';
+      const decoder = new StringDecoder('utf8');
+      const send = request.url.protocol === 'https:' ? httpsRequest : httpRequest;
+      const connection = send(request.url, {
+        method: request.method,
+        headers: request.headers,
+        agent: false,
+        lookup: (_name, options, callback) => {
+          const answer = { address: target.address, family: target.family };
+          if ((options as { all?: boolean }).all) (callback as (error: null, addresses: typeof answer[]) => void)(null, [answer]);
+          else callback(null, answer.address, answer.family);
+        },
       });
-      response.on('end', () => { keep(decoder.end()); finish({ kind: 'response', status, body: retained }); });
-      response.on('error', () => finish({ kind: 'failed' }));
-    });
-    outgoing.end(request.body);
+      connection.on('error', () => finish({ kind: 'failed' }));
+      connection.on('response', (response) => {
+        const status = response.statusCode ?? 0;
+        const isRedirect = status >= 300 && status < 400;
+        if (isRedirect) return finish({ kind: 'redirect_refused' });
+
+        const keep = (text: string): void => {
+          const room = request.maxRetainedChars - retained.length;
+          if (room > 0) retained += text.slice(0, room);
+        };
+        response.on('data', (chunk: Buffer) => {
+          keep(decoder.write(chunk));
+          const isFull = retained.length >= request.maxRetainedChars;
+          if (isFull) finish({ kind: 'response', status, body: retained });
+        });
+        response.on('end', () => { keep(decoder.end()); finish({ kind: 'response', status, body: retained }); });
+        response.on('error', () => finish({ kind: 'failed' }));
+      });
+      connection.end(request.body);
+      return connection;
+    }
   });
 }

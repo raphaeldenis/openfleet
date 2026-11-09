@@ -8,6 +8,21 @@ import { createTempDirTracker } from '../tempDirTracker.js';
 import { REAL_HTTP_STEP_NETWORK, type HttpStepNetwork } from './httpStepRequest.js';
 import { PlaybookRepository } from './playbookRepository.js';
 
+/*
+ * Guards of the http cell, each with the test that fails when the guard is removed (replay: break the line, run this file and httpStepRequest.test.ts, restore).
+ *  1. allowed host            httpStepRequest.ts `isHostAllowed` -> 'refuses a host the policy does not list', 'refuses every host when the policy lists none', 'refuses a policy stored before the allowed hosts existed'
+ *  2. address filter          `answers.some(isForbiddenAddress)` in pinAddressOf -> 'refuses a host name that resolves to %s', 'refuses a host name when any one of its addresses is forbidden'
+ *  3. pinned lookup           the `lookup` option in connectTo -> 'is resolved once and the connection goes to that very address'
+ *  4. redirect refused        `isRedirect` -> 'refuses to follow a redirect, even to the same host'
+ *  5. https only              schemeIsAcceptedFor -> 'reaches a public address over https only'
+ *  6. first address only      `target: first` -> 'is resolved once ...' (the second answer of the DNS has no effect)
+ *  7. safe headers            httpStepTemplates.ts header refusal -> 'refuses %s and sends nothing' (line break, Host, Content-Length)
+ *  8. headers of the client   same table, 'a header the client sets itself' and 'a content length written by the cell'
+ *  9. header cap              'refuses headers that grow past the cap once their tokens are resolved'
+ * 10. templates               'refuses a secret in %s ...', 'never lets the output of a step into %s ...', 'refuses an input that moves the url to another host'
+ * 11. output masking          'sends a secret in the authentication and masks it ...', 'masks the base64 form of a secret ...', 'keeps at most the cap of the response body'
+ * 12. abort and deadline      'the deadline and the stop of a cell cover the DNS resolution ...' and, in httpStepRequest.test.ts, 'sendHttpStep while the name is being resolved'
+ */
 type RunView = {
   id: string; status: string; errorCode: string | null;
   steps: { seq: number; stepId: string; status: string; errorCode: string | null; output: { status?: number; output?: string } | null }[];
@@ -43,10 +58,12 @@ const listenFakeServer = async (reply: Reply) => {
       reply(seenRequest, response);
     });
   });
+  const connections = { opened: 0 };
+  server.on('connection', () => { connections.opened += 1; });
   fakeServers.push(server);
   await new Promise<void>((resolve) => server.listen(0, LOOPBACK, resolve));
   const port = (server.address() as { port: number }).port;
-  return { seen, port, origin: `http://${LOOPBACK}:${port}` };
+  return { seen, connections, port, origin: `http://${LOOPBACK}:${port}` };
 };
 const answer = (status: number, body: string): Reply => (_request, response) => { response.writeHead(status, { 'content-type': 'text/plain' }); response.end(body); };
 
@@ -293,6 +310,93 @@ describe('the address a host name resolves to', () => {
   });
 });
 
+/** A clock the test drives by hand: a timer fires only when the test elapses its delay. */
+const createManualClock = () => {
+  let now = 0;
+  let nextId = 0;
+  const armed = new Map<number, { dueAt: number; delayMs: number; onElapsed: () => void }>();
+  const startTimer: NonNullable<HttpStepNetwork['startTimer']> = (onElapsed, delayMs) => {
+    const id = nextId++;
+    armed.set(id, { dueAt: now + delayMs, delayMs, onElapsed });
+    return () => { armed.delete(id); };
+  };
+  const elapse = (ms: number) => {
+    now += ms;
+    const due = [...armed].filter(([, timer]) => timer.dueAt <= now);
+    for (const [id, timer] of due) { armed.delete(id); timer.onElapsed(); }
+  };
+  return { startTimer, elapse, armedDelays: () => [...armed.values()].map((timer) => timer.delayMs) };
+};
+
+/** A resolver whose first answer is held until the test releases it; every later lookup answers the loopback at once. */
+const createStalledFirstResolver = () => {
+  const lookups: string[] = [];
+  let releaseFirstAnswer!: (answers: { address: string; family: 4 | 6 }[]) => void;
+  const resolveAddresses: HttpStepNetwork['resolveAddresses'] = (hostname) => {
+    lookups.push(hostname);
+    const isFirstLookup = lookups.length === 1;
+    if (!isFirstLookup) return Promise.resolve([{ address: LOOPBACK, family: 4 }]);
+    return new Promise((resolve) => { releaseFirstAnswer = resolve; });
+  };
+  return { resolveAddresses, lookups, releaseFirstAnswer: (answers: { address: string; family: 4 | 6 }[]) => releaseFirstAnswer(answers) };
+};
+
+describe('the deadline and the stop of a cell cover the DNS resolution as much as the transport', () => {
+  const GUARD_AGAINST_A_HANG_MS = 5_000;
+  const CELL_TIMEOUT_SECONDS = 1;
+  const FOUR_TIMES_THE_TIMEOUT_MS = 4 * CELL_TIMEOUT_SECONDS * 1000;
+
+  const startWithAStalledResolver = async () => {
+    const clock = createManualClock();
+    const resolver = createStalledFirstResolver();
+    const f = await boot({ resolveAddresses: resolver.resolveAddresses, isForbiddenAddress: () => false, startTimer: clock.startTimer });
+    const server = await listenFakeServer(answer(200, 'reached'));
+    const playbook = await createApprovedPlaybook(f, [httpCell('call', `http://slow-dns.test:${server.port}/`, { timeoutSeconds: CELL_TIMEOUT_SECONDS })], allowing('slow-dns.test'));
+    const started = await f.api(`/api/playbooks/${playbook.id}/run`, { method: 'POST', body: JSON.stringify({ inputs: {} }) });
+    const { id: runId } = await jsonOf<RunView>(started);
+    await waitUntil('the resolver to be asked', () => resolver.lookups.length === 1, GUARD_AGAINST_A_HANG_MS);
+    return { f, clock, resolver, server, playbook, runId };
+  };
+
+  it('arms the deadline of the cell before the resolution starts', async () => {
+    const { clock } = await startWithAStalledResolver();
+
+    expect(clock.armedDelays()).toEqual([CELL_TIMEOUT_SECONDS * 1000]);
+  });
+
+  it('fails with http_timeout when the resolver stays silent for four times the timeout, and opens no connection', async () => {
+    const { f, clock, server, runId } = await startWithAStalledResolver();
+
+    clock.elapse(FOUR_TIMES_THE_TIMEOUT_MS);
+    await waitUntil('the run to end', async () => (await viewOfRun(f, runId)).status !== 'running', GUARD_AGAINST_A_HANG_MS);
+
+    expect(await viewOfRun(f, runId)).toMatchObject({ status: 'failed', errorCode: 'http_timeout', steps: [{ status: 'failed', errorCode: 'http_timeout' }] });
+    expect(server.connections.opened).toBe(0);
+  });
+
+  it('lets stop() return while the resolver is silent, and journals the step as needs_review', async () => {
+    const { f, server, runId } = await startWithAStalledResolver();
+
+    await f.daemon.playbookRunner.stop();
+
+    expect(await viewOfRun(f, runId)).toMatchObject({ status: 'needs_review', errorCode: 'interrupted', steps: [{ status: 'needs_review' }] });
+    expect(server.connections.opened).toBe(0);
+  });
+
+  it('opens no connection when the resolver answers after the deadline, and the next run of the playbook is served normally', async () => {
+    const { f, clock, resolver, server, playbook, runId } = await startWithAStalledResolver();
+    clock.elapse(FOUR_TIMES_THE_TIMEOUT_MS);
+    await waitUntil('the run to end', async () => (await viewOfRun(f, runId)).status !== 'running', GUARD_AGAINST_A_HANG_MS);
+
+    resolver.releaseFirstAnswer([{ address: LOOPBACK, family: 4 }]);
+    const nextRun = await runToTheEnd(f, playbook.id);
+
+    expect(nextRun.status).toBe('succeeded');
+    expect(server.connections.opened).toBe(1);
+    expect(server.seen).toHaveLength(1);
+  });
+});
+
 describe('what a request may carry', () => {
   const secretValue = `canary-${randomUUID()}`;
 
@@ -336,35 +440,45 @@ describe('what a request may carry', () => {
     expect(run.steps[0]!.output!.output).toMatch(/^\[secret:API_KEY\]=*$/);
   });
 
-  it('refuses a secret in the url or in the body for a flow stored outside the save path, and sends nothing', async () => {
+  it.each([
+    ['the body', (origin: string) => ({ url: `${origin}/`, extra: { method: 'POST', body: `{{secret:${SECRET_NAME}}}` } })],
+    ['the path of the url', (origin: string) => ({ url: `${origin}/items/{{secret:${SECRET_NAME}}}`, extra: { method: 'GET' } })],
+    ['the query of the url', (origin: string) => ({ url: `${origin}/items?key={{secret:${SECRET_NAME}}}`, extra: { method: 'GET' } })],
+  ])('refuses a secret in %s for a flow stored outside the save path, and sends nothing', async (_label, cellOf) => {
     const f = await boot();
     const server = await listenFakeServer(answer(200, 'x'));
+    const { url, extra } = cellOf(server.origin);
     new PlaybookRepository(f.db).insert({
-      id: 'secret-in-body', projectId: OWN_PROJECT_ID, name: 'Outside', inputs: [], agentLocked: false, origin: 'native', createdAt: 'now',
+      id: 'secret-misplaced', projectId: OWN_PROJECT_ID, name: 'Outside', inputs: [], agentLocked: false, origin: 'native', createdAt: 'now',
       policy: { allowedHosts: [LOOPBACK], browserAutoGrant: false, autoDistill: false, maxRunsToKeep: 50 },
-      flow: { cells: [httpCell('call', `${server.origin}/`, { method: 'POST', body: `{{secret:${SECRET_NAME}}}` })] as never },
+      flow: { cells: [httpCell('call', url, extra)] as never },
     });
-    new SecretRefRepository(f.db).declare({ kind: 'playbook', id: 'secret-in-body' }, SECRET_NAME);
-    await secretStore.set({ kind: 'playbook', id: 'secret-in-body' }, SECRET_NAME, secretValue);
-    expect((await approve(f, 'secret-in-body')).status).toBe(200);
+    new SecretRefRepository(f.db).declare({ kind: 'playbook', id: 'secret-misplaced' }, SECRET_NAME);
+    await secretStore.set({ kind: 'playbook', id: 'secret-misplaced' }, SECRET_NAME, secretValue);
+    expect((await approve(f, 'secret-misplaced')).status).toBe(200);
 
-    const run = await runToTheEnd(f, 'secret-in-body');
+    const run = await runToTheEnd(f, 'secret-misplaced');
 
     expect(run).toMatchObject({ status: 'failed', errorCode: 'secret_not_allowed_here' });
     expect(server.seen).toEqual([]);
   });
 
-  it('never lets the output of a step into the authority of the url or a header, for a flow stored outside the save path', async () => {
+  it.each([
+    ['the authority of the url', (_origin: string, port: number) => ({ url: `http://{{steps.first.output}}:${port}/`, extra: {} })],
+    ['a header', (origin: string, _port: number) => ({ url: `${origin}/`, extra: { headers: { 'X-From': '{{steps.first.output}}' } } })],
+    ['the bearer token of the authentication', (origin: string, _port: number) => ({ url: `${origin}/`, extra: { auth: { type: 'bearer', token: '{{steps.first.output}}' } } })],
+  ])('never lets the output of a step into %s, for a flow stored outside the save path', async (_label, secondCellOf) => {
     const f = await boot();
     const server = await listenFakeServer(answer(200, '127.0.0.1'));
+    const { url, extra } = secondCellOf(server.origin, server.port);
     new PlaybookRepository(f.db).insert({
-      id: 'untrusted-url', projectId: OWN_PROJECT_ID, name: 'Outside', inputs: [], agentLocked: false, origin: 'native', createdAt: 'now',
+      id: 'untrusted-reference', projectId: OWN_PROJECT_ID, name: 'Outside', inputs: [], agentLocked: false, origin: 'native', createdAt: 'now',
       policy: { allowedHosts: [LOOPBACK], browserAutoGrant: false, autoDistill: false, maxRunsToKeep: 50 },
-      flow: { cells: [httpCell('first', `${server.origin}/`), httpCell('second', `http://{{steps.first.output}}:${server.port}/`)] as never },
+      flow: { cells: [httpCell('first', `${server.origin}/`), httpCell('second', url, extra)] as never },
     });
-    expect((await approve(f, 'untrusted-url')).status).toBe(200);
+    expect((await approve(f, 'untrusted-reference')).status).toBe(200);
 
-    const run = await runToTheEnd(f, 'untrusted-url');
+    const run = await runToTheEnd(f, 'untrusted-reference');
 
     expect(run).toMatchObject({ status: 'failed', errorCode: 'untrusted_reference' });
     expect(server.seen).toHaveLength(1);
