@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { forgottenFireIds, isoDaysBefore, leaveFires, remainingFireIds } from './fireRetention.testkit.js';
+import { FIRE_PRUNE_BATCH_SIZE } from './fireRetention.js';
+import { forgottenFireIds, isoDaysBefore, leaveFires } from './fireRetention.testkit.js';
 import { MINUTE_MS, PROJECT_ID, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
 
 let world: TriggerWorld | undefined;
@@ -9,8 +10,8 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 const SECONDS_PER_DAY = 24 * 60 * 60;
 const CRASH_EVENT = { session: { id: 'worker', name: 'Worker', state: 'closed_with_error' } };
 
-const worldWithAManagerAndATrigger = async ({ policy, configJson }: { policy?: Record<string, unknown>; configJson?: Record<string, unknown> } = {}) => {
-  world = await startTriggerWorld({ configJson });
+const worldWithAManagerAndATrigger = async ({ policy, configJson, letTheEventLoopRun }: { policy?: Record<string, unknown>; configJson?: Record<string, unknown>; letTheEventLoopRun?: () => Promise<void> } = {}) => {
+  world = await startTriggerWorld({ configJson, letTheEventLoopRun });
   const lead = await world.createSession('Lead', { manager: world.managerSpec });
   const triggerId = await world.createArmedTrigger({
     when: { source: 'session_state', state: 'closed_with_error' }, run: { kind: 'prompt_manager', managerId: lead.id, prompt: 'A worker crashed: {{event.session.name}}' }, policy,
@@ -103,19 +104,35 @@ describe('the daemon forgets old fires every day, whether or not a fire settles'
 });
 
 describe('the daemon stays responsive while it forgets a large ledger', () => {
-  const FIRES_TO_FORGET = 100_000;
+  const BATCHES_OF_OLD_FIRES = 3;
+  const FIRES_TO_FORGET = BATCHES_OF_OLD_FIRES * FIRE_PRUNE_BATCH_SIZE;
 
-  it('answers a request while a purge of 100 000 fires is under way', async () => {
-    const { world, triggerId } = await worldWithAManagerAndATrigger();
+  /** A purge that, once suspension starts, stays suspended at every yield until the test resumes it; the purge of the boot is not suspended. */
+  const suspendedPurgeYields = () => {
+    const suspendedYields: Array<() => void> = [];
+    let isSuspending = false;
+    const letTheEventLoopRun = () => (isSuspending ? new Promise<void>((resolve) => { suspendedYields.push(resolve); }) : Promise.resolve());
+    const startSuspending = () => { isSuspending = true; };
+    const resumeThePurge = () => suspendedYields.splice(0).forEach((resume) => resume());
+    return { letTheEventLoopRun, startSuspending, suspendedYields, resumeThePurge };
+  };
+
+  it('answers a request while the purge is suspended between two batches, and goes on with the next batch afterwards', async () => {
+    const purge = suspendedPurgeYields();
+    const { world, triggerId } = await worldWithAManagerAndATrigger({ letTheEventLoopRun: purge.letTheEventLoopRun });
     const longAgo = isoDaysBefore(200, new Date(world.nowMs).toISOString());
-    leaveFires(world.db, triggerId, { *[Symbol.iterator]() { for (let index = 0; index < FIRES_TO_FORGET; index += 1) yield { ledgerState: 'completed' as const, settledAt: longAgo }; } });
+    leaveFires(world.db, triggerId, Array.from({ length: FIRES_TO_FORGET }, () => ({ ledgerState: 'completed' as const, settledAt: longAgo })));
     world.advanceMs(DAY_MS);
+    purge.startSuspending();
 
     retentionTimer()[0]!.callback();
     const response = await world.api(`/api/triggers?projectId=${PROJECT_ID}`);
-    const fireIdsStillHoldingTheirEvent = remainingFireIds(world.db).length - forgottenFireIds(world.db).length;
+    const eventsForgottenWhenTheResponseArrived = forgottenFireIds(world.db).length;
+    purge.resumeThePurge();
+    await vi.waitFor(() => expect(forgottenFireIds(world.db)).toHaveLength(2 * FIRE_PRUNE_BATCH_SIZE));
 
     expect(response.status).toBe(200);
-    expect(fireIdsStillHoldingTheirEvent).toBeGreaterThan(0);
-  }, 60_000);
+    expect(eventsForgottenWhenTheResponseArrived).toBe(FIRE_PRUNE_BATCH_SIZE);
+    expect(purge.suspendedYields).toHaveLength(1);
+  });
 });

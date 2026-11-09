@@ -10,10 +10,17 @@ export interface PullRequestRef {
   number: number;
 }
 
+export const isRepository = (repo: string): boolean => REPOSITORY_PATTERN.test(repo);
+
+/** Returns the repository when it is an owner/name that cannot read as an option or a shell word; throws invalid_body otherwise. */
+export function requireRepository(repo: string): string {
+  if (!isRepository(repo)) throw new OpenFleetError('invalid_body', 'repo is not an owner/name GitHub repository.', { hint: 'use the form owner/name, e.g. acme/widgets.' });
+  return repo;
+}
+
 /** Returns the pull request reference when it is safe to hand to gh as arguments; throws invalid_body otherwise. */
 export function requirePullRequestRef({ repo, number }: PullRequestRef): PullRequestRef {
-  const isRepository = REPOSITORY_PATTERN.test(repo);
-  if (!isRepository) throw new OpenFleetError('invalid_body', 'repo is not an owner/name GitHub repository.', { hint: 'use the form owner/name, e.g. acme/widgets.' });
+  requireRepository(repo);
   const isPullRequestNumber = Number.isInteger(number) && number >= 1 && number <= MAX_PULL_REQUEST_NUMBER;
   if (!isPullRequestNumber) throw new OpenFleetError('invalid_body', 'number is not a pull request number.', { hint: 'give a positive integer.' });
   return { repo, number };

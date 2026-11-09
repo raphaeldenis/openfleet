@@ -100,6 +100,9 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
 
   search_knowledge: { domain: 'knowledge', category: 'read_only' },
 
+  get_github_pr: { domain: 'integrations', category: 'read_only' },
+  list_github_prs: { domain: 'integrations', category: 'read_only' },
+
   add_playbook_cell: { domain: 'playbooks', category: 'additive' },
   clear_playbook_secret: { domain: 'playbooks', category: 'destructive' },
   create_playbook: { domain: 'playbooks', category: 'additive' },

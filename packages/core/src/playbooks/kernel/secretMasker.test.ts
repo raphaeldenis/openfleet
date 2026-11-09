@@ -292,6 +292,57 @@ describe('createSecretMasker: input ceiling', () => {
   });
 });
 
+describe('createSecretMasker: a secret too long for one regular expression', () => {
+  const HUGE_VALUE_CHARS = 320_000;
+  const ALPHABET = 'abcdefghij/ ';
+  const nonPeriodicValue = (length: number): string => {
+    let state = 12345;
+    return Array.from({ length }, () => {
+      state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+      return ALPHABET[state % ALPHABET.length];
+    }).join('');
+  };
+  const hugeValue = nonPeriodicValue(HUGE_VALUE_CHARS);
+  const CEILING_ABOVE_EVERY_FORM = 10_000_000;
+  const hugeMasker = () => createSecretMasker([{ name: 'HUGE', value: hugeValue }, { name: 'JIRA_TOKEN', value: jiraValue }], { maxInputChars: CEILING_ABOVE_EVERY_FORM });
+
+  it('builds without throwing', () => {
+    expect(hugeMasker).not.toThrow();
+  });
+
+  it('masks the plain form and a small secret beside it', () => {
+    const masked = hugeMasker().mask(`before ${hugeValue} ${jiraValue} after`);
+
+    expect(masked).toBe('before [secret:HUGE] [secret:JIRA_TOKEN] after');
+  });
+
+  it('masks the URL-encoded form in either hexadecimal case', () => {
+    const upperCaseHex = encodeURIComponent(hugeValue);
+    const lowerCaseHex = upperCaseHex.replace(/%[0-9A-F]{2}/g, (sequence) => sequence.toLowerCase());
+
+    const masked = hugeMasker().mask(`one ${upperCaseHex} two ${lowerCaseHex} three`);
+
+    expect(masked).toBe('one [secret:HUGE] two [secret:HUGE] three');
+  });
+
+  it('masks the base64 and the JSON-escaped forms', () => {
+    const base64 = Buffer.from(hugeValue).toString('base64').replace(/=+$/, '');
+    const jsonEscaped = JSON.stringify(hugeValue).slice(1, -1).replaceAll('/', '\\/');
+
+    const masked = hugeMasker().mask(`one ${base64} two ${jsonEscaped} three`);
+
+    expect(masked).toBe('one [secret:HUGE] two [secret:HUGE] three');
+  });
+
+  it('cuts a text over the ceiling before a straddling occurrence', () => {
+    const masker = createSecretMasker([{ name: 'HUGE', value: hugeValue }], { maxInputChars: 100 });
+
+    const masked = masker.mask(`${'z'.repeat(90)}${hugeValue}`);
+
+    expect(masked).toBe(`${'z'.repeat(90)}[truncated]`);
+  });
+});
+
 describe('createSecretMasker: linear cost', () => {
   it('masks a text of 1 000 000 characters in under 200 ms', () => {
     const masker = createSecretMasker([

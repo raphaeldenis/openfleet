@@ -12,7 +12,9 @@ export interface FirePruneReport {
   batches: number;
 }
 
-const letTheEventLoopRun = () => new Promise<void>((resolve) => setImmediate(resolve));
+export type LetTheEventLoopRun = () => Promise<void>;
+
+const letTheEventLoopRunOnRealLoop: LetTheEventLoopRun = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /** Forgets the events of the fires that ended a long time ago, a batch at a time, once a day; it hands the event loop back between two batches and never lets a failure reach its caller. */
 export class FireRetention {
@@ -25,6 +27,8 @@ export class FireRetention {
     schedule: (callback: () => void, delayMs: number) => () => void;
     retentionDays: number;
     onFailure: (error: unknown) => void;
+    /** Resolves once the event loop has served what waits for it; defaults to a turn of the real loop. */
+    letTheEventLoopRun?: LetTheEventLoopRun;
   }) {}
 
   /** Arms the daily run; the first one is a day from now. */
@@ -41,7 +45,7 @@ export class FireRetention {
   }
 
   async forgetOldEvents(): Promise<FirePruneReport> {
-    const { ledger, clock, retentionDays, onFailure } = this.deps;
+    const { ledger, clock, retentionDays, onFailure, letTheEventLoopRun = letTheEventLoopRunOnRealLoop } = this.deps;
     const settledBefore = new Date(clock() - retentionDays * MILLISECONDS_PER_DAY).toISOString();
     const report: FirePruneReport = { forgotten: 0, batches: 0 };
     let afterRowid = FROM_THE_FIRST_ROW;

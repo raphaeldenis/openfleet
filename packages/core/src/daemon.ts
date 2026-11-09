@@ -19,7 +19,7 @@ import { CriteriaStatusGuard } from './escalation/criteriaStatusGuard.js';
 import { EscalationRepository } from './escalation/escalationRepository.js';
 import { EscalationService } from './escalation/escalationService.js';
 import { GovernanceQueueService } from './governance/governanceQueueService.js';
-import { OpenFleetError, type EscalationView } from '@openfleet/shared';
+import { MAX_CONCURRENT_RUNS, MAX_RUNS_NEEDING_REVIEW, MAX_STEP_EXECUTIONS_PER_RUN, OpenFleetError, type EscalationView } from '@openfleet/shared';
 import { decisionNotification, escalationAnswerNotification } from './governance/decisionNotification.js';
 import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
@@ -82,6 +82,7 @@ import { ChildSilenceWatch, DEFAULT_SILENCE_CHECK_DELAY_MS } from './managers/ch
 import { CiWatchService } from './managers/ciWatchService.js';
 import { WatchedPrRepository } from './managers/watchedPrRepository.js';
 import { createGhPullRequestPort, type GhPullRequestPort } from './github/ghPullRequestPort.js';
+import { createGhPullRequestReader, type GhPullRequestReader } from './github/ghPullRequestReader.js';
 import { staleInProgressRowLabelsOfProject } from './managers/staleRows.js';
 import { createMcpHandler } from './mcp/mcpServer.js';
 import type { HumanProofVerifier } from './triggers/humanProofVerifier.js';
@@ -101,6 +102,10 @@ import { TriggerService } from './triggers/triggerService.js';
 import { PlaybookRepository } from './playbooks/playbookRepository.js';
 import { PlaybookVersionRepository } from './playbooks/playbookVersionRepository.js';
 import { PlaybookService } from './playbooks/playbookService.js';
+import { PlaybookApprovals } from './playbooks/playbookApprovals.js';
+import { PlaybookRunner } from './playbooks/playbookRunner.js';
+import { PlaybookRunRepository } from './playbooks/playbookRunRepository.js';
+import { ScriptLocator } from './playbooks/scriptLocator.js';
 import { pendingPermissionViewOf } from './mcp/pendingPermissionView.js';
 import { KnowledgeRepository } from './knowledge/knowledgeRepository.js';
 import { KnowledgeRepoScope } from './knowledge/knowledgeRepoScope.js';
@@ -174,6 +179,8 @@ export interface Daemon {
   harnesses: Harness[];
   /** The secrets service the REST routes use; a playbook run resolves its values through it. */
   secrets: SecretService;
+  /** Runs the approved script cells of playbooks; its steps are journaled and a step found running at boot is never started again. */
+  playbookRunner: PlaybookRunner;
   /** The health of the line to the desktop app: how many answers it ignored because no request in flight claimed them. */
   secretChannel: { ignoredAnswerCount: () => number };
   close: () => Promise<void>;
@@ -199,6 +206,8 @@ export interface DaemonOptions {
   managerBase?: ManagerBase;
   /** Replaces the GitHub CLI the daemon polls the checks of watched pull requests with, so a test needs no network and no login. */
   gh?: GhPullRequestPort;
+  /** Reads the pull requests of the list_github_prs and get_github_pr tools; defaults to the user's gh. */
+  ghReader?: GhPullRequestReader;
   /** The injection point of the command policy: the settings the daemon enforces and the evaluator that applies them. */
   commandPolicy?: { settings?: CommandPolicySettings; evaluate?: PolicyEvaluate };
   /** Overrides the delay after which an undecided approval expires, so a test does not wait the nine minutes of the hook timeout. */
@@ -227,12 +236,17 @@ export interface DaemonOptions {
   /** Replaces the clock of the trigger engine (epoch milliseconds), so a test decides when a fire is accepted, how old a backlog is and which day it is. */
   triggers?: { clock?: () => number; schedule?: (callback: () => void, delayMs: number) => () => void };
   /** Replaces the timer of the daily purge of the trigger fires, apart from `triggers.schedule` so that a test counting the timers of the sources does not see it. */
-  fireRetention?: { schedule?: (callback: () => void, delayMs: number) => () => void };
+  fireRetention?: { schedule?: (callback: () => void, delayMs: number) => () => void; letTheEventLoopRun?: () => Promise<void> };
   power?: {
     api?: PowerApi;
     clock?: () => number;
     schedule?: (callback: () => void, delayMs: number) => () => void;
   };
+  /**
+   * The runner of playbooks. `scriptRoots` replaces the `playbooks.scriptRoots` of config.json (the directories a script cell may run files from);
+   * `maxStepExecutions` and `maxConcurrentRuns` replace the caps of 1000 step executions per run and 4 runs at once, so a test reaches them with a few steps.
+   */
+  playbooks?: { scriptRoots?: string[]; maxStepExecutions?: number; maxConcurrentRuns?: number; maxRunsNeedingReview?: number };
   /**
    * The secrets of playbooks. `parent` is the line to the desktop app that spawned the daemon (stdout and stdin of the sidecar); with it the keychain of the app holds the values.
    * `store` replaces the keychain adapter with another holder, so a test needs no desktop app. `clock` and `exchangeTimeoutMs` replace the clock of the nonces and the wait for the app's answer.
@@ -276,7 +290,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   approvals.expireAllPending('daemon restarted');
   const modelConfigPath = join(config.home, 'config.json');
   const modelTable = readingConfigFile(() => loadModelTable(modelConfigPath));
-  const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings, findingsGate: findingsGateSettings, triggers: triggerSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
+  const { workingState: workingStateSettings, managers: managerSettings, contextNotice: contextNoticeSettings, findingsGate: findingsGateSettings, playbooks: playbookSettings, triggers: triggerSettings } = readingConfigFile(() => loadDaemonSettings(modelConfigPath));
   const powerSettings = readingConfigFile(() => loadPowerSettings(modelConfigPath));
   const reportPowerUnavailable = () => degraded.mark('power_assertion_unavailable', 'Idle sleep protection is unavailable or its helper cannot be stopped.');
   const powerApi = options.power?.api ?? new CaffeinatePowerApi({ onPowerUnavailable: reportPowerUnavailable });
@@ -442,6 +456,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     sessions, managers: managerRepository, bus, checks: new ChildSilenceRepository(db), delayMs: options.childSilence?.delayMs ?? DEFAULT_SILENCE_CHECK_DELAY_MS,
     clock: options.childSilence?.clock ?? Date.now, schedule: options.childSilence?.schedule ?? scheduleOnRealClock,
   });
+  const githubReader = options.ghReader ?? createGhPullRequestReader();
   const ciWatch = new CiWatchService({ repository: new WatchedPrRepository(db), gh: options.gh ?? createGhPullRequestPort(), scheduledEvents });
   const secretMonotonicClock = options.secrets?.monotonicClock ?? (() => performance.now());
   const secretNonces = createNonceLedger({ monotonicClock: secretMonotonicClock });
@@ -465,6 +480,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const fireRetention = new FireRetention({
     ledger: fireLedger, clock: triggerClock, schedule: options.fireRetention?.schedule ?? scheduleOnRealClock, retentionDays: triggerSettings.fireRetentionDays,
     onFailure: (error) => log('warn', 'the trigger fires could not be pruned', error),
+    letTheEventLoopRun: options.fireRetention?.letTheEventLoopRun,
   });
   const announceSettledFire = ({ triggerId, fireId, ledgerState, reason }: SettledFire) => {
     bus.emit({ type: 'trigger.fired', triggerId, fireId, ledgerState, ...(reason !== undefined && { reason }) });
@@ -488,7 +504,6 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     sessions, managers: managerRepository, triggers: triggerRepository, engine: triggerEngine, ledger: fireLedger, clock: triggerClock,
     schedule: options.triggers?.schedule ?? scheduleOnRealClock, onOfferSuppressedByCause: (triggerId) => systemActivity.triggerOfferSuppressed({ triggerId }),
   });
-  const playbooks = new PlaybookService({ db, repository: new PlaybookRepository(db), versions: new PlaybookVersionRepository(db),secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
   const integrations = new IntegrationService({
     db, repository: new IntegrationRepository(db), secretRefs: new SecretRefRepository(db), credentials: secrets,
     providers: createIntegrationProviderRegistry(options.integrations?.providers ?? shippedIntegrationProviders()),
@@ -496,7 +511,18 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     projectExists: (projectId) => projects.get(projectId) !== undefined, clock: options.integrations?.clock ?? Date.now, monotonicClock: options.integrations?.monotonicClock ?? (() => performance.now()), newId,
     ...(options.integrations?.refreshCooldownMs !== undefined && { refreshCooldownMs: options.integrations.refreshCooldownMs }),
   });
-  const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, integrations, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, integrations, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const playbookRepository = new PlaybookRepository(db);
+  const playbooks = new PlaybookService({ db, repository: playbookRepository, versions: new PlaybookVersionRepository(db),secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
+  const playbookRuns = new PlaybookRunRepository(db);
+  const scriptLocator = new ScriptLocator(options.playbooks?.scriptRoots ?? playbookSettings.scriptRoots);
+  const playbookApprovals = new PlaybookApprovals({ repository: playbookRepository, locator: scriptLocator, clock: () => new Date().toISOString() });
+  const playbookRunner = new PlaybookRunner({
+    playbooks, approvals: playbookApprovals, runs: playbookRuns, secrets, clock: () => new Date().toISOString(), newId,
+    limits: { maxStepExecutions: options.playbooks?.maxStepExecutions ?? MAX_STEP_EXECUTIONS_PER_RUN, maxConcurrentRuns: options.playbooks?.maxConcurrentRuns ?? MAX_CONCURRENT_RUNS, maxRunsNeedingReview: options.playbooks?.maxRunsNeedingReview ?? MAX_RUNS_NEEDING_REVIEW },
+    observer: { runStarted: (run) => systemActivity.playbookRunStarted(run), runEnded: (run) => systemActivity.playbookRunEnded(run) },
+  });
+  playbookRunner.recover();
+  const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, integrations, playbookRunning: { approvals: playbookApprovals, runner: playbookRunner, runs: playbookRuns }, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, integrations, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, github: githubReader, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);
@@ -514,6 +540,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     cronSource.stop();
     silentRunSource.stop();
     triggerEngine.stop();
+    await playbookRunner.stop();
     fireRetention.stop();
     childSilence.stop();
     arbiters.stop();
@@ -563,5 +590,5 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     throw error;
   }
 
-  return { server, db, degraded, stores, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, triggerEngine, harnesses, secrets, secretChannel, close };
+  return { server, db, degraded, stores, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, triggerEngine, harnesses, secrets, playbookRunner, secretChannel, close };
 }

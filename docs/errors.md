@@ -24,8 +24,8 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | --- | --- | --- |
 | `invalid_request` | 400 | 32 |
 | `unauthorized` | 401 | 3 |
-| `not_found` | 404 | 22 |
-| `conflict` | 409 | 48 |
+| `not_found` | 404 | 23 |
+| `conflict` | 409 | 55 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 13 |
 | `internal` | 500 | 4 |
@@ -100,6 +100,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `playbook_version_not_found` | 404 | `never` |
 | `integration_not_found` | 404 | `never` |
 | `integration_connection_not_found` | 404 | `never` |
+| `playbook_run_not_found` | 404 | `never` |
 | `escalation_not_found` | 404 | `never` |
 | `secret_scope_not_found` | 404 | `never` |
 | `secret_not_declared` | 404 | `never` |
@@ -108,6 +109,13 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Code | HTTP status | Retry |
 | --- | --- | --- |
+| `playbook_unapproved` | 409 | `never` |
+| `approval_digest_mismatch` | 409 | `after_refresh` |
+| `script_changed` | 409 | `never` |
+| `script_not_allowed` | 409 | `never` |
+| `playbook_not_runnable` | 409 | `never` |
+| `playbook_run_busy` | 409 | `later` |
+| `playbook_review_backlog` | 409 | `never` |
 | `playbook_conflict` | 409 | `after_refresh` |
 | `playbook_locked` | 409 | `never` |
 | `integration_refresh_cooldown` | 409 | `later` |

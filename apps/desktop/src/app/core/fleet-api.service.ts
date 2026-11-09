@@ -5,7 +5,9 @@ import type {
   LawView, ManagerGovernanceWithLawsView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   RemovedWorktree, ToolSummary, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
+import type { SecretStatusAnswer, TriggerFireView } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
+import type { PlaybookVersionContent, PlaybookVersionList, PlaybookView, TriggerView } from './playbook-trigger-views';
 import { parseActivityPage } from './activity-page-parser';
 import { parseCloseHandoffResult, parseHandoffPreview, parseHandoffTarget } from './handoff-response-parser';
 import { parseManagerProfile } from './manager-profile-parser';
@@ -320,7 +322,25 @@ export class FleetApiService {
   }
   listViews(scope: StoreScope) { return this.call<{ items: DsView[] }>(`${storePath(scope.storeId)}/views${queryString({ projectId: scope.projectId })}`); }
   // --- end data stores ---
+  // --- Playbooks and triggers (read side, UI-PBK-TRG01) ---
+  listPlaybooks(projectId: string) { return this.call<PlaybookView[]>(`/api/playbooks${queryString({ projectId })}`); }
+  listPlaybookVersions(playbookId: string) { return this.call<PlaybookVersionList>(`${playbookPath(playbookId)}/versions`); }
+  getPlaybookVersion(playbookId: string, rev: number) { return this.call<PlaybookVersionContent>(`${playbookPath(playbookId)}/versions/${rev}`); }
+  restorePlaybookVersion({ playbookId, rev, expectedRev }: { playbookId: string; rev: number; expectedRev: number }) {
+    return this.post<PlaybookView>(`${playbookPath(playbookId)}/versions/${rev}/restore`, { expectedRev });
+  }
+  /** Whether this device holds the value of a declared secret; the value itself never travels. */
+  getPlaybookSecretStatus(playbookId: string, name: string) {
+    return this.call<SecretStatusAnswer>(`/api/secrets/playbook/${encodeURIComponent(playbookId)}/${encodeURIComponent(name)}`);
+  }
+  listTriggers(projectId: string) { return this.call<TriggerView[]>(`/api/triggers${queryString({ projectId })}`); }
+  async listTriggerFires(triggerId: string): Promise<TriggerFireView[]> {
+    return (await this.call<{ fires: TriggerFireView[] }>(`/api/triggers/${encodeURIComponent(triggerId)}/fires`)).fires;
+  }
+  // --- end playbooks and triggers ---
 }
+
+const playbookPath = (playbookId: string) => `/api/playbooks/${encodeURIComponent(playbookId)}`;
 
 // --- Data stores (Tables screen, P3-T18) ---
 export interface StoreScope { projectId: string; storeId: string }
