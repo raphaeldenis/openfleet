@@ -106,7 +106,21 @@ describe('the inputs and the policy', () => {
     expect(PlaybookInputsSchema.safeParse([{ name: 'a', type: 'string' }, { name: 'a', type: 'number' }]).success).toBe(false);
   });
 
-  it('defaults the policy to no auto grant, no auto distill and 50 runs kept', () => {
-    expect(PlaybookPolicySchema.parse({})).toEqual({ browserAutoGrant: false, autoDistill: false, maxRunsToKeep: 50 });
+  it('defaults the policy to no allowed host, no auto grant, no auto distill and 50 runs kept', () => {
+    expect(PlaybookPolicySchema.parse({})).toEqual({ allowedHosts: [], browserAutoGrant: false, autoDistill: false, maxRunsToKeep: 50 });
+  });
+
+  it.each(['*.example.com', 'Example.com', 'example.com:443', 'user@example.com', 'example.com/path', 'exa mple.com', '', '-bad.example.com', 'bücher.example'])(
+    'refuses the allowed host %j', (host) => {
+      expect(PlaybookPolicySchema.safeParse({ allowedHosts: [host] }).success).toBe(false);
+    });
+
+  it.each(['example.com', 'api.example.com', 'xn--bcher-kva.example', '127.0.0.1'])('accepts the allowed host %s', (host) => {
+    expect(PlaybookPolicySchema.parse({ allowedHosts: [host] }).allowedHosts).toEqual([host]);
+  });
+
+  it('refuses more than 32 allowed hosts', () => {
+    const tooMany = Array.from({ length: 33 }, (_, position) => `h${position}.example.com`);
+    expect(PlaybookPolicySchema.safeParse({ allowedHosts: tooMany }).success).toBe(false);
   });
 });

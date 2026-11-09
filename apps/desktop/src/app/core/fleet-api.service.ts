@@ -5,7 +5,7 @@ import type {
   LawView, ManagerGovernanceWithLawsView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   RemovedWorktree, ToolSummary, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
-import type { SecretStatusAnswer, TriggerFireView } from '@openfleet/shared';
+import type { SecretStatusAnswer, TriggerFireView, TriggerPolicy } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import type { PlaybookVersionContent, PlaybookVersionList, PlaybookView, TriggerView } from './playbook-trigger-views';
 import { parseActivityPage } from './activity-page-parser';
@@ -130,8 +130,8 @@ export class FleetApiService {
     return { ok: true, version: reportedVersion };
   }
   diagnostics() { return this.call<DiagnosticsDocument>(DIAGNOSTICS_PATH); }
-  /** The title of a trigger, which the banner of a `notify` trigger shows. */
-  getTrigger(triggerId: string) { return this.call<{ id: string; title: string }>(`/api/triggers/${encodeURIComponent(triggerId)}`); }
+  /** A trigger as it stands: its title shows in the banner of a `notify` trigger, its revision and digest are what arming reviews. */
+  getTrigger(triggerId: string) { return this.call<TriggerView>(triggerPath(triggerId)); }
   listSessions() { return this.getWithin<Session[]>('/api/sessions', DAEMON_ANSWER_TIMEOUT_MS); }
   models() { return this.call<Record<string, string>>('/api/models'); }
   availableModels() { return this.call<{ models: string[] }>('/api/models/available'); }
@@ -334,12 +334,22 @@ export class FleetApiService {
     return this.call<SecretStatusAnswer>(`/api/secrets/playbook/${encodeURIComponent(playbookId)}/${encodeURIComponent(name)}`);
   }
   listTriggers(projectId: string) { return this.call<TriggerView[]>(`/api/triggers${queryString({ projectId })}`); }
+  /** Replaces the title and the policy of a trigger the screen read at `expectedRev`; the daemon clears the arming. */
+  updateTrigger({ triggerId, expectedRev, changes }: { triggerId: string; expectedRev: number; changes: { title?: string; policy?: TriggerPolicy } }) {
+    return this.put<TriggerView>(triggerPath(triggerId), { expectedRev, ...changes });
+  }
+  /** Arms the revision the human reviewed; the proof of the human gesture travels in a header, never the digest. */
+  armTrigger({ triggerId, approvedRev, humanProof }: { triggerId: string; approvedRev: number; humanProof: string }) {
+    return this.call<TriggerView>(`${triggerPath(triggerId)}/arm`, { method: 'POST', body: JSON.stringify({ approvedRev }), headers: { 'x-human-proof': humanProof } });
+  }
+  disarmTrigger(triggerId: string) { return this.post<TriggerView>(`${triggerPath(triggerId)}/disarm`, {}); }
   async listTriggerFires(triggerId: string): Promise<TriggerFireView[]> {
     return (await this.call<{ fires: TriggerFireView[] }>(`/api/triggers/${encodeURIComponent(triggerId)}/fires`)).fires;
   }
   // --- end playbooks and triggers ---
 }
 
+const triggerPath = (triggerId: string) => `/api/triggers/${encodeURIComponent(triggerId)}`;
 const playbookPath = (playbookId: string) => `/api/playbooks/${encodeURIComponent(playbookId)}`;
 
 // --- Data stores (Tables screen, P3-T18) ---
