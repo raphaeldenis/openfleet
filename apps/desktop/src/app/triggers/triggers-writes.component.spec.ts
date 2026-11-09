@@ -611,6 +611,15 @@ describe('Triggers: the review shows everything the digest covers', () => {
     expect(reviewText()).toHaveTextContent('avant\\u202eapres\\u001bfin');
   });
 
+  it('writes control and direction characters of the inputs of a playbook as their code, keys included', async () => {
+    await renderTriggers({ triggers: [trigger({ run: { kind: 'run_playbook', playbookId: 'pb-9', inputs: { 'cle‮': 'valeur\u001b' } } })] });
+
+    await choose(FIRST);
+
+    expect(reviewText()).toHaveTextContent('"cle\\\\u202e"');
+    expect(reviewText()).toHaveTextContent('"valeur\\\\u001b"');
+  });
+
   describe('a text too long to show in full', () => {
     const triggerWithLongPrompt = (overrides: Partial<TriggerView> = {}) => trigger({ run: { kind: 'prompt_manager', prompt: longPrompt }, ...overrides });
 
