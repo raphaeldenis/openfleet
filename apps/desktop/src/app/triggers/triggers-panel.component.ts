@@ -1,5 +1,8 @@
 import { ChangeDetectionStrategy, Component, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, untracked, viewChild, type Signal } from '@angular/core';
 import type { TriggerFireView } from '@openfleet/shared';
+import { acceptedOwnerOf, ownerChoicesOf, type OwnerChoice } from './owner-choices';
+import { TriggerEditorComponent } from './trigger-editor.component';
+import type { WhenDraft } from './when-draft';
 import { copyFor, retryOfError } from '../core/error-copy';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { OperatorNonceMinter } from '../core/operator-nonce-minter';
@@ -8,7 +11,7 @@ import { BannerComponent } from '../design/banner.component';
 import { approvalReviewOf, previewOf } from './approval-review';
 import { LOADING, failedLoadOf, loadedValueOf, type Load } from './load-state';
 import { FIRE_REASON_LABELS, LEDGER_STATE_LABELS, conditionText, runText, whenText } from './rule-text';
-import { BACKLOG_POLICIES, BATCH_MODES, changesOf, draftOf, problemOfDraft, type TriggerEditDraft } from './trigger-edit-draft';
+import { changesOf, draftOf, problemOfDraft, type TriggerEditDraft } from './trigger-edit-draft';
 
 type ArmingState = 'disarmed' | 'armed' | 'lapsed';
 type PillState = ArmingState | 'unknown';
@@ -47,13 +50,11 @@ const hasMovedSinceReview = ({ reviewed, current }: { reviewed: TriggerView; cur
 /** Spoken as the daemon would refuse a stale revision, so the copy and the advice to reload come from the error registry. */
 const reviewedRuleHasMoved = () => new ApiError(409, 'the reviewed rule changed before arming', 'stale_revision');
 
-const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
-
 /** The triggers of a project: the list, then for the chosen one its rule as stored, its arming and the history of its fires. */
 @Component({
   selector: 'of-triggers-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BannerComponent],
+  imports: [BannerComponent, TriggerEditorComponent],
   template: `
     <div class="split">
       <nav class="list" aria-label="Triggers">
@@ -124,29 +125,15 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
           }
 
           @if (draft(); as editing) {
-            <form class="editor" aria-label="Modifier le trigger" data-testid="trigger-editor" (submit)="submitEdit($event, trigger)">
-              <p class="muted">Enregistrer désarme le trigger : il faudra relire la règle et l’armer de nouveau.</p>
-              <label>Titre <input #titleField type="text" [value]="editing.title" (input)="editDraft({ title: valueOf($event) })" /></label>
-              <label>Repos (secondes) <input type="text" inputmode="numeric" [value]="editing.cooldownSeconds" [attr.aria-describedby]="draftProblem() ? 'editor-problem' : null" (input)="editDraft({ cooldownSeconds: valueOf($event) })" /></label>
-              <label>Plafond de tirs par jour <input type="text" inputmode="numeric" [value]="editing.maxFiresPerDay" [attr.aria-describedby]="draftProblem() ? 'editor-problem' : null" (input)="editDraft({ maxFiresPerDay: valueOf($event) })" /></label>
-              <span class="muted">Un plafond vide laisse le trigger sans plafond journalier.</span>
-              <label>Mode de lot
-                <select (change)="editDraft({ batchMode: batchModeOf($event) })">
-                  @for (mode of batchModes; track mode) { <option [value]="mode" [selected]="mode === editing.batchMode">{{ mode }}</option> }
-                </select>
-              </label>
-              <label>Arriéré
-                <select (change)="editDraft({ backlogPolicy: backlogPolicyOf($event) })">
-                  @for (policy of backlogPolicies; track policy) { <option [value]="policy" [selected]="policy === editing.backlogPolicy">{{ policy }}</option> }
-                </select>
-              </label>
-              @if (draftProblem(); as problem) { <p id="editor-problem" class="error" data-testid="editor-problem">{{ problem }}</p> }
-              <div class="actions">
-                <button type="submit" class="of-btn of-btn--compact" [disabled]="draftProblem() !== undefined || isWriting()">Enregistrer</button>
-                <button type="button" class="of-btn of-btn--compact" (click)="cancelEdit()">Annuler</button>
-              </div>
-            </form>
+            <of-trigger-editor
+              [draft]="editing" [problem]="draftProblem()" [managers]="managers()" [isWriting]="isWriting()"
+              (draftChange)="editDraft($event)" (whenChange)="editWhen($event)" (ownerChosen)="chooseOwner($event)" (managersRetried)="loadManagers()"
+              (submitted)="submitEdit($event, trigger)" (cancelled)="cancelEdit()"
+            />
           } @else if (unconfirmedState() === undefined) {
+            @if (isSavedNoticeShown()) {
+              <p class="notice" data-testid="edit-saved-notice">Modification enregistrée : le trigger est désarmé, à relire avant de l’armer de nouveau.</p>
+            }
             <h3>Revue avant armement</h3>
             <p class="muted">Tout ce que couvre l’empreinte, en texte brut : ce qui est écrit dans le trigger n’est jamais interprété.</p>
             <dl class="review" data-testid="review-fields">
@@ -226,9 +213,8 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
     .pill { display: inline-block; margin-right: .5rem; padding: 0 .5rem; border-radius: 999px; background: var(--sunk); color: var(--fg); font-weight: 500; }
     .pill[data-state='lapsed'] { color: var(--state-error); }
     .error { color: var(--state-error); margin: 0; }
+    .notice { margin: 0; color: var(--state-error); font-weight: 500; }
     .actions { display: flex; flex-wrap: wrap; gap: .5rem; }
-    .editor { display: flex; flex-direction: column; align-items: flex-start; gap: .5rem; }
-    .editor label { display: flex; flex-direction: column; gap: .125rem; }
     .skeleton { height: 8rem; margin: .5rem; border-radius: .625rem; background: var(--sunk); }
     .empty { display: flex; flex-direction: column; gap: .25rem; padding: 2rem 1rem; text-align: center; color: var(--mut); }
     .empty-title { color: var(--fg); font-weight: 500; }
@@ -242,19 +228,17 @@ export class TriggersPanelComponent {
   private readonly injector = inject(Injector);
   private readonly triggerHeading = viewChild<ElementRef<HTMLElement>>('triggerHeading');
   private readonly writeAlert = viewChild<ElementRef<HTMLElement>>('writeAlert');
-  private readonly titleField = viewChild<ElementRef<HTMLElement>>('titleField');
   protected readonly triggers = signal<Load<TriggerView[]>>(LOADING);
   protected readonly selectedId = signal<string | undefined>(undefined);
   protected readonly fires = signal<Load<TriggerFireView[]>>(LOADING);
   protected readonly draft = signal<TriggerEditDraft | undefined>(undefined);
+  protected readonly managers = signal<Load<OwnerChoice[]>>(LOADING);
+  private readonly savedTriggerId = signal<string | undefined>(undefined);
   protected readonly writeFailure = signal<WriteFailure | undefined>(undefined);
   private readonly triggerIdsBeingWritten = signal<readonly string[]>([]);
   private readonly unconfirmedStates = signal<readonly UnconfirmedState[]>([]);
   private readonly readInFullFieldIds = signal<ReadonlySet<string>>(new Set());
 
-  protected readonly batchModes = BATCH_MODES;
-  protected readonly backlogPolicies = BACKLOG_POLICIES;
-  protected readonly valueOf = valueOf;
   protected readonly armingStateOf = armingStateOf;
 
   protected readonly loadedTriggers = computed(() => loadedValueOf(this.triggers()));
@@ -267,6 +251,7 @@ export class TriggersPanelComponent {
   protected readonly draftProblem = computed(() => { const draft = this.draft(); return draft === undefined ? undefined : problemOfDraft(draft); });
 
   protected readonly unconfirmedState = computed(() => this.unconfirmedStates().find((state) => state.triggerId === this.selectedId()));
+  protected readonly isSavedNoticeShown = computed(() => this.savedTriggerId() !== undefined && this.savedTriggerId() === this.selectedId());
 
   /** A field read in full stays read for this exact content only: another trigger or another revision starts unread. */
   private readonly reviewScope = computed(() => {
@@ -302,6 +287,7 @@ export class TriggersPanelComponent {
 
   private latestListRequest = 0;
   private latestFiresRequest = 0;
+  private latestManagersRequest = 0;
 
   constructor() {
     effect(() => {
@@ -349,7 +335,25 @@ export class TriggersPanelComponent {
   /** The refusal and the open form belong to the trigger chosen when they appeared. */
   private forgetWriteState(): void {
     this.writeFailure.set(undefined);
+    this.savedTriggerId.set(undefined);
+    this.closeDraft();
+  }
+
+  /** A list of managers asked for by a form that is closed belongs to no form: its answer is ignored. */
+  private closeDraft(): void {
+    this.latestManagersRequest += 1;
     this.draft.set(undefined);
+  }
+
+  protected async loadManagers(): Promise<void> {
+    const request = ++this.latestManagersRequest;
+    this.managers.set(LOADING);
+    try {
+      const sessions = await this.api.listSessions();
+      if (request === this.latestManagersRequest) this.managers.set({ status: 'loaded', value: ownerChoicesOf({ sessions, projectId: this.projectId() }) });
+    } catch (error) {
+      if (request === this.latestManagersRequest) this.managers.set(failedLoadOf(error));
+    }
   }
 
   protected arm(reviewed: TriggerView): Promise<void> {
@@ -385,12 +389,13 @@ export class TriggersPanelComponent {
 
   protected startEditing(trigger: TriggerView): void {
     this.writeFailure.set(undefined);
+    this.savedTriggerId.set(undefined);
     this.draft.set(draftOf(trigger));
-    this.focusAfterRender(this.titleField);
+    void this.loadManagers();
   }
 
   protected cancelEdit(): void {
-    this.draft.set(undefined);
+    this.closeDraft();
     this.focusAfterRender(this.triggerHeading);
   }
 
@@ -398,8 +403,18 @@ export class TriggersPanelComponent {
     this.draft.update((draft) => (draft === undefined ? draft : { ...draft, ...change }));
   }
 
-  protected batchModeOf(event: Event) { return valueOf(event) as TriggerEditDraft['batchMode']; }
-  protected backlogPolicyOf(event: Event) { return valueOf(event) as TriggerEditDraft['backlogPolicy']; }
+  /** The change is merged into the WHEN the draft holds now, never into the one a child saw when it last rendered. */
+  protected editWhen(change: Partial<WhenDraft>): void {
+    this.draft.update((draft) => (draft?.when === undefined ? draft : { ...draft, when: { ...draft.when, ...change } }));
+  }
+
+  protected chooseOwner(chosenValue: string): void {
+    const choices = loadedValueOf(this.managers()) ?? [];
+    this.draft.update((draft) => {
+      const accepted = draft === undefined ? undefined : acceptedOwnerOf({ chosenValue, choices, openedWith: draft.openedWithOwnerManagerId });
+      return draft === undefined || accepted === undefined ? draft : { ...draft, ownerManagerId: accepted.owner };
+    });
+  }
 
   protected submitEdit(event: Event, trigger: TriggerView): Promise<void> {
     event.preventDefault();
@@ -409,6 +424,7 @@ export class TriggersPanelComponent {
     const target = { triggerId: trigger.id, mayBeArmedAfterwards: trigger.armedAt !== null };
     return this.performWrite(target, async () => {
       await this.api.updateTrigger({ triggerId: trigger.id, expectedRev: draft.openedAtRev, changes: changesOf(draft) });
+      this.savedTriggerId.set(trigger.id);
     });
   }
 
@@ -428,13 +444,13 @@ export class TriggersPanelComponent {
       const refresh = await this.refreshTriggers();
       if (!refresh.confirmed) this.unconfirmedStates.update((states) => [...states.filter((state) => state.triggerId !== triggerId), { triggerId, mayBeArmed: mayBeArmedAfterwards }]);
       if (!isStillOnSelectionAtStart()) return;
-      this.draft.set(undefined);
+      this.closeDraft();
       this.focusAfterRender(this.triggerHeading);
     } catch (error) {
       const isReloadAdvised = retryOfError(error) === 'after_refresh';
       if (isReloadAdvised) await this.refreshTriggers();
       if (!isStillOnSelectionAtStart()) return;
-      if (isReloadAdvised) this.draft.set(undefined);
+      if (isReloadAdvised) this.closeDraft();
       this.writeFailure.set({ message: copyFor(error, { action: 'generic' }).text });
       this.focusAfterRender(this.writeAlert);
     } finally {

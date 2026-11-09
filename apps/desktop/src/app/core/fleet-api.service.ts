@@ -5,7 +5,7 @@ import type {
   LawView, ManagerGovernanceWithLawsView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   RemovedWorktree, ToolSummary, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
-import type { SecretStatusAnswer, TriggerFireView, TriggerPolicy } from '@openfleet/shared';
+import type { SecretStatusAnswer, TriggerFireView, TriggerPolicy, TriggerWhen } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import type { PlaybookVersionContent, PlaybookVersionList, PlaybookView, TriggerView } from './playbook-trigger-views';
 import { parseActivityPage } from './activity-page-parser';
@@ -334,8 +334,8 @@ export class FleetApiService {
     return this.call<SecretStatusAnswer>(`/api/secrets/playbook/${encodeURIComponent(playbookId)}/${encodeURIComponent(name)}`);
   }
   listTriggers(projectId: string) { return this.call<TriggerView[]>(`/api/triggers${queryString({ projectId })}`); }
-  /** Replaces the title and the policy of a trigger the screen read at `expectedRev`; the daemon clears the arming. */
-  updateTrigger({ triggerId, expectedRev, changes }: { triggerId: string; expectedRev: number; changes: { title?: string; policy?: TriggerPolicy } }) {
+  /** Replaces the title, the policy and, when given, the WHEN and the owner of a trigger the screen read at `expectedRev`; the daemon clears the arming. */
+  updateTrigger({ triggerId, expectedRev, changes }: { triggerId: string; expectedRev: number; changes: { title?: string; policy?: TriggerPolicy; when?: TriggerWhen; ownerManagerId?: string | null } }) {
     return this.put<TriggerView>(triggerPath(triggerId), { expectedRev, ...changes });
   }
   /** Arms the revision the human reviewed; the proof of the human gesture travels in a header, never the digest. */
