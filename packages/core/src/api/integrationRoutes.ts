@@ -21,7 +21,7 @@ export function registerIntegrationRoutes(router: Router, deps: { integrations: 
     json(res, 200, deps.integrations.list(projectId));
   });
 
-  router.add('POST', '/api/integrations', ({ res, body }) => {
-    json(res, 201, deps.integrations.createIntegration(CreateIntegrationBodySchema.parse(body)));
+  router.add('POST', '/api/integrations', async ({ res, body }) => {
+    json(res, 201, await deps.integrations.createIntegration(CreateIntegrationBodySchema.parse(body)));
   });
 }

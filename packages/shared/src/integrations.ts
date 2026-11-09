@@ -19,6 +19,10 @@ const SAFE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 const MAX_NAME_CHARS = 64;
 const MAX_ALLOWED_HOSTS = 8;
 
+/**
+ * A label typed by the operator (connection name, integration name, resource): free text, shown to agents as typed.
+ * The schema bounds its form; the service refuses a label shaped like a token or equal to the credential stored for its connection (`integration_label_is_secret`).
+ */
 const nameField = z.string().trim().min(1).max(MAX_NAME_CHARS);
 
 /** The body of a connection creation: names and hosts, no credential. A human sets the token afterwards through the secrets route. */

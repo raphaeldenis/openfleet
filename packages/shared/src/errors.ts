@@ -52,6 +52,7 @@ export const ERROR_CODES = {
   // A connection names a provider the daemon does not know, or a host the provider does not allow: a provider reaches its own hosts only, never a free url.
   integration_provider_unknown: { kind: 'invalid_request' },
   integration_host_not_allowed: { kind: 'invalid_request' },
+  integration_label_is_secret: { kind: 'invalid_request' },
 
   unauthorized: { kind: 'unauthorized' },
   // Arming a trigger is a gesture of a human: the admin token alone is not the proof, a single-use proof minted by the desktop app is.

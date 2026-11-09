@@ -22,7 +22,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Kind | HTTP status | Codes |
 | --- | --- | --- |
-| `invalid_request` | 400 | 31 |
+| `invalid_request` | 400 | 32 |
 | `unauthorized` | 401 | 3 |
 | `not_found` | 404 | 22 |
 | `conflict` | 409 | 48 |
@@ -63,6 +63,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `invalid_secret_name` | 400 | `never` |
 | `integration_provider_unknown` | 400 | `never` |
 | `integration_host_not_allowed` | 400 | `never` |
+| `integration_label_is_secret` | 400 | `never` |
 | `question_unclassified` | 400 | `never` |
 | `row_guard_violation` | 400 | `never` |
 | `message_held_for_review` | 400 | `never` |

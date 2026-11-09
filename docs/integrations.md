@@ -34,13 +34,21 @@ None of the three tools is in the reviewer set or the arbiter set. Their input i
 
 - A connection names hosts; each must be a bare host name (no scheme, port, path or user) that the **provider itself** allows. A connection with one refused host is refused whole: `integration_host_not_allowed`. An unknown provider is `integration_provider_unknown`.
 - The probe asks `<scheme>://<first host><health path>` and nothing else. A redirect is never followed, so the credential reaches the host asked and no other.
-- A creation body is strict: a field it does not know, a `token` included, is refused `invalid_body`.
+- A creation body is strict: a field it does not know, a `token` included, is refused `invalid_body`. A known field that holds a credential is refused `integration_label_is_secret` (see "What the guarantee covers").
 
 ## Health
 
 `ok`, `auth_failed` (401, 403), `rate_limited` (429), `unreachable` (any other status, a redirect, a network failure, a timeout of 10 s), or `unknown` before the first refresh. It is a type: no byte of the provider's answer, no error text, leaves the probe.
 
-`refresh_integration` is bounded. A second refresh of the same integration within 60 seconds, or while one is running, is refused `integration_refresh_cooldown` (retry later) before the credential is read, so a loop cannot hammer a provider or lock out an account. A connection with no value on this device answers `secret_not_connected_on_this_device` and calls nobody.
+`refresh_integration` is bounded, and the bound follows the credential: it belongs to the **connection**, so every integration of a connection shares one cooldown and one place in flight. A second refresh of the same connection (through any of its integrations, in any project) within 60 seconds, or while one is running, is refused `integration_refresh_cooldown` (retry later) before the credential is read. At most 4 refreshes are in flight at once across all connections (`MAX_CONCURRENT_REFRESHES`); a fifth is refused with the same code. A loop, or many profiles of one connection, cannot hammer a provider or lock out an account. A connection with no value on this device answers `secret_not_connected_on_this_device` and calls nobody.
+
+The cooldown is kept in memory and measured on the monotonic clock: a step of the wall clock neither ends it nor extends it, and a restart of the daemon clears it.
+
+## What the guarantee covers
+
+- **Covered.** The credential stored in the secret store is never read back into a view, an answer, a table, a log line or an error. The daemon reads it in two places: `refresh`, to reach the provider, and the creation of an integration, to compare it in memory with the labels typed there. Neither writes it anywhere.
+- **Operator text.** The names of a connection and of an integration, and the `resource`, are free text typed by the operator and shown to agents as typed. They are not secret storage. A label that has the shape of a token (the detector of the log masking, `maskedSecrets`) is refused `integration_label_is_secret`, and so is an integration label (name or resource) equal to the credential stored for its connection, blanks around it ignored. The refusal carries no value.
+- **Not covered.** A credential of no known shape typed in the name of a connection, or in a label of an integration whose connection holds no value yet, or equal to the credential of another connection, is accepted: the daemon cannot tell it from a name. This is a typing slip of the operator, not an extraction by an agent; no tool lets an agent read the secret store.
 
 ## What this does not claim
 
@@ -48,3 +56,4 @@ None of the three tools is in the reviewer set or the arbiter set. Their input i
 - Creating a connection needs the admin token only. A process that reads `admin.token` can create a connection on an allowed host (for `jira_cloud`, any `*.atlassian.net` tenant); it still cannot set a value without the operator nonce of the desktop app, so no credential reaches a host the human did not type a value for.
 - The activity log keeps the value of an identifier argument (`integration`) when it is a safe token of at most 64 characters, as it does for every identifier ([CHANGELOG.md](../CHANGELOG.md), ACTIVITY-LOG01). A credential pasted by someone into the `integration` argument would be kept as such. Any other argument, `token` and `authorization` included, is never kept.
 - Health is not recomputed in the background: it is what the last refresh saw.
+- The `down` of migration 070 drops the three integration tables in child-to-parent order and does not clean the polymorphic `secret_refs` rows of scope `connection`. After a rollback they stay as orphans (and the values stay in the secret store); a human clears them from the secrets route before the rollback, or leaves them: a later `up` creates new connection ids, so no orphan is ever read again.

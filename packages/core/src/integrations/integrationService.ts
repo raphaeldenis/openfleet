@@ -2,13 +2,18 @@ import type { DatabaseSync } from 'node:sqlite';
 import {
   INTEGRATION_HEALTH_UNKNOWN, INTEGRATION_TOKEN_SECRET_NAME, OpenFleetError, type CreateIntegrationBody, type CreateIntegrationConnectionBody, type IntegrationConnectionView, type IntegrationView,
 } from '@openfleet/shared';
-import { inTransaction } from '../db/transaction.js';import type { SecretRefRepository } from '../secrets/secretRefRepository.js';
+import { inTransaction } from '../db/transaction.js';
+import { maskedSecrets } from '../redact.js';
+import type { SecretRefRepository } from '../secrets/secretRefRepository.js';
 import type { SecretService } from '../secrets/secretService.js';
 import { allowedHostOf, originOf, type IntegrationProvider, type IntegrationProviderRegistry } from './integrationProviders.js';
 import type { IntegrationProbe } from './integrationProbe.js';
 import type { ConnectionRecord, IntegrationRepository, ProfileRecord } from './integrationRepository.js';
 
 export const DEFAULT_REFRESH_COOLDOWN_MS = 60_000;
+
+/** The refreshes that may be in flight at once, whatever their connections: a burst of agents cannot fan out into a burst of provider calls. */
+export const MAX_CONCURRENT_REFRESHES = 4;
 
 export interface IntegrationServiceDeps {
   db: DatabaseSync;
@@ -19,19 +24,32 @@ export interface IntegrationServiceDeps {
   probe: IntegrationProbe;
   projectExists: (projectId: string) => boolean;
   clock: () => number;
+  monotonicClock: () => number;
   newId: () => string;
   refreshCooldownMs?: number;
 }
 
 const tokenScopeOf = (connectionId: string) => ({ kind: 'connection' as const, id: connectionId });
 
+const looksLikeACredential = (label: string): boolean => maskedSecrets(label) !== label;
+
+const refusedLabel = () => new OpenFleetError('integration_label_is_secret', 'a name or a resource must be a plain label, not a credential; the credential is set through the secrets route.');
+
 /**
  * Connections to providers, the integrations a project builds on them, and their health.
- * The credential of a connection lives in the secret store. It is read inside `refresh` to reach the provider and goes nowhere else: every view carries its status, never its value.
+ *
+ * The guarantee: the credential stored in the secret store is never read back into a view, an answer, a table or a log line. It is read inside `refresh` to reach the provider
+ * and inside `createIntegration` to compare it with the labels typed there, and goes nowhere else.
+ * The labels a human types (connection name, integration name, resource) are the operator's free text: they are refused when they have the shape of a token or equal the credential
+ * stored for their connection. A credential of another shape typed in a label of a connection that holds none yet is not recognised.
+ *
+ * Refreshes are bounded by connection, because the credential belongs to the connection: one refresh at a time and one per cooldown for each connection, `MAX_CONCURRENT_REFRESHES` at once overall.
+ * The cooldown lives in memory and is measured on the monotonic clock: a restart of the daemon clears it, a step of the wall clock does not move it.
  */
 export class IntegrationService {
   private readonly refreshCooldownMs: number;
-  private readonly profilesBeingRefreshed = new Set<string>();
+  private readonly connectionsBeingRefreshed = new Set<string>();
+  private readonly lastProbeEndedAtByConnection = new Map<string, number>();
 
   constructor(private readonly deps: IntegrationServiceDeps) {
     this.refreshCooldownMs = deps.refreshCooldownMs ?? DEFAULT_REFRESH_COOLDOWN_MS;
@@ -43,6 +61,7 @@ export class IntegrationService {
 
   /** Records a connection and declares the secret its token will be set under; a human sets the value. */
   createConnection(body: CreateIntegrationConnectionBody): IntegrationConnectionView {
+    this.refuseLabelsShapedLikeCredentials([body.name]);
     const provider = this.providerNamed(body.provider);
     const allowedHosts = [...new Set(body.allowedHosts.map((host) => allowedHostOf(provider, host)))];
     const connection: ConnectionRecord = { id: this.deps.newId(), name: body.name, provider: provider.id, credentialKind: 'token', allowedHosts };
@@ -59,9 +78,12 @@ export class IntegrationService {
     return this.deps.repository.listConnections().map((connection) => this.connectionViewOf(connection));
   }
 
-  createIntegration(body: CreateIntegrationBody): IntegrationView {
+  async createIntegration(body: CreateIntegrationBody): Promise<IntegrationView> {
     if (!this.deps.projectExists(body.projectId)) throw new OpenFleetError('project_not_found', 'no such project.');
     const connection = this.connectionNamed(body.connectionId);
+    const labels = [body.name, ...(body.resource === undefined ? [] : [body.resource])];
+    this.refuseLabelsShapedLikeCredentials(labels);
+    await this.refuseLabelsEqualToStoredCredential(connection, labels);
     const profile: ProfileRecord = { id: this.deps.newId(), projectId: body.projectId, connectionId: connection.id, name: body.name, ...(body.resource !== undefined && { resource: body.resource }) };
     const hasSameName = this.deps.repository.listProfilesOfProject(body.projectId).some((existing) => existing.name === profile.name);
     if (hasSameName) throw new OpenFleetError('duplicate_name', 'an integration of that name exists in this project.');
@@ -81,36 +103,64 @@ export class IntegrationService {
 
   /**
    * Probes the provider with the credential and records the typed result.
-   * A refresh inside the cooldown of the previous one is refused before the credential is read; a connection with no value on this device fails with secret_not_connected_on_this_device.
+   * A refresh is refused before the credential is read when its connection is being refreshed, was refreshed inside the cooldown, or when `MAX_CONCURRENT_REFRESHES` are in flight.
+   * A connection with no value on this device fails with secret_not_connected_on_this_device.
    */
   async refresh(projectId: string, integrationId: string): Promise<IntegrationView> {
     const profile = this.profileOf(projectId, integrationId);
     const connection = this.connectionNamed(profile.connectionId);
     const provider = this.providerNamed(connection.provider);
-    this.refuseDuringCooldown(profile);
+    this.refuseUnlessRefreshIsAllowed(connection.id);
 
-    this.profilesBeingRefreshed.add(profile.id);
+    this.connectionsBeingRefreshed.add(connection.id);
     try {
       const credential = await this.deps.credentials.resolve(tokenScopeOf(connection.id), INTEGRATION_TOKEN_SECRET_NAME);
       const host = connection.allowedHosts[0]!;
       const status = await this.deps.probe({ url: `${originOf(provider, host)}${provider.healthPath}`, authorization: provider.authorizationOf(credential) });
+      this.lastProbeEndedAtByConnection.set(connection.id, this.deps.monotonicClock());
       this.deps.repository.saveHealth(profile.id, { status, checkedAt: this.nowIso() });
     } finally {
-      this.profilesBeingRefreshed.delete(profile.id);
+      this.connectionsBeingRefreshed.delete(connection.id);
     }
     return this.integrationViewOf(profile, connection);
   }
 
-  private refuseDuringCooldown(profile: ProfileRecord): void {
-    const isAlreadyBeingRefreshed = this.profilesBeingRefreshed.has(profile.id);
-    if (isAlreadyBeingRefreshed) throw new OpenFleetError('integration_refresh_cooldown', 'this integration is being refreshed right now; read its health in a moment.');
-    const lastCheck = this.deps.repository.healthOf(profile.id);
-    if (lastCheck === undefined) return;
-    const millisecondsSinceLastCheck = this.deps.clock() - Date.parse(lastCheck.checkedAt);
-    const isInsideCooldown = millisecondsSinceLastCheck < this.refreshCooldownMs;
+  private refuseUnlessRefreshIsAllowed(connectionId: string): void {
+    const isConnectionBeingRefreshed = this.connectionsBeingRefreshed.has(connectionId);
+    if (isConnectionBeingRefreshed) throw new OpenFleetError('integration_refresh_cooldown', 'this connection is being refreshed right now; read the health in a moment.');
+    const isRefreshCapacityReached = this.connectionsBeingRefreshed.size >= MAX_CONCURRENT_REFRESHES;
+    if (isRefreshCapacityReached) throw new OpenFleetError('integration_refresh_cooldown', 'too many refreshes are running; try again in a moment.');
+    const lastProbeEndedAt = this.lastProbeEndedAtByConnection.get(connectionId);
+    if (lastProbeEndedAt === undefined) return;
+    const millisecondsSinceLastProbe = this.deps.monotonicClock() - lastProbeEndedAt;
+    const isInsideCooldown = millisecondsSinceLastProbe < this.refreshCooldownMs;
     if (!isInsideCooldown) return;
-    const secondsLeft = Math.ceil((this.refreshCooldownMs - millisecondsSinceLastCheck) / 1000);
-    throw new OpenFleetError('integration_refresh_cooldown', `this integration was refreshed a moment ago; refresh again in ${secondsLeft} seconds.`);
+    const secondsLeft = Math.ceil((this.refreshCooldownMs - millisecondsSinceLastProbe) / 1000);
+    throw new OpenFleetError('integration_refresh_cooldown', `this connection was refreshed a moment ago; refresh again in ${secondsLeft} seconds.`);
+  }
+
+  private refuseLabelsShapedLikeCredentials(labels: string[]): void {
+    if (labels.some(looksLikeACredential)) throw refusedLabel();
+  }
+
+  /** Compares in memory and answers with a typed refusal that carries neither value. A connection with no value on this device has nothing to be equal to. */
+  private async refuseLabelsEqualToStoredCredential(connection: ConnectionRecord, labels: string[]): Promise<void> {
+    const isCredentialStored = this.deps.secretRefs.find(tokenScopeOf(connection.id), INTEGRATION_TOKEN_SECRET_NAME)?.status === 'stored';
+    if (!isCredentialStored) return;
+    const credential = await this.storedCredentialOrUndefined(connection.id);
+    if (credential === undefined) return;
+    const isLabelTheCredential = labels.some((label) => label.trim() === credential.trim());
+    if (isLabelTheCredential) throw refusedLabel();
+  }
+
+  private async storedCredentialOrUndefined(connectionId: string): Promise<string | undefined> {
+    try {
+      return await this.deps.credentials.resolve(tokenScopeOf(connectionId), INTEGRATION_TOKEN_SECRET_NAME);
+    } catch (error) {
+      const isMissingOnThisDevice = error instanceof OpenFleetError && error.code === 'secret_not_connected_on_this_device';
+      if (isMissingOnThisDevice) return undefined;
+      throw error;
+    }
   }
 
   private profileOf(projectId: string, integrationId: string): ProfileRecord {

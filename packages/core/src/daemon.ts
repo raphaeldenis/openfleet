@@ -241,9 +241,9 @@ export interface DaemonOptions {
   secrets?: { parent?: SecretParentLink; store?: SecretStore; clock?: () => number; monotonicClock?: () => number; exchangeTimeoutMs?: number };
   /**
    * The integrations with providers. `providers` replaces the shipped list (jira_cloud, github), so a test reaches a fake server on loopback and no real host.
-   * `probe` replaces the HTTP probe, `clock` the time of the health records and the cooldown, `refreshCooldownMs` the minimum gap between two refreshes of one integration.
+   * `probe` replaces the HTTP probe, `clock` the time of the health records, `monotonicClock` the time the cooldown is measured on, `refreshCooldownMs` the minimum gap between two refreshes of one connection.
    */
-  integrations?: { providers?: IntegrationProvider[]; probe?: IntegrationProbe; clock?: () => number; refreshCooldownMs?: number };
+  integrations?: { providers?: IntegrationProvider[]; probe?: IntegrationProbe; clock?: () => number; monotonicClock?: () => number; refreshCooldownMs?: number };
 }
 
 // Builds every service from the config and starts serving; a throw at any point refuses the boot, after closing whatever already started.
@@ -493,7 +493,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     db, repository: new IntegrationRepository(db), secretRefs: new SecretRefRepository(db), credentials: secrets,
     providers: createIntegrationProviderRegistry(options.integrations?.providers ?? shippedIntegrationProviders()),
     probe: options.integrations?.probe ?? createHttpIntegrationProbe(),
-    projectExists: (projectId) => projects.get(projectId) !== undefined, clock: options.integrations?.clock ?? Date.now, newId,
+    projectExists: (projectId) => projects.get(projectId) !== undefined, clock: options.integrations?.clock ?? Date.now, monotonicClock: options.integrations?.monotonicClock ?? (() => performance.now()), newId,
     ...(options.integrations?.refreshCooldownMs !== undefined && { refreshCooldownMs: options.integrations.refreshCooldownMs }),
   });
   const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, integrations, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, integrations, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });

@@ -9,6 +9,7 @@ import type { IntegrationProvider } from '../integrations/integrationProviders.j
 import { recentLogLines } from '../logger.js';
 import { createFakeTauriParent, type FakeTauriParent } from '../secrets/fakeTauriParent.testkit.js';
 import { createInMemorySecretStore, type InMemorySecretStore } from '../secrets/inMemorySecretStore.js';
+import { syntheticToken } from '../syntheticTokens.js';
 import { ARBITER_TOOL_NAMES } from './arbiterTools.js';
 
 type Client = Awaited<ReturnType<GovernanceFixture['connect']>>;
@@ -17,7 +18,9 @@ interface SeenRequest { path: string; authorization: string | undefined }
 
 const INTEGRATION_TOOLS = ['get_integration_health', 'list_integrations', 'refresh_integration'];
 const COOLDOWN_MS = 60_000;
+const MAX_CONCURRENT_REFRESHES = 4;
 const START_OF_TEST_TIME = Date.parse('2026-11-06T10:00:00.000Z');
+const START_OF_MONOTONIC_TIME = 5_000;
 const TOKEN_SECRET = 'TOKEN';
 
 const makeCanary = () => ['canary', randomUUID()].join('-');
@@ -51,6 +54,7 @@ let bystander: FakeProvider;
 let parent: FakeTauriParent;
 let store: InMemorySecretStore;
 let now: number;
+let monotonicNow: number;
 
 beforeEach(async () => {
   provider = await startFakeProvider();
@@ -58,9 +62,10 @@ beforeEach(async () => {
   store = createInMemorySecretStore();
   parent = createFakeTauriParent();
   now = START_OF_TEST_TIME;
+  monotonicNow = START_OF_MONOTONIC_TIME;
   fixture = await startGovernanceFixture({
     secrets: { store, parent: parent.link },
-    integrations: { providers: [providerOn(provider.port)], clock: () => now, refreshCooldownMs: COOLDOWN_MS },
+    integrations: { providers: [providerOn(provider.port)], clock: () => now, monotonicClock: () => monotonicNow, refreshCooldownMs: COOLDOWN_MS },
   });
   lead = await fixture.connect(fixture.lead.id);
 });
@@ -90,9 +95,9 @@ const setTokenAsHuman = async (connectionId: string, value: string) => {
   const response = await fixture.api(`/api/secrets/connection/${connectionId}/${TOKEN_SECRET}`, { method: 'PUT', headers: { [OPERATOR_NONCE_HEADER]: nonce }, body: JSON.stringify({ value }) });
   return response.status;
 };
-const connectedIntegration = async (value = makeCanary()) => {
-  const connection = await createConnection();
-  const integration = await createIntegration(connection.id);
+const connectedIntegration = async (value = makeCanary(), { connectionName = 'Fake', integrationName = 'Backlog' } = {}) => {
+  const connection = await createConnection({ name: connectionName });
+  const integration = await createIntegration(connection.id, { name: integrationName });
   await setTokenAsHuman(connection.id, value);
   return { connection, integration, value };
 };
@@ -290,9 +295,9 @@ describe('refresh_integration', () => {
     await tool(lead, 'refresh_integration', { integration: integration.id });
 
     const tooSoon = await tool(lead, 'refresh_integration', { integration: integration.id });
-    now += COOLDOWN_MS - 1000;
+    monotonicNow += COOLDOWN_MS - 1000;
     const stillTooSoon = await tool(lead, 'refresh_integration', { integration: integration.id });
-    now += 1000;
+    monotonicNow += 1000;
     const afterCooldown = await tool(lead, 'refresh_integration', { integration: integration.id });
 
     expect(tooSoon.text).toMatch(/^error integration_refresh_cooldown:/);
@@ -311,14 +316,130 @@ describe('refresh_integration', () => {
     expect(provider.seen).toHaveLength(1);
   });
 
-  it('counts the cooldown per integration: another integration refreshes at once', async () => {
+  it('counts the cooldown per connection: a second integration of the same connection is refused, one of another connection refreshes at once', async () => {
     const { connection, integration } = await connectedIntegration();
-    const second = await createIntegration(connection.id, { name: 'Second' });
+    const sameConnection = await createIntegration(connection.id, { name: 'Second' });
+    const otherConnection = await connectedIntegration(makeCanary(), { connectionName: 'Other', integrationName: 'Other backlog' });
     await tool(lead, 'refresh_integration', { integration: integration.id });
 
-    const other = await tool(lead, 'refresh_integration', { integration: second.id });
+    const sibling = await tool(lead, 'refresh_integration', { integration: sameConnection.id });
+    const stranger = await tool(lead, 'refresh_integration', { integration: otherConnection.integration.id });
 
-    expect(other.json.health).toBe('ok');
+    expect(sibling.text).toMatch(/^error integration_refresh_cooldown:/);
+    expect(stranger.json.health).toBe('ok');
+    expect(provider.seen).toHaveLength(2);
+  });
+
+  it('lets one of two simultaneous refreshes of integrations of the same connection through: the credential is presented once', async () => {
+    const { connection, integration } = await connectedIntegration();
+    const sameConnection = await createIntegration(connection.id, { name: 'Second' });
+    provider.behaviour.delayMs = 150;
+
+    const answers = await Promise.all([tool(lead, 'refresh_integration', { integration: integration.id }), tool(lead, 'refresh_integration', { integration: sameConnection.id })]);
+
+    expect(answers.filter((answer) => answer.isError).map((answer) => answer.text.slice(0, 40))).toEqual([expect.stringMatching(/^error integration_refresh_cooldown:/)]);
+    expect(provider.seen).toHaveLength(1);
+  });
+
+  it('measures the cooldown on the monotonic clock: a step of the wall clock neither ends it nor extends it', async () => {
+    const { integration } = await connectedIntegration();
+    await tool(lead, 'refresh_integration', { integration: integration.id });
+
+    now += COOLDOWN_MS * 2;
+    const afterWallClockStepForward = await tool(lead, 'refresh_integration', { integration: integration.id });
+    monotonicNow += COOLDOWN_MS;
+    now -= COOLDOWN_MS * 3;
+    const afterMonotonicCooldown = await tool(lead, 'refresh_integration', { integration: integration.id });
+
+    expect(afterWallClockStepForward.text).toMatch(/^error integration_refresh_cooldown:/);
+    expect(afterMonotonicCooldown.json.health).toBe('ok');
+  });
+
+  it('bounds the refreshes in flight at once across connections, and frees the places when they end', async () => {
+    const connected = await Promise.all(Array.from({ length: MAX_CONCURRENT_REFRESHES + 1 }, (_, index) => connectedIntegration(makeCanary(), { connectionName: `Connection ${index}`, integrationName: `Backlog ${index}` })));
+    provider.behaviour.delayMs = 150;
+
+    const answers = await Promise.all(connected.map(({ integration }) => tool(lead, 'refresh_integration', { integration: integration.id })));
+    const refused = answers.filter((answer) => answer.isError);
+    const refusedIntegration = connected[answers.findIndex((answer) => answer.isError)]!.integration;
+    const afterTheBurst = await tool(lead, 'refresh_integration', { integration: refusedIntegration.id });
+
+    expect(refused.map((answer) => answer.text.slice(0, 40))).toEqual([expect.stringMatching(/^error integration_refresh_cooldown:/)]);
+    expect(provider.seen).toHaveLength(MAX_CONCURRENT_REFRESHES + 1);
+    expect(afterTheBurst.json.health).toBe('ok');
+  });
+
+  it('frees the connection when its credential is missing: the next refresh meets the same answer, not a cooldown', async () => {
+    const connection = await createConnection();
+    const integration = await createIntegration(connection.id);
+
+    const first = await tool(lead, 'refresh_integration', { integration: integration.id });
+    const second = await tool(lead, 'refresh_integration', { integration: integration.id });
+
+    expect(first.text).toMatch(/^error secret_not_connected_on_this_device:/);
+    expect(second.text).toMatch(/^error secret_not_connected_on_this_device:/);
+  });
+});
+
+describe('the free text of a connection and of an integration (REST, admin token)', () => {
+  const tokenShapedLabel = () => syntheticToken({ shape: 'github', bodyLength: 36 });
+  const tokenShapedResource = () => syntheticToken({ shape: 'aws', bodyLength: 16 });
+  const integrationsOfOwnProject = async () => (await rest('GET', `/api/integrations?projectId=${OWN_PROJECT_ID}`)).json as { name: string; resource?: string }[];
+
+  it('refuses a connection whose name has the shape of a token, and keeps nothing of it', async () => {
+    const label = tokenShapedLabel();
+
+    const answer = await rest('POST', '/api/integration-connections', connectionBody({ name: label }));
+
+    expect(answer.status).toBe(400);
+    expect(answer.json).toMatchObject({ error: 'integration_label_is_secret' });
+    expect(answer.text.includes(label)).toBe(false);
+    expect((await rest('GET', '/api/integration-connections')).json).toEqual([]);
+  });
+
+  it('refuses an integration whose name has the shape of a token, and keeps nothing of it', async () => {
+    const connection = await createConnection();
+    const label = tokenShapedLabel();
+
+    const answer = await rest('POST', '/api/integrations', { projectId: OWN_PROJECT_ID, connectionId: connection.id, name: label });
+
+    expect(answer.status).toBe(400);
+    expect(answer.json).toMatchObject({ error: 'integration_label_is_secret' });
+    expect(answer.text.includes(label)).toBe(false);
+    expect(await integrationsOfOwnProject()).toEqual([]);
+  });
+
+  it('refuses an integration whose resource has the shape of a token, and keeps nothing of it', async () => {
+    const connection = await createConnection();
+    const label = tokenShapedResource();
+
+    const answer = await rest('POST', '/api/integrations', { projectId: OWN_PROJECT_ID, connectionId: connection.id, name: 'Backlog', resource: label });
+
+    expect(answer.status).toBe(400);
+    expect(answer.json).toMatchObject({ error: 'integration_label_is_secret' });
+    expect(answer.text.includes(label)).toBe(false);
+    expect(await integrationsOfOwnProject()).toEqual([]);
+  });
+
+  it('refuses an integration whose name is the credential stored for its connection, and answers without the value', async () => {
+    const { connection, value } = await connectedIntegration();
+
+    const answer = await rest('POST', '/api/integrations', { projectId: OWN_PROJECT_ID, connectionId: connection.id, name: value });
+
+    expect(answer.status).toBe(400);
+    expect(answer.json).toMatchObject({ error: 'integration_label_is_secret' });
+    expect(answer.text.includes(value)).toBe(false);
+    expect((await integrationsOfOwnProject()).map((integration) => integration.name)).toEqual(['Backlog']);
+  });
+
+  it('refuses an integration whose resource is the credential stored for its connection, whatever the blanks around it', async () => {
+    const { connection, value } = await connectedIntegration();
+
+    const answer = await rest('POST', '/api/integrations', { projectId: OWN_PROJECT_ID, connectionId: connection.id, name: 'Second', resource: value });
+
+    expect(answer.json).toMatchObject({ error: 'integration_label_is_secret' });
+    expect(answer.text.includes(value)).toBe(false);
+    expect((await integrationsOfOwnProject()).map((integration) => integration.name)).toEqual(['Backlog']);
   });
 });
 
@@ -337,11 +458,13 @@ describe('where the credential can appear', () => {
     await record(tool(lead, 'refresh_integration', { integration: 'ghost', token: value, authorization: value }));
     await record(rest('GET', '/api/integration-connections'));
     await record(rest('GET', `/api/integrations?projectId=${OWN_PROJECT_ID}`));
-    await record(rest('POST', '/api/integration-connections', connectionBody({ name: value, token: value })));
     await record(rest('POST', '/api/integration-connections', connectionBody({ name: 'Other', allowedHosts: [value] })));
+    await record(rest('POST', '/api/integration-connections', connectionBody({ name: 'Strict', token: value })));
     await record(rest('POST', '/api/integrations', { projectId: OWN_PROJECT_ID, connectionId: connection.id, name: 'Dup', credential: value }));
+    await record(rest('POST', '/api/integrations', { projectId: OWN_PROJECT_ID, connectionId: connection.id, name: value }));
+    await record(rest('POST', '/api/integrations', { projectId: OWN_PROJECT_ID, connectionId: connection.id, name: 'Valid', resource: value }));
     provider.behaviour.status = 401;
-    now += COOLDOWN_MS;
+    monotonicNow += COOLDOWN_MS;
     await record(tool(lead, 'refresh_integration', { integration: integration.id }));
     const activity = (await rest('GET', '/api/activity?limit=200')).text;
     const diagnostics = (await rest('GET', '/api/diagnostics')).text;
