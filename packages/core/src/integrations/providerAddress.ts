@@ -24,19 +24,13 @@ const NON_PUBLIC_RANGES: ReadonlyArray<{ network: string; prefix: number; family
 const nonPublicAddresses = new BlockList();
 for (const { network, prefix, family } of NON_PUBLIC_RANGES) nonPublicAddresses.addSubnet(network, prefix, family);
 
-const IPV4_MAPPED_PREFIX = '::ffff:';
-
-/** A block list reads every IPv4 address as an IPv4-mapped IPv6 one, so the mapped range cannot be a rule of the list: it is recognised on the compressed text of the address. */
-const isIpv4Mapped = (ipv6Address: string): boolean => new URL(`http://[${ipv6Address}]`).hostname.slice(1, -1).startsWith(IPV4_MAPPED_PREFIX);
-
 /**
  * True for an address on the public internet: not loopback, private, link-local, shared, multicast, reserved,
- * nor an IPv6 form (mapped, translated, 6to4) that can carry one of those.
+ * nor an IPv6 form (translated, 6to4) that can carry one of those. The block list reads an IPv4-mapped IPv6 address as its IPv4 address, so a mapped private address is refused by the IPv4 rules.
  * A text that is not an IP address is not public.
  */
 export const isPublicAddress = (address: string): boolean => {
   const version = isIP(address);
   if (version === 0) return false;
-  if (version === 6 && isIpv4Mapped(address)) return false;
   return !nonPublicAddresses.check(address, version === 4 ? 'ipv4' : 'ipv6');
 };

@@ -81,7 +81,7 @@ describe('reading a provider through a pinned address', () => {
   });
 
   it.each([301, 302, 307, 308])('refuses a %i redirect to another host: it is unreachable and the other host is never asked', async (status) => {
-    server.answerWith({ status, headers: { location: `http://127.0.0.1:${bystander.port}/steal` } });
+    server.answerWith({ status, headers: { location: `http://127.0.0.1:${bystander.port}/steal` }, body: '{"issues":[]}' });
 
     const answer = await readerOver()(getOf());
 
@@ -89,15 +89,14 @@ describe('reading a provider through a pinned address', () => {
     expect(bystander.seen).toEqual([]);
   });
 
-  it('refuses a body larger than the limit, whether the server declares its size or streams it', async () => {
-    const oversized = 'x'.repeat(SMALL_BODY_LIMIT_BYTES * 2);
-    server.answerWith({ status: 200, headers: { 'content-length': String(oversized.length) }, body: JSON.stringify({ filler: oversized }) });
-    const declared = await readerOver()(getOf());
-    server.answerWith({ status: 200, headers: { 'transfer-encoding': 'chunked' }, body: JSON.stringify({ filler: oversized }) });
-    const streamed = await readerOver()(getOf());
+  it.each([
+    ['declares its size', (body: string) => ({ 'content-length': String(body.length) })],
+    ['streams it', () => ({ 'transfer-encoding': 'chunked' })],
+  ])('refuses a body larger than the limit when the server %s', async (_label, headersOf) => {
+    const body = JSON.stringify({ filler: 'x'.repeat(SMALL_BODY_LIMIT_BYTES * 2) });
+    server.answerWith({ status: 200, headers: headersOf(body), body });
 
-    expect(declared).toEqual({ kind: 'unreachable' });
-    expect(streamed).toEqual({ kind: 'unreachable' });
+    expect(await readerOver()(getOf())).toEqual({ kind: 'unreachable' });
   });
 
   it('accepts a body of exactly the limit', async () => {
@@ -111,7 +110,7 @@ describe('reading a provider through a pinned address', () => {
   });
 
   it('refuses response headers larger than the limit', async () => {
-    server.answerWith({ status: 200, headers: { 'x-filler': 'a'.repeat(SMALL_HEADER_LIMIT_BYTES * 2) }, body: '{}' });
+    server.answerWith({ status: 200, headers: { 'x-filler': 'a'.repeat(SMALL_HEADER_LIMIT_BYTES + 4_096) }, body: '{}' });
 
     expect(await readerOver()(getOf())).toEqual({ kind: 'unreachable' });
   });

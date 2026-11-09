@@ -97,9 +97,6 @@ const readOnce = (get: ProviderGet, pinned: ResolvedAddress, limits: ProviderRea
       }
       const isSuccess = status >= 200 && status < 300;
       if (!isSuccess) return finish(UNREACHABLE);
-      const declaredBytes = Number(response.headers['content-length']);
-      const declaresTooMuch = declaredBytes > limits.maxBodyBytes;
-      if (declaresTooMuch) return finish(UNREACHABLE);
 
       const chunks: Buffer[] = [];
       let receivedBytes = 0;
