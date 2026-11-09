@@ -155,7 +155,12 @@ const hasUniqueNames = (inputs: { name: string }[]): boolean => new Set(inputs.m
 export const PlaybookInputsSchema = z.array(InputDeclarationSchema).max(MAX_PLAYBOOK_INPUTS).refine(hasUniqueNames, 'input names are unique');
 export type PlaybookInputDeclaration = z.output<typeof InputDeclarationSchema>;
 
+/** An exact lowercase host name (IDN in punycode) or IPv4 literal: no wildcard, port, userinfo or path. */
+const ALLOWED_HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+export const MAX_ALLOWED_HOSTS = 32;
+
 export const PlaybookPolicySchema = z.strictObject({
+  allowedHosts: z.array(z.string().regex(ALLOWED_HOST, 'must be an exact lowercase host name, with no wildcard, port or userinfo')).max(MAX_ALLOWED_HOSTS).default([]),
   browserAutoGrant: z.boolean().default(false),
   autoDistill: z.boolean().default(false),
   maxRunsToKeep: z.int().min(1).max(MAX_RUNS_TO_KEEP).default(DEFAULT_MAX_RUNS_TO_KEEP),
