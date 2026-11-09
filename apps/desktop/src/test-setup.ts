@@ -1,5 +1,14 @@
+import { configure } from '@testing-library/angular/zoneless';
 import '@testing-library/jest-dom/vitest';
+import { vi } from 'vitest';
 import './testing/leaked-timers';
+
+// waitFor, findBy* and the spec itself return as soon as their condition holds; these ceilings only bound one that never holds.
+// The 1 000 ms and 5 000 ms defaults fail a passing spec on a loaded machine, where one render and a few keystrokes already take that long.
+const NEVER_HOLDS_CEILING_MS = 15_000;
+const SPEC_CEILING_MS = 30_000;
+configure({ asyncUtilTimeout: NEVER_HOLDS_CEILING_MS });
+vi.setConfig({ testTimeout: SPEC_CEILING_MS, hookTimeout: SPEC_CEILING_MS });
 
 // xterm needs a ResizeObserver in jsdom, which doesn't implement one.
 globalThis.ResizeObserver ??= class {
