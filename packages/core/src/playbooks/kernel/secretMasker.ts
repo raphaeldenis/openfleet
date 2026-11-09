@@ -15,6 +15,8 @@ export type SecretMasker = {
    * The marker `[secret:NAME]` is plain text: an agent output can forge it, so it never proves that a value was masked.
    */
   mask: (text: string) => string;
+  /** The length in characters of the longest spelling of any secret, at least 1: a text cut shorter than this beyond the ceiling can hide the start of a secret from `mask`. */
+  longestSpellingLength: number;
 };
 
 type Match = { start: number; end: number; name: string };
@@ -74,6 +76,32 @@ const namesBySpelling = (secrets: readonly SecretToMask[]): Map<string, string> 
   const owners = new Map<string, string>();
   for (const { name, value } of secrets) for (const form of formsOf(value).map(withLowercaseHex)) if (!owners.has(form)) owners.set(form, name);
   return new Map([...owners].sort(([spellingA], [spellingB]) => spellingB.length - spellingA.length));
+};
+
+/** Every match, overlapping ones included, in order of start; at one start, the longest spelling first. */
+type MatchFinder = (text: string) => Match[];
+
+/** Finds the spellings by string search, for spellings too large for one regular expression. The hexadecimal case is folded on both sides; folding keeps the length. */
+const stringSearchFinderOf = (nameOf: Map<string, string>): MatchFinder => (text) => {
+  const foldedText = withLowercaseHex(text);
+  const matches: Match[] = [];
+  for (const [spelling, name] of nameOf) {
+    for (let start = foldedText.indexOf(spelling); start !== -1; start = foldedText.indexOf(spelling, start + 1)) {
+      matches.push({ start, end: start + spelling.length, name });
+    }
+  }
+  return matches.sort((matchA, matchB) => matchA.start - matchB.start);
+};
+
+/** The regular expression of the spellings, or undefined when they are too large for the engine to compile it. The engine compiles at the first match attempt, so one empty attempt forces the error here. */
+const compiledScanOf = (nameOf: Map<string, string>): RegExp | undefined => {
+  try {
+    const scan = new RegExp([...nameOf.keys()].map(patternOf).join('|'), 'g');
+    scan.test('');
+    return scan;
+  } catch {
+    return undefined;
+  }
 };
 
 /** Every match, overlapping ones included, in order of start; at one start, the longest spelling. */
@@ -151,7 +179,8 @@ const TRUNCATION_MARKER = '[truncated]';
 
 /**
  * Builds a masker from the values of the secrets a run resolved.
- * Throws secret_too_short for a value under MIN_SECRET_LENGTH characters and invalid_secret_name for a name that cannot sit in a marker.
+ * Throws secret_too_short for a value under MIN_SECRET_LENGTH characters and invalid_secret_name for a name that cannot sit in a marker; `mask` never throws.
+ * Spellings too large for one regular expression are found by string search instead.
  * The scan is one pass over the text per call. A text longer than `maxInputChars` (default 262 144) is cut before the scan and ends with `[truncated]`;
  * the cut moves back before any secret it would split, so no piece of a secret survives it.
  */
@@ -159,9 +188,10 @@ export const createSecretMasker = (secrets: readonly SecretToMask[], { maxInputC
   secrets.forEach(assertMaskable);
 
   const nameOf = namesBySpelling(secrets);
-  const scan = new RegExp([...nameOf.keys()].map(patternOf).join('|'), 'g');
-  const longestSpelling = Math.max(1, ...Array.from(nameOf.keys(), (spelling) => spelling.length));
-  const matchesIn = (text: string): Match[] => (secrets.length === 0 ? [] : matchesOf(text, scan, nameOf));
+  const scan = compiledScanOf(nameOf);
+  const longestSpelling = nameOf.size === 0 ? 1 : Array.from(nameOf.keys()).reduce((longest, spelling) => Math.max(longest, spelling.length), 1);
+  const findMatches: MatchFinder = scan === undefined ? stringSearchFinderOf(nameOf) : (text) => matchesOf(text, scan, nameOf);
+  const matchesIn: MatchFinder = (text) => (secrets.length === 0 ? [] : findMatches(text));
 
   const mask = (text: string): string => {
     const isWithinCeiling = text.length <= maxInputChars;
@@ -173,5 +203,5 @@ export const createSecretMasker = (secrets: readonly SecretToMask[], { maxInputC
     const matchesBeforeTheCut = matches.filter((match) => match.end <= cut);
     return maskedWith(text.slice(0, cut), matchesBeforeTheCut) + TRUNCATION_MARKER;
   };
-  return { mask };
+  return { mask, longestSpellingLength: longestSpelling };
 };
