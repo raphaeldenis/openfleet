@@ -407,7 +407,7 @@ describe('the value of a secret never reaches what is stored or answered', () =>
     writeScript('echo-args.sh', `touch ${marker('second-ran')}`);
     const playbook = await createPlaybook(f, []);
     new PlaybookRepository(f.db).insert({
-      id: 'stored-outside', projectId: OWN_PROJECT_ID, name: 'Outside', inputs: [], policy: { browserAutoGrant: false, autoDistill: false, maxRunsToKeep: 50 },
+      id: 'stored-outside', projectId: OWN_PROJECT_ID, name: 'Outside', inputs: [], policy: { allowedHosts: [], browserAutoGrant: false, autoDistill: false, maxRunsToKeep: 50 },
       agentLocked: false, origin: 'native', createdAt: 'now',
       flow: { cells: [
         { id: 'first', kind: 'script', program: 'print.sh', args: [], env: {} },
@@ -429,7 +429,7 @@ describe('the limits of a run', () => {
     const f = await boot({ maxStepExecutions: 3 });
     writeScript('tick.sh', `printf x >> ${marker('ticks')}`);
     new PlaybookRepository(f.db).insert({
-      id: 'loops', projectId: OWN_PROJECT_ID, name: 'Loops', inputs: [], policy: { browserAutoGrant: false, autoDistill: false, maxRunsToKeep: 50 }, agentLocked: false, origin: 'native', createdAt: 'now',
+      id: 'loops', projectId: OWN_PROJECT_ID, name: 'Loops', inputs: [], policy: { allowedHosts: [], browserAutoGrant: false, autoDistill: false, maxRunsToKeep: 50 }, agentLocked: false, origin: 'native', createdAt: 'now',
       flow: { cells: [{ id: 'again', kind: 'script', program: 'tick.sh', args: [], env: {}, next: [{ to: 'again' }] }] },
     });
     await approve(f, 'loops');

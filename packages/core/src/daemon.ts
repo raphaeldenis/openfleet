@@ -103,6 +103,7 @@ import { PlaybookRepository } from './playbooks/playbookRepository.js';
 import { PlaybookVersionRepository } from './playbooks/playbookVersionRepository.js';
 import { PlaybookService } from './playbooks/playbookService.js';
 import { PlaybookApprovals } from './playbooks/playbookApprovals.js';
+import type { HttpStepNetwork } from './playbooks/httpStepRequest.js';
 import { PlaybookRunner } from './playbooks/playbookRunner.js';
 import { PlaybookRunRepository } from './playbooks/playbookRunRepository.js';
 import { ScriptLocator } from './playbooks/scriptLocator.js';
@@ -246,7 +247,7 @@ export interface DaemonOptions {
    * The runner of playbooks. `scriptRoots` replaces the `playbooks.scriptRoots` of config.json (the directories a script cell may run files from);
    * `maxStepExecutions` and `maxConcurrentRuns` replace the caps of 1000 step executions per run and 4 runs at once, so a test reaches them with a few steps.
    */
-  playbooks?: { scriptRoots?: string[]; maxStepExecutions?: number; maxConcurrentRuns?: number; maxRunsNeedingReview?: number };
+  playbooks?: { scriptRoots?: string[]; maxStepExecutions?: number; maxConcurrentRuns?: number; maxRunsNeedingReview?: number; httpNetwork?: HttpStepNetwork };
   /**
    * The secrets of playbooks. `parent` is the line to the desktop app that spawned the daemon (stdout and stdin of the sidecar); with it the keychain of the app holds the values.
    * `store` replaces the keychain adapter with another holder, so a test needs no desktop app. `clock` and `exchangeTimeoutMs` replace the clock of the nonces and the wait for the app's answer.
@@ -517,7 +518,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const scriptLocator = new ScriptLocator(options.playbooks?.scriptRoots ?? playbookSettings.scriptRoots);
   const playbookApprovals = new PlaybookApprovals({ repository: playbookRepository, locator: scriptLocator, clock: () => new Date().toISOString() });
   const playbookRunner = new PlaybookRunner({
-    playbooks, approvals: playbookApprovals, runs: playbookRuns, secrets, clock: () => new Date().toISOString(), newId,
+    playbooks, approvals: playbookApprovals, runs: playbookRuns, secrets, clock: () => new Date().toISOString(), newId, httpNetwork: options.playbooks?.httpNetwork,
     limits: { maxStepExecutions: options.playbooks?.maxStepExecutions ?? MAX_STEP_EXECUTIONS_PER_RUN, maxConcurrentRuns: options.playbooks?.maxConcurrentRuns ?? MAX_CONCURRENT_RUNS, maxRunsNeedingReview: options.playbooks?.maxRunsNeedingReview ?? MAX_RUNS_NEEDING_REVIEW },
     observer: { runStarted: (run) => systemActivity.playbookRunStarted(run), runEnded: (run) => systemActivity.playbookRunEnded(run) },
   });
