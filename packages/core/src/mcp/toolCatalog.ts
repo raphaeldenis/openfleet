@@ -120,6 +120,10 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
   set_playbook_inputs: { domain: 'playbooks', category: 'additive' },
   update_playbook_cell: { domain: 'playbooks', category: 'additive' },
 
+  get_integration_health: { domain: 'integrations', category: 'read_only' },
+  list_integrations: { domain: 'integrations', category: 'read_only' },
+  refresh_integration: { domain: 'integrations', category: 'execution_external' }, // calls the provider once, inside a cooldown
+
   get_working_state: { domain: 'working_state', category: 'read_only' },
   update_working_state: { domain: 'working_state', category: 'destructive' },
 

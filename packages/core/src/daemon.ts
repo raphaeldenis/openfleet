@@ -40,6 +40,10 @@ import type { SecretParentLink } from './secrets/secretParentLink.js';
 import { SecretRefRepository } from './secrets/secretRefRepository.js';
 import { SecretService } from './secrets/secretService.js';
 import { createUnavailableSecretStore, type SecretStore } from './secrets/secretStore.js';
+import { createHttpIntegrationProbe, type IntegrationProbe } from './integrations/integrationProbe.js';
+import { createIntegrationProviderRegistry, shippedIntegrationProviders, type IntegrationProvider } from './integrations/integrationProviders.js';
+import { IntegrationRepository } from './integrations/integrationRepository.js';
+import { IntegrationService } from './integrations/integrationService.js';
 
 /** Shorter than the 30 seconds a nonce lives, so a request that waits out the app also finds its nonces expired. */
 const DEFAULT_SECRET_EXCHANGE_TIMEOUT_MS = 15_000;
@@ -249,6 +253,11 @@ export interface DaemonOptions {
    * Without `parent` and `store` nothing can be set or read: the typed error is secret_store_unavailable.
    */
   secrets?: { parent?: SecretParentLink; store?: SecretStore; clock?: () => number; monotonicClock?: () => number; exchangeTimeoutMs?: number };
+  /**
+   * The integrations with providers. `providers` replaces the shipped list (jira_cloud, github), so a test reaches a fake server on loopback and no real host.
+   * `probe` replaces the HTTP probe, `clock` the time of the health records, `monotonicClock` the time the cooldown is measured on, `refreshCooldownMs` the minimum gap between two refreshes of one connection.
+   */
+  integrations?: { providers?: IntegrationProvider[]; probe?: IntegrationProbe; clock?: () => number; monotonicClock?: () => number; refreshCooldownMs?: number };
 }
 
 // Builds every service from the config and starts serving; a throw at any point refuses the boot, after closing whatever already started.
@@ -495,6 +504,13 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     sessions, managers: managerRepository, triggers: triggerRepository, engine: triggerEngine, ledger: fireLedger, clock: triggerClock,
     schedule: options.triggers?.schedule ?? scheduleOnRealClock, onOfferSuppressedByCause: (triggerId) => systemActivity.triggerOfferSuppressed({ triggerId }),
   });
+  const integrations = new IntegrationService({
+    db, repository: new IntegrationRepository(db), secretRefs: new SecretRefRepository(db), credentials: secrets,
+    providers: createIntegrationProviderRegistry(options.integrations?.providers ?? shippedIntegrationProviders()),
+    probe: options.integrations?.probe ?? createHttpIntegrationProbe(),
+    projectExists: (projectId) => projects.get(projectId) !== undefined, clock: options.integrations?.clock ?? Date.now, monotonicClock: options.integrations?.monotonicClock ?? (() => performance.now()), newId,
+    ...(options.integrations?.refreshCooldownMs !== undefined && { refreshCooldownMs: options.integrations.refreshCooldownMs }),
+  });
   const playbookRepository = new PlaybookRepository(db);
   const playbooks = new PlaybookService({ db, repository: playbookRepository, versions: new PlaybookVersionRepository(db),secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
   const playbookRuns = new PlaybookRunRepository(db);
@@ -506,7 +522,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     observer: { runStarted: (run) => systemActivity.playbookRunStarted(run), runEnded: (run) => systemActivity.playbookRunEnded(run) },
   });
   playbookRunner.recover();
-  const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, playbookRunning: { approvals: playbookApprovals, runner: playbookRunner, runs: playbookRuns }, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, github: githubReader, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
+  const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, integrations, playbookRunning: { approvals: playbookApprovals, runner: playbookRunner, runs: playbookRuns }, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, integrations, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, github: githubReader, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });
   log('info', `openfleet core listening on ${server.url} (version: ${DAEMON_VERSION}, home: ${config.home})`);
 
   const unwatchDatabase = watchDatabaseHealth(degraded);

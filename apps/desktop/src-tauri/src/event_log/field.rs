@@ -651,6 +651,7 @@ const KNOWN_CODES: &[&str] = &[
   "playbook_version_not_found", "playbook_run_not_found", "playbook_unapproved", "approval_digest_mismatch", "script_changed", "script_not_allowed", "playbook_not_runnable", "playbook_run_busy", "playbook_review_backlog",
   "secret_scope_not_found", "secret_not_declared", "secret_not_connected_on_this_device", "secret_store_unavailable", "secret_too_short", "secret_nonce_invalid",
   "breaker_open",
+  "integration_provider_unknown", "integration_host_not_allowed", "integration_label_is_secret", "integration_not_found", "integration_connection_not_found", "integration_refresh_cooldown",
 ];
 
 const OTHER_CODE: &str = "other";

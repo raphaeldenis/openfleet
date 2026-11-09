@@ -73,6 +73,7 @@ describe('the tool catalog', () => {
       'message_argus',
       'message_parent',
       'pulse_now',
+      'refresh_integration', // calls the provider once with the credential of the connection
       'report_arbiter_opinion', // closes the arbiter session once its opinion is recorded
       'report_ship_verdict', // runs git in the worktree and messages the manager on a no-go
       'report_step_finding', // runs git in the worktree

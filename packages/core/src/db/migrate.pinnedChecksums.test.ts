@@ -76,6 +76,7 @@ const SHIPPED_MIGRATION_CHECKSUMS: Record<string, string> = {
   '067_playbooks': 'f677504d4cff0486b1a929df205230b394d9ea793c192a08570f5a3f2d0c1550',
   '068_playbook_versions': '2cd09b5d356e50b324ab47a2b9ebe2f7d8b8dcf7a8783774b7dc52e996ef9099',
   '069_playbook_runs': 'e124d910a227dd2fd5329f5d189ee88efce2da7ab3c0caf8f90bfc36b4dbc785',
+  '070_integrations': '5ec05bc5ec0a4ceb9bb3b07b07b56597baf9988168262a96f2e9c5dd41356166',
 };
 
 const migrationVersionsOnDisk = () =>
