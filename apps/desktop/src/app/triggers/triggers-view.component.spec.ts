@@ -518,12 +518,12 @@ describe('TriggersViewComponent: triggers', () => {
     expect(screen.getByTestId('trigger-detail')).toHaveTextContent('Une session enfant est inactive');
   });
 
-  it('offers no arm, edit or run control in this version', async () => {
+  it('offers no run control in this version', async () => {
     await openTriggers();
     await userEvent.click(await screen.findByRole('button', { name: /Réveiller Capitaine/ }));
     await screen.findByTestId('fire-f1');
 
-    expect(screen.queryByRole('button', { name: /armer|modifier|lancer|exécuter/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /lancer|exécuter/i })).toBeNull();
   });
 });
 
