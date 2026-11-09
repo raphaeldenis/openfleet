@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { syntheticToken } from '../syntheticTokens.js';
 import { credentialEchoMaskerOf } from './credentialEchoMasker.js';
 
 const TOKEN = 'ATATT3xFfGF0-token-0123456789';
@@ -23,7 +24,7 @@ describe('masking what a provider echoes of a credential', () => {
   });
 
   it('masks a bearer credential and the bearer header that carries it', () => {
-    const bearer = 'ghp_0123456789abcdefghijklmnopqrstuvwxyz';
+    const bearer = syntheticToken({ shape: 'github', bodyLength: 36 });
     const mask = credentialEchoMaskerOf({ credential: bearer, authorization: `Bearer ${bearer}` });
 
     expect(mask(`x Bearer ${bearer} y`)).toBe(`x ${MARKER} y`);
