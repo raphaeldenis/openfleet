@@ -2,7 +2,7 @@ import type { Session, TriggerFireReason } from '@openfleet/shared';
 import type { ActivityRecorder } from './activityRecorder.js';
 
 /** The reasons a fire is held back by a rule, as opposed to failing to run. */
-const REASONS_OF_A_HELD_BACK_FIRE: readonly TriggerFireReason[] = ['cooldown', 'daily_cap', 'breaker_open', 'chain_depth', 'batched', 'superseded', 'stale', 'disarmed'];
+const REASONS_OF_A_HELD_BACK_FIRE: readonly TriggerFireReason[] = ['cooldown', 'daily_cap', 'breaker_open', 'chain_depth', 'batched', 'superseded', 'stale', 'disarmed', 'playbook_unapproved', 'playbook_busy'];
 
 /** The actions the daemon takes on its own, each recorded as one system row. */
 export class SystemActivity {
@@ -22,6 +22,11 @@ export class SystemActivity {
     const isHeldBack = reason !== undefined && REASONS_OF_A_HELD_BACK_FIRE.includes(reason);
     const outcome = ledgerState === 'completed' ? 'ok' : isHeldBack ? 'denied' : 'error';
     this.recorder.record({ actorKind: 'system', actorLabel: 'triggers', source: 'daemon', action: 'trigger.fired', entityKind: 'trigger', entityId: triggerId, outcome });
+  }
+
+  /** A change of a playbook disarmed a trigger that runs it: the id of the trigger only. */
+  triggerDisarmedByPlaybook({ triggerId }: { triggerId: string }): void {
+    this.recorder.record({ actorKind: 'system', actorLabel: 'triggers', source: 'daemon', action: 'trigger.disarmed_by_playbook', entityKind: 'trigger', entityId: triggerId, outcome: 'denied' });
   }
 
   /** A table change was not offered to a trigger because the message of that same trigger set its author going: the id of the trigger only. */

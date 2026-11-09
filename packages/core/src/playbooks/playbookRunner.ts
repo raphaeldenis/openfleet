@@ -63,6 +63,7 @@ const SECRET_SCOPE_KIND = 'playbook';
 const busy = (reason: string) => new OpenFleetError('playbook_run_busy', reason, { hint: 'Wait for a run to end, then start again.' });
 const reviewBacklogFull = (limit: number) =>
   new OpenFleetError('playbook_review_backlog', `${limit} runs interrupted at an unknown point still await a review: no new run starts, and none of them is deleted.`, { hint: 'Examine the interrupted runs, then start again.' });
+const movedDuringStart = () => new OpenFleetError('playbook_conflict', 'the playbook was edited while its run was starting.', { hint: 'Start the run again once the edit is done.' });
 const notRunnable =(reason: string) => new OpenFleetError('playbook_not_runnable', reason);
 const invalidInput = (reason: string) => new OpenFleetError('invalid_body', reason);
 
@@ -149,17 +150,18 @@ export class PlaybookRunner {
 
   /**
    * Validates the run, journals it as running, and starts executing it in the background: the answer is the run as journaled, not its result.
-   * Nothing is written when the run is refused. Throws playbook_not_found, playbook_not_runnable, playbook_unapproved, script_changed, invalid_body,
+   * Nothing is written when the run is refused. The stop of the daemon and the approval of the playbook are checked again once the secrets are read, and an edit during that wait refuses the run.
+   * Throws playbook_not_found, playbook_not_runnable, playbook_unapproved, playbook_conflict (the playbook was edited while the run started), script_changed, invalid_body,
    * secret_not_connected_on_this_device (this device holds no value for a secret the playbook uses), playbook_run_busy or playbook_review_backlog (the runs awaiting a review reach their cap).
    */
   async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind }): Promise<PlaybookRunRecord> {
-    const isStopping = this.shutdown.signal.aborted;
-    if (isStopping) throw busy('the daemon is stopping.');
+    this.assertNotStopping();
     const playbook = this.deps.playbooks.getById(input.playbookId);
     assertCellsCanRun(playbook);
     const pinnedScripts = this.deps.approvals.assertStillApproved(playbook);
     const inputs = resolveRunInputs(playbook.inputs, input.inputs);
     const secretValues = await this.resolveSecretsOf(playbook);
+    this.assertStillStartableAfterTheWait(playbook);
     const masker = this.maskerOf(secretValues);
 
     this.assertRoomForAnotherRun(playbook.id);
@@ -173,6 +175,20 @@ export class PlaybookRunner {
     const execution = this.execute({ run, playbook, pinnedScripts, inputs, secretValues, masker }).finally(() => this.inFlight.delete(execution));
     this.inFlight.add(execution);
     return run;
+  }
+
+  private assertNotStopping(): void {
+    const isStopping = this.shutdown.signal.aborted;
+    if (isStopping) throw busy('the daemon is stopping.');
+  }
+
+  /** The secrets are read asynchronously: a start that waited for them goes on only if the daemon is not stopping and the playbook is still the approved revision it validated. */
+  private assertStillStartableAfterTheWait(validated: PlaybookRecord): void {
+    this.assertNotStopping();
+    const current = this.deps.playbooks.getById(validated.id);
+    this.deps.approvals.assertStillApproved(current);
+    const hasMovedDuringTheWait = current.contentRev !== validated.contentRev;
+    if (hasMovedDuringTheWait) throw movedDuringStart();
   }
 
   private assertRoomForAnotherRun(playbookId: string): void {
