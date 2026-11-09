@@ -31,7 +31,7 @@ A crash test cannot stop the process between two lines of synchronous code. The 
 
 ## The digest to review before arming
 
-`GET /api/triggers` and `GET /api/triggers/:id` add `reviewDigest` to each trigger: the digest of the approved graph (owner, WHEN, conditions, RUN, policy) of the trigger as it stands. It comes from `reviewDigestOf`, the function arming uses to record `approvedGraphDigest` and the engine uses to judge a fire, so a trigger armed and left unchanged reads `reviewDigest === approvedGraphDigest`. The title is not part of it. Reading writes nothing: no revision, no arming, no activity log row. The RUN holds the id of a playbook, not its content: the digest follows the id and the inputs. The MCP tools do not return it.
+`GET /api/triggers` and `GET /api/triggers/:id` add `reviewDigest` to each trigger: the digest of the approved graph (owner, WHEN, conditions, RUN, policy) of the trigger as it stands. It comes from `reviewDigestOf`, the function arming uses to record `approvedGraphDigest` and the engine uses to judge a fire, so a trigger armed and left unchanged reads `reviewDigest === approvedGraphDigest`. The title is not part of it. Reading writes nothing: no revision, no arming, no activity log row. The RUN holds the id of a playbook, not its content: the digest follows the id and the inputs, and an edit of the playbook disarms the triggers that run it (see "The RUN `run_playbook`"). The MCP tools do not return it.
 
 ## The owner of a trigger
 
@@ -137,4 +137,19 @@ A `silent_run` trigger fires when a child of a manager is `generating` and shows
 - `close_session` never closes a silent child that is still generating: only an idle session is closed (`target_not_eligible`).
 - Known limits: the pty is not read, so a child that prints and no more is silent; a child blocked in a long tool call that writes nothing to its transcript is silent too, which is the point. The count is made of polls of 30 seconds, so a fire comes up to 30 seconds after the minutes.
 
-`integration_records` is accepted by the schema and does not fire yet. The RUN `run_playbook` does not run either.
+`integration_records` is accepted by the schema and does not fire yet.
+
+## The RUN `run_playbook`
+
+`{ kind: 'run_playbook', playbookId, inputs? }` starts a run of the playbook through the runner of `docs/playbook-runs.md`, with the guarantees of a run started by hand.
+
+- Only an approved playbook runs: the digest as it stands and the sha256 of each pinned script, checked by the runner. Otherwise the fire is `cancelled` with `playbook_unapproved`. The playbook must belong to the project of the trigger; another project, a missing playbook, a playbook this runner cannot run or a secret this device does not hold is `playbook_unavailable`.
+- The inputs are those of the RUN, as written when a human armed it. No token and no text of the event reaches them: an event is untrusted, and the digest of arming covers the inputs. An input the playbook does not declare, or of the wrong type, is `playbook_inputs_invalid`.
+- The runner keeps its caps. A playbook that already runs, 4 runs at once and 50 runs awaiting a review end the fire `playbook_busy`; nothing is queued and no run is written for a refused fire.
+- One effect per fire: the ledger row `(trigger_id, dedup_key)` is unique, so an event offered twice starts one run. The fire is `attempted` while the runner answers, then `completed` with `run_id` set to the run (the fire does not wait for the run to end), or `cancelled` with the reason. A daemon that stops in between leaves the fire `needs_review` (`interrupted`) and never replays it. Chain depth, cooldown, `maxFiresPerDay` and the breaker judge the fire before the effect, as for the other RUN kinds.
+- The run is recorded for the actor `admin`: the run table knows no other. The link from a fire to its run is `trigger_fires.run_id`; the run holds no fire id.
+- The activity log gets `trigger.fired` with the id of the trigger and the outcome, and the system rows of the run (`playbook.run.started`, `playbook.run.ended`); the inputs and the event are not written to it.
+
+### A change of the playbook disarms the triggers that run it
+
+The digest of arming hashes the id of the playbook and the inputs, not its content. So a write that changes the content of a playbook (an edit of its name, inputs, cells or policy, the restore of a version, the delete) disarms, in the transaction of that write, every armed trigger whose RUN starts it, and bumps their revision: the screen a human read before the change can no longer arm them (`stale_revision`), and arming again takes a new proof of a human gesture, as always. If the disarm fails the write is rolled back. The fires of the trigger are kept; a fire still `accepted` ends `cancelled` as `disarmed`. After the commit the desktop gets the broadcast error `trigger_playbook_changed` and the activity log one `trigger.disarmed_by_playbook` row per trigger, both with ids only. A write that leaves the content alone (the agent lock) disarms nothing. A script file replaced on disk is no write to the playbook: the trigger stays armed and the next fire is cancelled `playbook_unapproved`.

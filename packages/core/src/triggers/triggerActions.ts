@@ -2,8 +2,10 @@ import { OpenFleetError, type Session, type SessionCloseReason, type TriggerFire
 import { log } from '../logger.js';
 import { lineageRootIdOf } from '../managers/lineage.js';
 import type { ManagerRepository } from '../managers/managerRepository.js';
+import type { PlaybookRunner } from '../playbooks/playbookRunner.js';
+import type { PlaybookService } from '../playbooks/playbookService.js';
 import type { SessionService } from '../sessions/sessionService.js';
-import type { ActionResult, TriggerActions } from './triggerEngine.js';
+import type { ActionResult, SettledResult, TriggerActions } from './triggerEngine.js';
 import type { TriggerFire } from './fireLedger.js';
 import { triggerMessageOf } from './triggerMessage.js';
 import type { TriggerRecord } from './triggerRepository.js';
@@ -11,6 +13,8 @@ import type { TriggerRecord } from './triggerRepository.js';
 export interface TriggerActionsDeps {
   sessions: Pick<SessionService, 'get' | 'sendMessage' | 'close'>;
   managers: Pick<ManagerRepository, 'get'>;
+  playbooks: Pick<PlaybookService, 'getById'>;
+  playbookRunner: Pick<PlaybookRunner, 'start'>;
   /** Tells the desktop that a `notify` trigger fired, by ids only. */
   announce: (notice: { triggerId: string; fireId: string }) => void;
   clock: () => number;
@@ -22,8 +26,16 @@ const MINUTE_MS = 60_000;
 /** The reasons a session closes that are failures; the others are a user, a shutdown. */
 const ERROR_CLOSE_REASONS: readonly SessionCloseReason[] = ['launch_failed', 'resume_timeout', 'conversation_not_found', 'harness_exit'];
 
-const completed = (): ActionResult => ({ settlement: 'completed' });
-const cancelled = (reason: TriggerFireReason): ActionResult => ({ settlement: 'cancelled', reason });
+/** The reason a fire is cancelled with, for each refusal of the playbook service or runner; a code not listed is an unexpected failure. */
+const FIRE_REASON_OF_REFUSAL: Partial<Record<string, TriggerFireReason>> = {
+  playbook_unapproved: 'playbook_unapproved', script_changed: 'playbook_unapproved',
+  playbook_not_found: 'playbook_unavailable', playbook_not_runnable: 'playbook_unavailable', secret_not_connected_on_this_device: 'playbook_unavailable',
+  invalid_body: 'playbook_inputs_invalid',
+  playbook_run_busy: 'playbook_busy', playbook_review_backlog: 'playbook_busy',
+};
+
+const completed = (): SettledResult => ({ settlement: 'completed' });
+const cancelled = (reason: TriggerFireReason): SettledResult => ({ settlement: 'cancelled', reason });
 
 /** The session an event is about, and its parent: the sessions whose manager a trigger may prompt when its RUN names none. */
 const sessionIdsOfEvent = (event: Record<string, unknown>): string[] => {
@@ -38,9 +50,9 @@ const idleMinutesOf = (trigger: TriggerRecord): number | undefined => {
   return when.source === 'session_state' && when.state === 'idle' ? when.minutes : undefined;
 };
 
-/** Performs the RUN of a trigger for one fire. A kind not performed yet cancels the fire. */
+/** Performs the RUN of a trigger for one fire. */
 export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
-  const { sessions, managers, announce, clock } = deps;
+  const { sessions, managers, playbooks, playbookRunner, announce, clock } = deps;
 
   const isOpenSessionOfTheProject = (trigger: TriggerRecord, session: Session | undefined): session is Session =>
     session !== undefined && session.state !== 'closed' && session.projectId === trigger.projectId;
@@ -119,6 +131,22 @@ export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
     return completed();
   };
 
+  /** Starts the run of an approved playbook of the project of the trigger, with the inputs the RUN holds and nothing from the event. */
+  const startPlaybookRun = async (trigger: TriggerRecord, run: RunOf<'run_playbook'>): Promise<SettledResult> => {
+    try {
+      const playbook = playbooks.getById(run.playbookId);
+      const isOfAnotherProject = playbook.projectId !== trigger.projectId;
+      if (isOfAnotherProject) return cancelled('playbook_unavailable');
+      const started = await playbookRunner.start({ playbookId: playbook.id, inputs: run.inputs ?? {}, actorKind: 'admin' });
+      return { settlement: 'completed', runId: started.id };
+    } catch (error) {
+      const reason = error instanceof OpenFleetError ? FIRE_REASON_OF_REFUSAL[error.code] : undefined;
+      if (reason !== undefined) return cancelled(reason);
+      log('error', `the playbook run of trigger ${trigger.id} failed to start`, error);
+      return cancelled('action_failed');
+    }
+  };
+
   return {
     perform({ trigger, fire, batchSize }) {
       const { run } = trigger;
@@ -126,7 +154,7 @@ export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
       if (run.kind === 'prompt_session') return promptSession(trigger, fire, batchSize, run);
       if (run.kind === 'notify') return notify(trigger, fire);
       if (run.kind === 'close_session') return closeSession(trigger, fire, run);
-      throw new OpenFleetError('invalid_body', `the RUN kind ${run.kind} is not performed by the engine.`);
+      return { settlement: 'pending', settled: startPlaybookRun(trigger, run) };
     },
   };
 }

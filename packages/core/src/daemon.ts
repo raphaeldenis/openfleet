@@ -486,9 +486,31 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     bus.emit({ type: 'trigger.fired', triggerId, fireId, ledgerState, ...(reason !== undefined && { reason }) });
     systemActivity.triggerFired({ triggerId, ledgerState, reason });
   };
+  const announcePlaybookChangedTriggers = ({ triggerIds }: { playbookId: string; triggerIds: string[] }) => {
+    const error = describeError(new OpenFleetError('trigger_playbook_changed', 'a playbook changed and the triggers that run it were disarmed.', { hint: 'Review the playbook, then arm those triggers again from the Triggers screen.' }));
+    for (const triggerId of triggerIds) {
+      cronSource.sync(triggerId);
+      silentRunSource.sync(triggerId);
+      systemActivity.triggerDisarmedByPlaybook({ triggerId });
+    }
+    bus.emit({ type: 'error', scope: 'broadcast', error });
+  };
+  const playbookRepository = new PlaybookRepository(db);
+  const playbooks = new PlaybookService({
+    db, repository: playbookRepository, versions: new PlaybookVersionRepository(db), secretRefs: new SecretRefRepository(db), triggers: triggerRepository, onTriggersDisarmed: announcePlaybookChangedTriggers,
+    projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId,
+  });
+  const playbookRuns = new PlaybookRunRepository(db);
+  const scriptLocator = new ScriptLocator(options.playbooks?.scriptRoots ?? playbookSettings.scriptRoots);
+  const playbookApprovals = new PlaybookApprovals({ repository: playbookRepository, locator: scriptLocator, clock: () => new Date().toISOString() });
+  const playbookRunner = new PlaybookRunner({
+    playbooks, approvals: playbookApprovals, runs: playbookRuns, secrets, clock: () => new Date().toISOString(), newId,
+    limits: { maxStepExecutions: options.playbooks?.maxStepExecutions ?? MAX_STEP_EXECUTIONS_PER_RUN, maxConcurrentRuns: options.playbooks?.maxConcurrentRuns ?? MAX_CONCURRENT_RUNS, maxRunsNeedingReview: options.playbooks?.maxRunsNeedingReview ?? MAX_RUNS_NEEDING_REVIEW },
+    observer: { runStarted: (run) => systemActivity.playbookRunStarted(run), runEnded: (run) => systemActivity.playbookRunEnded(run) },
+  });
   const triggerEngine = new TriggerEngine({
     onSettled: announceSettledFire,
-    triggers: triggerRepository, ledger: fireLedger, actions: createTriggerActions({ sessions, managers: managerRepository, clock: triggerClock, announce: (notice) => bus.emit({ type: 'notification.trigger', category: 'triggerNotice', ...notice }) }), breaker: new FireBreaker(triggerClock),
+    triggers: triggerRepository, ledger: fireLedger, actions: createTriggerActions({ sessions, managers: managerRepository, playbooks, playbookRunner, clock: triggerClock, announce: (notice) => bus.emit({ type: 'notification.trigger', category: 'triggerNotice', ...notice }) }), breaker: new FireBreaker(triggerClock),
     clock: triggerClock, newId, schedule: options.triggers?.schedule ?? scheduleOnRealClock, onBreakerOpened: (trigger) => { announceBreakerOpened(trigger); cronSource.sync(trigger.id); silentRunSource.sync(trigger.id); },
   });
   const triggerCursors = new TriggerCursors(db);
@@ -510,16 +532,6 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     probe: options.integrations?.probe ?? createHttpIntegrationProbe(),
     projectExists: (projectId) => projects.get(projectId) !== undefined, clock: options.integrations?.clock ?? Date.now, monotonicClock: options.integrations?.monotonicClock ?? (() => performance.now()), newId,
     ...(options.integrations?.refreshCooldownMs !== undefined && { refreshCooldownMs: options.integrations.refreshCooldownMs }),
-  });
-  const playbookRepository = new PlaybookRepository(db);
-  const playbooks = new PlaybookService({ db, repository: playbookRepository, versions: new PlaybookVersionRepository(db),secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
-  const playbookRuns = new PlaybookRunRepository(db);
-  const scriptLocator = new ScriptLocator(options.playbooks?.scriptRoots ?? playbookSettings.scriptRoots);
-  const playbookApprovals = new PlaybookApprovals({ repository: playbookRepository, locator: scriptLocator, clock: () => new Date().toISOString() });
-  const playbookRunner = new PlaybookRunner({
-    playbooks, approvals: playbookApprovals, runs: playbookRuns, secrets, clock: () => new Date().toISOString(), newId,
-    limits: { maxStepExecutions: options.playbooks?.maxStepExecutions ?? MAX_STEP_EXECUTIONS_PER_RUN, maxConcurrentRuns: options.playbooks?.maxConcurrentRuns ?? MAX_CONCURRENT_RUNS, maxRunsNeedingReview: options.playbooks?.maxRunsNeedingReview ?? MAX_RUNS_NEEDING_REVIEW },
-    observer: { runStarted: (run) => systemActivity.playbookRunStarted(run), runEnded: (run) => systemActivity.playbookRunEnded(run) },
   });
   playbookRunner.recover();
   const server = await startServer({ ...config, triggers, triggerFires: fireLedger, playbooks, integrations, playbookRunning: { approvals: playbookApprovals, runner: playbookRunner, runs: playbookRuns }, secrets: { service: secrets, nonces: secretNonces }, activity: { recorder: activity, reader: activityRepository }, e2eRoutes: config.e2eEnabled, degraded, commandPolicy, commandPolicyAdmin: { policy: commandPolicyService, denials: denialJournal }, diagnostics, managerBase, sessions, approvals, managers, pulseScheduler, bus, modelTable, modelConfigPath, notes, noteRepo, docs, docsRoot, stores, storeRepo, projects, projectService, worktrees, governanceQueue, escalations, handoff, stopRefusal, sessionStartContext, handoverLedger, contextNotice, todos, silentBlocks, workingStates, workingStateMaxAgeMinutes: workingStateSettings.maxAgeMinutes, reviewFindings, usageLedger, usageIngestion, mcp: createMcpHandler({ triggers, triggerFires: fireLedger, playbooks, integrations, secrets, activity, askUserGate, criteria, escalations, arbiters, scheduledEvents, ciWatch, github: githubReader, projectProfile: new ProjectProfileBootstrap({ db, stores, storeRepo, notes, managers, governanceQueue }), reviewFindings, ticketPattern: findingsGateSettings.ticketPattern, managerBase: shippedManagerBase, baseNotReadEnforcement: options.baseNotReadEnforcement, noteNotReadEnforcement: options.noteNotReadEnforcement, denialJournal, managerDenials, knowledgeSearch, governanceQueue, sessions, approvals, managers, pulseScheduler, modelTable, stores, storeRepo, notes, noteRepo, docs, projects, workingStates, worktreesRoot: config.worktreesRoot }) });

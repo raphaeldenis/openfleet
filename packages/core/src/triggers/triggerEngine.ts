@@ -18,8 +18,11 @@ export const DEFAULT_STALE_BACKLOG_MINUTES = 60;
 /** A message a trigger sent to a session counts as the cause of the events of that session for this long. */
 export const CHAIN_CAUSE_WINDOW_MINUTES = 60;
 
-/** What happened to the effect of a fire: it ran, or it did not and says why. */
-export type ActionResult = { settlement: 'completed'; runId?: string } | { settlement: 'cancelled'; reason: TriggerFireReason };
+/** How the effect of a fire ended: it ran, or it did not and says why. */
+export type SettledResult = { settlement: 'completed'; runId?: string } | { settlement: 'cancelled'; reason: TriggerFireReason };
+
+/** What an action answers: the end of the effect, or a promise of it when the effect is not instant. A pending fire stays `attempted` until the promise ends. */
+export type ActionResult = SettledResult | { settlement: 'pending'; settled: Promise<SettledResult> };
 
 export interface TriggerActions {
   perform(input: { trigger: TriggerRecord; fire: TriggerFire; batchSize: number }): ActionResult;
@@ -226,6 +229,22 @@ export class TriggerEngine {
     if (!stillOwnsTheFire) return ledger.get(fire.id)?.ledgerState ?? 'cancelled';
 
     const result = this.performSafely({ trigger, fire, batchSize });
+    if (result.settlement === 'pending') return this.settleWhenTheEffectEnds(fire, result.settled);
+    return this.settle(fire, result);
+  }
+
+  /** The fire stays `attempted` until the effect ends; a daemon that stops meanwhile leaves it for the review at the next boot, never replayed. */
+  private settleWhenTheEffectEnds(fire: TriggerFire, effect: Promise<SettledResult>): TriggerLedgerState {
+    const failed: SettledResult = { settlement: 'cancelled', reason: 'action_failed' };
+    effect
+      .catch((error: unknown) => { log('error', `the action of trigger ${fire.triggerId} failed for fire ${fire.id}`, error); return failed; })
+      .then((result) => this.settle(fire, result))
+      .catch((error: unknown) => log('error', 'the outcome of a pending trigger fire could not be written to the ledger', error));
+    return 'attempted';
+  }
+
+  private settle(fire: TriggerFire, result: SettledResult): TriggerLedgerState {
+    const { ledger, clock } = this.deps;
     const settledAt = new Date(clock()).toISOString();
     if (result.settlement === 'completed') {
       ledger.markCompleted({ id: fire.id, settledAt, runId: result.runId });
