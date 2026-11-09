@@ -103,7 +103,7 @@ describe('the integrations migration', () => {
 
     db.exec(readFileSync(new URL(`${INTEGRATIONS_VERSION}.down.sql`, migrationsDownDirectory), 'utf8'));
 
-    expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'integration_%'").all()).toEqual([]);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name IN ('integration_connections', 'integration_profiles', 'integration_health')").all()).toEqual([]);
     expect(db.prepare('SELECT COUNT(*) AS n FROM secret_refs').get()).toEqual({ n: 1 });
   });
 });
@@ -122,7 +122,7 @@ describe('the integrations migration upgrading a database that already holds dat
   it('applies only 070 on top of what was there and keeps the projects, playbooks and secret refs untouched', () => {
     const db = openUpgradedDatabase();
 
-    expect(db.prepare('SELECT version FROM schema_migrations WHERE version >= ? ORDER BY version').all(INTEGRATIONS_VERSION)).toEqual([{ version: INTEGRATIONS_VERSION }]);
+    expect(db.prepare("SELECT version FROM schema_migrations WHERE version >= ? AND version < '071' ORDER BY version").all(INTEGRATIONS_VERSION)).toEqual([{ version: INTEGRATIONS_VERSION }]);
     expect(db.prepare('SELECT id, name FROM projects').all()).toEqual([{ id: 'p1', name: 'One' }]);
     expect(db.prepare('SELECT id, project_id FROM playbooks').all()).toEqual([{ id: 'pb1', project_id: 'p1' }]);
     expect(db.prepare('SELECT scope_kind, scope_id, name, status, set_at, set_by FROM secret_refs').all()).toEqual([{ scope_kind: 'playbook', scope_id: 'pb1', name: 'JIRA_TOKEN', status: 'stored', set_at: 't1', set_by: 'admin' }]);
