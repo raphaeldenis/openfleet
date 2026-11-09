@@ -8,7 +8,8 @@ import { createInMemorySecretStore } from '../secrets/inMemorySecretStore.js';
 import { startFakeHttpServer, type FakeHttpServer } from './fakeHttpServer.testkit.js';
 import { shippedIntegrationProviders, type IntegrationProvider } from './integrationProviders.js';
 import type { IntegrationHealthStatus } from '@openfleet/shared';
-import type { ResolvedAddress } from './providerReader.js';
+import { createManualTimers, deferred, settle, until, type ManualTimers } from './manualTimers.testkit.js';
+import { createPinnedProviderReader, type ProviderReader, type ResolvedAddress } from './providerReader.js';
 
 type Client = Awaited<ReturnType<GovernanceFixture['connect']>>;
 
@@ -43,13 +44,19 @@ const jiraProviderOn = (port: number, overrides: Partial<IntegrationProvider> = 
   return { ...shipped, scheme: 'http', port, isAddressAllowed: () => true, ...overrides };
 };
 
-const startDaemonWith = async (providers: IntegrationProvider[]) => {
+/** `reader` replaces the polling reader (the health probe reads through it too); `isProbeReal` keeps the daemon's own probe instead of a fake one. */
+const startDaemonWith = async (providers: IntegrationProvider[], { reader, isProbeReal = false }: { reader?: ProviderReader; isProbeReal?: boolean } = {}) => {
   fixture = await startGovernanceFixture({
     secrets: { store: createInMemorySecretStore(), parent: parent.link },
-    integrations: { providers, clock: () => now, monotonicClock: () => now, resolveAddress: (host) => resolveAddress(host), probe: async () => probeHealth },
+    integrations: {
+      providers, clock: () => now, monotonicClock: () => now, resolveAddress: (host) => resolveAddress(host),
+      ...(reader !== undefined && { reader }), ...(!isProbeReal && { probe: async () => probeHealth }),
+    },
   });
   lead = await fixture.connect(fixture.lead.id);
 };
+
+const readerWithHandTimers = (timers: ManualTimers): ProviderReader => createPinnedProviderReader({ resolve: (host) => resolveAddress(host), startTimer: timers.startTimer });
 
 beforeEach(async () => {
   jira = await startFakeHttpServer();
@@ -520,23 +527,398 @@ describe('what a person typed in Jira', () => {
 });
 
 describe('the credential', () => {
-  it('appears in no answer, no health, no log line, no activity row and no table, whatever the provider answered', async () => {
-    const { integration, value } = await connectedIntegration();
-    const echoOfTheCredential = (request: { headers: Record<string, string | string[] | undefined> }) => `${request.headers.authorization}`;
-    const answers = [{ status: 200, body: searchBody(issueOf('CCM-1')) }, { status: 401, body: 'x' }, { status: 500, body: 'x' }, { status: 429, body: 'x' }];
+  const makeJiraCredential = () => `ada@example.com:ATATT-${randomUUID()}`;
+  const tokenOf = (credential: string) => credential.slice(credential.indexOf(':') + 1);
+  const base64Of = (text: string) => Buffer.from(text).toString('base64');
+  type SeenHeaders = { headers: Record<string, string | string[] | undefined> };
+  const authorizationOf = (request: SeenHeaders) => `${request.headers.authorization}`;
+  const wholeDatabase = () => {
+    const tableNames = (fixture.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((table) => table.name);
+    return tableNames.map((name) => JSON.stringify(fixture.db.prepare(`SELECT * FROM "${name}"`).all()));
+  };
+  const everythingTheDaemonShows = async (integrationId: string) => [
+    (await itemsOf(integrationId)).text, (await rest('GET', `/api/integrations?projectId=${OWN_PROJECT_ID}`)).text, (await rest('GET', '/api/integration-connections')).text,
+    (await tool('list_integrations')).text, (await tool('get_integration_health', { integration: integrationId })).text, ...recentLogLines(), ...wholeDatabase(),
+  ].join('\n');
+  const everyFormOf = (credential: string) => [credential, tokenOf(credential), basicOf(credential), base64Of(credential), base64Of(tokenOf(credential)), encodeURIComponent(credential)];
+
+  it('appears in no answer, no health, no log line, no activity row and no table, whatever the provider answered, a 200 that echoes it included', async () => {
+    const value = makeJiraCredential();
+    const connection = await createConnection();
+    const integration = await createIntegration(connection.id);
+    await setTokenAsHuman(connection.id, value);
+    const echoesEverything = (request: SeenHeaders) => `${authorizationOf(request)} ${value} ${base64Of(value)} ${tokenOf(value)}`;
+    const hostile200 = (request: SeenHeaders) => ({
+      status: 200, headers: { etag: `"${value}"` },
+      body: searchBody(issueOf('CCM-1', {
+        summary: echoesEverything(request), status: { name: tokenOf(value) }, priority: { name: authorizationOf(request) }, issuetype: { name: base64Of(value) }, assignee: { displayName: value },
+      })),
+    });
+    const refusals = [401, 500, 429].map((status) => (request: SeenHeaders) => ({ status, body: echoesEverything(request) }));
     const transcripts: string[] = [];
-    for (const answer of answers) {
-      const isSearchResult = answer.status === 200;
-      jira.answerWith((request) => ({ ...answer, body: isSearchResult ? answer.body : `${answer.body} ${echoOfTheCredential(request)}` }));
+    for (const answer of [hostile200, ...refusals]) {
+      jira.answerWith(answer);
       await pollAfter(24 * HOUR);
-      transcripts.push((await itemsOf(integration.id)).text, (await rest('GET', `/api/integrations?projectId=${OWN_PROJECT_ID}`)).text, (await rest('GET', '/api/integration-connections')).text);
+      transcripts.push(await everythingTheDaemonShows(integration.id));
     }
-    transcripts.push((await tool('list_integrations')).text, (await tool('get_integration_health', { integration: integration.id })).text);
-    transcripts.push(...recentLogLines());
-    const tables = ['activity_log', 'integration_connections', 'integration_profiles', 'integration_health', 'integration_poll_state', 'integration_connection_polling', 'integration_view_items', 'secret_refs'];
-    for (const table of tables) transcripts.push(JSON.stringify(fixture.db.prepare(`SELECT * FROM ${table}`).all()));
 
     const everything = transcripts.join('\n');
+    for (const form of everyFormOf(value)) expect(everything.includes(form), `no trace of ${form.slice(0, 6)}…`).toBe(false);
+  });
+
+  it('keeps the issue of a 200 that echoes the credential, with the echo replaced by a marker, and keeps no ETag', async () => {
+    const value = makeJiraCredential();
+    const connection = await createConnection();
+    const integration = await createIntegration(connection.id);
+    await setTokenAsHuman(connection.id, value);
+    jira.answerWith((request) => ({ status: 200, headers: { etag: `"${tokenOf(value)}"` }, body: searchBody(issueOf('CCM-1', { summary: `see ${authorizationOf(request)} and ${tokenOf(value)}` })) }));
+
+    await poll();
+
+    const { items } = (await itemsOf(integration.id)).json as { items: { key: string; untrusted: { summary: string } }[] };
+    expect(items.map((item) => item.key)).toEqual(['CCM-1']);
+    expect(items[0]!.untrusted.summary).toBe('see [secret:INTEGRATION_CREDENTIAL] and [secret:INTEGRATION_CREDENTIAL]');
+    expect(fixture.db.prepare('SELECT etag FROM integration_poll_state').all()).toEqual([{ etag: null }]);
+  });
+
+  it('drops an ETag that is not shaped like one, and sends none back', async () => {
+    const value = makeJiraCredential();
+    const connection = await createConnection();
+    await createIntegration(connection.id);
+    await setTokenAsHuman(connection.id, value);
+    jira.answerWith({ status: 200, headers: { etag: tokenOf(value) }, body: searchBody(issueOf('CCM-1')) });
+
+    await poll();
+    await pollAfter(POLL_INTERVAL);
+
+    expect(jira.seen.map((request) => request.headers['if-none-match'])).toEqual([undefined, undefined]);
+    expect(fixture.db.prepare('SELECT etag FROM integration_poll_state').all()).toEqual([{ etag: null }]);
+  });
+
+  it('keeps the unrelated ETag of an answer whose text echoes the credential nowhere in it', async () => {
+    await connectedIntegration(makeJiraCredential());
+    jira.answerWith({ status: 200, headers: { etag: '"v1"' }, body: searchBody(issueOf('CCM-1')) });
+
+    await poll();
+
+    expect(fixture.db.prepare('SELECT etag FROM integration_poll_state').all()).toEqual([{ etag: '"v1"' }]);
+  });
+
+  it('drops an issue whose key is a form of the credential, and keeps the others', async () => {
+    const value = 'ABCDEFGH-12345';
+    const connection = await createConnection();
+    const integration = await createIntegration(connection.id);
+    await setTokenAsHuman(connection.id, value);
+    jira.answerWith({ status: 200, body: searchBody(issueOf(value), issueOf('CCM-2')) });
+
+    await poll();
+
+    const { items } = (await itemsOf(integration.id)).json as { items: { key: string }[] };
+    expect(items.map((item) => item.key)).toEqual(['CCM-2']);
+    expect((await everythingTheDaemonShows(integration.id)).includes(value)).toBe(false);
+  });
+
+  it('is masked in a summary where invisible characters split it and where a cut would have left the start of it', async () => {
+    const value = makeJiraCredential();
+    const connection = await createConnection();
+    const integration = await createIntegration(connection.id);
+    await setTokenAsHuman(connection.id, value);
+    const token = tokenOf(value);
+    const splitByZeroWidthSpace = `${token.slice(0, 8)}​${token.slice(8)}`;
+    const nearTheCut = `${'x'.repeat(190)}${value}`;
+    jira.answerWith({ status: 200, body: searchBody(issueOf('CCM-1', { summary: splitByZeroWidthSpace }), issueOf('CCM-2', { summary: nearTheCut })) });
+
+    await poll();
+
+    const everything = await everythingTheDaemonShows(integration.id);
+    expect(everything.includes(token.slice(0, 8))).toBe(false);
+    expect(everything.includes(token.slice(8))).toBe(false);
+  });
+});
+
+describe('a provider whose profiles cannot be polled', () => {
+  const GITHUB_PROFILE_COUNT = 20;
+  const insertProfileDirectly = (id: string, connectionId: string) =>
+    fixture.db.prepare('INSERT INTO integration_profiles (id, project_id, connection_id, name, resource, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, OWN_PROJECT_ID, connectionId, id, 'CCM', 'now');
+
+  const startWithGithubAndJira = async () => {
+    await fixture.close();
+    const github = shippedIntegrationProviders().find((provider) => provider.id === 'github')!;
+    await startDaemonWith([jiraProviderOn(jira.port), { ...github, scheme: 'http', port: jira.port, isAddressAllowed: () => true }]);
+    const hub = await createConnection({ name: 'Hub', provider: 'github', allowedHosts: ['api.github.com'] });
+    const jiraConnection = await createConnection();
+    await setTokenAsHuman(hub.id, makeCanary());
+    await setTokenAsHuman(jiraConnection.id, makeCanary());
+    for (let index = 0; index < GITHUB_PROFILE_COUNT; index++) insertProfileDirectly(`a${String(index).padStart(2, '0')}`, hub.id);
+    insertProfileDirectly('zjira', jiraConnection.id);
+    return { hub, jiraConnection };
+  };
+
+  it('does not keep a Jira profile from being read, however many of them come first', async () => {
+    await startWithGithubAndJira();
+
+    await poll();
+
+    expect(jira.seen).toHaveLength(1);
+    expect(new URL(jira.seen[0]!.path, 'http://x').pathname).toBe('/rest/api/3/search/jql');
+    expect(await healthOf('zjira')).toBe('ok');
+  });
+
+  it('reads the Jira profile at once in the first pass and in the second, and still polls no GitHub profile', async () => {
+    await startWithGithubAndJira();
+
+    await poll();
+    await pollAfter(POLL_INTERVAL);
+
+    expect(jira.seen).toHaveLength(2);
+    expect(new Set(jira.seen.map((request) => new URL(request.path, 'http://x').pathname))).toEqual(new Set(['/rest/api/3/search/jql']));
+    expect(fixture.db.prepare("SELECT COUNT(*) AS n FROM integration_poll_state WHERE profile_id LIKE 'a%'").get()).toEqual({ n: 0 });
+  });
+
+  it('reads every Jira profile over two passes when there are more of them than a pass takes', async () => {
+    const { jiraConnection } = await startWithGithubAndJira();
+    const jiraProfileCount = 25;
+    for (let index = 0; index < jiraProfileCount; index++) insertProfileDirectly(`j${String(index).padStart(2, '0')}`, jiraConnection.id);
+
+    await poll();
+    const readsInTheFirstPass = jira.seen.length;
+    await poll();
+
+    expect(readsInTheFirstPass).toBe(20);
+    expect(jira.seen).toHaveLength(jiraProfileCount + 1);
+  });
+});
+
+describe('a name that does not resolve', () => {
+  const HOST_OF_THE_OTHER_CONNECTION = 'other.atlassian.net';
+  const unresolvedNames: string[] = [];
+  let timers: ManualTimers;
+  let held: ReturnType<typeof deferred<ResolvedAddress>>;
+
+  beforeEach(async () => {
+    timers = createManualTimers();
+    held = deferred<ResolvedAddress>();
+    unresolvedNames.length = 0;
+    resolveAddress = (host) => {
+      const isTheStuckName = host === HOST;
+      if (isTheStuckName) unresolvedNames.push(host);
+      return isTheStuckName ? held.promise : Promise.resolve(LOOPBACK);
+    };
+    await fixture.close();
+    await startDaemonWith([jiraProviderOn(jira.port)], { reader: readerWithHandTimers(timers) });
+  });
+
+  const connectBothHosts = async () => {
+    const stuck = await createConnection({ name: 'Stuck' });
+    const stuckIntegration = await createIntegration(stuck.id, { name: 'Stuck backlog' });
+    await setTokenAsHuman(stuck.id, makeCanary());
+    const fine = await createConnection({ name: 'Fine', allowedHosts: [HOST_OF_THE_OTHER_CONNECTION] });
+    const fineIntegration = await createIntegration(fine.id, { name: 'Fine backlog' });
+    await setTokenAsHuman(fine.id, makeCanary());
+    return { stuckIntegration, fineIntegration };
+  };
+
+  it('is given up when the deadline elapses, and the pass goes on to the next connection', async () => {
+    const { stuckIntegration, fineIntegration } = await connectBothHosts();
+    jira.answerWith({ status: 200, body: searchBody(issueOf('CCM-1')) });
+    const pass = poll();
+    await until(() => unresolvedNames.length === 1);
+
+    timers.elapseAll();
+    await pass;
+
+    expect(await healthOf(stuckIntegration.id)).toBe('unreachable');
+    expect(await healthOf(fineIntegration.id)).toBe('ok');
+    expect(jira.seen).toHaveLength(1);
+  });
+
+  it('opens no connection when the name resolves after the deadline', async () => {
+    await connectBothHosts();
+    const pass = poll();
+    await until(() => unresolvedNames.length === 1);
+    timers.elapseAll();
+    await pass;
+    const requestsBeforeTheLateAnswer = jira.seen.length;
+
+    held.resolve(LOOPBACK);
+    await settle();
+
+    expect(jira.seen).toHaveLength(requestsBeforeTheLateAnswer);
+  });
+
+  it('does not keep stop() waiting: the pass ends, and nothing is recorded after it', async () => {
+    const { stuckIntegration } = await connectBothHosts();
+    const pass = poll();
+    await until(() => unresolvedNames.length === 1);
+
+    await fixture.daemon.integrationPoller.stop();
+    await pass;
+
+    expect(await healthOf(stuckIntegration.id)).toBe('unknown');
+    expect(fixture.db.prepare('SELECT profile_id FROM integration_poll_state WHERE profile_id = ?').all(stuckIntegration.id)).toEqual([]);
+  });
+
+  it('opens no connection when the name resolves after stop()', async () => {
+    await connectBothHosts();
+    const pass = poll();
+    await until(() => unresolvedNames.length === 1);
+    await fixture.daemon.integrationPoller.stop();
+    await pass;
+    const requestsBeforeTheLateAnswer = jira.seen.length;
+
+    held.resolve(LOOPBACK);
+    await settle();
+
+    expect(jira.seen).toHaveLength(requestsBeforeTheLateAnswer);
+  });
+});
+
+describe('the health probe of a refresh', () => {
+  const HOST_OF_NO_ONE = 'acme.atlassian.invalid';
+  const jiraOfNoOne = (overrides: Partial<IntegrationProvider> = {}) => jiraProviderOn(jira.port, { isHostAllowed: (host) => host.endsWith('.atlassian.invalid'), ...overrides });
+  let resolutions: string[];
+
+  const startWithRealProbe = async (provider: IntegrationProvider, reader?: ProviderReader) => {
+    await fixture.close();
+    resolutions = [];
+    const countingResolver = resolveAddress;
+    resolveAddress = async (host) => { resolutions.push(host); return countingResolver(host); };
+    await startDaemonWith([provider], { isProbeReal: true, ...(reader !== undefined && { reader }) });
+  };
+  const connectedIntegrationOfNoOne = async (value = makeCanary()) => {
+    const connection = await createConnection({ allowedHosts: [HOST_OF_NO_ONE] });
+    const integration = await createIntegration(connection.id);
+    await setTokenAsHuman(connection.id, value);
+    return { connection, integration, value };
+  };
+  const refresh = (integrationId: string) => tool('refresh_integration', { integration: integrationId });
+
+  it('asks the provider through the pinned reader: one resolution, a GET of the health path carrying the credential, to the resolved address', async () => {
+    await startWithRealProbe(jiraOfNoOne());
+    const { integration, value } = await connectedIntegrationOfNoOne();
+
+    const refreshed = await refresh(integration.id);
+
+    expect(refreshed.isError).toBe(false);
+    expect(resolutions).toEqual([HOST_OF_NO_ONE]);
+    expect(jira.seen).toHaveLength(1);
+    expect(jira.seen[0]).toMatchObject({ method: 'GET', path: '/rest/api/3/myself' });
+    expect(jira.seen[0]!.headers).toMatchObject({ authorization: basicOf(value), host: `${HOST_OF_NO_ONE}:${jira.port}` });
+    expect(await healthOf(integration.id)).toBe('ok');
+  });
+
+  it('refuses an address the provider does not allow: it connects to nobody and says unreachable', async () => {
+    await startWithRealProbe(jiraOfNoOne({ isAddressAllowed: (address) => address !== '127.0.0.1' }));
+    const { integration } = await connectedIntegrationOfNoOne();
+
+    await refresh(integration.id);
+
+    expect(jira.seen).toEqual([]);
+    expect(await healthOf(integration.id)).toBe('unreachable');
+  });
+
+  it('allows public addresses only when the provider names no policy of its own', async () => {
+    const withoutPolicy = jiraOfNoOne();
+    delete withoutPolicy.isAddressAllowed;
+    await startWithRealProbe(withoutPolicy);
+    const { integration } = await connectedIntegrationOfNoOne();
+
+    await refresh(integration.id);
+
+    expect(jira.seen).toEqual([]);
+    expect(await healthOf(integration.id)).toBe('unreachable');
+  });
+
+  it('connects to the address it resolved once, even if the name resolves elsewhere afterwards', async () => {
+    await startWithRealProbe(jiraOfNoOne());
+    resolveAddress = async (host) => { resolutions.push(host); return resolutions.length === 1 ? LOOPBACK : { address: '203.0.113.9', family: 4 }; };
+    const { integration } = await connectedIntegrationOfNoOne();
+
+    await refresh(integration.id);
+
+    expect(resolutions).toEqual([HOST_OF_NO_ONE]);
+    expect(jira.seen).toHaveLength(1);
+  });
+
+  it.each<[string, number, IntegrationHealthStatus]>([
+    ['a 200', 200, 'ok'],
+    ['a 401', 401, 'auth_failed'],
+    ['a 403', 403, 'auth_failed'],
+    ['a 429', 429, 'rate_limited'],
+    ['a 404', 404, 'unreachable'],
+    ['a 500', 500, 'unreachable'],
+    ['a 304', 304, 'unreachable'],
+  ])('reads %s as %s', async (_label, status, expected) => {
+    await startWithRealProbe(jiraOfNoOne());
+    const { integration } = await connectedIntegrationOfNoOne();
+    jira.answerWith({ status, body: status === 200 ? '{}' : 'x' });
+
+    await refresh(integration.id);
+
+    expect(await healthOf(integration.id)).toBe(expected);
+  });
+
+  it('reads a 200 that is not JSON as unreachable: a login page is not a healthy provider', async () => {
+    await startWithRealProbe(jiraOfNoOne());
+    const { integration } = await connectedIntegrationOfNoOne();
+    jira.answerWith({ status: 200, body: '<html>login</html>' });
+
+    await refresh(integration.id);
+
+    expect(await healthOf(integration.id)).toBe('unreachable');
+  });
+
+  it('refuses a redirect, whatever its target: the other host is never asked', async () => {
+    await startWithRealProbe(jiraOfNoOne());
+    const { integration } = await connectedIntegrationOfNoOne();
+    jira.answerWith({ status: 302, headers: { location: `http://127.0.0.1:${bystander.port}/rest/api/3/myself` } });
+
+    await refresh(integration.id);
+
+    expect(bystander.seen).toEqual([]);
+    expect(await healthOf(integration.id)).toBe('unreachable');
+  });
+
+  it('keeps the cooldown of a connection: a second refresh inside it is refused, and one after it goes through', async () => {
+    await startWithRealProbe(jiraOfNoOne());
+    const { integration } = await connectedIntegrationOfNoOne();
+    await refresh(integration.id);
+
+    const inside = await refresh(integration.id);
+    advance(MINUTE);
+    const after = await refresh(integration.id);
+
+    expect(inside.isError).toBe(true);
+    expect(inside.text).toContain('integration_refresh_cooldown');
+    expect(after.isError).toBe(false);
+    expect(jira.seen).toHaveLength(2);
+  });
+
+  it('gives up on a name that does not resolve when the deadline elapses', async () => {
+    const timers = createManualTimers();
+    const stuck = deferred<ResolvedAddress>();
+    resolveAddress = () => stuck.promise;
+    await startWithRealProbe(jiraOfNoOne(), readerWithHandTimers(timers));
+    const { integration } = await connectedIntegrationOfNoOne();
+    const refreshing = refresh(integration.id);
+    await until(() => timers.armedCount() === 1);
+
+    timers.elapseAll();
+    const refreshed = await refreshing;
+
+    expect(refreshed.isError).toBe(false);
+    expect(await healthOf(integration.id)).toBe('unreachable');
+    expect(jira.seen).toEqual([]);
+  });
+
+  it('shows nothing of what the provider echoed of the credential', async () => {
+    await startWithRealProbe(jiraOfNoOne());
+    const { integration, value } = await connectedIntegrationOfNoOne();
+    jira.answerWith((request) => ({ status: 500, body: `${request.headers.authorization}` }));
+
+    await refresh(integration.id);
+
+    const everything = [(await rest('GET', `/api/integrations?projectId=${OWN_PROJECT_ID}`)).text, ...recentLogLines()].join('\n');
     expect(everything.includes(value)).toBe(false);
     expect(everything.includes(Buffer.from(value).toString('base64'))).toBe(false);
   });

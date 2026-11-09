@@ -260,7 +260,7 @@ export interface DaemonOptions {
   /**
    * The integrations with providers. `providers` replaces the shipped list (jira_cloud, github), so a test reaches a fake server on loopback and no real host.
    * `probe` replaces the HTTP probe, `clock` the time of the health records and of the polling, `monotonicClock` the time the cooldown is measured on, `refreshCooldownMs` the minimum gap between two refreshes of one connection.
-   * `resolveAddress` replaces the DNS lookup of the polling reader, `reader` the reader itself.
+   * `resolveAddress` replaces the DNS lookup of the reader, `reader` the reader itself; the poller and the default probe read through the same one.
    */
   integrations?: {
     providers?: IntegrationProvider[]; probe?: IntegrationProbe; clock?: () => number; monotonicClock?: () => number; refreshCooldownMs?: number;
@@ -515,16 +515,17 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const integrationRepository = new IntegrationRepository(db);
   const integrationProviders = createIntegrationProviderRegistry(options.integrations?.providers ?? shippedIntegrationProviders());
   const integrationClock = options.integrations?.clock ?? Date.now;
+  const integrationReader = options.integrations?.reader ?? createPinnedProviderReader({ ...(options.integrations?.resolveAddress !== undefined && { resolve: options.integrations.resolveAddress }) });
   const integrations = new IntegrationService({
     db, repository: integrationRepository, secretRefs: new SecretRefRepository(db), credentials: secrets,
     providers: integrationProviders,
-    probe: options.integrations?.probe ?? createHttpIntegrationProbe(),
+    probe: options.integrations?.probe ?? createHttpIntegrationProbe({ reader: integrationReader }),
     projectExists: (projectId) => projects.get(projectId) !== undefined, clock: integrationClock, monotonicClock: options.integrations?.monotonicClock ?? (() => performance.now()), newId,
     ...(options.integrations?.refreshCooldownMs !== undefined && { refreshCooldownMs: options.integrations.refreshCooldownMs }),
   });
   const integrationPoller = new IntegrationPoller({
     repository: integrationRepository, credentials: secrets, providers: integrationProviders, clock: integrationClock,
-    reader: options.integrations?.reader ?? createPinnedProviderReader({ ...(options.integrations?.resolveAddress !== undefined && { resolve: options.integrations.resolveAddress }) }),
+    reader: integrationReader,
   });
   const playbookRepository = new PlaybookRepository(db);
   const playbooks = new PlaybookService({ db, repository: playbookRepository, versions: new PlaybookVersionRepository(db),secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });

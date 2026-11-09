@@ -1,6 +1,7 @@
 import { INTEGRATION_TOKEN_SECRET_NAME, OpenFleetError, type IntegrationHealthStatus } from '@openfleet/shared';
 import { log } from '../logger.js';
 import type { SecretService } from '../secrets/secretService.js';
+import { credentialEchoMaskerOf, type MaskText } from './credentialEchoMasker.js';
 import { allowedHostOf, isAddressAllowedFor, originOf, type IntegrationProvider, type IntegrationProviderRegistry } from './integrationProviders.js';
 import type { ConnectionRecord, IntegrationRepository, ProfileRecord } from './integrationRepository.js';
 import { MAX_ISSUES_PER_POLL, issuesOfSearchBody } from './jiraIssues.js';
@@ -41,9 +42,13 @@ export interface IntegrationPollerDeps {
   clock: () => number;
 }
 
+/** What the daemon presents to the provider for one connection: the Authorization value, and the masker of every spelling of the credential behind it. */
+interface Presentation { authorization: string; maskText: MaskText }
+
 /**
  * Keeps the issues of the integrations whose provider has an issue search up to date, read only.
- * A pass asks every profile that is due, one after the other. A success waits `POLL_INTERVAL_MS`; a failure waits `retryDelayMsAfter` its count, the 429's own Retry-After if longer.
+ * A pass asks every profile that is due, one after the other; the profile attempted longest ago comes first.
+ * Whatever the provider sends back passes the masker of the credential of its connection before it is kept. `stop()` aborts the read in flight, name resolution included. A success waits `POLL_INTERVAL_MS`; a failure waits `retryDelayMsAfter` its count, the 429's own Retry-After if longer.
  * The ETag of the last answer is sent back, so an unchanged answer costs a 304. A credential refused `MAX_CONSECUTIVE_AUTH_FAILURES` times in a row stops its connection until a refresh finds it working.
  * Time comes from the injected clock; the only timer is the one that wakes a pass.
  */
@@ -51,17 +56,20 @@ export class IntegrationPoller {
   private passInProgress: Promise<void> | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private isStopped = false;
+  private abortion = new AbortController();
 
   constructor(private readonly deps: IntegrationPollerDeps) {}
 
   start(): void {
     this.isStopped = false;
+    this.abortion = new AbortController();
     this.armNextPass();
   }
 
-  /** Resolves once the pass in flight has finished, so nothing is written after the returned promise settles. */
+  /** Aborts the read in flight and resolves once the pass has finished, so nothing is written after the returned promise settles. */
   async stop(): Promise<void> {
     this.isStopped = true;
+    this.abortion.abort();
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     await this.passInProgress?.catch(() => undefined);
@@ -80,7 +88,7 @@ export class IntegrationPoller {
   }
 
   private async pollDueProfiles(): Promise<void> {
-    const dueProfiles = this.deps.repository.listProfilesDueForPolling({ nowIso: this.nowIso(), limit: MAX_PROFILES_PER_PASS });
+    const dueProfiles = this.deps.repository.listProfilesDueForPolling({ nowIso: this.nowIso(), limit: MAX_PROFILES_PER_PASS, pollableProviderIds: this.pollableProviderIds() });
     const connectionsRefusedInThisPass = new Set<string>();
     for (const profile of dueProfiles) {
       if (this.isStopped) return;
@@ -89,6 +97,11 @@ export class IntegrationPoller {
       const outcome = await this.pollProfile(profile);
       if (outcome === 'credential_refused') connectionsRefusedInThisPass.add(profile.connectionId);
     }
+  }
+
+  private pollableProviderIds(): string[] {
+    const { providers } = this.deps;
+    return providers.ids().filter((providerId) => providers.find(providerId)?.issueSearchPath !== undefined);
   }
 
   private async pollProfile(profile: ProfileRecord): Promise<PollOutcome> {
@@ -102,8 +115,8 @@ export class IntegrationPoller {
       this.recordFailure({ profile, connection }, { kind: 'unreachable' });
       return 'settled';
     }
-    const authorization = await this.authorizationOrUndefined(provider, connection);
-    if (authorization === undefined) {
+    const presentation = await this.presentationOrUndefined(provider, connection);
+    if (presentation === undefined) {
       this.recordNothingToPoll(profile);
       return 'settled';
     }
@@ -112,9 +125,11 @@ export class IntegrationPoller {
     const query = new URLSearchParams({ jql: pollJqlOf(profile.resource), fields: ISSUE_FIELDS, maxResults: String(MAX_ISSUES_PER_POLL) });
     const answer = await this.deps.reader({
       scheme: provider.scheme, host, ...(provider.port !== undefined && { port: provider.port }), path: `${issueSearchPath}?${query.toString()}`,
-      headers: { authorization, ...(etag !== undefined && { 'if-none-match': etag }) }, isAddressAllowed: (address) => isAddressAllowedFor(provider, address),
+      headers: { authorization: presentation.authorization, ...(etag !== undefined && { 'if-none-match': etag }) }, isAddressAllowed: (address) => isAddressAllowedFor(provider, address),
+      signal: this.abortion.signal,
     });
-    this.record({ profile, connection, provider, host }, answer);
+    if (this.isStopped) return 'settled';
+    this.record({ profile, connection, provider, host, maskText: presentation.maskText }, answer);
     return answer.kind === 'auth_failed' ? 'credential_refused' : 'settled';
   }
 
@@ -126,11 +141,12 @@ export class IntegrationPoller {
     }
   }
 
-  /** The Authorization value, or undefined when this device holds no credential for the connection or the secret store cannot answer: nobody is asked, nothing is counted against the provider. */
-  private async authorizationOrUndefined(provider: IntegrationProvider, connection: ConnectionRecord): Promise<string | undefined> {
+  /** The Authorization value and the masker of the credential, or undefined when this device holds no credential for the connection or the secret store cannot answer: nobody is asked, nothing is counted against the provider. */
+  private async presentationOrUndefined(provider: IntegrationProvider, connection: ConnectionRecord): Promise<Presentation | undefined> {
     try {
       const credential = await this.deps.credentials.resolve({ kind: 'connection', id: connection.id }, INTEGRATION_TOKEN_SECRET_NAME);
-      return provider.authorizationOf(credential);
+      const authorization = provider.authorizationOf(credential);
+      return { authorization, maskText: credentialEchoMaskerOf({ credential, authorization }) };
     } catch (error) {
       const isExpected = error instanceof OpenFleetError && (error.code === 'secret_not_connected_on_this_device' || error.code === 'secret_store_unavailable');
       if (!isExpected) log('error', 'the credential of an integration could not be read for polling', error);
@@ -138,14 +154,15 @@ export class IntegrationPoller {
     }
   }
 
-  private record(context: { profile: ProfileRecord; connection: ConnectionRecord; provider: IntegrationProvider; host: string }, answer: ProviderAnswer): void {
-    const { profile, connection, provider, host } = context;
+  private record(context: { profile: ProfileRecord; connection: ConnectionRecord; provider: IntegrationProvider; host: string; maskText: MaskText }, answer: ProviderAnswer): void {
+    const { profile, connection, provider, host, maskText } = context;
     if (answer.kind === 'not_modified') return this.recordSuccess({ profile, connection }, { health: 'ok', etag: this.deps.repository.pollStateOf(profile.id)?.etag });
     if (answer.kind !== 'ok') return this.recordFailure({ profile, connection }, answer);
-    const issues = issuesOfSearchBody(answer.body, originOf(provider, host));
+    const issues = issuesOfSearchBody(answer.body, originOf(provider, host), { maskText });
     if (issues === undefined) return this.recordFailure({ profile, connection }, { kind: 'unreachable' });
     this.deps.repository.replaceItems(profile.id, issues, { fetchedAt: this.nowIso() });
-    this.recordSuccess({ profile, connection }, { health: 'ok', etag: answer.etag });
+    const isEtagFreeOfTheMaskedValue = answer.etag !== undefined && maskText(answer.etag) === answer.etag;
+    this.recordSuccess({ profile, connection }, { health: 'ok', ...(isEtagFreeOfTheMaskedValue && { etag: answer.etag }) });
   }
 
   private recordSuccess({ profile, connection }: { profile: ProfileRecord; connection: ConnectionRecord }, { health, etag }: { health: IntegrationHealthStatus; etag?: string | undefined }): void {

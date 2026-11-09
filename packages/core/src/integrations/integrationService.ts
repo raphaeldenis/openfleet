@@ -6,7 +6,7 @@ import { inTransaction } from '../db/transaction.js';
 import { maskedSecrets } from '../redact.js';
 import type { SecretRefRepository } from '../secrets/secretRefRepository.js';
 import type { SecretService } from '../secrets/secretService.js';
-import { allowedHostOf, originOf, type IntegrationProvider, type IntegrationProviderRegistry } from './integrationProviders.js';
+import { allowedHostOf, isAddressAllowedFor, type IntegrationProvider, type IntegrationProviderRegistry } from './integrationProviders.js';
 import type { IntegrationProbe } from './integrationProbe.js';
 import type { ConnectionRecord, IntegrationRepository, ProfileRecord } from './integrationRepository.js';
 
@@ -123,7 +123,10 @@ export class IntegrationService {
     try {
       const credential = await this.deps.credentials.resolve(tokenScopeOf(connection.id), INTEGRATION_TOKEN_SECRET_NAME);
       const host = connection.allowedHosts[0]!;
-      const status = await this.deps.probe({ url: `${originOf(provider, host)}${provider.healthPath}`, authorization: provider.authorizationOf(credential) });
+      const status = await this.deps.probe({
+        scheme: provider.scheme, host, ...(provider.port !== undefined && { port: provider.port }), path: provider.healthPath,
+        headers: { authorization: provider.authorizationOf(credential) }, isAddressAllowed: (address) => isAddressAllowedFor(provider, address),
+      });
       this.lastProbeEndedAtByConnection.set(connection.id, this.deps.monotonicClock());
       this.deps.repository.saveHealth(profile.id, { status, checkedAt: this.nowIso() });
       const isCredentialWorkingAgain = status === 'ok';

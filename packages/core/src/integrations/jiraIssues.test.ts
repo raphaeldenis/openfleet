@@ -12,7 +12,8 @@ const issueOf = (overrides: { key?: unknown; fields?: Record<string, unknown>; s
   ...(overrides.key !== undefined && { key: overrides.key }),
 });
 
-const parse = (issues: unknown[]) => issuesOfSearchBody({ issues }, ORIGIN)!;
+const maskNothing = (text: string) => text;
+const parse = (issues: unknown[]) => issuesOfSearchBody({ issues }, ORIGIN, { maskText: maskNothing })!;
 
 describe('reading the issues of a Jira search answer', () => {
   it('keeps the key, an address built from the origin and the third-party text under untrusted', () => {
@@ -111,11 +112,52 @@ describe('reading the issues of a Jira search answer', () => {
     ['an object without issues', {}],
     ['an object whose issues is not a list', { issues: 'x' }],
   ])('reads %s as a malformed answer', (_label, body) => {
-    expect(issuesOfSearchBody(body, ORIGIN)).toBeUndefined();
+    expect(issuesOfSearchBody(body, ORIGIN, { maskText: maskNothing })).toBeUndefined();
   });
 
   it('skips an entry of the list that is not an issue', () => {
-    const issues = issuesOfSearchBody({ issues: [null, 'x', 7, [], { key: 'CCM-1' }, issueOf()] }, ORIGIN)!;
+    const issues = issuesOfSearchBody({ issues: [null, 'x', 7, [], { key: 'CCM-1' }, issueOf()] }, ORIGIN, { maskText: maskNothing })!;
+
+    expect(issues.map((issue) => issue.key)).toEqual(['CCM-12']);
+  });
+});
+
+describe('masking what a provider echoes while reading its issues', () => {
+  const SECRET = 'sekret-value-1234';
+  const maskSecret = (text: string) => text.replaceAll(SECRET, '[masked]');
+  const parseMasked = (issues: unknown[]) => issuesOfSearchBody({ issues }, ORIGIN, { maskText: maskSecret })!;
+
+  it.each([
+    ['summary', { summary: `echo ${SECRET}` }, (issue: ReturnType<typeof parseMasked>[number]) => issue.untrusted.summary],
+    ['status name', { status: { name: `echo ${SECRET}` } }, (issue: ReturnType<typeof parseMasked>[number]) => issue.untrusted.status],
+    ['priority name', { priority: { name: `echo ${SECRET}` } }, (issue: ReturnType<typeof parseMasked>[number]) => issue.untrusted.priority],
+    ['issue type name', { issuetype: { name: `echo ${SECRET}` } }, (issue: ReturnType<typeof parseMasked>[number]) => issue.untrusted.issueType],
+    ['assignee name', { assignee: { displayName: `echo ${SECRET}` } }, (issue: ReturnType<typeof parseMasked>[number]) => issue.untrusted.assignee],
+  ])('masks the %s', (_label, fields, textOf) => {
+    const [issue] = parseMasked([issueOf({ fields })]);
+
+    expect(textOf(issue!)).toBe('echo [masked]');
+  });
+
+  it('masks a value that only appears once the invisible characters between its halves are removed', () => {
+    const splitByZeroWidthSpace = `${SECRET.slice(0, 6)}​${SECRET.slice(6)}`;
+
+    const [issue] = parseMasked([issueOf({ fields: { summary: `echo ${splitByZeroWidthSpace}` } })]);
+
+    expect(issue!.untrusted.summary).toBe('echo [masked]');
+  });
+
+  it('masks a value before cutting, so that the cut cannot leave the start of it', () => {
+    const [issue] = parseMasked([issueOf({ fields: { summary: `${'x'.repeat(MAX_SUMMARY_CHARS - 9)}${SECRET}` } })]);
+
+    expect(issue!.untrusted.summary).not.toContain(SECRET.slice(0, 5));
+    expect(Array.from(issue!.untrusted.summary).length).toBeLessThanOrEqual(MAX_SUMMARY_CHARS);
+  });
+
+  it('drops an issue whose key is a form of the value, instead of keeping the key', () => {
+    const maskKey = (text: string) => text.replaceAll('SECRET-1', '[masked]');
+
+    const issues = issuesOfSearchBody({ issues: [issueOf({ key: 'SECRET-1' }), issueOf()] }, ORIGIN, { maskText: maskKey })!;
 
     expect(issues.map((issue) => issue.key)).toEqual(['CCM-12']);
   });

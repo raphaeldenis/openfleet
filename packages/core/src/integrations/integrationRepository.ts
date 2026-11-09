@@ -97,16 +97,21 @@ export class IntegrationRepository {
       .run(profileId, health.status, health.checkedAt);
   }
 
-  /** The profiles whose next poll is due at `nowIso` (or that were never polled), oldest due first, whose connection is not stopped. */
-  listProfilesDueForPolling({ nowIso, limit }: { nowIso: string; limit: number }): ProfileRecord[] {
+  /**
+   * The profiles of a provider in `pollableProviderIds` whose next poll is due at `nowIso` (or that were never polled) and whose connection is not stopped,
+   * the profile never attempted first, then the one attempted longest ago, so that none is left behind by the ones before it. A profile of any other provider is never due.
+   */
+  listProfilesDueForPolling({ nowIso, limit, pollableProviderIds }: { nowIso: string; limit: number; pollableProviderIds: readonly string[] }): ProfileRecord[] {
+    const providerPlaceholders = pollableProviderIds.map(() => '?').join(', ');
     const rows = this.db.prepare(`
       SELECT p.id, p.project_id, p.connection_id, p.name, p.resource
       FROM integration_profiles p
+      JOIN integration_connections k ON k.id = p.connection_id
       LEFT JOIN integration_poll_state s ON s.profile_id = p.id
       LEFT JOIN integration_connection_polling c ON c.connection_id = p.connection_id
-      WHERE (s.next_poll_at IS NULL OR s.next_poll_at <= ?) AND COALESCE(c.is_stopped, 0) = 0
-      ORDER BY COALESCE(s.next_poll_at, ''), p.id
-      LIMIT ?`).all(nowIso, limit) as unknown as ProfileRow[];
+      WHERE k.provider IN (${providerPlaceholders}) AND (s.next_poll_at IS NULL OR s.next_poll_at <= ?) AND COALESCE(c.is_stopped, 0) = 0
+      ORDER BY COALESCE(s.last_polled_at, ''), p.id
+      LIMIT ?`).all(...pollableProviderIds, nowIso, limit) as unknown as ProfileRow[];
     return rows.map(toProfile);
   }
 
