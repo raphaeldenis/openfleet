@@ -42,8 +42,10 @@ import { SecretService } from './secrets/secretService.js';
 import { createUnavailableSecretStore, type SecretStore } from './secrets/secretStore.js';
 import { createHttpIntegrationProbe, type IntegrationProbe } from './integrations/integrationProbe.js';
 import { createIntegrationProviderRegistry, shippedIntegrationProviders, type IntegrationProvider } from './integrations/integrationProviders.js';
+import { IntegrationPoller } from './integrations/integrationPoller.js';
 import { IntegrationRepository } from './integrations/integrationRepository.js';
 import { IntegrationService } from './integrations/integrationService.js';
+import { createPinnedProviderReader, type ProviderReader, type ResolvedAddress } from './integrations/providerReader.js';
 
 /** Shorter than the 30 seconds a nonce lives, so a request that waits out the app also finds its nonces expired. */
 const DEFAULT_SECRET_EXCHANGE_TIMEOUT_MS = 15_000;
@@ -170,6 +172,8 @@ export interface Daemon {
   governanceQueue: GovernanceQueueService;
   scheduledEvents: ScheduledEventService;
   ciWatch: CiWatchService;
+  /** Polls the issues of the integrations; `pollOnce` runs a pass now, which is how a test drives it. */
+  integrationPoller: IntegrationPoller;
   /** The entry point of the trigger sources: they offer events, the engine fires. */
   triggerEngine: TriggerEngine;
   /** The data stores service the REST routes and the tools use. */
@@ -255,9 +259,13 @@ export interface DaemonOptions {
   secrets?: { parent?: SecretParentLink; store?: SecretStore; clock?: () => number; monotonicClock?: () => number; exchangeTimeoutMs?: number };
   /**
    * The integrations with providers. `providers` replaces the shipped list (jira_cloud, github), so a test reaches a fake server on loopback and no real host.
-   * `probe` replaces the HTTP probe, `clock` the time of the health records, `monotonicClock` the time the cooldown is measured on, `refreshCooldownMs` the minimum gap between two refreshes of one connection.
+   * `probe` replaces the HTTP probe, `clock` the time of the health records and of the polling, `monotonicClock` the time the cooldown is measured on, `refreshCooldownMs` the minimum gap between two refreshes of one connection.
+   * `resolveAddress` replaces the DNS lookup of the polling reader, `reader` the reader itself.
    */
-  integrations?: { providers?: IntegrationProvider[]; probe?: IntegrationProbe; clock?: () => number; monotonicClock?: () => number; refreshCooldownMs?: number };
+  integrations?: {
+    providers?: IntegrationProvider[]; probe?: IntegrationProbe; clock?: () => number; monotonicClock?: () => number; refreshCooldownMs?: number;
+    resolveAddress?: (host: string) => Promise<ResolvedAddress>; reader?: ProviderReader;
+  };
 }
 
 // Builds every service from the config and starts serving; a throw at any point refuses the boot, after closing whatever already started.
@@ -504,12 +512,19 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     sessions, managers: managerRepository, triggers: triggerRepository, engine: triggerEngine, ledger: fireLedger, clock: triggerClock,
     schedule: options.triggers?.schedule ?? scheduleOnRealClock, onOfferSuppressedByCause: (triggerId) => systemActivity.triggerOfferSuppressed({ triggerId }),
   });
+  const integrationRepository = new IntegrationRepository(db);
+  const integrationProviders = createIntegrationProviderRegistry(options.integrations?.providers ?? shippedIntegrationProviders());
+  const integrationClock = options.integrations?.clock ?? Date.now;
   const integrations = new IntegrationService({
-    db, repository: new IntegrationRepository(db), secretRefs: new SecretRefRepository(db), credentials: secrets,
-    providers: createIntegrationProviderRegistry(options.integrations?.providers ?? shippedIntegrationProviders()),
+    db, repository: integrationRepository, secretRefs: new SecretRefRepository(db), credentials: secrets,
+    providers: integrationProviders,
     probe: options.integrations?.probe ?? createHttpIntegrationProbe(),
-    projectExists: (projectId) => projects.get(projectId) !== undefined, clock: options.integrations?.clock ?? Date.now, monotonicClock: options.integrations?.monotonicClock ?? (() => performance.now()), newId,
+    projectExists: (projectId) => projects.get(projectId) !== undefined, clock: integrationClock, monotonicClock: options.integrations?.monotonicClock ?? (() => performance.now()), newId,
     ...(options.integrations?.refreshCooldownMs !== undefined && { refreshCooldownMs: options.integrations.refreshCooldownMs }),
+  });
+  const integrationPoller = new IntegrationPoller({
+    repository: integrationRepository, credentials: secrets, providers: integrationProviders, clock: integrationClock,
+    reader: options.integrations?.reader ?? createPinnedProviderReader({ ...(options.integrations?.resolveAddress !== undefined && { resolve: options.integrations.resolveAddress }) }),
   });
   const playbookRepository = new PlaybookRepository(db);
   const playbooks = new PlaybookService({ db, repository: playbookRepository, versions: new PlaybookVersionRepository(db),secretRefs: new SecretRefRepository(db), projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId });
@@ -545,6 +560,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     childSilence.stop();
     arbiters.stop();
     await ciWatch.stop();
+    await integrationPoller.stop();
     childAutoRestarter.stop();
     idleChildWatcher.stop();
     contextNotice.stop();
@@ -584,11 +600,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     scheduledEvents.start();
     sleepHandoff.start();
     ciWatch.start();
+    integrationPoller.start();
     idleChildWatcher.start();
   } catch (error) {
     await closeWithin({ timeoutMs: REFUSED_BOOT_CLOSE_TIMEOUT_MS, close });
     throw error;
   }
 
-  return { server, db, degraded, stores, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, triggerEngine, harnesses, secrets, playbookRunner, secretChannel, close };
+  return { server, db, degraded, stores, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, integrationPoller, triggerEngine, harnesses, secrets, playbookRunner, secretChannel, close };
 }

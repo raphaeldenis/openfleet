@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  INTEGRATION_HEALTH_UNKNOWN, INTEGRATION_TOKEN_SECRET_NAME, OpenFleetError, type CreateIntegrationBody, type CreateIntegrationConnectionBody, type IntegrationConnectionView, type IntegrationView,
+  INTEGRATION_HEALTH_UNKNOWN, INTEGRATION_TOKEN_SECRET_NAME, OpenFleetError, type CreateIntegrationBody, type CreateIntegrationConnectionBody, type IntegrationConnectionView, type IntegrationItemsView, type IntegrationView,
 } from '@openfleet/shared';
 import { inTransaction } from '../db/transaction.js';
 import { maskedSecrets } from '../redact.js';
@@ -101,6 +101,13 @@ export class IntegrationService {
     return this.integrationViewOf(profile, this.connectionNamed(profile.connectionId));
   }
 
+  /** The issues the poller kept for an integration, cleaned and under `untrusted`, and whether its connection still polls. It makes no call to the provider. */
+  itemsOf(projectId: string, integrationId: string): IntegrationItemsView {
+    const profile = this.profileOf(projectId, integrationId);
+    const isStopped = this.deps.repository.connectionPollingOf(profile.connectionId).isStopped;
+    return { items: this.deps.repository.listItems(profile.id), polling: isStopped ? 'stopped_auth_failed' : 'active' };
+  }
+
   /**
    * Probes the provider with the credential and records the typed result.
    * A refresh is refused before the credential is read when its connection is being refreshed, was refreshed inside the cooldown, or when `MAX_CONCURRENT_REFRESHES` are in flight.
@@ -119,6 +126,8 @@ export class IntegrationService {
       const status = await this.deps.probe({ url: `${originOf(provider, host)}${provider.healthPath}`, authorization: provider.authorizationOf(credential) });
       this.lastProbeEndedAtByConnection.set(connection.id, this.deps.monotonicClock());
       this.deps.repository.saveHealth(profile.id, { status, checkedAt: this.nowIso() });
+      const isCredentialWorkingAgain = status === 'ok';
+      if (isCredentialWorkingAgain) this.deps.repository.resumePolling(connection.id, { nowIso: this.nowIso() });
     } finally {
       this.connectionsBeingRefreshed.delete(connection.id);
     }

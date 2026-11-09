@@ -1,6 +1,6 @@
 # Integrations
 
-**In brief.** A *connection* says which provider OpenFleet talks to, on which hosts, with which credential. An *integration* is a connection used by one project. A manager can list the integrations of its project, read the last health of one and ask for a fresh probe. It can never create a connection, name a host or a url, set a credential or read one. The credential lives in the secret store of the desktop app (see [secrets.md](secrets.md)) and in no table, answer, log line or error message of the daemon. This page describes foundations only (I1): there is no polling, no item sync and no Jira or GitHub read tool yet.
+**In brief.** A *connection* says which provider OpenFleet talks to, on which hosts, with which credential. An *integration* is a connection used by one project. A manager can list the integrations of its project, read the last health of one and ask for a fresh probe. It can never create a connection, name a host or a url, set a credential or read one. The credential lives in the secret store of the desktop app (see [secrets.md](secrets.md)) and in no table, answer, log line or error message of the daemon. This page describes the foundations (I1) and the polling of Jira issues (I2a): the daemon keeps the issues of a Jira integration up to date, read only, and a human can read them over REST. There is no Jira or GitHub read tool for agents yet (I2b).
 
 ## What exists
 
@@ -43,6 +43,28 @@ None of the three tools is in the reviewer set or the arbiter set. Their input i
 `refresh_integration` is bounded, and the bound follows the credential: it belongs to the **connection**, so every integration of a connection shares one cooldown and one place in flight. A second refresh of the same connection (through any of its integrations, in any project) within 60 seconds, or while one is running, is refused `integration_refresh_cooldown` (retry later) before the credential is read. At most 4 refreshes are in flight at once across all connections (`MAX_CONCURRENT_REFRESHES`); a fifth is refused with the same code. A loop, or many profiles of one connection, cannot hammer a provider or lock out an account. A connection with no value on this device answers `secret_not_connected_on_this_device` and calls nobody.
 
 The cooldown is kept in memory and measured on the monotonic clock: a step of the wall clock neither ends it nor extends it, and a restart of the daemon clears it.
+
+## Polling Jira issues
+
+A provider that names an issue search path (`jira_cloud`: `/rest/api/3/search/jql`) is polled by the daemon; `github` is not. The poller (`packages/core/src/integrations/integrationPoller.ts`) wakes every minute and polls the profiles that are due, at most 20 a pass, one after the other.
+
+| Piece | Where |
+|---|---|
+| Tables `integration_poll_state`, `integration_connection_polling`, `integration_view_items` (migration 071, down file alongside) | `packages/core/src/db/migrations/071_integration_polling.sql` |
+| The reader: one GET, pinned address, bounded | `packages/core/src/integrations/providerReader.ts`, `providerAddress.ts` |
+| The poller and its schedule | `packages/core/src/integrations/integrationPoller.ts` |
+| The cleaning of third-party text | `packages/core/src/integrations/jiraIssues.ts` |
+| REST read of the issues | `GET /api/integrations/:id/items?projectId=` (admin token) |
+
+- **The query.** It is fixed by the daemon. A profile whose `resource` is a Jira project key (`[A-Z][A-Z0-9_]{1,9}`) reads `project = <KEY> AND resolution = Unresolved ORDER BY updated DESC`; any other resource reads `assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC`. 50 issues at most, the fields `summary,status,priority,issuetype,assignee,updated`. No agent supplies a JQL text.
+- **Read only.** The reader can only send a GET. No code path writes to a provider.
+- **Where the credential goes.** The host is re-checked against the provider rule at every poll (a bare `*.atlassian.net` name: no user, port, IPv6, Unicode or trailing dot). It is resolved once, the address is checked by the provider's policy (public addresses only, unless a provider names its own: loopback, private, link-local, shared, multicast and reserved ranges, and the IPv6 forms that can carry them, are refused), and the connection is made to that address, so a second resolution that answers differently changes nothing. A redirect is never followed, whatever its target. The credential is in the `Authorization` header and nowhere in the answer of the reader.
+- **Bounds.** Body 1 MiB (declared or streamed), response headers 16 KiB, 15 s, `Accept-Encoding: identity`, no cookie. Anything over a bound, a body that is not JSON, or a JSON that is not a search result reads as `unreachable` and the issues already kept stay.
+- **Schedule, on the injected clock.** After a success the next poll is in 5 minutes, and the ETag of the answer is sent back as `If-None-Match` (a 304 keeps the issues). After the n-th failure in a row the wait is one minute doubled n-1 times, at most one hour; a 429 waits its `Retry-After` (whole seconds) if that is longer, at most one hour. A device with no credential for the connection asks nobody and looks again in 5 minutes.
+- **Refused credential.** A 401 or 403 is `auth_failed`. Three in a row on one connection stop its polling (`polling: stopped_auth_failed`); all the integrations of a connection share the count, and a refusal ends the pass for the other integrations of that connection. A success resets the count. A `refresh_integration` whose probe says `ok` lets the connection poll again at once.
+- **Third-party text.** The key is checked (`[A-Z][A-Z0-9_]{1,19}-<digits>`; any other issue is dropped) and the address is built from the connection host (`<origin>/browse/<KEY>`). The summary and the status, priority, type and assignee names are cleaned (control, bidirectional and zero-width characters removed, blanks collapsed, `<` and `>` turned into `‹` and `›`), cut (200 and 64 characters, ending in `…`) and kept under `untrusted`. Nothing else of the answer is kept: not the Jira address, not an email, not a description.
+
+What this does not claim: the health probe of `refresh_integration` still uses `fetch` and does not pin the address; the cleaning removes markup characters and invisible ones, not words, so a title that reads like an instruction is still only a title and a reader must treat it as data; the issues are polled for one query per integration, not for a configured view (view configurations and their human approval are I2b).
 
 ## What the guarantee covers
 
