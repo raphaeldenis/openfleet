@@ -226,7 +226,7 @@ export interface DaemonOptions {
   /** Replaces the clock of the trigger engine (epoch milliseconds), so a test decides when a fire is accepted, how old a backlog is and which day it is. */
   triggers?: { clock?: () => number; schedule?: (callback: () => void, delayMs: number) => () => void };
   /** Replaces the timer of the daily purge of the trigger fires, apart from `triggers.schedule` so that a test counting the timers of the sources does not see it. */
-  fireRetention?: { schedule?: (callback: () => void, delayMs: number) => () => void };
+  fireRetention?: { schedule?: (callback: () => void, delayMs: number) => () => void; letTheEventLoopRun?: () => Promise<void> };
   power?: {
     api?: PowerApi;
     clock?: () => number;
@@ -460,6 +460,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const fireRetention = new FireRetention({
     ledger: fireLedger, clock: triggerClock, schedule: options.fireRetention?.schedule ?? scheduleOnRealClock, retentionDays: triggerSettings.fireRetentionDays,
     onFailure: (error) => log('warn', 'the trigger fires could not be pruned', error),
+    letTheEventLoopRun: options.fireRetention?.letTheEventLoopRun,
   });
   const announceSettledFire = ({ triggerId, fireId, ledgerState, reason }: SettledFire) => {
     bus.emit({ type: 'trigger.fired', triggerId, fireId, ledgerState, ...(reason !== undefined && { reason }) });

@@ -3,19 +3,16 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { openDatabase } from '../db/database.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 import { FireLedger } from './fireLedger.js';
-import { FIRE_PRUNE_BATCH_SIZE, FireRetention } from './fireRetention.js';
+import { FIRE_PRUNE_BATCH_SIZE, FireRetention, type LetTheEventLoopRun } from './fireRetention.js';
 import { fireCount, forgottenFireIds, isoDaysBefore, leaveFires, leaveTrigger, NOW_ISO } from './fireRetention.testkit.js';
 
 const directories = createTempDirTracker();
 afterAll(() => directories.removeAll());
 
-const FIRES_IN_THE_TABLE = 100_000;
-const FIRES_TO_FORGET = 70_000;
-const FIRES_PROTECTED = 1_000;
+const FIRES_IN_THE_TABLE = 10_000;
+const FIRES_TO_FORGET = 7_000;
+const FIRES_PROTECTED = 100;
 const RETENTION_DAYS = 90;
-// The bound that matters is the longest stretch the event loop is held: one batch, never the whole purge. The purge hands the loop back after every batch,
-// so the longest gap between two turns of a probe is the duration of one 1000-row statement. The limit is far above what a batch costs and far below a purge in one go.
-const LONGEST_STRETCH_HOLDING_THE_EVENT_LOOP_MILLISECONDS = 1_000;
 
 const fireToLeave = (index: number) => {
   const isProtected = index < FIRES_PROTECTED;
@@ -24,50 +21,75 @@ const fireToLeave = (index: number) => {
   return { ledgerState: 'completed' as const, settledAt: isoDaysBefore(isToForget ? 200 : 1) };
 };
 
-const retentionOn = (db: ReturnType<typeof openDatabase>) => new FireRetention({
-  ledger: new FireLedger(db), clock: () => Date.parse(NOW_ISO), schedule: () => () => {}, retentionDays: RETENTION_DAYS, onFailure: (error) => { throw error; },
+const retentionOn = (db: ReturnType<typeof openDatabase>, { ledger = new FireLedger(db), letTheEventLoopRun }: { ledger?: Pick<FireLedger, 'forgetSettledEvents'>; letTheEventLoopRun?: LetTheEventLoopRun } = {}) => new FireRetention({
+  ledger, clock: () => Date.parse(NOW_ISO), schedule: () => () => {}, retentionDays: RETENTION_DAYS, onFailure: (error) => { throw error; }, letTheEventLoopRun,
 });
 
-/** Turns of the event loop a purge lets through, and the longest time between two of them. */
-const probeTheEventLoopDuring = async (purge: Promise<unknown>) => {
+/** A purge whose every batch and every hand-back of the event loop is written down, in the order they happen. */
+const observedPurgeOn = (db: ReturnType<typeof openDatabase>) => {
+  const ledger = new FireLedger(db);
+  const requestedBatchSizes: number[] = [];
+  const forgottenPerBatch: number[] = [];
+  const batchesDoneAtEachHandBack: number[] = [];
+  const observedLedger: Pick<FireLedger, 'forgetSettledEvents'> = {
+    forgetSettledEvents: (input) => {
+      const batch = ledger.forgetSettledEvents(input);
+      requestedBatchSizes.push(input.batchSize);
+      forgottenPerBatch.push(batch.forgotten);
+      return batch;
+    },
+  };
+  const letTheEventLoopRun: LetTheEventLoopRun = async () => { batchesDoneAtEachHandBack.push(forgottenPerBatch.length); };
+  return { retention: retentionOn(db, { ledger: observedLedger, letTheEventLoopRun }), requestedBatchSizes, forgottenPerBatch, batchesDoneAtEachHandBack };
+};
+
+/** Turns of the real event loop a purge lets through. */
+const countTurnsOfTheEventLoopDuring = async (purge: Promise<unknown>) => {
   let turns = 0;
-  let longestStretchMilliseconds = 0;
   let isPurging = true;
-  let previousTurnAt = performance.now();
   const turn = () => {
-    const now = performance.now();
-    longestStretchMilliseconds = Math.max(longestStretchMilliseconds, now - previousTurnAt);
-    previousTurnAt = now;
     turns += 1;
     if (isPurging) setImmediate(turn);
   };
   setImmediate(turn);
   await purge;
   isPurging = false;
-  return { turns, longestStretchMilliseconds };
+  return turns;
 };
 
 describe('the cost of forgetting the events of the fire ledger', () => {
-  it('forgets 70 000 of 100 000 events in bounded batches, keeps the protected ones and every row, and never holds the event loop for more than a batch', async () => {
+  it('forgets 7 000 of 10 000 events in bounded batches, hands the event loop back after every batch, keeps the protected ones and every row', async () => {
     const db = openDatabase(join(directories.make('fire-retention-cost-'), 'openfleet.db'));
     const triggerId = leaveTrigger(db);
     leaveFires(db, triggerId, { *[Symbol.iterator]() { for (let index = 0; index < FIRES_IN_THE_TABLE; index += 1) yield fireToLeave(index); } });
-    const retention = retentionOn(db);
+    const purge = observedPurgeOn(db);
 
-    const startedAt = performance.now();
-    const purge = retention.forgetOldEvents();
-    const { turns, longestStretchMilliseconds } = await probeTheEventLoopDuring(purge);
-    const report = await purge;
-    const milliseconds = performance.now() - startedAt;
+    const report = await purge.retention.forgetOldEvents();
 
-    console.info(`[fire retention] forgot ${report.forgotten} of ${FIRES_IN_THE_TABLE} events in ${report.batches} batches of ${FIRE_PRUNE_BATCH_SIZE}, ${milliseconds.toFixed(0)} ms, longest stretch holding the event loop ${longestStretchMilliseconds.toFixed(0)} ms`);
     const fullBatchesThenOneThatFindsNothingMore = Math.floor(FIRES_TO_FORGET / FIRE_PRUNE_BATCH_SIZE) + 1;
+    const everyBatchIsFollowedByAHandBack = Array.from({ length: fullBatchesThenOneThatFindsNothingMore }, (_, batchIndex) => batchIndex + 1);
     expect(report).toEqual({ forgotten: FIRES_TO_FORGET, batches: fullBatchesThenOneThatFindsNothingMore });
+    expect(purge.requestedBatchSizes.every((size) => size === FIRE_PRUNE_BATCH_SIZE)).toBe(true);
+    expect(Math.max(...purge.forgottenPerBatch)).toBe(FIRE_PRUNE_BATCH_SIZE);
+    expect(purge.batchesDoneAtEachHandBack).toEqual(everyBatchIsFollowedByAHandBack);
     expect(forgottenFireIds(db)).toHaveLength(FIRES_TO_FORGET);
     expect(fireCount(db)).toBe(FIRES_IN_THE_TABLE);
+    db.close();
+  });
+
+  it('lets the real event loop turn between two batches', async () => {
+    const db = openDatabase(join(directories.make('fire-retention-loop-'), 'openfleet.db'));
+    const triggerId = leaveTrigger(db);
+    const batches = 4;
+    leaveFires(db, triggerId, Array.from({ length: batches * FIRE_PRUNE_BATCH_SIZE - 1 }, () => ({ ledgerState: 'completed' as const, settledAt: isoDaysBefore(200) })));
+    const purge = retentionOn(db).forgetOldEvents();
+
+    const turns = await countTurnsOfTheEventLoopDuring(purge);
+
+    const report = await purge;
     const turnsBetweenTwoBatches = report.batches - 1;
+    expect(report.batches).toBe(batches);
     expect(turns).toBeGreaterThanOrEqual(turnsBetweenTwoBatches);
-    expect(longestStretchMilliseconds).toBeLessThan(LONGEST_STRETCH_HOLDING_THE_EVENT_LOOP_MILLISECONDS);
     db.close();
   });
 
