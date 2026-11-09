@@ -88,6 +88,16 @@ export class TriggerRepository {
   disarm(id: string): void {
     this.db.prepare('UPDATE triggers SET armed_at = NULL, approved_rev = NULL, approved_graph_digest = NULL WHERE id = ?').run(id);
   }
+
+  /**
+   * Clears the arming of every armed trigger whose RUN starts the playbook, and bumps their revision so that a review made before the change cannot arm them again.
+   * Returns the ids it disarmed; the fires of those triggers stay.
+   */
+  disarmThoseRunningPlaybook(playbookId: string): string[] {
+    const disarmed = this.db.prepare(`UPDATE triggers SET armed_at = NULL, approved_rev = NULL, approved_graph_digest = NULL, content_rev = content_rev + 1
+      WHERE armed_at IS NOT NULL AND json_extract(run_json, '$.playbookId') = ? RETURNING id`).all(playbookId) as unknown as { id: string }[];
+    return disarmed.map(({ id }) => id);
+  }
 }
 
 const json = (value: unknown): string | null => (value === undefined ? null : JSON.stringify(value));

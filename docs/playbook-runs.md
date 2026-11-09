@@ -1,6 +1,6 @@
 # Playbook runs
 
-**In brief.** A playbook of script cells runs only after a human approved its digest. The runner starts each script itself, with no shell, journals every step before it starts, and masks the value of every secret before anything is stored or answered. A daemon killed in the middle of a step marks the run `needs_review` at the next boot and never starts the step again. This page describes the runner of script cells (PBK-P3a) and `http` cells (PBK-P3b-http); `readFromStore`, `writeToStore` and `tool` cells, `run_playbook` and the other kinds come later.
+**In brief.** A playbook of script cells runs only after a human approved its digest. The runner starts each script itself, with no shell, journals every step before it starts, and masks the value of every secret before anything is stored or answered. A daemon killed in the middle of a step marks the run `needs_review` at the next boot and never starts the step again. This page describes the runner of script cells (PBK-P3a) and `http` cells (PBK-P3b-http); `readFromStore`, `writeToStore` and `tool` cells and the other kinds come later. A trigger starts a run with the RUN `run_playbook` (see `docs/triggers.md`).
 
 ## Who can do what
 

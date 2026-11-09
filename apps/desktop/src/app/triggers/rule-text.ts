@@ -15,6 +15,8 @@ export const FIRE_REASON_LABELS: Record<TriggerFireReason, string> = {
   interrupted: 'le démon s’est arrêté pendant l’effet', stale: 'trop ancien', superseded: 'remplacé par un tir plus récent', batched: 'regroupé dans un lot', disarmed: 'le trigger n’était plus armé',
   target_unavailable: 'cible indisponible', target_not_eligible: 'cible non éligible', cooldown: 'délai de repos', daily_cap: 'plafond du jour atteint', breaker_open: 'disjoncteur ouvert',
   chain_depth: 'chaîne trop profonde', action_failed: 'l’action a échoué',
+  playbook_unapproved: 'playbook non approuvé tel qu’il est', playbook_unavailable: 'playbook introuvable ou hors du projet', playbook_inputs_invalid: 'entrées du playbook refusées',
+  playbook_busy: 'playbook déjà en cours ou plafond de runs atteint',
 };
 
 /** The WHEN of a trigger as one French sentence. */

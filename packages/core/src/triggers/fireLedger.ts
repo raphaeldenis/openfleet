@@ -157,6 +157,20 @@ export class FireLedger {
     return rows;
   }
 
+  /**
+   * The fires whose playbook run was running at `atIso` in the project: it had started by then and had not ended before.
+   * A script writes only while its run runs, so a write made then may be an effect of that run, whoever the daemon records as its author; each fire answers with the depth of its chain, which is also the depth of its run.
+   * The run is found from `trigger_fires.run_id`, which the engine sets when the fire settles, right after the runner journals the run.
+   */
+  causesOfRunsAliveAt(input: { projectId: string; atIso: string }): { triggerId: string; chainDepth: number }[] {
+    const rows = this.db.prepare(
+      `SELECT DISTINCT f.trigger_id AS triggerId, f.chain_depth AS chainDepth FROM trigger_fires f
+       JOIN triggers t ON t.id = f.trigger_id JOIN playbook_runs r ON r.id = f.run_id
+       WHERE t.project_id = ? AND f.ledger_state IN (${STATES_SQL_LIST}) AND r.started_at <= ? AND (r.ended_at IS NULL OR r.ended_at >= ?)`,
+    ).all(input.projectId, input.atIso, input.atIso) as unknown as { triggerId: string; chainDepth: number }[];
+    return rows;
+  }
+
   /** The deepest chain among the fires whose message went to one of the sessions since `sinceIso`; 0 when none did. The message of a fire carries the id of the fire. */
   deepestChainMessagedSince(input: { sessionIds: readonly string[]; sinceIso: string }): number {
     if (input.sessionIds.length === 0) return 0;
