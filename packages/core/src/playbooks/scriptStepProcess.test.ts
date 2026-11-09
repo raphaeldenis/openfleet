@@ -218,13 +218,30 @@ describe('the signals a step sends to its process group', () => {
   it('sends none after a script that ignores SIGTERM and ends by itself resolved the step, though the timeout and an abort both asked it to stop', async () => {
     const script = arrangeScript('');
     const readyMarker = `${script.marker}-ready`;
-    writeFileSync(script.path, `#!${process.execPath}\nprocess.on('SIGTERM', () => {});\nrequire('node:fs').writeFileSync(${JSON.stringify(readyMarker)}, '1');\nsetTimeout(() => {}, 1200);\n`);
+    const releaseMarker = `${script.marker}-release`;
+    const scriptEndsWhenReleased = [
+      "const { existsSync, writeFileSync } = require('node:fs');",
+      "process.on('SIGTERM', () => {});",
+      `writeFileSync(${JSON.stringify(readyMarker)}, '1');`,
+      `const waiting = setInterval(() => { if (existsSync(${JSON.stringify(releaseMarker)})) clearInterval(waiting); }, 10);`,
+    ].join('\n');
+    writeFileSync(script.path, `#!${process.execPath}\n${scriptEndsWhenReleased}\n`);
     const abort = new AbortController();
+    const TIMEOUT_MS = 1_000;
+    const SCRIPT_STARTUP_BOUND_MS = 10_000;
 
     const late = await signalsAfterResolution(async () => {
-      const running = runScriptStep(runOf(script, { signal: abort.signal, timeoutMs: 800 }));
-      while (!existsSync(readyMarker)) await sleepMs(10);
+      const startedAt = Date.now();
+      const running = runScriptStep(runOf(script, { signal: abort.signal, timeoutMs: TIMEOUT_MS }));
+      while (!existsSync(readyMarker)) {
+        const hasWaitedTooLong = Date.now() - startedAt > SCRIPT_STARTUP_BOUND_MS;
+        if (hasWaitedTooLong) throw new Error(`the script wrote no ready marker within ${SCRIPT_STARTUP_BOUND_MS} ms`);
+        await sleepMs(10);
+      }
+      const timeoutFiresAt = startedAt + TIMEOUT_MS;
+      await sleepMs(Math.max(0, timeoutFiresAt - Date.now()) + 100);
       abort.abort();
+      writeFileSync(releaseMarker, '1');
       await running;
     });
 
