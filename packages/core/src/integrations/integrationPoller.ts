@@ -4,6 +4,7 @@ import type { SecretService } from '../secrets/secretService.js';
 import { credentialEchoMaskerOf, type MaskText } from './credentialEchoMasker.js';
 import { allowedHostOf, isAddressAllowedFor, originOf, type IntegrationProvider, type IntegrationProviderRegistry } from './integrationProviders.js';
 import type { ConnectionRecord, IntegrationRepository, ProfileRecord } from './integrationRepository.js';
+import { pollQueryOf } from './integrationViewConfig.js';
 import { MAX_ISSUES_PER_POLL, issuesOfSearchBody } from './jiraIssues.js';
 import type { ProviderAnswer, ProviderReader } from './providerReader.js';
 
@@ -20,8 +21,9 @@ const ISSUE_FIELDS = 'summary,status,priority,issuetype,assignee,updated';
 const UNRESOLVED_NEWEST_FIRST = 'resolution = Unresolved ORDER BY updated DESC';
 
 /**
- * The one query the daemon runs against a provider: fixed by the daemon, never typed by an agent.
+ * The query the daemon runs against a provider when the integration has no view configuration: fixed by the daemon, never typed by an agent.
  * A profile narrowed to a project key reads that project; any other resource reads what is assigned to the credential's owner.
+ * An integration with a view configuration runs the query a human approved, and nothing while that configuration is pending.
  */
 export const pollJqlOf = (resource: string | undefined): string => {
   const isProjectKey = resource !== undefined && PROJECT_KEY.test(resource);
@@ -110,6 +112,13 @@ export class IntegrationPoller {
     const issueSearchPath = provider?.issueSearchPath;
     if (connection === undefined || provider === undefined || issueSearchPath === undefined) return 'settled';
 
+    const pollQuery = pollQueryOf(this.deps.repository.findViewConfig(profile.id));
+    const isNothingApprovedToRun = pollQuery.kind === 'withheld';
+    if (isNothingApprovedToRun) {
+      this.recordNothingToPoll(profile);
+      return 'settled';
+    }
+
     const host = this.allowedHostOrUndefined(provider, connection);
     if (host === undefined) {
       this.recordFailure({ profile, connection }, { kind: 'unreachable' });
@@ -123,7 +132,9 @@ export class IntegrationPoller {
     }
 
     const etag = this.deps.repository.pollStateOf(profile.id)?.etag;
-    const query = new URLSearchParams({ jql: pollJqlOf(profile.resource), fields: ISSUE_FIELDS, maxResults: String(MAX_ISSUES_PER_POLL) });
+    const jql = pollQuery.kind === 'approved' ? pollQuery.jql : pollJqlOf(profile.resource);
+    const fields = pollQuery.kind === 'approved' ? pollQuery.fields.join(',') : ISSUE_FIELDS;
+    const query = new URLSearchParams({ jql, fields, maxResults: String(MAX_ISSUES_PER_POLL) });
     const answer = await this.deps.reader({
       scheme: provider.scheme, host, ...(provider.port !== undefined && { port: provider.port }), path: `${issueSearchPath}?${query.toString()}`,
       headers: { authorization: presentation.authorization, ...(etag !== undefined && { 'if-none-match': etag }) }, isAddressAllowed: (address) => isAddressAllowedFor(provider, address),

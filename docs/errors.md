@@ -22,9 +22,9 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 
 | Kind | HTTP status | Codes |
 | --- | --- | --- |
-| `invalid_request` | 400 | 32 |
+| `invalid_request` | 400 | 33 |
 | `unauthorized` | 401 | 3 |
-| `not_found` | 404 | 23 |
+| `not_found` | 404 | 24 |
 | `conflict` | 409 | 56 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 13 |
@@ -64,6 +64,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `integration_provider_unknown` | 400 | `never` |
 | `integration_host_not_allowed` | 400 | `never` |
 | `integration_label_is_secret` | 400 | `never` |
+| `integration_view_jql_refused` | 400 | `never` |
 | `question_unclassified` | 400 | `never` |
 | `row_guard_violation` | 400 | `never` |
 | `message_held_for_review` | 400 | `never` |
@@ -100,6 +101,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `playbook_version_not_found` | 404 | `never` |
 | `integration_not_found` | 404 | `never` |
 | `integration_connection_not_found` | 404 | `never` |
+| `integration_view_config_not_found` | 404 | `never` |
 | `playbook_run_not_found` | 404 | `never` |
 | `escalation_not_found` | 404 | `never` |
 | `secret_scope_not_found` | 404 | `never` |

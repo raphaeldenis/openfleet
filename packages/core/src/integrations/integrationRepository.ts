@@ -35,6 +35,18 @@ export interface ConnectionPollingRecord {
   isStopped: boolean;
 }
 
+/** The query a human may approve for an integration and the revision it was last written at; the approval is the digest of the content as it was reviewed. */
+export interface ViewConfigRecord {
+  profileId: string;
+  jql: string;
+  fields: string[];
+  contentRev: number;
+  approvedRev?: number;
+  approvedDigest?: string;
+  approvedAt?: string;
+}
+
+interface ViewConfigRow { profile_id: string; jql: string; fields_json: string; content_rev: number; approved_rev: number | null; approved_digest: string | null; approved_at: string | null }
 interface PollStateRow { etag: string | null; consecutive_failures: number; next_poll_at: string; last_polled_at: string }
 interface ConnectionPollingRow { consecutive_auth_failures: number; is_stopped: number }
 interface ItemRow { external_id: string; fields_json: string }
@@ -145,6 +157,37 @@ export class IntegrationRepository {
   resumePolling(connectionId: string, { nowIso }: { nowIso: string }): void {
     this.saveConnectionPolling(connectionId, { consecutiveAuthFailures: 0, isStopped: false });
     this.db.prepare('UPDATE integration_poll_state SET next_poll_at = ?, consecutive_failures = 0 WHERE profile_id IN (SELECT id FROM integration_profiles WHERE connection_id = ?)').run(nowIso, connectionId);
+  }
+
+  findViewConfig(profileId: string): ViewConfigRecord | undefined {
+    const row = this.db.prepare('SELECT profile_id, jql, fields_json, content_rev, approved_rev, approved_digest, approved_at FROM integration_view_configs WHERE profile_id = ?').get(profileId) as ViewConfigRow | undefined;
+    if (row === undefined) return undefined;
+    return {
+      profileId: row.profile_id, jql: row.jql, fields: JSON.parse(row.fields_json) as string[], contentRev: row.content_rev,
+      ...(row.approved_rev !== null && { approvedRev: row.approved_rev }), ...(row.approved_digest !== null && { approvedDigest: row.approved_digest }), ...(row.approved_at !== null && { approvedAt: row.approved_at }),
+    };
+  }
+
+  /** Writes the content as a new revision and clears any approval: a configuration is `pending` after every write. */
+  saveViewConfig(profileId: string, content: { jql: string; fields: string[] }, { now }: { now: string }): void {
+    this.db.prepare(`
+      INSERT INTO integration_view_configs (profile_id, jql, fields_json, content_rev, updated_at) VALUES (?, ?, ?, 1, ?)
+      ON CONFLICT(profile_id) DO UPDATE SET jql = excluded.jql, fields_json = excluded.fields_json, content_rev = integration_view_configs.content_rev + 1,
+        approved_rev = NULL, approved_digest = NULL, approved_at = NULL, updated_at = excluded.updated_at`)
+      .run(profileId, content.jql, JSON.stringify(content.fields), now);
+  }
+
+  /**
+   * Records the approval of the content at `approvedRev` and makes the profile due at `now` with no ETag, so the approved query is asked fresh instead of answered 304 for the previous one.
+   * False when the configuration is no longer at that revision.
+   */
+  approveViewConfig({ profileId, approvedRev, digest, now }: { profileId: string; approvedRev: number; digest: string; now: string }): boolean {
+    return inTransaction(this.db, 'approveIntegrationViewConfig', () => {
+      const result = this.db.prepare('UPDATE integration_view_configs SET approved_rev = ?, approved_digest = ?, approved_at = ? WHERE profile_id = ? AND content_rev = ?').run(approvedRev, digest, now, profileId, approvedRev);
+      const isApproved = Number(result.changes) === 1;
+      if (isApproved) this.db.prepare('UPDATE integration_poll_state SET etag = NULL, next_poll_at = ?, consecutive_failures = 0 WHERE profile_id = ?').run(now, profileId);
+      return isApproved;
+    });
   }
 
   /** Replaces the items of a profile by the issues of the last answer, all or nothing. */

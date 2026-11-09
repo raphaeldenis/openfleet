@@ -52,6 +52,39 @@ export interface IntegrationIssueItem {
   untrusted: { summary: string; status?: string; priority?: string; issueType?: string; assignee?: string };
 }
 
+/** The Jira fields a view may display; the daemon asks the provider for these and no other. */
+export const VIEW_CONFIG_FIELDS = ['summary', 'status', 'priority', 'issuetype', 'assignee', 'updated'] as const;
+
+/** What a human approves for an integration: the query the daemon runs and the fields it keeps. */
+export interface ViewConfigContent {
+  jql: string;
+  fields: string[];
+}
+
+/** `pending` is a proposal that has no effect; `approved` is the content a human reviewed, still unchanged. */
+export const VIEW_CONFIG_STATES = ['pending', 'approved'] as const;
+export type ViewConfigState = (typeof VIEW_CONFIG_STATES)[number];
+
+export interface IntegrationViewConfigView extends ViewConfigContent {
+  integrationId: string;
+  contentRev: number;
+  state: ViewConfigState;
+  /** The digest that approving this revision would record: what a human reviews. */
+  reviewDigest: string;
+  approvedAt?: string;
+}
+
+/** A proposal: the query and the fields. A write replaces the previous content and puts the configuration back to `pending`. */
+export const SaveViewConfigBodySchema = z.object({
+  jql: z.string().max(1000),
+  fields: z.array(z.string().max(32)).max(16),
+  expectedRev: z.int().min(1).optional(),
+}).strict();
+export type SaveViewConfigBody = z.infer<typeof SaveViewConfigBodySchema>;
+
+export const ApproveViewConfigBodySchema = z.object({ approvedRev: z.int().min(1) }).strict();
+export type ApproveViewConfigBody = z.infer<typeof ApproveViewConfigBodySchema>;
+
 /** Polling of a connection stops after repeated refusals of its credential, and resumes when a refresh finds the credential working. */
 export const INTEGRATION_POLLING_STATES = ['active', 'stopped_auth_failed'] as const;
 export type IntegrationPollingState = (typeof INTEGRATION_POLLING_STATES)[number];

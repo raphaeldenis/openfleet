@@ -147,7 +147,8 @@ describe('describeError: every Error subclass of core is mapped or internal on p
   // ScapeImportError is raised by the import command line only and answered by importCli.ts; no REST route or MCP tool throws it.
   // KernelError is raised by the playbook kernel, which no route, MCP tool or runner calls: no KernelError reaches describeError,
   // and its codes are not in the shared error registry.
-  const INTERNAL_ON_PURPOSE = ['ConfigFileError', 'DatabaseOpenError', 'PortInUseError', 'DataStoreWriteError', 'BackupFailedError', 'MigrationFailedError', 'SchemaNewerThanCodeError', 'ScapeImportError', 'KernelError'];
+  // Refusal is thrown and caught inside the view query checker (viewConfigJql.ts), which answers with a typed result: it never leaves that module.
+  const INTERNAL_ON_PURPOSE = ['Refusal', 'ConfigFileError', 'DatabaseOpenError', 'PortInUseError', 'DataStoreWriteError', 'BackupFailedError', 'MigrationFailedError', 'SchemaNewerThanCodeError', 'ScapeImportError', 'KernelError'];
 
   const declaredErrorClasses = (): string[] =>
     readdirSync(CORE_DIRECTORY, { recursive: true, encoding: 'utf8' })

@@ -53,6 +53,8 @@ export const ERROR_CODES = {
   integration_provider_unknown: { kind: 'invalid_request' },
   integration_host_not_allowed: { kind: 'invalid_request' },
   integration_label_is_secret: { kind: 'invalid_request' },
+  // A view query outside the short allow list of clauses and operators: it is refused whole, before it is stored or run.
+  integration_view_jql_refused: { kind: 'invalid_request' },
 
   unauthorized: { kind: 'unauthorized' },
   // Arming a trigger is a gesture of a human: the admin token alone is not the proof, a single-use proof minted by the desktop app is.
@@ -82,6 +84,7 @@ export const ERROR_CODES = {
   // An integration of another project reads exactly like one that does not exist.
   integration_not_found: { kind: 'not_found' },
   integration_connection_not_found: { kind: 'not_found' },
+  integration_view_config_not_found: { kind: 'not_found' },
   playbook_run_not_found: { kind: 'not_found' },
 
   // A run is refused: no human approved this content (or an edit cleared the approval), the digest a human confirmed is not the digest of the playbook as it stands,

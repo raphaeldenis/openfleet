@@ -124,7 +124,7 @@ describe('the integration polling migration upgrading a database that already ho
   it('applies only 071 on top of what was there and keeps the connections, profiles and health untouched', () => {
     const db = openUpgradedDatabase();
 
-    expect(db.prepare('SELECT version FROM schema_migrations WHERE version >= ? ORDER BY version').all(POLLING_VERSION)).toEqual([{ version: POLLING_VERSION }]);
+    expect(db.prepare("SELECT version FROM schema_migrations WHERE version >= ? AND version < '072' ORDER BY version").all(POLLING_VERSION)).toEqual([{ version: POLLING_VERSION }]);
     expect(db.prepare('SELECT id, provider FROM integration_connections').all()).toEqual([{ id: 'c1', provider: 'jira_cloud' }]);
     expect(db.prepare('SELECT id, resource FROM integration_profiles').all()).toEqual([{ id: 'i1', resource: 'CCM' }]);
     expect(db.prepare('SELECT status FROM integration_health').all()).toEqual([{ status: 'ok' }]);
