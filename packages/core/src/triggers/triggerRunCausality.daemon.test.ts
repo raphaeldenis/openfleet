@@ -50,25 +50,18 @@ describe('a table written by the script of a run that a trigger started', () => 
     expect((p.world.db.prepare('SELECT COUNT(*) AS n FROM ds_row_history WHERE store_id = ?').get(table.storeId) as { n: number }).n).toBe(2);
   });
 
-  it('is still not offered to that trigger when the script ended before the write was read, inside the window after the start of the run', async () => {
-    const p = await boot();
-    const { table, triggerId } = await loopAfterItsFirstRun(p);
-    const suppressedBefore = p.offersSuppressedFor(triggerId);
-
-    table.insert({ title: 'a later row' });
-
-    expect(p.offersSuppressedFor(triggerId)).toBe(suppressedBefore + 1);
-    expect(p.fireRowsOf(triggerId)).toHaveLength(1);
-  });
-
-  it('is offered again once the window after the start of an ended run has passed', async () => {
+  it('offers a human write made after the run ended as any other, at chain depth 1', async () => {
     const p = await boot();
     const { table, triggerId, firstRun } = await loopAfterItsFirstRun(p);
-    p.dateRun(firstRun.id, { startedAt: isoAgo(WINDOW_MS + 10 * MINUTE_MS), endedAt: isoAgo(WINDOW_MS + 9 * MINUTE_MS) });
+    p.dateRun(firstRun.id, { startedAt: isoAgo(2 * MINUTE_MS), endedAt: isoAgo(MINUTE_MS) });
+    const suppressedBefore = p.offersSuppressedFor(triggerId);
 
-    table.insert({ title: 'a row after the window' });
+    table.insert({ title: 'a human row after the run ended' });
 
     expect(p.fireRowsOf(triggerId).map((fire) => fire.chain_depth)).toEqual([1, 1]);
+    expect(p.offersSuppressedFor(triggerId)).toBe(suppressedBefore);
+    await p.untilRunsStarted(2);
+    await p.untilNoRunIsRunning();
   });
 
   it('is not offered to the trigger while its run is still running, however long ago the run started', async () => {
@@ -83,7 +76,7 @@ describe('a table written by the script of a run that a trigger started', () => 
     expect(p.fireRowsOf(triggerId)).toHaveLength(1);
   });
 
-  it('is not offered to the trigger when the run ended after the write, even if it started before the window', async () => {
+  it('is not offered to the trigger when the run ended after the write, however long ago it started', async () => {
     const p = await boot();
     const { table, triggerId, firstRun } = await loopAfterItsFirstRun(p);
     p.dateRun(firstRun.id, { startedAt: isoAgo(3 * WINDOW_MS), endedAt: isoAhead(MINUTE_MS) });
@@ -117,14 +110,14 @@ describe('a table written by the script of a run that a trigger started', () => 
     world.engine.submit({ triggerId: created.id, dedupKey: 'elsewhere', event: { session: { id: 's1' } } });
     await p.untilRunsStarted(1);
     await p.untilNoRunIsRunning();
+    p.dateRun(p.runsOf(foreign.id)[0]!.id, { startedAt: isoAgo(MINUTE_MS), endedAt: null, status: 'running' });
     const { table, triggerId } = await armTheLoop(p);
 
     table.insert({ title: 'a human row while another project runs a playbook' });
 
     expect(p.fireRowsOf(triggerId).map((fire) => [fire.ledger_state, fire.chain_depth])).toEqual([['attempted', 1]]);
     expect(p.offersSuppressedFor(triggerId)).toBe(0);
-    await p.untilRunsStarted(2);
-    await p.untilNoRunIsRunning();
+    await p.untilFiresLeaveAttempted(triggerId);
   });
 });
 
@@ -151,10 +144,13 @@ describe('a chain of triggers whose playbooks write each other\'s tables', () =>
     await p.untilFiresLeaveAttempted(triggerA);
     await p.untilFiresLeaveAttempted(triggerB);
 
-    expect(p.fireRowsOf(triggerA).map((fire) => [fire.ledger_state, fire.chain_depth])).toEqual([['completed', 1]]);
+    const firesOfA = p.fireRowsOf(triggerA);
+    const wayBackToA = firesOfA.slice(1);
+    expect(firesOfA[0]).toMatchObject({ ledger_state: 'completed', chain_depth: 1 });
     expect(p.fireRowsOf(triggerB).map((fire) => [fire.ledger_state, fire.chain_depth])).toEqual([['completed', 2]]);
     expect([p.runsOf(playbookA.id).length, p.runsOf(playbookB.id).length]).toEqual([1, 1]);
-    expect(p.offersSuppressedFor(triggerA)).toBe(1);
+    expect(wayBackToA.every((fire) => fire.ledger_state === 'cancelled' && fire.settle_reason === 'chain_depth' && fire.chain_depth === 3)).toBe(true);
+    expect(wayBackToA.length + p.offersSuppressedFor(triggerA)).toBe(1);
   });
 
   it('cancels the third link of a chain with chain_depth and starts no run for it', async () => {

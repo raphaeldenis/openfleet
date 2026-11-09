@@ -288,7 +288,7 @@ export class TableSource {
 
     const writtenAtMs = Date.parse(change.createdAt);
     const isDated = Number.isFinite(writtenAtMs);
-    const causes = isDated ? [...this.causesFromTheAuthor(change, projectId, writtenAtMs), ...this.causesFromRunsAlive(change, projectId, writtenAtMs)] : [];
+    const causes = isDated ? [...this.causesFromTheAuthor(change, projectId, writtenAtMs), ...this.causesFromRunsAlive(change, projectId)] : [];
     const result = { triggerIds: new Set(causes.map((cause) => cause.triggerId)), chainDepth: Math.max(0, ...causes.map((cause) => cause.chainDepth)) };
     cache.set(key, result);
     return result;
@@ -306,10 +306,10 @@ export class TableSource {
 
   /**
    * A script of a playbook run writes through the REST API as the human "You", so the author says nothing: a write is attributed to every playbook run of the project
-   * that was running at that moment or started in the hour before it, and so to the fire that started the run.
+   * that was running at that moment, and so to the fire that started the run. A write after the run ended is nobody's effect.
    */
-  private causesFromRunsAlive(change: DsRowHistoryEntry, projectId: string, writtenAtMs: number): { triggerId: string; chainDepth: number }[] {
-    return this.deps.ledger.causesOfRunsAliveAt({ projectId, atIso: change.createdAt, startedSinceIso: new Date(writtenAtMs - CHAIN_CAUSE_WINDOW_MINUTES * MINUTE_MS).toISOString() });
+  private causesFromRunsAlive(change: DsRowHistoryEntry, projectId: string): { triggerId: string; chainDepth: number }[] {
+    return this.deps.ledger.causesOfRunsAliveAt({ projectId, atIso: change.createdAt });
   }
 
   /** The sessions of the project that carry the label, and their ancestors of the same project. */

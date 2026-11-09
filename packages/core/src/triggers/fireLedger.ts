@@ -158,16 +158,16 @@ export class FireLedger {
   }
 
   /**
-   * The fires whose playbook run was alive at `atIso` in the project: the run had started by then and was still running at that moment, or started no earlier than `startedSinceIso`.
-   * A write made then may be an effect of that run, whoever the daemon records as its author; each fire answers with the depth of its chain, which is also the depth of its run.
-   * The run is found from `trigger_fires.run_id`, which the engine sets when the run is journaled.
+   * The fires whose playbook run was running at `atIso` in the project: it had started by then and had not ended before.
+   * A script writes only while its run runs, so a write made then may be an effect of that run, whoever the daemon records as its author; each fire answers with the depth of its chain, which is also the depth of its run.
+   * The run is found from `trigger_fires.run_id`, which the engine sets when the fire settles, right after the runner journals the run.
    */
-  causesOfRunsAliveAt(input: { projectId: string; atIso: string; startedSinceIso: string }): { triggerId: string; chainDepth: number }[] {
+  causesOfRunsAliveAt(input: { projectId: string; atIso: string }): { triggerId: string; chainDepth: number }[] {
     const rows = this.db.prepare(
       `SELECT DISTINCT f.trigger_id AS triggerId, f.chain_depth AS chainDepth FROM trigger_fires f
        JOIN triggers t ON t.id = f.trigger_id JOIN playbook_runs r ON r.id = f.run_id
-       WHERE t.project_id = ? AND f.ledger_state IN (${STATES_SQL_LIST}) AND r.started_at <= ? AND (r.started_at >= ? OR r.ended_at IS NULL OR r.ended_at >= ?)`,
-    ).all(input.projectId, input.atIso, input.startedSinceIso, input.atIso) as unknown as { triggerId: string; chainDepth: number }[];
+       WHERE t.project_id = ? AND f.ledger_state IN (${STATES_SQL_LIST}) AND r.started_at <= ? AND (r.ended_at IS NULL OR r.ended_at >= ?)`,
+    ).all(input.projectId, input.atIso, input.atIso) as unknown as { triggerId: string; chainDepth: number }[];
     return rows;
   }
 
