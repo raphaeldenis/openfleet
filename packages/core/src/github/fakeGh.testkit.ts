@@ -2,11 +2,16 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, chmodSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+/** Separates the calls in the argv log; an argument of gh may be `--`, so `--` cannot do it. */
+const END_OF_CALL = '<<end-of-call>>';
+
 export interface FakeGhBehaviour {
   stdout?: string;
   exitCode?: number;
   /** Seconds the fake sleeps before answering, to provoke a timeout. */
   sleepSeconds?: number;
+  /** Seconds after which a background child of the fake writes the survivor marker, silent on stdout and stderr. */
+  descendantWritesMarkerAfterSeconds?: number;
 }
 
 export interface FakeGh {
@@ -15,6 +20,8 @@ export interface FakeGh {
   invocations(): string[][];
   /** The environment variable names the fake saw. */
   environmentNames(): string[];
+  /** True once a descendant of the fake has written its marker. */
+  descendantWroteMarker(): boolean;
   setBehaviour(behaviour: FakeGhBehaviour): void;
 }
 
@@ -27,12 +34,15 @@ export function createFakeGh(initial: FakeGhBehaviour = {}): FakeGh {
   const sleepFile = join(directory, 'sleep-seconds');
   const argvLog = join(directory, 'argv.log');
   const environmentLog = join(directory, 'environment.log');
+  const descendantSecondsFile = join(directory, 'descendant-seconds');
+  const descendantMarker = join(directory, 'descendant-marker');
 
   writeFileSync(executable, [
     '#!/bin/sh',
     `printf '%s\\n' "$@" >> '${argvLog}'`,
-    `printf '%s\\n' '--' >> '${argvLog}'`,
+    `printf '%s\\n' '${END_OF_CALL}' >> '${argvLog}'`,
     `env | cut -d= -f1 >> '${environmentLog}'`,
+    `if [ "$(cat '${descendantSecondsFile}')" != "0" ]; then ( sleep "$(cat '${descendantSecondsFile}')"; echo survived > '${descendantMarker}' ) >/dev/null 2>&1 & fi`,
     `if [ "$(cat '${sleepFile}')" != "0" ]; then exec sleep "$(cat '${sleepFile}')"; fi`,
     `cat '${payloadFile}'`,
     `exit "$(cat '${exitCodeFile}')"`,
@@ -40,21 +50,24 @@ export function createFakeGh(initial: FakeGhBehaviour = {}): FakeGh {
   ].join('\n'));
   chmodSync(executable, 0o755);
 
-  const setBehaviour = ({ stdout = '', exitCode = 0, sleepSeconds = 0 }: FakeGhBehaviour): void => {
+  const setBehaviour = ({ stdout = '', exitCode = 0, sleepSeconds = 0, descendantWritesMarkerAfterSeconds = 0 }: FakeGhBehaviour): void => {
     writeFileSync(payloadFile, stdout);
     writeFileSync(exitCodeFile, String(exitCode));
     writeFileSync(sleepFile, String(sleepSeconds));
+    writeFileSync(descendantSecondsFile, String(descendantWritesMarkerAfterSeconds));
   };
   setBehaviour(initial);
 
   const invocations = (): string[][] => {
     if (!existsSync(argvLog)) return [];
-    const calls = readFileSync(argvLog, 'utf8').split('\n--\n').filter((call) => call !== '');
-    return calls.map((call) => call.replace(/\n--$/, '').split('\n'));
+    const calls = readFileSync(argvLog, 'utf8').split(`\n${END_OF_CALL}\n`).filter((call) => call !== '');
+    return calls.map((call) => call.replace(`\n${END_OF_CALL}`, '').split('\n'));
   };
   const environmentNames = (): string[] => (existsSync(environmentLog) ? readFileSync(environmentLog, 'utf8').split('\n').filter((name) => name !== '') : []);
 
-  return { executable, invocations, environmentNames, setBehaviour };
+  const descendantWroteMarker = (): boolean => existsSync(descendantMarker);
+
+  return { executable, invocations, environmentNames, descendantWroteMarker, setBehaviour };
 }
 
 /** A gh answer for one pull request, with the check shapes gh prints. */
@@ -62,7 +75,21 @@ export function ghPullRequestJson({ state = 'OPEN', headRefOid = 'a'.repeat(40),
   return JSON.stringify({ state, headRefOid, statusCheckRollup: checks });
 }
 
-export const checkRun = ({ name = 'build', status = 'COMPLETED', conclusion = 'SUCCESS' }: { name?: string; status?: string; conclusion?: string } = {}) =>
+/** One entry of `gh search prs --json ...`. */
+export const searchedPullRequest = ({ number = 7, repo = 'acme/widgets', title = 'Fix the cache', author = 'ada', isDraft = false, url = `https://github.com/${repo}/pull/${number}` }: { number?: number; repo?: string; title?: string; author?: string; isDraft?: boolean; url?: string } = {}) =>
+  ({ number, title, repository: { name: repo.split('/')[1], nameWithOwner: repo }, author: { login: author }, isDraft, url });
+
+export const ghSearchResultsJson = (entries: unknown[]): string => JSON.stringify(entries);
+
+/** The answer of `gh pr view --json ...` for the detail tool. */
+export function ghPullRequestDetailJson({ title = 'Fix the cache', state = 'OPEN', headRefOid = 'a'.repeat(40), headRefName = 'fix-cache', reviewDecision = '', checks = [] }: { title?: string; state?: string; headRefOid?: string; headRefName?: string; reviewDecision?: string; checks?: unknown[] } = {}): string {
+  return JSON.stringify({
+    number: 7, title, state, isDraft: false, author: { login: 'ada' }, headRefName, baseRefName: 'main', headRefOid,
+    url: 'https://github.com/acme/widgets/pull/7', reviewDecision, statusCheckRollup: checks,
+  });
+}
+
+export const checkRun =({ name = 'build', status = 'COMPLETED', conclusion = 'SUCCESS' }: { name?: string; status?: string; conclusion?: string } = {}) =>
   ({ __typename: 'CheckRun', name, status, conclusion });
 
 export const statusContext = ({ context = 'ci/legacy', state = 'SUCCESS' }: { context?: string; state?: string } = {}) =>

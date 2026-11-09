@@ -8,7 +8,7 @@ export { TOOL_CATEGORIES, type ToolCategory };
  * destructive: removes data, or overwrites content or settings in place without history.
  * execution_external: runs git or a process, or delivers a message into a session.
  */
-export type ToolDomain = 'data_stores' | 'notes' | 'sessions' | 'managers' | 'governance' | 'escalation' | 'review' | 'worktrees' | 'projects' | 'knowledge' | 'working_state' | 'triggers' | 'playbooks';
+export type ToolDomain = 'data_stores' | 'notes' | 'sessions' | 'managers' | 'governance' | 'escalation' | 'review' | 'worktrees' | 'projects' | 'knowledge' | 'working_state' | 'triggers' | 'playbooks' | 'integrations';
 
 export interface ToolCatalogEntry {
   domain: ToolDomain;
@@ -99,6 +99,9 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
   list_projects: { domain: 'projects', category: 'read_only' },
 
   search_knowledge: { domain: 'knowledge', category: 'read_only' },
+
+  get_github_pr: { domain: 'integrations', category: 'read_only' },
+  list_github_prs: { domain: 'integrations', category: 'read_only' },
 
   add_playbook_cell: { domain: 'playbooks', category: 'additive' },
   clear_playbook_secret: { domain: 'playbooks', category: 'destructive' },
