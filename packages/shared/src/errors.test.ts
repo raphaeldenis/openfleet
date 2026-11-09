@@ -51,7 +51,7 @@ describe('the wire contract of the registry', () => {
     governance_queue_full: 'conflict/later',
     question_unclassified: 'invalid_request/never', escalation_open: 'conflict/later', criteria_stale: 'conflict/never', escalation_not_found: 'not_found/never',
     law_not_found: 'not_found/never', law_revision_conflict: 'conflict/after_refresh', law_withdrawn: 'conflict/never',
-    breaker_open: 'conflict/never',
+    breaker_open: 'conflict/never', trigger_playbook_changed: 'conflict/never',
     integration_provider_unknown: 'invalid_request/never', integration_host_not_allowed: 'invalid_request/never', integration_label_is_secret: 'invalid_request/never',
     integration_not_found: 'not_found/never', integration_connection_not_found: 'not_found/never', integration_refresh_cooldown: 'conflict/later',
     session_closed: 'conflict/never', stale_revision: 'conflict/after_refresh', file_backed: 'conflict/never', file_unreadable: 'conflict/later',

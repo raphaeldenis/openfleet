@@ -3,7 +3,7 @@ import {
   type PlaybookCell, type PlaybookInputDeclaration, type PlaybookOrigin, type PlaybookPolicy, type PlaybookVersionSource, type SecretScope,
 } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
-import { inTransaction } from '../db/transaction.js';
+import { afterCommit, inTransaction } from '../db/transaction.js';
 import type { SecretRefRepository } from '../secrets/secretRefRepository.js';
 import { parsePlaybookCell } from './cellParsing.js';
 import { canonicalDigestOf } from './kernel/canonicalDigest.js';
@@ -27,6 +27,10 @@ export interface PlaybookServiceDeps {
   repository: PlaybookRepository;
   versions: PlaybookVersionRepository;
   secretRefs: SecretRefRepository;
+  /** The triggers whose RUN starts a playbook: a write that changes or deletes the playbook disarms them in its own transaction. */
+  triggers: { disarmThoseRunningPlaybook: (playbookId: string) => string[] };
+  /** Told once the write is committed which triggers it disarmed, never when it rolls back. */
+  onTriggersDisarmed: (disarmed: { playbookId: string; triggerIds: string[] }) => void;
   projectExists: (projectId: string) => boolean;
   clock: () => string;
   newId: () => string;
@@ -109,6 +113,7 @@ export class PlaybookService {
     inTransaction(this.deps.db, 'playbook_delete', () => {
       const wasDeleted = this.deps.repository.delete({ id, expectedRev });
       if (!wasDeleted) throw conflict(this.getById(id).contentRev);
+      this.disarmTriggersRunning(id);
       this.declareReferencedSecrets(id, []);
     });
   }
@@ -141,13 +146,15 @@ export class PlaybookService {
       ...(parsedFlow !== undefined && { flow: parsedFlow }),
       ...(policy !== undefined && { policy: PlaybookPolicySchema.parse(policy) }),
     };
+    const changesTheVersionedContent = replacesVersionedContent(checkedContent);
     const clearsAnApproval = current.approvedDigest !== null;
-    const mustKeepCurrentVersion = replacesVersionedContent(checkedContent) || clearsAnApproval;
+    const mustKeepCurrentVersion = changesTheVersionedContent || clearsAnApproval;
 
     inTransaction(this.deps.db, 'playbook_edit', () => {
       const wasReplaced = repository.replaceContent({ id, expectedRev: current.contentRev, content: checkedContent, now: clock() });
       if (!wasReplaced) throw conflict(this.getById(id).contentRev);
       if (mustKeepCurrentVersion) this.keepVersionOf(current, options.versionSource ?? 'edit');
+      if (changesTheVersionedContent) this.disarmTriggersRunning(id);
       this.declareReferencedSecrets(id, secretNames);
     });
     return this.getById(id);
@@ -170,6 +177,15 @@ export class PlaybookService {
   restoreVersion(id: string, input: { rev: number }, options: WriteOptions): PlaybookRecord {
     const { name, inputs, flow, policy } = this.getVersion(id, input.rev);
     return this.edit(id, () => ({ name, inputs, flow, policy }), { ...options, versionSource: 'restore' });
+  }
+
+  /** A trigger armed on the playbook was reviewed against content that is gone: it is disarmed inside the write, and its listeners hear of it after the commit. */
+  private disarmTriggersRunning(playbookId: string): void {
+    const { db, triggers, onTriggersDisarmed } = this.deps;
+    const triggerIds = triggers.disarmThoseRunningPlaybook(playbookId);
+    const disarmedNone = triggerIds.length === 0;
+    if (disarmedNone) return;
+    afterCommit(db, () => onTriggersDisarmed({ playbookId, triggerIds }));
   }
 
   private keepVersionOf(replaced: PlaybookRecord, source: PlaybookVersionSource): void {
