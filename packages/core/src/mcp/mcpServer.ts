@@ -44,6 +44,8 @@ import { registerProjectProfileTools } from './projectProfileTools.js';
 import { registerProjectTools } from './projectTools.js';
 import { registerScheduledEventTools } from './scheduledEventTools.js';
 import { registerCiWatchTools } from './ciWatchTools.js';
+import { registerGithubReadTools } from './githubReadTools.js';
+import type { GhPullRequestReader } from '../github/ghPullRequestReader.js';
 import { registerSecretTools } from './secretTools.js';
 import type { SecretService } from '../secrets/secretService.js';
 import type { CiWatchService } from '../managers/ciWatchService.js';
@@ -65,7 +67,7 @@ import { registerWorktreeTools } from './worktreeTools.js';
 import { WorktreeService } from '../worktrees/worktreeService.js';
 
 /** The only tools a reviewer sees: it reports to its manager and writes nothing else. */
-const REVIEWER_TOOL_NAMES: ReadonlySet<string> = new Set(['report_ship_verdict', 'message_parent']);
+export const REVIEWER_TOOL_NAMES: ReadonlySet<string> = new Set(['report_ship_verdict', 'message_parent']);
 
 /** A view of the server that registers only the tools allowed; every other registration is skipped. */
 function registeringOnly(server: McpServer, allowedToolNames: ReadonlySet<string>): McpServer {
@@ -86,7 +88,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { triggers?: TriggerService; triggerFires?: FireLedger; playbooks?: PlaybookService; secrets?: SecretService; activity?: ActivityRecorder; askUserGate?: AskUserGate; criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService;projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
+export function createMcpHandler(deps: { triggers?: TriggerService; triggerFires?: FireLedger; playbooks?: PlaybookService; secrets?: SecretService; activity?: ActivityRecorder; askUserGate?: AskUserGate; criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService; github?: GhPullRequestReader; projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -104,6 +106,7 @@ export function createMcpHandler(deps: { triggers?: TriggerService; triggerFires
     if (deps.reviewFindings) registerStepFindingTools(toolServer, { reviewFindings: deps.reviewFindings, managers: deps.managers, caller, ...(deps.ticketPattern === undefined ? {} : { ticketPattern: deps.ticketPattern }) });
     if (deps.scheduledEvents) registerScheduledEventTools(toolServer, { scheduledEvents: deps.scheduledEvents, managers: deps.managers, caller });
     if (deps.ciWatch) registerCiWatchTools(toolServer, { ciWatch: deps.ciWatch, managers: deps.managers, caller });
+    if (deps.github) registerGithubReadTools(toolServer, { github: deps.github });
     if (deps.secrets) registerSecretTools(toolServer, { secrets: deps.secrets });
     if (deps.triggers && deps.triggerFires) registerTriggerTools(toolServer, { triggers: deps.triggers, sessions: deps.sessions, fires: deps.triggerFires, caller });
     if (deps.playbooks) registerPlaybookTools(toolServer, { playbooks: deps.playbooks, caller });
