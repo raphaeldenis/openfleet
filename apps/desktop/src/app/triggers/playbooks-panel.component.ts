@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, untracked, viewChild, type Signal } from '@angular/core';
 import { FleetApiService } from '../core/fleet-api.service';
-import { copyFor } from '../core/error-copy';
+import { copyFor, retryOfError } from '../core/error-copy';
 import type { PlaybookSecretStatus, PlaybookVersionContent, PlaybookVersionList, PlaybookView } from '../core/playbook-trigger-views';
 import { BannerComponent } from '../design/banner.component';
 import { LOADING, failedLoadOf, loadedValueOf, type Load } from './load-state';
@@ -8,6 +8,11 @@ import { LOADING, failedLoadOf, loadedValueOf, type Load } from './load-state';
 interface PlaybookDetail {
   versions: PlaybookVersionList;
   secrets: PlaybookSecretStatus[];
+}
+
+interface RestoreFailure {
+  message: string;
+  isReloadAdvised: boolean;
 }
 
 const ORIGIN_LABELS = { native: 'Créé ici', imported: 'Importé', agent: 'Écrit par un agent' } as const;
@@ -98,7 +103,12 @@ const SOURCE_LABELS = { edit: 'Modification', restore: 'Restauration' } as const
             }
 
             <h3>Versions</h3>
-            @if (restoreError(); as message) { <p #restoreAlert tabindex="-1" class="error" role="alert" data-testid="restore-error">{{ message }}</p> }
+            @if (restoreFailure(); as failure) {
+              <div class="restore-failure">
+                <p #restoreAlert tabindex="-1" class="error" role="alert" data-testid="restore-error">{{ failure.message }}</p>
+                @if (failure.isReloadAdvised) { <button type="button" class="of-btn of-btn--compact" (click)="reloadPlaybook(playbook.id)">Recharger</button> }
+              </div>
+            }
             <ul class="versions" aria-label="Versions du playbook">
               @for (version of loaded.versions.versions; track version.rev) {
                 <li>
@@ -146,6 +156,7 @@ const SOURCE_LABELS = { edit: 'Modification', restore: 'Restauration' } as const
     .secrets li, .versions li { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .25rem 0; }
     .status[data-status='missing'] { color: var(--state-error); }
     .error { color: var(--state-error); margin: 0; }
+    .restore-failure { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
     .skeleton { height: 8rem; margin: .5rem; border-radius: .625rem; background: var(--sunk); }
     .empty { display: flex; flex-direction: column; gap: .25rem; padding: 2rem 1rem; text-align: center; color: var(--mut); }
     .empty-title { color: var(--fg); font-weight: 500; }
@@ -162,7 +173,7 @@ export class PlaybooksPanelComponent {
   protected readonly selectedId = signal<string | undefined>(undefined);
   protected readonly detail = signal<Load<PlaybookDetail>>(LOADING);
   protected readonly openedVersion = signal<Load<PlaybookVersionContent> | { status: 'closed' }>({ status: 'closed' });
-  protected readonly restoreError = signal<string | undefined>(undefined);
+  protected readonly restoreFailure = signal<RestoreFailure | undefined>(undefined);
   protected readonly isRestoring = signal(false);
 
   protected readonly loadedPlaybooks = computed(() => loadedValueOf(this.playbooks()));
@@ -191,7 +202,7 @@ export class PlaybooksPanelComponent {
     this.invalidateRequestsOfPreviousSelection();
     this.selectedId.set(undefined);
     this.openedVersion.set({ status: 'closed' });
-    this.restoreError.set(undefined);
+    this.restoreFailure.set(undefined);
   }
 
   /** Detail, version reads and restoration continuations started under an earlier selection find their token outdated. */
@@ -220,7 +231,7 @@ export class PlaybooksPanelComponent {
     this.selectedId.set(playbookId);
     this.detail.set(LOADING);
     this.openedVersion.set({ status: 'closed' });
-    this.restoreError.set(undefined);
+    this.restoreFailure.set(undefined);
     const playbook = this.loadedPlaybooks()?.find((candidate) => candidate.id === playbookId);
     try {
       const [versions, secrets] = await Promise.all([this.api.listPlaybookVersions(playbookId), this.secretStatusesOf(playbookId, playbook?.secrets ?? [])]);
@@ -253,23 +264,46 @@ export class PlaybooksPanelComponent {
     const versions = this.loadedDetail()?.versions;
     if (versions === undefined || this.isRestoring()) return;
     const selectionAtStart = this.latestSelectionRequest;
+    const listRequestAtStart = this.latestListRequest;
     const isStillOnSelectionAtStart = () => selectionAtStart === this.latestSelectionRequest;
     this.isRestoring.set(true);
-    this.restoreError.set(undefined);
+    this.restoreFailure.set(undefined);
     try {
       await this.api.restorePlaybookVersion({ playbookId, rev, expectedRev: versions.currentContentRev });
-      if (!isStillOnSelectionAtStart()) return;
-      await this.reload();
-      if (!isStillOnSelectionAtStart()) return;
-      await this.select(playbookId);
-      if (this.selectedId() === playbookId) this.focusAfterRender(this.playbookHeading);
+      if (!isStillOnSelectionAtStart()) {
+        void this.refreshListWithoutLeavingSelection(listRequestAtStart);
+        return;
+      }
+      await this.showFreshPlaybook(playbookId);
     } catch (error) {
       if (!isStillOnSelectionAtStart()) return;
-      this.restoreError.set(copyFor(error, { action: 'generic' }).text);
+      this.restoreFailure.set({ message: copyFor(error, { action: 'generic' }).text, isReloadAdvised: retryOfError(error) === 'after_refresh' });
       this.focusAfterRender(this.restoreAlert);
     } finally {
       this.isRestoring.set(false);
     }
+  }
+
+  protected async reloadPlaybook(playbookId: string): Promise<void> {
+    await this.showFreshPlaybook(playbookId);
+  }
+
+  /** Reads the list and the detail again, then puts the keyboard focus on the heading of the playbook; does nothing once the user has moved to another project. */
+  private async showFreshPlaybook(playbookId: string): Promise<void> {
+    const selectionAtStart = this.latestSelectionRequest;
+    await this.reload();
+    const hasMovedOn = selectionAtStart !== this.latestSelectionRequest;
+    if (hasMovedOn) return;
+    await this.select(playbookId);
+    if (this.selectedId() === playbookId) this.focusAfterRender(this.playbookHeading);
+  }
+
+  /** Replaces the cached list without the loading state, so the playbook chosen meanwhile stays on screen; a project chosen since owns its own list. */
+  private async refreshListWithoutLeavingSelection(listRequestAtStart: number): Promise<void> {
+    const isListOfSameProject = () => listRequestAtStart === this.latestListRequest;
+    if (!isListOfSameProject()) return;
+    const items = await this.api.listPlaybooks(this.projectId()).catch(() => undefined);
+    if (items !== undefined && isListOfSameProject()) this.playbooks.set({ status: 'loaded', value: items });
   }
 
   private focusAfterRender(target: Signal<ElementRef<HTMLElement> | undefined>): void {

@@ -252,7 +252,78 @@ describe('TriggersViewComponent: answers that arrive after the user moved on', (
 
       expect(screen.getByRole('heading', { name: 'Livrer' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Lire la révision 9' })).toBeInTheDocument();
-      expect(api.listPlaybooks).toHaveBeenCalledTimes(1);
+      expect(api.listPlaybooks).toHaveBeenCalledTimes(2);
+    });
+
+    describe('the list read again for the playbook restored while another one is chosen', () => {
+      const revisionOfFirstPlaybookOnceRestored = 4;
+
+      /** The list answers rev 3 until the restoration is sent, then rev 4; the answer to the list read after it is held by the test. */
+      async function startRestoringFirstPlaybookWithListHeldAfterwards(overrides: FakeApi = {}) {
+        const restoreAnswer = deferred<PlaybookView>();
+        const listAnswerAfterRestore = deferred<PlaybookView[]>();
+        let restorationSent = false;
+        const listPlaybooks = vi.fn((projectId: string) => {
+          if (projectId !== 'p1') return Promise.resolve([playbookOfOtherProject()]);
+          const firstPlaybookNow = playbook({ contentRev: restorationSent ? revisionOfFirstPlaybookOnceRestored : 3 });
+          return restorationSent ? listAnswerAfterRestore.promise : Promise.resolve([firstPlaybookNow, secondPlaybook()]);
+        });
+        const restorePlaybookVersion = vi.fn(() => { restorationSent = true; return restoreAnswer.promise; });
+        const rendered = await renderTwoProjects({ listPlaybooks, restorePlaybookVersion, ...overrides });
+        await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
+        await userEvent.click(await screen.findByRole('button', { name: 'Restaurer la révision 2' }));
+        await chooseSecondPlaybook();
+        return { ...rendered, restoreAnswer, listAnswerAfterRestore };
+      }
+
+      const firstPlaybookRestored = () => [playbook({ contentRev: revisionOfFirstPlaybookOnceRestored }), secondPlaybook()];
+
+      it('shows the new revision of the restored playbook in the list and stays on the one chosen meanwhile', async () => {
+        const { fixture, restoreAnswer, listAnswerAfterRestore } = await startRestoringFirstPlaybookWithListHeldAfterwards();
+
+        restoreAnswer.resolve(playbook({ contentRev: revisionOfFirstPlaybookOnceRestored }));
+        listAnswerAfterRestore.resolve(firstPlaybookRestored());
+        await letPendingAnswersLand(fixture);
+
+        expect(screen.getByRole('button', { name: /Déployer/ })).toHaveTextContent('rév. 4');
+        expect(screen.getByRole('heading', { name: 'Livrer' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Lire la révision 9' })).toBeInTheDocument();
+      });
+
+      it('keeps the detail of the playbook chosen meanwhile on screen while the list is read again', async () => {
+        const { fixture, restoreAnswer } = await startRestoringFirstPlaybookWithListHeldAfterwards();
+
+        restoreAnswer.resolve(playbook({ contentRev: revisionOfFirstPlaybookOnceRestored }));
+        await letPendingAnswersLand(fixture);
+
+        expect(screen.getByRole('heading', { name: 'Livrer' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Lire la révision 9' })).toBeInTheDocument();
+      });
+
+      it('leaves the list of the project chosen meanwhile alone when the list of the previous project arrives late', async () => {
+        const { fixture, restoreAnswer, listAnswerAfterRestore } = await startRestoringFirstPlaybookWithListHeldAfterwards();
+        restoreAnswer.resolve(playbook({ contentRev: revisionOfFirstPlaybookOnceRestored }));
+        await letPendingAnswersLand(fixture);
+        await chooseOtherProjectAndItsPlaybook();
+
+        listAnswerAfterRestore.resolve(firstPlaybookRestored());
+        await letPendingAnswersLand(fixture);
+
+        expect(screen.getByRole('heading', { name: 'Publier' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Déployer/ })).toBeNull();
+      });
+
+      it('keeps the list and says nothing when it cannot be read again', async () => {
+        const { fixture, restoreAnswer, listAnswerAfterRestore } = await startRestoringFirstPlaybookWithListHeldAfterwards();
+
+        restoreAnswer.resolve(playbook({ contentRev: revisionOfFirstPlaybookOnceRestored }));
+        listAnswerAfterRestore.reject(new ApiError(500, 'boom'));
+        await letPendingAnswersLand(fixture);
+
+        expect(screen.queryByTestId('playbooks-error')).toBeNull();
+        expect(screen.getByRole('button', { name: /Déployer/ })).toHaveTextContent('rév. 3');
+        expect(screen.getByRole('heading', { name: 'Livrer' })).toBeInTheDocument();
+      });
     });
 
     it('does not report a late restoration failure under the playbook chosen meanwhile', async () => {
@@ -307,6 +378,79 @@ describe('TriggersViewComponent: answers that arrive after the user moved on', (
       await fixture.whenStable();
 
       expect(document.activeElement).toBe(announcedError);
+    });
+  });
+
+  describe('reloading after the playbook changed since it was opened', () => {
+    const conflict = () => new ApiError(409, 'conflict', 'playbook_conflict');
+    const versionsOnceEditedElsewhere = (): PlaybookVersionList => ({ currentContentRev: 4, versions: [{ ...versions().versions[0], rev: 4 }, ...versions().versions] });
+
+    /** The playbook is at rev 3 when opened and at rev 4 once the restoration has been refused. */
+    async function failToRestoreBecauseEditedElsewhere() {
+      let editedElsewhere = false;
+      const rendered = await renderScreen({
+        restorePlaybookVersion: vi.fn(() => { editedElsewhere = true; return Promise.reject(conflict()); }),
+        listPlaybooks: vi.fn(() => Promise.resolve([playbook({ contentRev: editedElsewhere ? 4 : 3 })])),
+        listPlaybookVersions: vi.fn(() => Promise.resolve(editedElsewhere ? versionsOnceEditedElsewhere() : versions())),
+      });
+      await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Restaurer la révision 2' }));
+      await screen.findByTestId('restore-error');
+      return rendered;
+    }
+
+    it('reads the playbook and its versions again on Recharger and shows the current revision', async () => {
+      const { api } = await failToRestoreBecauseEditedElsewhere();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Recharger' }));
+
+      expect(await screen.findByRole('button', { name: 'Lire la révision 4' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Déployer/ })).toHaveTextContent('rév. 4');
+      expect(screen.getByRole('button', { name: 'Restaurer la révision 3' })).toBeEnabled();
+      expect(screen.queryByTestId('restore-error')).toBeNull();
+      expect(api.listPlaybookVersions).toHaveBeenCalledTimes(2);
+    });
+
+    it('puts the keyboard focus back on the heading of the playbook once reloaded', async () => {
+      const { fixture } = await failToRestoreBecauseEditedElsewhere();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Recharger' }));
+      await screen.findByRole('button', { name: 'Lire la révision 4' });
+      await fixture.whenStable();
+
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Déployer' }));
+    });
+
+    it('does not offer Recharger for a failure that reloading would not fix', async () => {
+      await renderScreen({ restorePlaybookVersion: vi.fn(() => Promise.reject(new ApiError(500, 'boom'))) });
+      await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Restaurer la révision 2' }));
+
+      expect(await screen.findByTestId('restore-error')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Recharger' })).toBeNull();
+    });
+
+    it('does not bring back the playbook of the previous project when the project changes during the reload', async () => {
+      const listAnswerOfReload = deferred<PlaybookView[]>();
+      let readsOfFirstProject = 0;
+      const listPlaybooks = vi.fn((projectId: string) => {
+        if (projectId !== 'p1') return Promise.resolve([playbookOfOtherProject()]);
+        readsOfFirstProject += 1;
+        return readsOfFirstProject === 1 ? Promise.resolve([playbook(), secondPlaybook()]) : listAnswerOfReload.promise;
+      });
+      const { api, fixture } = await renderTwoProjects({ listPlaybooks, restorePlaybookVersion: vi.fn(() => Promise.reject(conflict())) });
+      await userEvent.click(await screen.findByRole('button', { name: /Déployer/ }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Restaurer la révision 2' }));
+      await userEvent.click(await screen.findByRole('button', { name: 'Recharger' }));
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Projet' }), 'p2');
+      await screen.findByRole('button', { name: /Publier/ });
+
+      listAnswerOfReload.resolve([playbook(), secondPlaybook()]);
+      await letPendingAnswersLand(fixture);
+
+      expect(screen.queryByRole('heading', { name: 'Déployer' })).toBeNull();
+      expect(api.listPlaybookVersions).toHaveBeenCalledTimes(1);
     });
   });
 });
