@@ -479,6 +479,61 @@ describe('Triggers: edit', () => {
     expect(field('Titre')).toHaveValue(SECOND);
   });
 
+  describe('the draft keeps the revision it was opened from', () => {
+    const policyWithCap = (maxFiresPerDay: number, backlogMaxAgeMinutes: number) =>
+      ({ cooldownSeconds: 0, maxFiresPerDay, batchMode: 'per_event', backlogPolicy: 'fire_all', backlogMaxAgeMinutes }) as const;
+    const secondAtRevision5 = () => secondTrigger({ contentRev: 5, policy: policyWithCap(4, 45) });
+    const secondAtRevision6 = () => secondTrigger({ contentRev: 6, policy: policyWithCap(20, 90) });
+
+    async function openSecondEditorWhileFirstIsBeingArmed() {
+      const armAnswer = deferred<TriggerView>();
+      let secondChangedElsewhere = false;
+      const listTriggers = vi.fn(() => Promise.resolve([trigger(), secondChangedElsewhere ? secondAtRevision6() : secondAtRevision5()]));
+      const rendered = await renderTriggers({ api: { listTriggers, armTrigger: vi.fn(() => armAnswer.promise) } });
+      await choose(FIRST);
+      await arm(2);
+      await letPendingAnswersLand(rendered.fixture);
+      await choose(SECOND);
+      await openEditor();
+      secondChangedElsewhere = true;
+      return { ...rendered, armAnswer };
+    }
+
+    it('saves against the revision the form was opened from when the first trigger is armed late and the list moved on', async () => {
+      const { api, fixture, armAnswer } = await openSecondEditorWhileFirstIsBeingArmed();
+
+      armAnswer.resolve(armed());
+      await letPendingAnswersLand(fixture);
+      await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
+
+      expect(api.updateTrigger).toHaveBeenCalledWith({
+        triggerId: 't2', expectedRev: 5, changes: { title: SECOND, policy: policyWithCap(4, 45) },
+      });
+    });
+
+    it('keeps the values typed in the form when the first trigger is armed late', async () => {
+      const { fixture, armAnswer } = await openSecondEditorWhileFirstIsBeingArmed();
+      await userEvent.type(field('Titre'), '!');
+
+      armAnswer.resolve(armed());
+      await letPendingAnswersLand(fixture);
+
+      expect(field('Titre')).toHaveValue(`${SECOND}!`);
+      expect(field('Plafond de tirs par jour')).toHaveValue('4');
+    });
+
+    it('keeps the values typed in the form when the first trigger is refused late with a stale revision', async () => {
+      const { fixture, armAnswer } = await openSecondEditorWhileFirstIsBeingArmed();
+      await userEvent.type(field('Titre'), '!');
+
+      armAnswer.reject(staleRevision());
+      await letPendingAnswersLand(fixture);
+
+      expect(field('Titre')).toHaveValue(`${SECOND}!`);
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+  });
+
   it('shows no failure of a save that comes back late under the trigger chosen meanwhile', async () => {
     const saveAnswer = deferred<TriggerView>();
     const { fixture } = await renderTriggers({ triggers: [trigger(), secondTrigger()], api: { updateTrigger: vi.fn(() => saveAnswer.promise) } });
@@ -492,5 +547,313 @@ describe('Triggers: edit', () => {
 
     expect(screen.queryByRole('alert')).toBeNull();
     expect(heading(SECOND)).toBeInTheDocument();
+  });
+});
+
+describe('Triggers: the review shows everything the digest covers', () => {
+  const reviewText = () => screen.getByTestId('review-fields');
+  const armButton = () => screen.getByRole('button', { name: 'Armer la révision 2' });
+  const longPrompt = `${'a'.repeat(3000)}FIN-DU-PROMPT`;
+  const cronWhen = { source: 'cron', expression: '*/7 * * * *', timezone: 'Asia/Tokyo', catchUp: 'run_once' } as const;
+
+  it('shows the owner, the WHEN, each condition, the target and the policy with its backlog age', async () => {
+    await renderTriggers({
+      triggers: [trigger({
+        ownerManagerId: 'owner-m9', when: cronWhen,
+        conditions: [
+          { id: 'c1', lhs: 'event.slot.hour', op: 'gte', rhs: 1717, join: 'and', caseInsensitive: false },
+          { id: 'c2', lhs: 'event.slot.name', op: 'contains', rhs: 'Nuit-distincte', join: 'or', caseInsensitive: true },
+        ],
+        run: { kind: 'prompt_manager', managerId: 'mgr-42', prompt: 'PROMPT-DISTINCTIF' },
+        policy: { cooldownSeconds: 3131, maxFiresPerDay: 6161, batchMode: 'per_batch', backlogPolicy: 'discard_stale', backlogMaxAgeMinutes: 7777 },
+      })],
+    });
+
+    await choose(FIRST);
+
+    for (const expected of ['owner-m9', '*/7 * * * *', 'Asia/Tokyo', 'run_once', 'event.slot.hour', '1717', 'event.slot.name', 'Nuit-distincte', 'mgr-42', 'PROMPT-DISTINCTIF', '3131', '6161', 'per_batch', 'discard_stale', '7777']) {
+      expect(reviewText()).toHaveTextContent(expected, { normalizeWhitespace: true });
+    }
+  });
+
+  it.each([
+    ['a session_state WHEN', { when: { source: 'session_state', state: 'waiting_permission', minutes: 1313 } }, ['waiting_permission', '1313']],
+    ['a silent_run WHEN', { when: { source: 'silent_run', minutes: 2929 } }, ['2929']],
+    ['a data_store_query WHEN', { when: { source: 'data_store_query', storeId: 'store-xyz', event: 'row_count', op: 'gt', value: 4747 } }, ['store-xyz', 'row_count', 'gt', '4747']],
+    ['an integration_records WHEN', { when: { source: 'integration_records', itemId: 'item-q', event: 'field_changed', field: 'statut-distinct' } }, ['item-q', 'field_changed', 'statut-distinct']],
+    ['a notify RUN', { run: { kind: 'notify', title: 'TITRE-DISTINCT', message: 'MESSAGE-DISTINCT' } }, ['TITRE-DISTINCT', 'MESSAGE-DISTINCT']],
+    ['a prompt_session RUN', { run: { kind: 'prompt_session', sessionId: 'session-s7', prompt: 'PROMPT-SESSION-DISTINCT' } }, ['session-s7', 'PROMPT-SESSION-DISTINCT']],
+    ['a close_session RUN', { run: { kind: 'close_session', sessionId: 'session-s8' } }, ['session-s8']],
+    ['a run_playbook RUN with inputs', { run: { kind: 'run_playbook', playbookId: 'pb-9', inputs: { cle: 'VALEUR-INPUT', imbrique: { n: 8484 } } } }, ['pb-9', 'cle', 'VALEUR-INPUT', 'imbrique', '8484']],
+  ] satisfies [string, Partial<TriggerView>, string[]][])('shows every parameter of %s', async (_label, overrides, expectedTexts) => {
+    await renderTriggers({ triggers: [trigger(overrides)] });
+
+    await choose(FIRST);
+
+    for (const expected of expectedTexts) expect(reviewText()).toHaveTextContent(expected, { normalizeWhitespace: true });
+  });
+
+  it('shows text that looks like HTML as plain text', async () => {
+    await renderTriggers({ triggers: [trigger({ run: { kind: 'prompt_manager', prompt: '<img src="x" alt="piege"><b>gras</b>' } })] });
+
+    await choose(FIRST);
+
+    expect(reviewText().querySelector('img')).toBeNull();
+    expect(reviewText().querySelector('b')).toBeNull();
+    expect(reviewText()).toHaveTextContent('<img src="x" alt="piege"><b>gras</b>');
+  });
+
+  it('writes control and direction characters as their code', async () => {
+    await renderTriggers({ triggers: [trigger({ run: { kind: 'prompt_manager', prompt: 'avant‮apres\u001bfin' } })] });
+
+    await choose(FIRST);
+
+    expect(reviewText()).toHaveTextContent('avant\\u202eapres\\u001bfin');
+  });
+
+  describe('a text too long to show in full', () => {
+    const triggerWithLongPrompt = (overrides: Partial<TriggerView> = {}) => trigger({ run: { kind: 'prompt_manager', prompt: longPrompt }, ...overrides });
+
+    it('is cut with the number of hidden characters said, and offers to read it all', async () => {
+      await renderTriggers({ triggers: [triggerWithLongPrompt()] });
+
+      await choose(FIRST);
+
+      expect(reviewText()).not.toHaveTextContent('FIN-DU-PROMPT');
+      expect(reviewText()).toHaveTextContent(/\d+ caractères masqués/);
+      expect(screen.getByRole('button', { name: /Tout lire.*prompt/i })).toBeInTheDocument();
+    });
+
+    it('is shown in full once the human asks to read it all', async () => {
+      await renderTriggers({ triggers: [triggerWithLongPrompt()] });
+      await choose(FIRST);
+
+      await userEvent.click(screen.getByRole('button', { name: /Tout lire.*prompt/i }));
+
+      expect(reviewText()).toHaveTextContent('FIN-DU-PROMPT');
+      expect(reviewText()).not.toHaveTextContent('caractères masqués');
+    });
+
+    it('keeps Armer disabled and says why until the human has read it all', async () => {
+      await renderTriggers({ triggers: [triggerWithLongPrompt()] });
+      await choose(FIRST);
+
+      expect(armButton()).toBeDisabled();
+      expect(screen.getByTestId('arm-blocked')).toHaveTextContent(/lire/i);
+
+      await userEvent.click(screen.getByRole('button', { name: /Tout lire.*prompt/i }));
+
+      expect(armButton()).toBeEnabled();
+      expect(screen.queryByTestId('arm-blocked')).toBeNull();
+    });
+
+    it('does not count what was read on one trigger as read on the next', async () => {
+      await renderTriggers({ triggers: [triggerWithLongPrompt(), triggerWithLongPrompt({ id: 't2', title: SECOND, contentRev: 5, reviewDigest: 'digest-5' })] });
+      await choose(FIRST);
+      await userEvent.click(screen.getByRole('button', { name: /Tout lire.*prompt/i }));
+
+      await choose(SECOND);
+
+      expect(screen.getByRole('button', { name: 'Armer la révision 5' })).toBeDisabled();
+    });
+
+    it('asks to read it again when the same trigger comes back on a new revision', async () => {
+      let movedElsewhere = false;
+      const revisionThree = () => triggerWithLongPrompt({ contentRev: 3, reviewDigest: 'digest-3' });
+      const listTriggers = vi.fn(() => Promise.resolve([movedElsewhere ? revisionThree() : triggerWithLongPrompt()]));
+      const getTrigger = vi.fn(() => { movedElsewhere = true; return Promise.resolve(revisionThree()); });
+      await renderTriggers({ api: { listTriggers, getTrigger } });
+      await choose(FIRST);
+      await userEvent.click(screen.getByRole('button', { name: /Tout lire.*prompt/i }));
+      await userEvent.click(armButton());
+      await screen.findByRole('alert');
+
+      expect(screen.getByRole('button', { name: 'Armer la révision 3' })).toBeDisabled();
+    });
+  });
+
+  describe('a field the screen cannot show', () => {
+    const futureRun = { kind: 'send_pigeon', coop: 'nord' } as unknown as TriggerView['run'];
+    const noteWithUnknownField = { kind: 'notify', title: 'Inactive', message: 'Une session dort.', channel: 'sms' } as unknown as TriggerView['run'];
+
+    it.each([
+      ['a RUN kind it does not know', futureRun, 'send_pigeon'],
+      ['a field of the RUN it does not know', noteWithUnknownField, 'channel'],
+    ])('keeps Armer disabled and names the cause for %s', async (_label, run, culprit) => {
+      await renderTriggers({ triggers: [trigger({ run })] });
+
+      await choose(FIRST);
+
+      expect(armButton()).toBeDisabled();
+      expect(screen.getByTestId('arm-blocked')).toHaveTextContent(culprit);
+    });
+
+    it('keeps Armer disabled for a WHEN source it does not know', async () => {
+      const futureWhen = { source: 'telepathy', range: 'long' } as unknown as TriggerView['when'];
+      await renderTriggers({ triggers: [trigger({ when: futureWhen })] });
+
+      await choose(FIRST);
+
+      expect(armButton()).toBeDisabled();
+      expect(screen.getByTestId('arm-blocked')).toHaveTextContent('telepathy');
+    });
+
+    it('keeps Armer disabled for a policy field it does not know', async () => {
+      const futurePolicy = { cooldownSeconds: 0, batchMode: 'per_event', backlogPolicy: 'fire_all', jitter: 3 } as unknown as TriggerView['policy'];
+      await renderTriggers({ triggers: [trigger({ policy: futurePolicy })] });
+
+      await choose(FIRST);
+
+      expect(armButton()).toBeDisabled();
+      expect(screen.getByTestId('arm-blocked')).toHaveTextContent('jitter');
+    });
+
+    it('keeps Armer disabled for a condition field it does not know', async () => {
+      const futureCondition = { id: 'c1', lhs: 'event.session.state', op: 'eq', rhs: 'idle', join: 'and', caseInsensitive: false, weight: 2 } as unknown as TriggerView['conditions'][number];
+      await renderTriggers({ triggers: [trigger({ conditions: [futureCondition] })] });
+
+      await choose(FIRST);
+
+      expect(armButton()).toBeDisabled();
+      expect(screen.getByTestId('arm-blocked')).toHaveTextContent('weight');
+    });
+  });
+});
+
+describe('Triggers: the state after a write whose confirmation could not be read', () => {
+  const unreadable = () => Promise.reject(new ApiError(500, 'boom'));
+  /** Serves the answers of the list in order; the last one is served again. */
+  const listAnswering = (...answers: Array<() => Promise<TriggerView[]>>) => {
+    let served = 0;
+    return vi.fn(() => answers[Math.min(served++, answers.length - 1)]!());
+  };
+  const list = (...triggers: TriggerView[]) => () => Promise.resolve(triggers);
+  const pill = () => screen.getByTestId('trigger-arming-pill');
+  const armButtonOf = (rev: number) => screen.queryByRole('button', { name: `Armer la révision ${rev}` });
+  const reloadButton = () => screen.findByRole('button', { name: 'Recharger' });
+
+  it('says the state is unknown after an arming whose list could not be read, and offers to reload', async () => {
+    await renderTriggers({ api: { listTriggers: listAnswering(list(trigger()), unreadable) } });
+    await choose(FIRST);
+
+    await arm(2);
+    await reloadButton();
+
+    expect(pill()).toHaveTextContent('État inconnu — recharger');
+    expect(pill()).not.toHaveTextContent('Désarmé');
+    expect(armButtonOf(2)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Modifier' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Désarmer' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Triggers' })).toHaveTextContent('État inconnu');
+  });
+
+  it('shows the real state once the human reloads and the list is read', async () => {
+    await renderTriggers({ api: { listTriggers: listAnswering(list(trigger()), unreadable, list(armed())) } });
+    await choose(FIRST);
+    await arm(2);
+
+    await userEvent.click(await reloadButton());
+
+    await screen.findByRole('button', { name: 'Désarmer' });
+    expect(pill()).toHaveTextContent('Armé');
+    expect(screen.queryByRole('button', { name: 'Recharger' })).toBeNull();
+  });
+
+  it('stays unknown and announces the failure when the reload cannot be read either', async () => {
+    await renderTriggers({ api: { listTriggers: listAnswering(list(trigger()), unreadable, unreadable) } });
+    await choose(FIRST);
+    await arm(2);
+
+    await userEvent.click(await reloadButton());
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(pill()).toHaveTextContent('État inconnu — recharger');
+  });
+
+  it('offers to disarm, and nothing to arm, when a disarming could not be confirmed', async () => {
+    await renderTriggers({ triggers: [armed()], api: { listTriggers: listAnswering(list(armed()), unreadable) } });
+    await choose(FIRST);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Désarmer' }));
+    await reloadButton();
+
+    expect(pill()).toHaveTextContent('État inconnu — recharger');
+    expect(screen.getByRole('button', { name: 'Désarmer' })).toBeInTheDocument();
+    expect(armButtonOf(2)).toBeNull();
+  });
+
+  it('closes the form, offers no disarm and no edit when a save of a disarmed trigger could not be confirmed', async () => {
+    await renderTriggers({ api: { listTriggers: listAnswering(list(trigger()), unreadable) } });
+    await choose(FIRST);
+    await userEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
+    await reloadButton();
+
+    expect(screen.queryByTestId('trigger-editor')).toBeNull();
+    expect(pill()).toHaveTextContent('État inconnu — recharger');
+    expect(screen.queryByRole('button', { name: 'Désarmer' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Modifier' })).toBeNull();
+  });
+
+  it('offers to disarm when a save of an armed trigger could not be confirmed', async () => {
+    await renderTriggers({ triggers: [armed()], api: { listTriggers: listAnswering(list(armed()), unreadable) } });
+    await choose(FIRST);
+    await userEvent.click(screen.getByRole('button', { name: 'Modifier' }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
+    await reloadButton();
+
+    expect(screen.getByRole('button', { name: 'Désarmer' })).toBeInTheDocument();
+  });
+
+  it('disarms from the unknown state and shows the real state afterwards', async () => {
+    const { api } = await renderTriggers({ api: { listTriggers: listAnswering(list(trigger()), unreadable, list(trigger())) } });
+    await choose(FIRST);
+    await arm(2);
+    await reloadButton();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Désarmer' }));
+
+    await screen.findByRole('button', { name: 'Armer la révision 2' });
+    expect(api.disarmTrigger).toHaveBeenCalledWith('t1');
+    expect(pill()).toHaveTextContent('Désarmé');
+  });
+
+  describe('when the user has moved on to another trigger', () => {
+    async function armFirstLateThenChooseSecond(listAfterwards: Array<() => Promise<TriggerView[]>>) {
+      const armAnswer = deferred<TriggerView>();
+      const listTriggers = listAnswering(list(trigger(), secondTrigger()), ...listAfterwards);
+      const rendered = await renderTriggers({ triggers: [trigger(), secondTrigger()], api: { listTriggers, armTrigger: vi.fn(() => armAnswer.promise) } });
+      await choose(FIRST);
+      await arm(2);
+      await letPendingAnswersLand(rendered.fixture);
+      await choose(SECOND);
+      armAnswer.resolve(armed());
+      await letPendingAnswersLand(rendered.fixture);
+      return rendered;
+    }
+
+    it('leaves the second trigger as it is and shows the first one unknown when it is chosen again', async () => {
+      await armFirstLateThenChooseSecond([unreadable]);
+
+      expect(pill()).toHaveTextContent('Désarmé');
+      expect(armButtonOf(5)).toBeEnabled();
+      expect(screen.queryByRole('button', { name: 'Recharger' })).toBeNull();
+
+      await choose(FIRST);
+
+      expect(pill()).toHaveTextContent('État inconnu — recharger');
+    });
+
+    it('forgets the unknown state of the first trigger once another write reads the list again', async () => {
+      await armFirstLateThenChooseSecond([unreadable, list(armed(), secondTrigger({ armedAt: '2026-11-05T13:00:00Z', approvedRev: 5, approvedGraphDigest: 'digest-5' }))]);
+      await arm(5);
+      await screen.findByRole('button', { name: 'Désarmer' });
+
+      await choose(FIRST);
+
+      expect(pill()).toHaveTextContent('Armé');
+    });
   });
 });

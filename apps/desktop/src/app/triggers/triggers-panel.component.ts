@@ -5,17 +5,32 @@ import { ApiError, FleetApiService } from '../core/fleet-api.service';
 import { OperatorNonceMinter } from '../core/operator-nonce-minter';
 import type { TriggerView } from '../core/playbook-trigger-views';
 import { BannerComponent } from '../design/banner.component';
+import { approvalReviewOf, previewOf } from './approval-review';
 import { LOADING, failedLoadOf, loadedValueOf, type Load } from './load-state';
 import { FIRE_REASON_LABELS, LEDGER_STATE_LABELS, conditionText, runText, whenText } from './rule-text';
 import { BACKLOG_POLICIES, BATCH_MODES, changesOf, draftOf, problemOfDraft, type TriggerEditDraft } from './trigger-edit-draft';
 
 type ArmingState = 'disarmed' | 'armed' | 'lapsed';
+type PillState = ArmingState | 'unknown';
 
 interface WriteFailure {
   message: string;
 }
 
-const ARMING_LABELS: Record<ArmingState, string> = { disarmed: 'Désarmé', armed: 'Armé', lapsed: 'Armement caduc' };
+/** A write the daemon accepted whose effect on the trigger could not be read back: nothing on screen says what the daemon holds. */
+interface UnconfirmedState {
+  triggerId: string;
+  mayBeArmed: boolean;
+}
+
+interface WriteTarget {
+  triggerId: string;
+  mayBeArmedAfterwards: boolean;
+}
+
+type ListRefresh = { confirmed: true } | { confirmed: false; error: unknown };
+
+const PILL_LABELS: Record<PillState, string> = { disarmed: 'Désarmé', armed: 'Armé', lapsed: 'Armement caduc', unknown: 'État inconnu — recharger' };
 
 /** An armed trigger whose digest to review is no longer the approved one is armed on paper only: the engine does not fire it. */
 function armingStateOf(trigger: TriggerView): ArmingState {
@@ -59,7 +74,7 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
                 <li>
                   <button type="button" class="row of-focus-ring" [attr.aria-current]="trigger.id === selectedId() ? 'true' : null" (click)="select(trigger.id)">
                     <span class="row-title">{{ trigger.title || 'Sans titre' }}</span>
-                    <span class="row-meta">{{ trigger.armedAt === null ? 'Désarmé' : 'Armé' }} · rév. {{ trigger.contentRev }}</span>
+                    <span class="row-meta">{{ rowStateLabelOf(trigger) }} · rév. {{ trigger.contentRev }}</span>
                   </button>
                 </li>
               }
@@ -73,26 +88,36 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
           <header>
             <h2 #triggerHeading tabindex="-1">{{ trigger.title || 'Sans titre' }}</h2>
             <p class="meta">
-              <span class="pill" data-testid="trigger-arming-pill" [attr.data-state]="armingStateOf(trigger)">{{ armingLabelOf(trigger) }}</span>
+              <span class="pill" data-testid="trigger-arming-pill" [attr.data-state]="pillStateOf(trigger)">{{ pillLabelOf(trigger) }}</span>
               <span data-testid="trigger-arming">{{ armingText(trigger) }}</span>
             </p>
           </header>
 
-          <h3>Règle</h3>
-          <dl class="rule">
-            <dt>Quand</dt><dd>{{ whenText(trigger.when) }}</dd>
-            <dt>Conditions</dt>
-            <dd>
-              @if (trigger.conditions.length === 0) { Aucune } @else {
-                <ol class="conditions">
-                  @for (condition of trigger.conditions; track condition.id; let first = $first) { <li>{{ conditionText(condition, { isFirst: first }) }}</li> }
-                </ol>
+          @if (unconfirmedState(); as unconfirmed) {
+            <p data-testid="state-unknown">Le démon a accepté l’écriture, mais la relecture a échoué : l’état de ce trigger n’est pas connu. Rechargez avant d’agir.</p>
+            <div class="actions">
+              <button type="button" class="of-btn of-btn--compact" (click)="recheck()">Recharger</button>
+              @if (unconfirmed.mayBeArmed) {
+                <button type="button" class="of-btn of-btn--compact" [disabled]="isWriting()" (click)="disarm(trigger)">Désarmer</button>
               }
-            </dd>
-            <dt>Alors</dt><dd>{{ runText(trigger.run) }}</dd>
-            <dt>Propriétaire</dt><dd>{{ trigger.ownerManagerId ?? 'Aucun manager' }}</dd>
-            <dt>Politique</dt><dd>{{ policyText(trigger) }}</dd>
-          </dl>
+            </div>
+          } @else {
+            <h3>Règle</h3>
+            <dl class="rule">
+              <dt>Quand</dt><dd>{{ whenText(trigger.when) }}</dd>
+              <dt>Conditions</dt>
+              <dd>
+                @if (trigger.conditions.length === 0) { Aucune } @else {
+                  <ol class="conditions">
+                    @for (condition of trigger.conditions; track condition.id; let first = $first) { <li>{{ conditionText(condition, { isFirst: first }) }}</li> }
+                  </ol>
+                }
+              </dd>
+              <dt>Alors</dt><dd>{{ runText(trigger.run) }}</dd>
+              <dt>Propriétaire</dt><dd>{{ trigger.ownerManagerId ?? 'Aucun manager' }}</dd>
+              <dt>Politique</dt><dd>{{ policyText(trigger) }}</dd>
+            </dl>
+          }
 
           @if (writeFailure(); as failure) {
             <p #writeAlert tabindex="-1" class="error" role="alert" data-testid="write-error">{{ failure.message }}</p>
@@ -121,12 +146,26 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
                 <button type="button" class="of-btn of-btn--compact" (click)="cancelEdit()">Annuler</button>
               </div>
             </form>
-          } @else {
+          } @else if (unconfirmedState() === undefined) {
             <h3>Revue avant armement</h3>
+            <p class="muted">Tout ce que couvre l’empreinte, en texte brut : ce qui est écrit dans le trigger n’est jamais interprété.</p>
+            <dl class="review" data-testid="review-fields">
+              @for (row of reviewRows(); track row.key) {
+                <dt>{{ row.label }}</dt>
+                <dd>
+                  <span class="review-text">{{ row.shownText }}</span>
+                  @if (row.hiddenChars > 0) {
+                    <span class="muted"> … {{ row.hiddenChars }} caractères masqués</span>
+                    <button type="button" class="of-btn of-btn--compact" [attr.aria-label]="'Tout lire : ' + row.label" (click)="readAll(row.key)">Tout lire</button>
+                  }
+                </dd>
+              }
+            </dl>
             <p data-testid="review-digest">Empreinte à approuver, en lecture seule : <code>{{ trigger.reviewDigest ?? 'indisponible' }}</code></p>
+            @if (armBlockedReason(); as reason) { <p class="error" data-testid="arm-blocked">{{ reason }}</p> }
             <div class="actions">
               @if (armingStateOf(trigger) !== 'armed') {
-                <button type="button" class="of-btn of-btn--compact" [attr.aria-label]="'Armer la révision ' + trigger.contentRev" [disabled]="isWriting()" (click)="arm(trigger)">Armer</button>
+                <button type="button" class="of-btn of-btn--compact" [attr.aria-label]="'Armer la révision ' + trigger.contentRev" [disabled]="isWriting() || armBlockedReason() !== undefined" (click)="arm(trigger)">Armer</button>
               }
               @if (trigger.armedAt !== null) {
                 <button type="button" class="of-btn of-btn--compact" [disabled]="isWriting()" (click)="disarm(trigger)">Désarmer</button>
@@ -178,6 +217,9 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
     h2 { margin: 0; font-size: 1rem; } h3 { margin: .75rem 0 0; font-size: .875rem; }
     .rule { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: 0; }
     .rule dt { color: var(--mut); } .rule dd { margin: 0; }
+    .review { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; margin: 0; }
+    .review dt { color: var(--mut); } .review dd { margin: 0; min-width: 0; }
+    .review-text { white-space: pre-wrap; overflow-wrap: anywhere; }
     .conditions { margin: 0; padding-left: 1.25rem; }
     .fires li { display: flex; flex-wrap: wrap; gap: .5rem; padding: .25rem 0; }
     .state[data-state='needs_review'] { color: var(--state-error); }
@@ -207,6 +249,8 @@ export class TriggersPanelComponent {
   protected readonly draft = signal<TriggerEditDraft | undefined>(undefined);
   protected readonly writeFailure = signal<WriteFailure | undefined>(undefined);
   private readonly triggerIdsBeingWritten = signal<readonly string[]>([]);
+  private readonly unconfirmedStates = signal<readonly UnconfirmedState[]>([]);
+  private readonly readInFullFieldIds = signal<ReadonlySet<string>>(new Set());
 
   protected readonly batchModes = BATCH_MODES;
   protected readonly backlogPolicies = BACKLOG_POLICIES;
@@ -222,6 +266,36 @@ export class TriggersPanelComponent {
   protected readonly isWriting = computed(() => this.triggerIdsBeingWritten().includes(this.selectedId() ?? ''));
   protected readonly draftProblem = computed(() => { const draft = this.draft(); return draft === undefined ? undefined : problemOfDraft(draft); });
 
+  protected readonly unconfirmedState = computed(() => this.unconfirmedStates().find((state) => state.triggerId === this.selectedId()));
+
+  /** A field read in full stays read for this exact content only: another trigger or another revision starts unread. */
+  private readonly reviewScope = computed(() => {
+    const trigger = this.selected();
+    return trigger === undefined ? '' : `${trigger.id}@${trigger.contentRev}@${trigger.reviewDigest}`;
+  });
+  private readonly review = computed(() => {
+    const trigger = this.selected();
+    return trigger === undefined ? { fields: [], unreadable: [] } : approvalReviewOf(trigger);
+  });
+  protected readonly reviewRows = computed(() => {
+    const readInFull = this.readInFullFieldIds();
+    return this.review().fields.map((field) => {
+      const isReadInFull = readInFull.has(this.fieldId(field.key));
+      const { shownText, hiddenChars } = isReadInFull ? { shownText: field.text, hiddenChars: 0 } : previewOf(field.text);
+      const isCutAndUnread = hiddenChars > 0;
+      return { key: field.key, label: field.label, shownText, hiddenChars, isCutAndUnread };
+    });
+  });
+  protected readonly armBlockedReason = computed(() => {
+    const unreadable = this.review().unreadable;
+    const cutLabels = this.reviewRows().filter((row) => row.isCutAndUnread).map((row) => row.label);
+    const reasons = [
+      unreadable.length > 0 ? `Armement impossible : cet écran ne sait pas afficher ${unreadable.join(', ')}.` : undefined,
+      cutLabels.length > 0 ? `Armer demande de tout lire : ${cutLabels.join(', ')}.` : undefined,
+    ].filter((reason) => reason !== undefined);
+    return reasons.length === 0 ? undefined : reasons.join(' ');
+  });
+
   protected readonly whenText = whenText;
   protected readonly runText = runText;
   protected readonly conditionText = conditionText;
@@ -235,6 +309,7 @@ export class TriggersPanelComponent {
       untracked(() => {
         this.latestFiresRequest += 1;
         this.selectedId.set(undefined);
+        this.unconfirmedStates.set([]);
         this.forgetWriteState();
         void this.reload();
       });
@@ -246,10 +321,16 @@ export class TriggersPanelComponent {
     this.triggers.set(LOADING);
     try {
       const items = await this.api.listTriggers(this.projectId());
-      if (request === this.latestListRequest) this.triggers.set({ status: 'loaded', value: items });
+      if (request === this.latestListRequest) this.showList(items);
     } catch (error) {
       if (request === this.latestListRequest) this.triggers.set(failedLoadOf(error));
     }
+  }
+
+  /** A list just read is the truth about every trigger in it, so no state stays unconfirmed. */
+  private showList(items: TriggerView[]): void {
+    this.triggers.set({ status: 'loaded', value: items });
+    this.unconfirmedStates.set([]);
   }
 
   protected async select(triggerId: string): Promise<void> {
@@ -272,7 +353,7 @@ export class TriggersPanelComponent {
   }
 
   protected arm(reviewed: TriggerView): Promise<void> {
-    return this.performWrite(reviewed.id, async () => {
+    return this.performWrite({ triggerId: reviewed.id, mayBeArmedAfterwards: true }, async () => {
       const current = await this.api.getTrigger(reviewed.id);
       if (hasMovedSinceReview({ reviewed, current })) throw reviewedRuleHasMoved();
       const humanProof = await this.nonceMinter.mintTriggerArmingNonce(reviewed.id);
@@ -281,7 +362,25 @@ export class TriggersPanelComponent {
   }
 
   protected disarm(trigger: TriggerView): Promise<void> {
-    return this.performWrite(trigger.id, async () => { await this.api.disarmTrigger(trigger.id); });
+    return this.performWrite({ triggerId: trigger.id, mayBeArmedAfterwards: true }, async () => { await this.api.disarmTrigger(trigger.id); });
+  }
+
+  /** Reads the list again for a trigger whose state is unknown; a list that cannot be read keeps it unknown and says so. */
+  protected async recheck(): Promise<void> {
+    const selectionAtStart = this.latestFiresRequest;
+    const refresh = await this.refreshTriggers();
+    const isStillOnSelectionAtStart = selectionAtStart === this.latestFiresRequest;
+    if (refresh.confirmed || !isStillOnSelectionAtStart) return;
+    this.writeFailure.set({ message: copyFor(refresh.error, { action: 'generic' }).text });
+    this.focusAfterRender(this.writeAlert);
+  }
+
+  protected readAll(fieldKey: string): void {
+    this.readInFullFieldIds.update((ids) => new Set(ids).add(this.fieldId(fieldKey)));
+  }
+
+  private fieldId(fieldKey: string): string {
+    return `${this.reviewScope()}|${fieldKey}`;
   }
 
   protected startEditing(trigger: TriggerView): void {
@@ -307,16 +406,18 @@ export class TriggersPanelComponent {
     const draft = this.draft();
     const hasNothingToSave = draft === undefined || problemOfDraft(draft) !== undefined;
     if (hasNothingToSave) return Promise.resolve();
-    return this.performWrite(trigger.id, async () => {
-      await this.api.updateTrigger({ triggerId: trigger.id, expectedRev: trigger.contentRev, changes: changesOf(draft, trigger) });
+    const target = { triggerId: trigger.id, mayBeArmedAfterwards: trigger.armedAt !== null };
+    return this.performWrite(target, async () => {
+      await this.api.updateTrigger({ triggerId: trigger.id, expectedRev: draft.openedAtRev, changes: changesOf(draft) });
     });
   }
 
   /**
    * Runs one write on a trigger, then reads the list again so the screen shows what the daemon holds.
    * Only the trigger still chosen when the answer comes back gets the focus, the refusal or the closed form.
+   * A write the daemon accepted whose list cannot be read leaves the trigger in an unconfirmed state, whatever is chosen by then.
    */
-  private async performWrite(triggerId: string, write: () => Promise<void>): Promise<void> {
+  private async performWrite({ triggerId, mayBeArmedAfterwards }: WriteTarget, write: () => Promise<void>): Promise<void> {
     if (this.triggerIdsBeingWritten().includes(triggerId)) return;
     const selectionAtStart = this.latestFiresRequest;
     const isStillOnSelectionAtStart = () => selectionAtStart === this.latestFiresRequest;
@@ -324,7 +425,8 @@ export class TriggersPanelComponent {
     this.writeFailure.set(undefined);
     try {
       await write();
-      await this.refreshTriggers();
+      const refresh = await this.refreshTriggers();
+      if (!refresh.confirmed) this.unconfirmedStates.update((states) => [...states.filter((state) => state.triggerId !== triggerId), { triggerId, mayBeArmed: mayBeArmedAfterwards }]);
       if (!isStillOnSelectionAtStart()) return;
       this.draft.set(undefined);
       this.focusAfterRender(this.triggerHeading);
@@ -341,22 +443,35 @@ export class TriggersPanelComponent {
   }
 
   /** Replaces the list without the loading state, so the trigger on screen stays; a project chosen since owns its own list. */
-  private async refreshTriggers(): Promise<void> {
+  private async refreshTriggers(): Promise<ListRefresh> {
     const request = ++this.latestListRequest;
-    const items = await this.api.listTriggers(this.projectId()).catch(() => undefined);
-    if (items !== undefined && request === this.latestListRequest) this.triggers.set({ status: 'loaded', value: items });
+    try {
+      const items = await this.api.listTriggers(this.projectId());
+      if (request === this.latestListRequest) this.showList(items);
+      return { confirmed: true };
+    } catch (error) {
+      return { confirmed: false, error };
+    }
   }
 
   private focusAfterRender(target: Signal<ElementRef<HTMLElement> | undefined>): void {
     afterNextRender(() => target()?.nativeElement.focus(), { injector: this.injector });
   }
 
-  protected armingLabelOf(trigger: TriggerView): string { return ARMING_LABELS[armingStateOf(trigger)]; }
+  protected pillStateOf(trigger: TriggerView): PillState { return this.isStateUnconfirmed(trigger) ? 'unknown' : armingStateOf(trigger); }
+  protected pillLabelOf(trigger: TriggerView): string { return PILL_LABELS[this.pillStateOf(trigger)]; }
+  protected rowStateLabelOf(trigger: TriggerView): string {
+    if (this.isStateUnconfirmed(trigger)) return 'État inconnu';
+    return trigger.armedAt === null ? 'Désarmé' : 'Armé';
+  }
+
+  private isStateUnconfirmed(trigger: TriggerView): boolean { return this.unconfirmedStates().some((state) => state.triggerId === trigger.id); }
 
   protected ledgerLabel(fire: TriggerFireView): string { return LEDGER_STATE_LABELS[fire.ledgerState]; }
   protected reasonLabel(fire: TriggerFireView): string { return fire.reason === null ? '' : FIRE_REASON_LABELS[fire.reason]; }
 
   protected armingText(trigger: TriggerView): string {
+    if (this.isStateUnconfirmed(trigger)) return '';
     const isArmed = trigger.armedAt !== null;
     if (!isArmed) return `Désarmé · révision ${trigger.contentRev}`;
     return `Armé le ${trigger.armedAt} sur la révision ${trigger.approvedRev} · digest approuvé ${trigger.approvedGraphDigest}`;
