@@ -773,6 +773,58 @@ describe('a name that does not resolve', () => {
   });
 });
 
+describe('a stop() while the secret store has not answered', () => {
+  let secretStore: ReturnType<typeof createInMemorySecretStore>;
+  let heldRead: ReturnType<typeof deferred<void>>;
+  let heldReadFailure: { reject: (reason: Error) => void; promise: Promise<void> };
+  let readsStarted: number;
+
+  beforeEach(async () => {
+    secretStore = createInMemorySecretStore();
+    heldRead = deferred<void>();
+    readsStarted = 0;
+    let rejectRead!: (reason: Error) => void;
+    heldReadFailure = { promise: new Promise<void>((_resolve, reject) => { rejectRead = reject; }), reject: (reason) => rejectRead(reason) };
+    const slowStore: typeof secretStore = { ...secretStore, read: async (scope, name) => { readsStarted++; await Promise.race([heldRead.promise, heldReadFailure.promise]); return secretStore.read(scope, name); } };
+    await fixture.close();
+    fixture = await startGovernanceFixture({
+      secrets: { store: slowStore, parent: parent.link },
+      integrations: { providers: [jiraProviderOn(jira.port)], clock: () => now, monotonicClock: () => now, resolveAddress: (host) => resolveAddress(host), probe: async () => probeHealth },
+    });
+    lead = await fixture.connect(fixture.lead.id);
+  });
+
+  const stopWhileTheSecretIsAwaited = async () => {
+    const { integration } = await connectedIntegration();
+    const pass = poll();
+    await until(() => readsStarted === 1);
+    const stopping = fixture.daemon.integrationPoller.stop();
+    return { integration, pass, stopping };
+  };
+  const pollStateRowsOf = (integrationId: string) => fixture.db.prepare('SELECT profile_id FROM integration_poll_state WHERE profile_id = ?').all(integrationId);
+
+  it('writes nothing and asks the provider nothing when the secret arrives after the stop', async () => {
+    const { integration, pass, stopping } = await stopWhileTheSecretIsAwaited();
+
+    heldRead.resolve();
+    await pass;
+    await stopping;
+
+    expect(jira.seen).toEqual([]);
+    expect(pollStateRowsOf(integration.id)).toEqual([]);
+  });
+
+  it('writes nothing when the secret store fails after the stop', async () => {
+    const { integration, pass, stopping } = await stopWhileTheSecretIsAwaited();
+
+    heldReadFailure.reject(new Error('synthetic store failure'));
+    await pass;
+    await stopping;
+
+    expect(pollStateRowsOf(integration.id)).toEqual([]);
+  });
+});
+
 describe('the health probe of a refresh', () => {
   const HOST_OF_NO_ONE = 'acme.atlassian.invalid';
   const jiraOfNoOne = (overrides: Partial<IntegrationProvider> = {}) => jiraProviderOn(jira.port, { isHostAllowed: (host) => host.endsWith('.atlassian.invalid'), ...overrides });

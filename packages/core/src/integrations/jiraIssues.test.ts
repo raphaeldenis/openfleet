@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { credentialEchoMaskerOf } from './credentialEchoMasker.js';
 import { MAX_ISSUES_PER_POLL, MAX_LABEL_CHARS, MAX_SUMMARY_CHARS, issuesOfSearchBody } from './jiraIssues.js';
 
 const ORIGIN = 'https://acme.atlassian.net';
@@ -168,5 +169,42 @@ describe('masking what a provider echoes while reading its issues', () => {
     const issues = issuesOfSearchBody({ issues: [issueOf({ key: 'SECRET-1' }), issueOf()] }, ORIGIN, { maskText: maskKey })!;
 
     expect(issues.map((issue) => issue.key)).toEqual(['CCM-12']);
+  });
+});
+
+describe('masking a credential split by invisible characters, through the real masker, whatever the length of the text around it', () => {
+  const ZERO_WIDTH_SPACE = '​';
+  const MASKER_INTERNAL_CEILING = 262_144;
+  const TOKEN = 'ATATT3xFfGF0-token-0123456789';
+  const CREDENTIAL = `ada@example.com:${TOKEN}`;
+  const maskText = credentialEchoMaskerOf({ credential: CREDENTIAL, authorization: `Basic ${Buffer.from(CREDENTIAL).toString('base64')}` });
+  const summaryOf = (summary: string) => issuesOfSearchBody({ issues: [issueOf({ fields: { summary } })] }, ORIGIN, { maskText })![0]!.untrusted.summary;
+  const splitAfter = (token: string, characters: number, invisible = ZERO_WIDTH_SPACE) => `${token.slice(0, characters)}${invisible}${token.slice(characters)}`;
+  const spelledWithInvisibleBetweenEveryCharacter = Array.from(TOKEN).join(ZERO_WIDTH_SPACE);
+
+  it('keeps no character of a token split after 12 characters and preceded by more padding than the masker reads', () => {
+    const paddingToTheCeiling = ZERO_WIDTH_SPACE.repeat(MASKER_INTERNAL_CEILING - 36);
+
+    expect(summaryOf(`${paddingToTheCeiling}${splitAfter(TOKEN, 12)}`)).toBe('[secret:INTEGRATION_CREDENTIAL]');
+  });
+
+  it.each([
+    ['an invisible character between every character', spelledWithInvisibleBetweenEveryCharacter],
+    ['several invisible characters in a row', splitAfter(TOKEN, 9, ZERO_WIDTH_SPACE.repeat(5))],
+    ['a mix of zero-width and bidirectional characters', splitAfter(TOKEN, 9, '​‮⁠﻿')],
+  ])('masks a token split by %s', (_label, spelling) => {
+    expect(summaryOf(`see ${spelling} end`)).toBe('see [secret:INTEGRATION_CREDENTIAL] end');
+  });
+
+  it.each([
+    ['at the head of the text', (spelling: string, padding: string) => `${spelling}${padding}`],
+    ['in the middle of the text', (spelling: string, padding: string) => `${padding}${spelling}${padding}`],
+    ['astride the ceiling of the masker', (spelling: string, padding: string) => `${padding.slice(0, MASKER_INTERNAL_CEILING - 14)}${spelling}${padding}`],
+  ])('keeps no character of a split token %s of a text longer than the masker reads', (_label, placed) => {
+    const padding = ZERO_WIDTH_SPACE.repeat(MASKER_INTERNAL_CEILING);
+
+    const summary = summaryOf(placed(splitAfter(TOKEN, 12), padding));
+
+    expect(summary).toBe('[secret:INTEGRATION_CREDENTIAL]');
   });
 });

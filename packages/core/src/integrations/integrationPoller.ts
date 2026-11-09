@@ -66,7 +66,7 @@ export class IntegrationPoller {
     this.armNextPass();
   }
 
-  /** Aborts the read in flight and resolves once the pass has finished, so nothing is written after the returned promise settles. */
+  /** Aborts the read in flight and resolves once the pass has finished: a pass waiting for the secret store writes nothing and asks the provider nothing once it is stopped. */
   async stop(): Promise<void> {
     this.isStopped = true;
     this.abortion.abort();
@@ -116,6 +116,7 @@ export class IntegrationPoller {
       return 'settled';
     }
     const presentation = await this.presentationOrUndefined(provider, connection);
+    if (this.isStopped) return 'settled';
     if (presentation === undefined) {
       this.recordNothingToPoll(profile);
       return 'settled';

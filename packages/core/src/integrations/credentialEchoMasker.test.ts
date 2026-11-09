@@ -47,6 +47,14 @@ describe('masking what a provider echoes of a credential', () => {
     expect(mask('abcdefghijkl')).toBe(MARKER);
   });
 
+  it('reads a text as large as a provider body whole: no cut, no truncation marker, a value after the default ceiling still masked', () => {
+    const text = `${'a'.repeat(300_000)}${TOKEN}${'b'.repeat(700_000)}`;
+
+    const masked = maskOfJira()(text);
+
+    expect(masked).toBe(`${'a'.repeat(300_000)}${MARKER}${'b'.repeat(700_000)}`);
+  });
+
   it('ignores a half of the credential that is too short to mask without destroying the text', () => {
     const mask = credentialEchoMaskerOf({ credential: 'ada@example.com:short', authorization: 'Basic x' });
 

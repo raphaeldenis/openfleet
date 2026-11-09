@@ -43,9 +43,11 @@ const startFakeProvider = async () => {
 };
 type FakeProvider = Awaited<ReturnType<typeof startFakeProvider>>;
 
-const providerOn = (port: number): IntegrationProvider => ({
+const providerWithoutTestCutOffOn = (port: number): IntegrationProvider => ({
   id: 'fake', scheme: 'http', port, isHostAllowed: (host) => host === '127.0.0.1', healthPath: '/health', authorizationOf: (credential) => `Bearer ${credential}`,
 });
+/** The cut-off reserved to tests lets the reader reach the fake provider on loopback; a provider without it is held to the public-address policy. */
+const providerOn = (port: number): IntegrationProvider => ({ ...providerWithoutTestCutOffOn(port), isAddressAllowed: () => true });
 
 let fixture: GovernanceFixture;
 let lead: Client;
@@ -257,6 +259,40 @@ describe('refresh_integration', () => {
     const { json } = await tool(lead, 'refresh_integration', { integration: integration.id });
 
     expect(json.health).toBe(expectedHealth);
+  });
+
+  it('production guard: without the cut-off reserved to tests, the probe refuses the loopback address of the provider and sends it nothing', async () => {
+    await fixture.close();
+    fixture = await startGovernanceFixture({
+      secrets: { store, parent: parent.link },
+      integrations: { providers: [providerWithoutTestCutOffOn(provider.port)], clock: () => now, monotonicClock: () => monotonicNow, refreshCooldownMs: COOLDOWN_MS },
+    });
+    lead = await fixture.connect(fixture.lead.id);
+    const { integration } = await connectedIntegration();
+
+    const { json } = await tool(lead, 'refresh_integration', { integration: integration.id });
+
+    expect(json.health).toBe('unreachable');
+    expect(provider.seen).toEqual([]);
+  });
+
+  it('refuses a token whose part after the colon is too short to mask, and keeps the credential missing', async () => {
+    const connection = await createConnection();
+    await createIntegration(connection.id);
+
+    const status = await setTokenAsHuman(connection.id, 'ada@example.com:1234567');
+
+    const stored = await rest('GET', `/api/secrets/connection/${connection.id}/${TOKEN_SECRET}`);
+    expect([status, JSON.stringify(stored.json)]).toEqual([400, expect.stringContaining('"status":"missing"')]);
+  });
+
+  it('accepts a token whose part after the colon has exactly the minimum length', async () => {
+    const connection = await createConnection();
+    await createIntegration(connection.id);
+
+    const status = await setTokenAsHuman(connection.id, 'ada@example.com:12345678');
+
+    expect(status).toBe(200);
   });
 
   it('types a provider that does not answer as unreachable', async () => {

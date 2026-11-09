@@ -21,12 +21,13 @@ const withoutMarkup = (text: string): string => text.replaceAll('<', '‹').repl
 export interface IssueReading { maskText: (text: string) => string }
 
 /**
- * Masks, removes control, bidirectional and zero-width characters, turns every run of blanks into one space, masks again (a value split by invisible characters is whole once they are gone),
- * defuses angle brackets and cuts to `maxChars` characters. Both masks run before the cut, so the cut cannot leave the start of a masked value.
+ * Masks the text as received, removes control, bidirectional and zero-width characters, turns every run of blanks into one space, masks the normalised text (a value split by invisible characters is whole once they are gone),
+ * defuses angle brackets and cuts to `maxChars` characters. The masker reads a whole provider text, and no step cuts before both masks have run, so the cut cannot leave the start of a masked value.
  */
 const cleanedText = (text: string, maxChars: number, { maskText }: IssueReading): string => {
-  const visible = maskText(text).replace(CONTROL_AND_INVISIBLE_CHARACTERS, '').replace(/\s+/g, ' ').trim();
-  const characters = Array.from(withoutMarkup(maskText(visible)));
+  const maskedAsReceived = maskText(text);
+  const normalised = maskedAsReceived.replace(CONTROL_AND_INVISIBLE_CHARACTERS, '').replace(/\s+/g, ' ').trim();
+  const characters = Array.from(withoutMarkup(maskText(normalised)));
   const isTooLong = characters.length > maxChars;
   return isTooLong ? `${characters.slice(0, maxChars - 1).join('')}${ELLIPSIS}` : characters.join('');
 };

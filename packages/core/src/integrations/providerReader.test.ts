@@ -144,6 +144,12 @@ describe('reading a provider through a pinned address', () => {
     expect(await readerOver()(getOf())).toEqual({ kind: 'unreachable' });
   });
 
+  it('reads a 204 with no body as an answer without content', async () => {
+    server.answerWith({ status: 204, body: '' });
+
+    expect(await readerOver()(getOf())).toEqual({ kind: 'ok', body: null });
+  });
+
   it('gives up on a server that never answers, when the deadline elapses', async () => {
     server.answerWith({ status: 200, isSilent: true });
     const timers = createManualTimers();

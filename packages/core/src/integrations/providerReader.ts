@@ -34,6 +34,7 @@ export const DEFAULT_PROVIDER_READER_LIMITS: ProviderReaderLimits = { timeoutMs:
 /** Calls `onElapsed` once after `delayMs` and returns the function that cancels it; tests inject timers they drive by hand. */
 export type StartTimer = (onElapsed: () => void, delayMs: number) => () => void;
 
+const NO_CONTENT_STATUS = 204;
 const UNREACHABLE: ProviderAnswer = { kind: 'unreachable' };
 const AUTH_REFUSED_STATUSES: ReadonlySet<number> = new Set([401, 403]);
 const RATE_LIMITED_STATUS = 429;
@@ -118,6 +119,8 @@ const sendTo = ({ get, pinned, limits, settle }: { get: ProviderGet; pinned: Res
     });
     response.on('error', () => settle(UNREACHABLE));
     response.on('end', () => {
+      const isNoContent = status === NO_CONTENT_STATUS && receivedBytes === 0;
+      if (isNoContent) return settle({ kind: 'ok', body: null });
       const parsed = parsedOrUndefined(Buffer.concat(chunks).toString('utf8'));
       if (parsed === undefined) return settle(UNREACHABLE);
       const etag = etagOf(response);
