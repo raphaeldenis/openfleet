@@ -31,4 +31,7 @@ playbook_runs_interrupted playbook runs left running by a stopped daemon were ma
 playbook_step_failed_unexpectedly a playbook step failed unexpectedly
 playbook_store_step_failed a playbook store step failed
 trigger_fires_prune_failed the trigger fires could not be pruned
+integration_poll_pass_failed an integration polling pass failed; the next pass retries
+integration_poll_credential_unreadable the credential of an integration could not be read for polling
+integration_poll_stopped polling of an integration connection stopped after its credential was refused
 trigger_pending_fire_not_settled the outcome of a pending trigger fire could not be written to the ledger

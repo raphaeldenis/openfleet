@@ -1,4 +1,5 @@
 import { OpenFleetError } from '@openfleet/shared';
+import { isPublicAddress } from './providerAddress.js';
 
 /** What the daemon knows of a provider: the hosts it may reach, how to ask it whether a credential works, how to present the credential. Nothing here comes from a user. */
 export interface IntegrationProvider {
@@ -8,6 +9,10 @@ export interface IntegrationProvider {
   isHostAllowed: (host: string) => boolean;
   /** The one read-only path a probe asks. */
   healthPath: string;
+  /** The read-only path of the issue search, for a provider whose issues the daemon polls. A provider without it is never polled. */
+  issueSearchPath?: string;
+  /** Which resolved addresses the provider may be reached at. Absent: public addresses only. */
+  isAddressAllowed?: (address: string) => boolean;
   authorizationOf: (credential: string) => string;
 }
 
@@ -21,7 +26,7 @@ const basic = (credential: string): string => `Basic ${Buffer.from(credential).t
 
 /** The providers of the product. Jira Cloud reaches `<tenant>.atlassian.net` and takes `email:api_token` as its credential. */
 export const shippedIntegrationProviders = (): IntegrationProvider[] => [
-  { id: 'jira_cloud', scheme: 'https', isHostAllowed: (host) => host.endsWith('.atlassian.net') && host.length > '.atlassian.net'.length, healthPath: '/rest/api/3/myself', authorizationOf: basic },
+  { id: 'jira_cloud', scheme: 'https', isHostAllowed: (host) => host.endsWith('.atlassian.net') && host.length > '.atlassian.net'.length, healthPath: '/rest/api/3/myself', issueSearchPath: '/rest/api/3/search/jql', authorizationOf: basic },
   { id: 'github', scheme: 'https', isHostAllowed: (host) => host === 'api.github.com', healthPath: '/rate_limit', authorizationOf: bearer },
 ];
 
@@ -42,7 +47,10 @@ export const allowedHostOf = (provider: IntegrationProvider, host: string): stri
   return canonicalHost;
 };
 
-export const originOf = (provider: IntegrationProvider, host: string): string => {
+export const isAddressAllowedFor = (provider: IntegrationProvider, address: string): boolean =>
+  (provider.isAddressAllowed ?? isPublicAddress)(address);
+
+export const originOf =(provider: IntegrationProvider, host: string): string => {
   const portSuffix = provider.port === undefined ? '' : `:${provider.port}`;
   return `${provider.scheme}://${host}${portSuffix}`;
 };
