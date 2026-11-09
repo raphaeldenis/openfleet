@@ -83,7 +83,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   session_closed: { what: 'The session is closed', fix: 'resume it first' },
   stale_revision: { what: 'This item changed since you opened it' },
   playbook_conflict: { what: 'This playbook changed since you opened it' },
-  playbook_run_not_found: { what: 'This playbook run does not exist', fix: 'refresh the list of runs' },
+  playbook_run_not_found: { what: 'This playbook run does not exist', fix: 'pick another run from the list of runs' },
   playbook_unapproved: { what: 'No one approved this playbook as it stands', fix: 'review its digest, then approve it' },
   approval_digest_mismatch: { what: 'The playbook changed since you read its digest', fix: 'read the approval again, then confirm' },
   script_changed: { what: 'A script is not the file that was approved', fix: 'review the script, then approve the playbook again' },
