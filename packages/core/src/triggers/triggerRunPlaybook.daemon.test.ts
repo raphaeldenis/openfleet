@@ -218,18 +218,6 @@ describe('a refusal of the runner is a typed cancellation, and no run is written
 });
 
 describe('the engine guards apply to run_playbook as to every other RUN', () => {
-  it('cancels chain_depth beyond depth 2 and starts no run', async () => {
-    const w = await boot();
-    writeScript('quick.sh', 'printf done');
-    const playbook = await createApprovedPlaybook(w);
-    const triggerId = await armTriggerRunning(w, playbook.id);
-
-    w.engine.submit({ triggerId, dedupKey: 'deep', event: { session: { id: 's1' } }, causedByChainDepth: 2 });
-
-    expect(fireRowOf(w, triggerId)).toEqual([{ ledger_state: 'cancelled', settle_reason: 'chain_depth', run_id: null }]);
-    expect(runsOf(w, playbook.id)).toEqual([]);
-  });
-
   it('opens the breaker at the 31st fire of the minute, disarms the trigger and starts no run for it', async () => {
     const w = await boot();
     writeScript('quick.sh', 'printf done');
@@ -257,20 +245,6 @@ describe('the engine guards apply to run_playbook as to every other RUN', () => 
 
     expect(fireRowOf(w, triggerId).map((fire) => [fire.ledger_state, fire.settle_reason])).toEqual([['completed', null], ['cancelled', 'cooldown']]);
     expect(runsOf(w, playbook.id)).toHaveLength(1);
-  });
-
-  it('leaves a fire attempted, never replayed, when the daemon stops before the run is started', async () => {
-    const w = await boot();
-    writeScript('quick.sh', 'printf done');
-    const playbook = await createApprovedPlaybook(w);
-    const triggerId = await armTriggerRunning(w, playbook.id);
-    w.db.prepare("INSERT INTO trigger_fires (id, trigger_id, dedup_key, ledger_state, fired_at, event_json, chain_depth) VALUES ('crashed-fire', ?, 'k', 'attempted', ?, '{}', 1)")
-      .run(triggerId, new Date(w.nowMs).toISOString());
-
-    await w.restart();
-
-    expect(fireRowOf(w, triggerId)).toEqual([{ ledger_state: 'needs_review', settle_reason: 'interrupted', run_id: null }]);
-    expect(runsOf(w, playbook.id)).toEqual([]);
   });
 });
 

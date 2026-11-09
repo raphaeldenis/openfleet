@@ -31,7 +31,7 @@ const FIRE_REASON_OF_REFUSAL: Partial<Record<string, TriggerFireReason>> = {
   playbook_unapproved: 'playbook_unapproved', script_changed: 'playbook_unapproved',
   playbook_not_found: 'playbook_unavailable', playbook_not_runnable: 'playbook_unavailable', secret_not_connected_on_this_device: 'playbook_unavailable',
   invalid_body: 'playbook_inputs_invalid',
-  playbook_run_busy: 'playbook_busy', playbook_review_backlog: 'playbook_busy',
+  playbook_run_busy: 'playbook_busy', playbook_review_backlog: 'playbook_busy', playbook_conflict: 'playbook_busy',
 };
 
 const completed = (): SettledResult => ({ settlement: 'completed' });
@@ -131,7 +131,10 @@ export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
     return completed();
   };
 
-  /** Starts the run of an approved playbook of the project of the trigger, with the inputs the RUN holds and nothing from the event. */
+  /**
+   * Starts the run of an approved playbook of the project of the trigger, with the inputs the RUN holds and nothing from the event.
+   * The fire is linked to its run by the engine (`run_id`) when this settles: the sources read that link to attribute the writes of the run to this trigger.
+   */
   const startPlaybookRun = async (trigger: TriggerRecord, run: RunOf<'run_playbook'>): Promise<SettledResult> => {
     try {
       const playbook = playbooks.getById(run.playbookId);

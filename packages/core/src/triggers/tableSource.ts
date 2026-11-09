@@ -52,7 +52,7 @@ export interface TableSourceDeps {
   cursors: Pick<TriggerCursors, 'read' | 'save'>;
   engine: Pick<TriggerEngine, 'submit' | 'submitBacklog'>;
   sessions: Pick<SessionService, 'list' | 'get'>;
-  ledger: Pick<FireLedger, 'causesOf'>;
+  ledger: Pick<FireLedger, 'causesOf' | 'causesOfRunsAliveAt'>;
   schedule: (callback: () => void, delayMs: number) => () => void;
   /** Called with the trigger id for each change not offered because the message of that trigger set its author going. */
   onOfferSuppressedByCause: (triggerId: string) => void;
@@ -62,7 +62,7 @@ export interface TableSourceDeps {
  * Offers the engine the changes of a data store: a new row, a row whose cells changed, a row count that reaches a threshold. It reads the change history of
  * the store from the position its cursor holds, one page at a time: a page is offered to the engine (the ledger keeps the fire, once per dedup key), then the cursor moves past it.
  * A daemon that stops between the two offers the page again, and the ledger absorbs it: nothing is lost, nothing fires twice. A trigger starts at the end of the history when it is armed.
- * A change is never offered to the trigger whose message set its author going; another trigger receives it one step deeper in the chain.
+ * A change is never offered to the trigger whose message set its author going, nor to the trigger whose playbook run was alive when it was written; another trigger receives it one step deeper in the chain.
  */
 export class TableSource {
   private unsubscribe: (() => void) | undefined;
@@ -280,26 +280,36 @@ export class TableSource {
     return { store, row: { id: row.id, ...row.data }, ...(previous !== undefined && { previous }) };
   }
 
-  /**
-   * The triggers whose message set the author of a write going, and how deep their chain is. An agent writes as "<emoji> <name>": the sessions that carry that label and
-   * their ancestors are the author; a fire that sent a message to one of them in the hour before the write is its cause.
-   */
+  /** The triggers whose message set the author of a write going, or whose playbook run was alive when the write happened, and how deep their chain is. */
   private causesOf(change: DsRowHistoryEntry, projectId: string, cache: Map<string, { triggerIds: Set<string>; chainDepth: number }>): { triggerIds: Set<string>; chainDepth: number } {
-    const none = { triggerIds: new Set<string>(), chainDepth: 0 };
-    if (change.actorKind !== 'agent') return none;
-    const key = `${change.actorLabel}|${change.createdAt}`;
+    const key = `${change.actorKind}|${change.actorLabel}|${change.createdAt}`;
     const known = cache.get(key);
     if (known !== undefined) return known;
 
-    const authorIds = this.authorSessionIdsOf(change.actorLabel, projectId);
     const writtenAtMs = Date.parse(change.createdAt);
-    const isDated = Number.isFinite(writtenAtMs) && authorIds.length > 0;
-    const causes = isDated
-      ? this.deps.ledger.causesOf({ sessionIds: authorIds, sinceIso: new Date(writtenAtMs - CHAIN_CAUSE_WINDOW_MINUTES * MINUTE_MS).toISOString(), untilIso: change.createdAt })
-      : [];
+    const isDated = Number.isFinite(writtenAtMs);
+    const causes = isDated ? [...this.causesFromTheAuthor(change, projectId, writtenAtMs), ...this.causesFromRunsAlive(change, projectId, writtenAtMs)] : [];
     const result = { triggerIds: new Set(causes.map((cause) => cause.triggerId)), chainDepth: Math.max(0, ...causes.map((cause) => cause.chainDepth)) };
     cache.set(key, result);
     return result;
+  }
+
+  /**
+   * An agent writes as "<emoji> <name>": the sessions that carry that label and their ancestors are the author; a fire that sent a message to one of them
+   * in the hour before the write is its cause.
+   */
+  private causesFromTheAuthor(change: DsRowHistoryEntry, projectId: string, writtenAtMs: number): { triggerId: string; chainDepth: number }[] {
+    if (change.actorKind !== 'agent') return [];
+    const authorIds = this.authorSessionIdsOf(change.actorLabel, projectId);
+    return this.deps.ledger.causesOf({ sessionIds: authorIds, sinceIso: new Date(writtenAtMs - CHAIN_CAUSE_WINDOW_MINUTES * MINUTE_MS).toISOString(), untilIso: change.createdAt });
+  }
+
+  /**
+   * A script of a playbook run writes through the REST API as the human "You", so the author says nothing: a write is attributed to every playbook run of the project
+   * that was running at that moment or started in the hour before it, and so to the fire that started the run.
+   */
+  private causesFromRunsAlive(change: DsRowHistoryEntry, projectId: string, writtenAtMs: number): { triggerId: string; chainDepth: number }[] {
+    return this.deps.ledger.causesOfRunsAliveAt({ projectId, atIso: change.createdAt, startedSinceIso: new Date(writtenAtMs - CHAIN_CAUSE_WINDOW_MINUTES * MINUTE_MS).toISOString() });
   }
 
   /** The sessions of the project that carry the label, and their ancestors of the same project. */
