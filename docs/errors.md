@@ -25,7 +25,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `invalid_request` | 400 | 32 |
 | `unauthorized` | 401 | 3 |
 | `not_found` | 404 | 23 |
-| `conflict` | 409 | 55 |
+| `conflict` | 409 | 56 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 13 |
 | `internal` | 500 | 4 |
@@ -120,6 +120,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `playbook_locked` | 409 | `never` |
 | `integration_refresh_cooldown` | 409 | `later` |
 | `breaker_open` | 409 | `never` |
+| `trigger_playbook_changed` | 409 | `never` |
 | `session_closed` | 409 | `never` |
 | `stale_revision` | 409 | `after_refresh` |
 | `file_backed` | 409 | `never` |
