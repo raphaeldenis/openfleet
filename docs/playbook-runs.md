@@ -1,6 +1,6 @@
 # Playbook runs
 
-**In brief.** A playbook of script cells runs only after a human approved its digest. The runner starts each script itself, with no shell, journals every step before it starts, and masks the value of every secret before anything is stored or answered. A daemon killed in the middle of a step marks the run `needs_review` at the next boot and never starts the step again. This page describes the runner of script cells (PBK-P3a) and `http` cells (PBK-P3b-http); `readFromStore`, `writeToStore` and `tool` cells, `run_playbook` and the other kinds come later.
+**In brief.** A playbook of script cells runs only after a human approved its digest. The runner starts each script itself, with no shell, journals every step before it starts, and masks the value of every secret before anything is stored or answered. A daemon killed in the middle of a step marks the run `needs_review` at the next boot and never starts the step again. This page describes the runner of script cells (PBK-P3a), `http` cells (PBK-P3b-http) and `readFromStore` and `writeToStore` cells (PBK-P3B-STORE-TOOL); `tool` cells (PBK-P3B-TOOL), `run_playbook` and the other kinds come later.
 
 ## Who can do what
 
@@ -48,6 +48,22 @@ A secret may stand in the headers and the authentication only; the url and the b
 A step found running at boot is `needs_review`, like any step: the request may have reached the server, so it is never sent again.
 
 Known limits: a server that echoes a secret in a form the daemon cannot recognise (hashed, split, or combined with other text before base64) defeats the masker, as for scripts. A literal IP in `allowedHosts` can point at a private address on purpose.
+
+## Store cells
+
+A `readFromStore` or `writeToStore` cell works on a table of the project of the playbook, and on no other: the data store service checks the owner of the table on every call, with the project of the playbook, so a table of another project and a table that does not exist both fail the step with `store_not_in_project`, and the answer says nothing more. The table (`storeID`) and the columns (`columns`, `whereColumnID`, `sortColumnID`, `naturalKeyColumnID`, the keys of `rowMappings`) are ids. They may hold literals and `{{inputs.x}}` but never the output of a step: the save refuses it with `untrusted_reference`, and the runner checks again before it touches the table. A value (`whereValue`, the values of `rowMappings`) accepts any token except a secret.
+
+A read filters on one column (`whereColumnID` and `whereValue` go together, else `store_filter_incomplete`; the comparison is an equality), sorts on one, and answers `rowCount` and `output`, the rows as JSON (`[{ id, data }]`, only the columns asked for). It answers 100 rows when the cell sets no `limit` and at most 1000 whatever the limit; an answer over 256 Ki characters fails the step with `store_read_too_large` and keeps no row (it is never cut). The rows go through the same treatment as a script's output: the shape-based layer, the value masker, the control characters.
+
+A write inserts one row, or, when the cell names a `naturalKeyColumnID`, upserts on the natural key the table holds. It answers `outcome` (`inserted` or `updated`) and `rowId`, never the cells. Every value passes through the value masker before the write, so the value of a secret never reaches a table. The history of the table names the author `playbook run <run id>`, with the actor kind `trigger` (the automation kind the history accepts without a migration).
+
+Values are written as text: a number, json or select column takes a string that is valid for it, and a text that is not fails the step with `store_value_rejected`. The failure of a store step is a code of the journal and nothing else: `store_column_unknown`, `store_value_rejected`, `store_row_cap_reached` (the table is at its 10,000 rows), `store_read_failed`, `store_write_failed`. No row, no value and no error text goes in the activity log, in the journal of the failure or in the logs (the log line names the type of the error only). The activity log keeps the ids of the run, as for any run.
+
+A step found running at boot is `needs_review`, like any step. A write is never replayed: the row may be written. A read could be replayed without harm, but the journal says what ran, so it is marked and not started again either. Known limits: the cell does not check that `naturalKeyColumnID` is the natural key the table holds (the table decides: a table with no natural key inserts); and the trigger loop guard reads the attribution of a session writing as an agent, so a row written by a run carries no chain depth until a run is started by a trigger (PBK-TR6).
+
+## The tool cell
+
+A `tool` cell is refused with `playbook_not_runnable` before anything is written. A run has no session, no role and no actor to give the tool, and the handlers of the MCP tools need a session; a cell that calls a tool comes with the actor and the role of a run (PBK-P3B-TOOL).
 
 ## Limits
 

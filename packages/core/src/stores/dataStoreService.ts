@@ -676,6 +676,11 @@ export class DataStoreService {
     return this.runQuery(storeId, input);
   }
 
+  listColumns(storeId: string, input: Scope): DsColumn[] {
+    this.authorize(storeId, input.projectId);
+    return this.repo.listColumns(storeId);
+  }
+
   pageRows(storeId: string, input: Scope & { limit: number; offset: number }): { rows: DsRow[]; totalRowCount: number } {
     this.authorize(storeId, input.projectId);
     return this.guarded(() => this.repo.pageRows(storeId, input));
