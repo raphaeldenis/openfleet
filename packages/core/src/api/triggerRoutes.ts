@@ -1,8 +1,8 @@
 import { TRIGGER_LEDGER_STATES, TriggerPolicySchema, TriggerRunSchema, TriggerWhenSchema } from '@openfleet/shared';
 import { z } from 'zod';
 import { fireViewOf, type FireLedger } from '../triggers/fireLedger.js';
-import type { TriggerContent } from '../triggers/triggerRepository.js';
-import type { TriggerService } from '../triggers/triggerService.js';
+import type { TriggerContent, TriggerRecord } from '../triggers/triggerRepository.js';
+import { reviewDigestOf, type TriggerService } from '../triggers/triggerService.js';
 import { json, queryParams, type Router } from './router.js';
 
 export const HUMAN_PROOF_HEADER = 'x-human-proof';
@@ -26,7 +26,10 @@ const ReplaceBodySchema = z.strictObject({
 });
 const ArmBodySchema = z.strictObject({ approvedRev: RevisionSchema });
 
-const headerValue = (value: string | string[] | undefined): string | undefined => (Array.isArray(value) ? value[0] : value);
+/** A trigger as the desktop reads it, with the digest that arming would record for its content as it stands. */
+const reviewedViewOf = (trigger: TriggerRecord) => ({ ...trigger, reviewDigest: reviewDigestOf(trigger) });
+
+const headerValue =(value: string | string[] | undefined): string | undefined => (Array.isArray(value) ? value[0] : value);
 
 /**
  * The human side of the triggers: every route sits under /api, behind the admin token; none sits under /mcp, so no agent arms.
@@ -43,7 +46,7 @@ export function registerTriggerRoutes(router: Router, deps: { triggers: TriggerS
 
   router.add('GET', '/api/triggers', ({ req, res }) => {
     const { projectId } = ListQuerySchema.parse(queryParams(req));
-    json(res, 200, triggers.list(projectId));
+    json(res, 200, triggers.list(projectId).map(reviewedViewOf));
   });
 
   router.add('POST', '/api/triggers', ({ res, body }) => {
@@ -51,7 +54,7 @@ export function registerTriggerRoutes(router: Router, deps: { triggers: TriggerS
   });
 
   router.add('GET', '/api/triggers/:id', ({ res, params }) => {
-    json(res, 200, triggers.getById(params.id!));
+    json(res, 200, reviewedViewOf(triggers.getById(params.id!)));
   });
 
   router.add('PUT', '/api/triggers/:id', ({ res, params, body }) => {

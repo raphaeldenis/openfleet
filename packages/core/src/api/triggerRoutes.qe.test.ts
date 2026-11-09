@@ -71,7 +71,7 @@ describe('the CRUD of triggers', () => {
 
     expect(trigger).toMatchObject({ projectId: OWN_PROJECT_ID, title: 'T1', contentRev: 1, armedAt: null, approvedRev: null, approvedGraphDigest: null });
     expect(listed.map((listedTrigger) => listedTrigger.id)).toEqual([trigger.id]);
-    expect(read).toEqual(trigger);
+    expect(read).toEqual({ ...trigger, reviewDigest: expect.any(String) });
     expect(replaced).toMatchObject({ title: 'Renamed', contentRev: 2, when: { source: 'silent_run', minutes: 20 }, policy: { cooldownSeconds: 30, batchMode: 'per_event', backlogPolicy: 'fire_all' } });
     expect(deleted.status).toBe(200);
     expect((await f.api(`/api/triggers/${trigger.id}`)).status).toBe(404);

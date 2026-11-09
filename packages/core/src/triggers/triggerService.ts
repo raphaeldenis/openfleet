@@ -76,6 +76,10 @@ function titleOf(requested: string | undefined): string {
 export const approvedGraphOf = (trigger: Pick<TriggerRecord, 'ownerManagerId' | 'when' | 'conditions' | 'run' | 'policy'>) =>
   ({ ownerManagerId: trigger.ownerManagerId, when: trigger.when, conditions: trigger.conditions, run: trigger.run, policy: trigger.policy });
 
+/** The digest of the approved graph of the trigger as it stands: what arming records and what a human reviews before arming. */
+export const reviewDigestOf = (trigger: Pick<TriggerRecord, 'ownerManagerId' | 'when' | 'conditions' | 'run' | 'policy'>): string =>
+  canonicalDigestOf(approvedGraphOf(trigger));
+
 export class TriggerService {
   constructor(private readonly deps: TriggerServiceDeps) {}
 
@@ -150,7 +154,7 @@ export class TriggerService {
     const isProvenHuman = humanProof.consume(input.proof, { action: 'arm_trigger', triggerId: trigger.id });
     if (!isProvenHuman) throw new OpenFleetError('human_proof_required', 'arming a trigger needs the proof of a human gesture in the desktop app.', { hint: 'Arm it from the Triggers screen.' });
 
-    const approvedGraphDigest = canonicalDigestOf(approvedGraphOf(trigger));
+    const approvedGraphDigest = reviewDigestOf(trigger);
     const wasArmed = repository.arm({ id: trigger.id, approvedRev: input.approvedRev, approvedGraphDigest, now: clock() });
     if (!wasArmed) throw staleRevision(this.getById(trigger.id).contentRev);
     const armed = this.getById(trigger.id);

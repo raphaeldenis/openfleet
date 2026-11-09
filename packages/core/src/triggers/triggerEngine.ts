@@ -6,7 +6,7 @@ import type { FireBreaker } from './fireBreaker.js';
 import type { FireLedger, TriggerFire } from './fireLedger.js';
 import { policyVerdictOf } from './firePolicy.js';
 import { kernelConditionsOf } from './kernelConditions.js';
-import { approvedGraphOf } from './triggerService.js';
+import { reviewDigestOf } from './triggerService.js';
 import type { TriggerRecord, TriggerRepository } from './triggerRepository.js';
 
 export const MAX_EVENT_JSON_CHARS = 8192;
@@ -54,7 +54,7 @@ export interface SettledFire {
 
 /** True when a human armed the trigger as it stands now: the armed digest still matches what would run. */
 export const isArmedAsItStands = (trigger: TriggerRecord): boolean =>
-  trigger.armedAt !== null && trigger.approvedGraphDigest === canonicalDigestOf(approvedGraphOf(trigger));
+  trigger.armedAt !== null && trigger.approvedGraphDigest === reviewDigestOf(trigger);
 
 /** The sessions an event is about: the session itself and its parent. */
 const sessionIdsOf = (event: Record<string, unknown>): string[] => {
