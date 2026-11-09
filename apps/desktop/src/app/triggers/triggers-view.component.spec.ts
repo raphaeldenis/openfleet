@@ -11,7 +11,7 @@ const PROJECT = { id: 'p1', name: 'Alpha' } as Project;
 
 const playbook = (overrides: Partial<PlaybookView> = {}): PlaybookView => ({
   id: 'pb1', projectId: 'p1', name: 'Déployer', inputs: [], flow: { cells: [{ id: 'build', kind: 'script', program: 'scripts/build.sh', args: [], env: {} }] }, contentRev: 3,
-  agentLocked: false, policy: { browserAutoGrant: false, autoDistill: false, maxRunsToKeep: 50 }, approvedDigest: null, approvedAt: null, origin: 'native', updatedAt: '2026-11-05T10:00:00Z',
+  agentLocked: false, policy: { allowedHosts: [], browserAutoGrant: false, autoDistill: false, maxRunsToKeep: 50 }, approvedDigest: null, approvedAt: null, origin: 'native', updatedAt: '2026-11-05T10:00:00Z',
   secrets: ['JIRA_TOKEN'], unreferencedSecrets: [], ...overrides,
 });
 
@@ -518,12 +518,12 @@ describe('TriggersViewComponent: triggers', () => {
     expect(screen.getByTestId('trigger-detail')).toHaveTextContent('Une session enfant est inactive');
   });
 
-  it('offers no arm, edit or run control in this version', async () => {
+  it('offers no run control in this version', async () => {
     await openTriggers();
     await userEvent.click(await screen.findByRole('button', { name: /Réveiller Capitaine/ }));
     await screen.findByTestId('fire-f1');
 
-    expect(screen.queryByRole('button', { name: /armer|modifier|lancer|exécuter/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /lancer|exécuter/i })).toBeNull();
   });
 });
 

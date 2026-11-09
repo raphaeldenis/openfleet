@@ -10,6 +10,8 @@ export type KernelErrorCode =
   | 'non_canonical_url'
   | 'url_authority_changed'
   | 'header_injection'
+  | 'http_header_refused'
+  | 'http_headers_too_large'
   | 'secret_too_short'
   | 'not_canonical_json';
 

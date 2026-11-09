@@ -11,6 +11,8 @@ import { evaluateConditions, type Condition } from './kernel/conditionEvaluator.
 import { KernelError } from './kernel/kernelError.js';
 import { createSecretMasker, type SecretMasker } from './kernel/secretMasker.js';
 import { assertTemplateAllowed, resolveTemplate, type ResolutionScope, type TemplateSlot, type UntrustedSources } from './kernel/tokenResolver.js';
+import { sendHttpStep, type HttpStepNetwork } from './httpStepRequest.js';
+import { resolveHttpRequest } from './httpStepTemplates.js';
 import type { PlaybookApprovals } from './playbookApprovals.js';
 import type { PlaybookRecord } from './playbookRepository.js';
 import { secretNamesReferencedBy, wireErrorOf } from './playbookRules.js';
@@ -25,15 +27,19 @@ export interface PlaybookRunnerDeps {
   secrets: Pick<SecretService, 'resolve'>;
   clock: () => string;
   newId: () => string;
+  /** The name resolution and the forbidden addresses of http cells; the defaults reach the real network. */
+  httpNetwork?: HttpStepNetwork;
   limits: { maxStepExecutions: number; maxConcurrentRuns: number; maxRunsNeedingReview: number };
   /** Told once a run is journaled as started and once it is settled, with ids and the status only. */
   observer?: { runStarted: (run: { runId: string; playbookId: string }) => void; runEnded: (run: { runId: string; playbookId: string; status: Settled }) => void };
 }
 
 type ScriptCell = Extract<PlaybookCell, { kind: 'script' }>;
+type HttpCell = Extract<PlaybookCell, { kind: 'http' }>;
 type Settled = Exclude<PlaybookRunStatus, 'running'>;
 type Verdict = { status: Settled; errorCode?: string };
-type StepOutput = { exitCode: number | null; output: string };
+/** A script answers its exit code; an http cell answers the status of the response. Both answer the masked output. */
+type StepOutput = { exitCode: number | null; output: string } | { status: number; output: string };
 
 /** What a step answers to the cells after it: its masked output, never a secret value. */
 type StepFields = Record<string, StepOutput>;
@@ -48,6 +54,10 @@ interface RunContext {
 }
 
 const INTERRUPTED = 'interrupted';
+const HTTP_REFUSAL_CODES = {
+  host_not_allowed: 'http_host_not_allowed', address_blocked: 'http_address_blocked', redirect_refused: 'http_redirect_refused',
+  timeout: 'http_timeout', failed: 'http_request_failed',
+} as const;
 const SECRET_SCOPE_KIND = 'playbook';
 
 const busy = (reason: string) => new OpenFleetError('playbook_run_busy', reason, { hint: 'Wait for a run to end, then start again.' });
@@ -58,11 +68,12 @@ const notRunnable =(reason: string) => new OpenFleetError('playbook_not_runnable
 const invalidInput = (reason: string) => new OpenFleetError('invalid_body', reason);
 
 const isScriptCell = (cell: PlaybookCell): cell is ScriptCell => cell.kind === 'script';
+const isHttpCell = (cell: PlaybookCell): cell is HttpCell => cell.kind === 'http';
 
-/** Only script cells that follow their edges run: a retry, a forEach or another kind of cell is refused before anything starts. */
+/** Only script and http cells that follow their edges run: a retry, a forEach or another kind of cell is refused before anything starts. */
 function assertCellsCanRun(playbook: PlaybookRecord): void {
   for (const cell of playbook.flow.cells) {
-    if (!isScriptCell(cell)) throw notRunnable(`the cell ${cell.id} is a ${cell.kind} cell: this runner executes script cells only.`);
+    if (!isScriptCell(cell) && !isHttpCell(cell)) throw notRunnable(`the cell ${cell.id} is a ${cell.kind} cell: this runner executes script and http cells only.`);
     if (cell.retry !== undefined) throw notRunnable(`the cell ${cell.id} retries: this runner does not retry a step.`);
     const iterates = (cell.next ?? []).some((edge) => edge.forEach !== undefined);
     if (iterates) throw notRunnable(`the cell ${cell.id} iterates with forEach: this runner does not iterate.`);
@@ -250,8 +261,9 @@ export class PlaybookRunner {
 
   private async runStep(cell: PlaybookCell, context: RunContext, steps: StepFields): Promise<{ verdict: Verdict; output?: unknown }> {
     try {
-      if (!isScriptCell(cell)) throw notRunnable(`the cell ${cell.id} is not a script cell.`);
-      return await this.runScriptCell(cell, context, steps);
+      if (isScriptCell(cell)) return await this.runScriptCell(cell, context, steps);
+      if (isHttpCell(cell)) return await this.runHttpCell(cell, context, steps);
+      throw notRunnable(`the cell ${cell.id} is not a script or http cell.`);
     } catch (error) {
       return { verdict: verdictOfFailure(error, context.masker) };
     }
@@ -276,6 +288,27 @@ export class PlaybookRunner {
     if (outcome.kind === 'timeout') return { verdict: { status: 'failed', errorCode: 'script_timeout' }, output: { output } };
     const stepOutput: StepOutput = { exitCode: outcome.exitCode, output };
     return outcome.exitCode === 0 ? { verdict: { status: 'succeeded' }, output: stepOutput } : { verdict: { status: 'failed', errorCode: 'script_failed' }, output: stepOutput };
+  }
+
+  private async runHttpCell(cell: HttpCell, context: RunContext, steps: StepFields): Promise<{ verdict: Verdict; output?: unknown }> {
+    const untrusted: UntrustedSources = { stepIds: new Set(context.playbook.flow.cells.map((other) => other.id)), isItemUntrusted: true };
+    const scope: ResolutionScope = { inputs: context.inputs, steps, secretValueOf: (name) => context.secretValues.get(name) };
+    const { url, headers, body } = resolveHttpRequest(cell, scope, untrusted);
+
+    const outcome = await sendHttpStep({
+      url, method: cell.method, headers, body, allowedHosts: context.playbook.policy.allowedHosts ?? [], signal: this.shutdown.signal,
+      timeoutMs: (cell.timeoutSeconds ?? DEFAULT_STEP_TIMEOUT_SECONDS) * 1000,
+      maxRetainedChars: MAX_STEP_OUTPUT_BYTES + context.masker.longestSpellingLength,
+    }, this.deps.httpNetwork);
+
+    if (outcome.kind === 'aborted') return { verdict: { status: 'needs_review', errorCode: INTERRUPTED } };
+    if (outcome.kind !== 'response') return { verdict: { status: 'failed', errorCode: HTTP_REFUSAL_CODES[outcome.kind] } };
+
+    // Same order as a script's output: the shape-based layer, then the masker, then the control characters.
+    const output = withoutControlCharacters(context.masker.mask(maskedSecrets(outcome.body)));
+    const stepOutput: StepOutput = { status: outcome.status, output };
+    const isSuccess = outcome.status >= 200 && outcome.status < 300;
+    return isSuccess ? { verdict: { status: 'succeeded' }, output: stepOutput } : { verdict: { status: 'failed', errorCode: 'http_status_failed' }, output: stepOutput };
   }
 
   /** The arguments and environment of a script cell with their tokens resolved. A token is checked in its place again here: a flow stored outside the save path is held to the same rules. */

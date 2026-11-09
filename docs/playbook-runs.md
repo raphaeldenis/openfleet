@@ -1,6 +1,6 @@
 # Playbook runs
 
-**In brief.** A playbook of script cells runs only after a human approved its digest. The runner starts each script itself, with no shell, journals every step before it starts, and masks the value of every secret before anything is stored or answered. A daemon killed in the middle of a step marks the run `needs_review` at the next boot and never starts the step again. This page describes the first wave of the runner (PBK-P3a); `http`, `readFromStore`, `writeToStore` and `tool` cells and the other kinds come later. A trigger starts a run with the RUN `run_playbook` (see `docs/triggers.md`).
+**In brief.** A playbook of script cells runs only after a human approved its digest. The runner starts each script itself, with no shell, journals every step before it starts, and masks the value of every secret before anything is stored or answered. A daemon killed in the middle of a step marks the run `needs_review` at the next boot and never starts the step again. This page describes the runner of script cells (PBK-P3a) and `http` cells (PBK-P3b-http); `readFromStore`, `writeToStore` and `tool` cells and the other kinds come later. A trigger starts a run with the RUN `run_playbook` (see `docs/triggers.md`).
 
 ## Who can do what
 
@@ -36,6 +36,18 @@ At boot every run and step left `running` is marked `needs_review` with the code
 ## Masking
 
 The values of the secrets the playbook references are resolved when the run starts (`secret_not_connected_on_this_device` refuses the run, and nothing is written, when this device holds none). The output of a step goes through the shape-based layer of `redact.ts`, then through the value-based masker: the plain, URL-encoded, base64 and JSON-escaped forms of each value become `[secret:NAME]`. The inputs of the run are masked the same way before they are stored. A script that hashes, splits or re-encodes the value defeats the masker; the approved script is the control. The cap of the output never cuts a secret: the step keeps the cap plus the length of the longest spelling of the secrets of the run, and the cut moves back before a secret that crosses it, on stdout and on stderr alike. An unexpected error of a step is masked with the values of the run before it is logged.
+
+## http cells
+
+An `http` cell calls a host the human approved: `allowedHosts` in the policy lists exact lowercase host names (IDN in punycode) or IPv4 literals, with no wildcard, port or userinfo. The list is empty by default, so no host is reachable, and it is part of the approval digest: changing it clears the approval.
+
+The name is resolved once. A name that resolves to a loopback, private, link-local, shared or multicast address, or one of whose answers does, is refused with `http_address_blocked`; the connection then goes to the address that was checked, so a DNS answer that changes in between has no effect. A literal IP written in `allowedHosts` is the human's choice and is not range-checked. The scheme is `https`; `http` is accepted only for a loopback address. A redirect is never followed (`http_redirect_refused`). A response outside 2xx fails the step with `http_status_failed` and keeps its masked body. The step answers `status` and `output` (the body, capped like a script's output and treated the same way: shape-based layer, value masker, control characters). Response headers are not kept and no cookie is sent or stored.
+
+A secret may stand in the headers and the authentication only; the url and the body refuse it. The output of an earlier step is refused in the authority of the url, the headers and the authentication, and accepted in the path, the query and the body, where it cannot steer the request elsewhere. Each token is checked in its place again at run time. Headers with a line break, headers the client sets itself (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, ...) and resolved headers over 16 Ki characters fail the step before anything is sent.
+
+A step found running at boot is `needs_review`, like any step: the request may have reached the server, so it is never sent again.
+
+Known limits: a server that echoes a secret in a form the daemon cannot recognise (hashed, split, or combined with other text before base64) defeats the masker, as for scripts. A literal IP in `allowedHosts` can point at a private address on purpose.
 
 ## Limits
 

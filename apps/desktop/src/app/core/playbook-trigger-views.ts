@@ -56,5 +56,7 @@ export interface TriggerView {
   armedAt: string | null;
   approvedRev: number | null;
   approvedGraphDigest: string | null;
+  /** The digest arming would record for the content as it stands; absent from a daemon that does not send it. */
+  reviewDigest?: string;
   updatedAt: string;
 }
