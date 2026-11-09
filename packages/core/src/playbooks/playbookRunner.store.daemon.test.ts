@@ -8,12 +8,19 @@ import { PlaybookRepository } from './playbookRepository.js';
  * Guards of the store cells, each with the test that fails when the guard is removed (replay: break the line, run this file, restore).
  *  1. project boundary     playbookStoreCells.ts `projectId: playbook.projectId` -> 'refuses a table of another project ...' (read and write)
  *  2. untrusted identifier TemplateSlot 'store_identifier' -> 'never lets the output of a step into a table or column ...', 'refuses at save ...'
- *  3. read bounds          READ_ROW_CAP / DEFAULT_READ_ROWS / MAX_READ_OUTPUT_CHARS -> 'reads at most ...', 'reads 100 rows when the cell sets no limit', 'refuses to answer rows that outgrow the output cap'
+ *  3. read bounds          READ_ROW_CAP / DEFAULT_READ_ROWS / MAX_READ_OUTPUT_BYTES -> 'reads at most ...', 'reads 100 rows when the cell sets no limit', 'refuses to answer rows that outgrow the output cap'
  *  4. attribution          PLAYBOOK_RUN_ACTOR -> 'writes the row as the playbook run and keeps its history'
  *  5. kinds                assertCellsCanRun -> 'refuses a tool cell ...'
  *  6. masking              `masker.mask` on written values -> 'masks the value of a secret before it is written'
  *  7. no replay            recover() -> 'never writes again a store step found running at boot'
  *  8. no row data leaks    failure codes only -> 'puts no row data in the activity log', 'a refused read keeps no row data'
+ *  9. natural key exact    `wantsUpsert && naturalKeyColumnId !== heldNaturalKeyColumnId` -> the five 'refuses ... as the natural key' tests
+ * 10. bytes, not chars     `Buffer.byteLength(output)` -> 'refuses an answer that is under the cap in characters and over it in bytes'
+ * 11. read stops early     `isLimitReached` in readRows -> 'reads 100 rows ...', 'reads at most ...' (and the readRows service tests)
+ * 12. read projection      `scannedColumnIds` -> 'refuses to answer rows that outgrow the output cap' (and the readRows service tests)
+ * 13. byte budget          `retainedBytes > maxBytes` -> the two budget tests of dataStoreService.readRows.test.ts
+ * 14. owner check          `authorize` in readRows -> 'refuses a table of another project ...'; in naturalKeyColumnIdOf -> dataStoreService.readRows.test.ts
+ * 15. committed write      recover() after a commit -> 'a daemon that stops once the write is committed'
  */
 type RunView = {
   id: string; status: string; errorCode: string | null;
@@ -361,6 +368,109 @@ describe('a table or a column is never named by the output of a step', () => {
     const run = await runToTheEnd(f, playbook.id);
 
     expect(run.status).toBe('succeeded');
+  });
+});
+
+describe('an upsert writes only on the natural key the table holds', () => {
+  const upsertOn = async (f: GovernanceFixture, table: { storeId: string; nameId: string; noteId: string }, naturalKeyColumnID: string) => {
+    const playbook = await createApprovedPlaybook(f, [writeCell('write', table.storeId, { [table.nameId]: 'legitimate', [table.noteId]: 'overwritten' }, { naturalKeyColumnID })]);
+    return runToTheEnd(f, playbook.id);
+  };
+  const tableHoldingLegitimateRow = async (f: GovernanceFixture, { withKey }: { withKey: boolean }) => {
+    const table = await makeTable(f);
+    if (withKey) f.daemon.stores.setNaturalKey(table.storeId, { projectId: OWN_PROJECT_ID, columnId: table.nameId });
+    table.insert({ name: 'legitimate', note: 'original' });
+    return table;
+  };
+  const originalRows = (table: { nameId: string; noteId: string }) => [{ [table.nameId]: 'legitimate', [table.noteId]: 'original' }];
+
+  it.each([
+    ['an id that is no column', () => 'no-such-column'],
+    ['a column of another table', async (f: GovernanceFixture) => f.daemon.stores.addColumn((await makeTable(f)).storeId, { projectId: OWN_PROJECT_ID, displayName: 'elsewhere', columnType: 'text' }).id],
+    ['a column of the table that is not its natural key', (_f: GovernanceFixture, table: { noteId: string }) => table.noteId],
+  ])('refuses %s as the natural key, and overwrites no row', async (_label, declaredKeyOf) => {
+    const f = await boot();
+    const table = await tableHoldingLegitimateRow(f, { withKey: true });
+
+    const run = await upsertOn(f, table, await declaredKeyOf(f, table));
+
+    expect(run).toMatchObject({ status: 'failed', errorCode: 'store_natural_key_mismatch' });
+    expect(table.rows().map((row) => row.data)).toEqual(originalRows(table));
+  });
+
+  it('refuses the column that was the natural key when the table has changed its key since', async () => {
+    const f = await boot();
+    const table = await tableHoldingLegitimateRow(f, { withKey: true });
+    f.daemon.stores.setNaturalKey(table.storeId, { projectId: OWN_PROJECT_ID, columnId: table.noteId });
+
+    const run = await upsertOn(f, table, table.nameId);
+
+    expect(run).toMatchObject({ status: 'failed', errorCode: 'store_natural_key_mismatch' });
+    expect(table.rows().map((row) => row.data)).toEqual(originalRows(table));
+  });
+
+  it('upserts when the column is exactly the natural key of the table', async () => {
+    const f = await boot();
+    const table = await tableHoldingLegitimateRow(f, { withKey: true });
+
+    const run = await upsertOn(f, table, table.nameId);
+
+    expect(run).toMatchObject({ status: 'succeeded', steps: [{ output: { outcome: 'updated' } }] });
+    expect(table.rows().map((row) => row.data)).toEqual([{ [table.nameId]: 'legitimate', [table.noteId]: 'overwritten' }]);
+  });
+
+  it('refuses an upsert on a table that has no natural key, and inserts nothing', async () => {
+    const f = await boot();
+    const table = await tableHoldingLegitimateRow(f, { withKey: false });
+
+    const run = await upsertOn(f, table, table.nameId);
+
+    expect(run).toMatchObject({ status: 'failed', errorCode: 'store_natural_key_mismatch' });
+    expect(table.rows().map((row) => row.data)).toEqual(originalRows(table));
+  });
+});
+
+describe('a read answer is counted in bytes of UTF-8', () => {
+  const FOUR_ROWS = 4;
+  const OUTPUT_CAP_BYTES = 256 * 1024;
+
+  it('refuses an answer that is under the cap in characters and over it in bytes', async () => {
+    const f = await boot();
+    const table = await makeTable(f);
+    const rowBytesOf = (characters: number) => Buffer.byteLength(JSON.stringify({ [table.noteId]: '界'.repeat(characters) }));
+    let characters = 1;
+    while (FOUR_ROWS * rowBytesOf(characters + 1) <= OUTPUT_CAP_BYTES) characters += 1;
+    for (let index = 0; index < FOUR_ROWS; index += 1) table.insert({ name: 'ignored', note: '界'.repeat(characters) });
+    const playbook = await createApprovedPlaybook(f, [readCell('read', table.storeId, { columns: [table.noteId] })]);
+
+    const run = await runToTheEnd(f, playbook.id);
+
+    const answerInCharacters = JSON.stringify(table.rows().map((row) => ({ id: row.id, data: { [table.noteId]: row.data[table.noteId] } }))).length;
+    expect(answerInCharacters).toBeLessThan(OUTPUT_CAP_BYTES);
+    expect(run).toMatchObject({ status: 'failed', errorCode: 'store_read_too_large' });
+  });
+});
+
+describe('a daemon that stops once the write is committed', () => {
+  it('finds the step needs_review at boot and writes nothing again', async () => {
+    const f = await boot();
+    const table = await makeTable(f);
+    const playbook = await createApprovedPlaybook(f, [writeCell('write', table.storeId, { [table.nameId]: 'once' })]);
+    const run = await runToTheEnd(f, playbook.id);
+    expect(run.status).toBe('succeeded');
+    f.db.prepare("UPDATE playbook_run_steps SET status = 'running', output_json_masked = NULL, error_code = NULL, ended_at = NULL WHERE run_id = ?").run(run.id);
+    f.db.prepare("UPDATE playbook_runs SET status = 'running', error_code = NULL, ended_at = NULL WHERE id = ?").run(run.id);
+    const rowsCommitted = table.rows().map((row) => row.data);
+    const historyCommitted = f.db.prepare('SELECT COUNT(*) AS entries FROM ds_row_history WHERE store_id = ?').get(table.storeId);
+
+    const interruptedRuns = f.daemon.playbookRunner.recover();
+
+    const afterBoot = await viewOfRun(f, run.id);
+    expect(interruptedRuns).toBe(1);
+    expect(afterBoot).toMatchObject({ status: 'needs_review', errorCode: 'interrupted', steps: [{ status: 'needs_review', errorCode: 'interrupted' }] });
+    expect(rowsCommitted).toEqual([{ [table.nameId]: 'once' }]);
+    expect(table.rows().map((row) => row.data)).toEqual(rowsCommitted);
+    expect(f.db.prepare('SELECT COUNT(*) AS entries FROM ds_row_history WHERE store_id = ?').get(table.storeId)).toEqual(historyCommitted);
   });
 });
 

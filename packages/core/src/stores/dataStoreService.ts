@@ -28,6 +28,12 @@ export class CellValueRejectedError extends InvalidCellValueError {
 export class InvalidNameError extends Error {}
 export class InvalidColumnDefinitionError extends Error {}
 export class InvalidQueryError extends Error {}
+/** The rows a bounded read keeps outgrow its budget of bytes; `scannedRowCount` is how many rows were read before it stopped. */
+export class ReadBudgetExceededError extends Error {
+  constructor(readonly scannedRowCount: number) {
+    super('The rows of the read outgrow its budget');
+  }
+}
 export class NoNaturalKeyError extends InvalidQueryError {
   constructor() {
     super('The data store has no natural key; address the row by row_id');
@@ -676,6 +682,48 @@ export class DataStoreService {
     return this.runQuery(storeId, input);
   }
 
+  /**
+   * Reads at most `limit` matching rows, never more than `maxBytes` of them, and only the cells of `columnIds` (all cells when absent).
+   * Without an order the scan stops at the `limit`-th match; with one it holds the matching rows to sort them, under the same budget.
+   * Throws ReadBudgetExceededError as soon as the rows kept outgrow `maxBytes`.
+   */
+  readRows(storeId: string, input: Scope & { where?: WhereClause[]; orderBy?: OrderTerm[]; limit: number; columnIds?: string[]; maxBytes: number }): { rows: { id: string; data: Record<string, unknown> }[]; scannedRowCount: number } {
+    this.authorize(storeId, input.projectId);
+    const { where, orderBy, columns, columnById } = this.parseQuery(storeId, input);
+    const { columnIds, limit, maxBytes } = input;
+    if (columnIds !== undefined) this.assertKnownColumns(columns, columnIds);
+    const scannedColumnIds = columnIds === undefined ? undefined : [...new Set([...columnIds, ...where.map((clause) => clause.columnId), ...orderBy.map((term) => term.columnId)])];
+    const isSorted = orderBy.length > 0;
+    const matchingRows: { id: string; data: Record<string, unknown> }[] = [];
+    let scannedRowCount = 0;
+    let retainedBytes = 0;
+    if (limit === 0) return { rows: [], scannedRowCount };
+
+    this.repo.scanRows(storeId, {
+      columnIds: scannedColumnIds,
+      visit: (row) => {
+        scannedRowCount += 1;
+        const isMatch = where.every((clause) => matches(columnById.get(clause.columnId)!, row.data[clause.columnId] ?? null, clause));
+        if (!isMatch) return true;
+        retainedBytes += row.bytes;
+        if (retainedBytes > maxBytes) throw new ReadBudgetExceededError(scannedRowCount);
+        matchingRows.push(row);
+        const isLimitReached = !isSorted && matchingRows.length === limit;
+        return !isLimitReached;
+      },
+    });
+
+    const kept = isSorted ? matchingRows.sort(this.rowComparator(orderBy, columnById)).slice(0, limit) : matchingRows;
+    const pickAskedFor = (data: Record<string, unknown>) => columnIds === undefined ? data : Object.fromEntries(columnIds.filter((columnId) => columnId in data).map((columnId) => [columnId, data[columnId]]));
+    return { rows: kept.map((row) => ({ id: row.id, data: pickAskedFor(row.data) })), scannedRowCount };
+  }
+
+  /** The column the table holds as its natural key, or undefined when it has none. */
+  naturalKeyColumnIdOf(storeId: string, input: Scope): string | undefined {
+    this.authorize(storeId, input.projectId);
+    return this.repo.findStore(storeId)?.naturalKeyColumnId;
+  }
+
   listColumns(storeId: string, input: Scope): DsColumn[] {
     this.authorize(storeId, input.projectId);
     return this.repo.listColumns(storeId);
@@ -836,7 +884,8 @@ export class DataStoreService {
     }
   }
 
-  private runQuery(storeId: string, input: { where?: WhereClause[] | undefined; orderBy?: OrderTerm[] | undefined; limit?: number | undefined }): DsRow[] {
+  /** Validates the where, the order and the limit of a query against the columns of the store. */
+  private parseQuery(storeId: string, input: { where?: WhereClause[] | undefined; orderBy?: OrderTerm[] | undefined; limit?: number | undefined }) {
     const where = z.array(WhereClauseSchema).safeParse(input.where ?? []);
     const orderBy = z.array(OrderTermSchema).safeParse(input.orderBy ?? []);
     if (!where.success || !orderBy.success) throw new InvalidQueryError('Invalid where or orderBy');
@@ -845,19 +894,29 @@ export class DataStoreService {
 
     const columns = this.requireColumns(storeId, [...where.data.map((c) => c.columnId), ...orderBy.data.map((t) => t.columnId)]);
     const columnById = new Map(columns.map((column) => [column.id, column]));
+    return { where: where.data, orderBy: orderBy.data, columns, columnById };
+  }
 
-    // ponytail: in-memory filter; push down to SQL if stores grow past the MAX_ROWS_PER_STORE cap
-    const filtered = this.repo.listRows(storeId).filter((row) =>
-      where.data.every((clause) => matches(columnById.get(clause.columnId)!, row.data[clause.columnId] ?? null, clause)));
-    const sorted = filtered.sort((a, b) => {
-      for (const { columnId, dir } of orderBy.data) {
+  private rowComparator(orderBy: OrderTerm[], columnById: Map<string, DsColumn>) {
+    return (a: { data: Record<string, unknown> }, b: { data: Record<string, unknown> }): number => {
+      for (const { columnId, dir } of orderBy) {
         const [cellA, cellB] = [a.data[columnId], b.data[columnId]];
         if (isEmptyCell(cellA) !== isEmptyCell(cellB)) return isEmptyCell(cellA) ? 1 : -1;
         const order = compareCells(columnById.get(columnId)!, cellA, cellB);
         if (order !== 0) return dir === 'asc' ? order : -order;
       }
       return 0;
-    });
+    };
+  }
+
+  private runQuery(storeId: string, input: { where?: WhereClause[] | undefined; orderBy?: OrderTerm[] | undefined; limit?: number | undefined }): DsRow[] {
+    const { where, orderBy, columnById } = this.parseQuery(storeId, input);
+    const { limit } = input;
+
+    // ponytail: in-memory filter; push down to SQL if stores grow past the MAX_ROWS_PER_STORE cap
+    const filtered = this.repo.listRows(storeId).filter((row) =>
+      where.every((clause) => matches(columnById.get(clause.columnId)!, row.data[clause.columnId] ?? null, clause)));
+    const sorted = filtered.sort(this.rowComparator(orderBy, columnById));
     return limit === undefined ? sorted : sorted.slice(0, limit);
   }
 
