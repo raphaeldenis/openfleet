@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { Script } from 'node:vm';
 import { z } from 'zod';
 import { readableConfigReason } from '../configReason.js';
@@ -55,8 +56,10 @@ export interface WorkingStateSettings { maxBytes: number; enforce: boolean; maxA
 export interface ManagerSettings { heartbeatDefaultSeconds: number }
 /** `enforcement` is unset when the operator keeps the shipped FINDINGS_GATE_ENFORCEMENT. */
 export interface FindingsGateSettings { ticketPattern: string; enforcement?: FindingsGateEnforcement }
+/** `scriptRoots` are the absolute directories the script cells of playbooks run files from; none is the shipped default, so no script runs until an operator names a root. */
+export interface PlaybookSettings { scriptRoots: string[] }
 export interface TriggerSettings { fireRetentionDays: number }
-export interface DaemonSettings { workingState: WorkingStateSettings; managers: ManagerSettings; contextNotice: ContextNoticeSettings; findingsGate: FindingsGateSettings; triggers: TriggerSettings }
+export interface DaemonSettings { workingState: WorkingStateSettings; managers: ManagerSettings; contextNotice: ContextNoticeSettings; findingsGate: FindingsGateSettings; playbooks: PlaybookSettings; triggers: TriggerSettings }
 
 const MIN_FIRE_RETENTION_DAYS = 1;
 const MAX_FIRE_RETENTION_DAYS = 3650;
@@ -65,8 +68,10 @@ const DEFAULT_WORKING_STATE_SETTINGS: WorkingStateSettings = { maxBytes: DEFAULT
 const DEFAULT_MANAGER_SETTINGS: ManagerSettings = { heartbeatDefaultSeconds: DEFAULT_HEARTBEAT_SECONDS };
 const DEFAULT_CONTEXT_NOTICE_SETTINGS: ContextNoticeSettings = { firstAt: DEFAULT_CONTEXT_NOTICE_FIRST_AT, every: DEFAULT_CONTEXT_NOTICE_EVERY, roles: { manager: true }, models: {} };
 const DEFAULT_FINDINGS_GATE_SETTINGS: FindingsGateSettings = { ticketPattern: DEFAULT_TICKET_PATTERN };
+const DEFAULT_PLAYBOOK_SETTINGS: PlaybookSettings = { scriptRoots: [] };
 const DEFAULT_TRIGGER_SETTINGS: TriggerSettings = { fireRetentionDays: DEFAULT_FIRE_RETENTION_DAYS };
 const MAX_TICKET_PATTERN_LENGTH = 200;
+const MAX_SCRIPT_ROOTS = 16;
 
 const isCompilableRegularExpression = (source: string) => {
   try {
@@ -96,6 +101,9 @@ const ConfigFileSchema = z.object({
   findingsGate: z.object({
     ticketPattern: z.string().min(1).max(MAX_TICKET_PATTERN_LENGTH).refine(isCompilableRegularExpression, { message: 'findingsGate.ticketPattern is not a valid regular expression' }).optional(),
     enforcement: z.enum(['observe', 'enforce']).optional(),
+  }).strict().optional(),
+  playbooks: z.object({
+    scriptRoots: z.array(z.string().min(1).refine(isAbsolute, { message: 'a script root is an absolute path' })).max(MAX_SCRIPT_ROOTS).optional(),
   }).strict().optional(),
   triggers: z.object({
     fireRetentionDays: z.number().int().min(MIN_FIRE_RETENTION_DAYS).max(MAX_FIRE_RETENTION_DAYS).optional(),
@@ -132,7 +140,7 @@ function compileHandoverPattern(source: string, position: number, handoverPatter
 
 const definedOnly = <T extends object>(values: T): Partial<T> => Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)) as Partial<T>;
 
-const SECTION_KEYS = ['workingState', 'managers', 'contextNotice', 'findingsGate', 'triggers'];
+const SECTION_KEYS = ['workingState', 'managers', 'contextNotice', 'findingsGate', 'playbooks', 'triggers'];
 const spelledLoosely = (key: string) => key.toLowerCase().replace(/s$/, '');
 const misspelledSectionKey = (key: string) => SECTION_KEYS.find((section) => key !== section && spelledLoosely(key) === spelledLoosely(section));
 
@@ -143,7 +151,7 @@ function warnAboutUnknownModelAliases(models: ContextNoticeSettings['models']): 
 
 // A malformed value fails the boot loudly, like the model table: a typo must not run every session on a setting nobody chose.
 export function loadDaemonSettings(configPath: string, { handoverPatternBudgetMs = SELF_TEST_BUDGET_MS }: { handoverPatternBudgetMs?: number } = {}): DaemonSettings {
-  const defaults: DaemonSettings = { workingState: DEFAULT_WORKING_STATE_SETTINGS, managers: DEFAULT_MANAGER_SETTINGS, contextNotice: DEFAULT_CONTEXT_NOTICE_SETTINGS, findingsGate: DEFAULT_FINDINGS_GATE_SETTINGS, triggers: DEFAULT_TRIGGER_SETTINGS };
+  const defaults: DaemonSettings = { workingState: DEFAULT_WORKING_STATE_SETTINGS, managers: DEFAULT_MANAGER_SETTINGS, contextNotice: DEFAULT_CONTEXT_NOTICE_SETTINGS, findingsGate: DEFAULT_FINDINGS_GATE_SETTINGS, playbooks: DEFAULT_PLAYBOOK_SETTINGS, triggers: DEFAULT_TRIGGER_SETTINGS };
   if (!existsSync(configPath)) return defaults;
   try {
     const rawConfig = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -158,9 +166,10 @@ export function loadDaemonSettings(configPath: string, { handoverPatternBudgetMs
       managers: { ...DEFAULT_MANAGER_SETTINGS, ...definedOnly(parsed.managers ?? {}) },
       contextNotice: { ...DEFAULT_CONTEXT_NOTICE_SETTINGS, ...definedOnly(parsed.contextNotice ?? {}) },
       findingsGate: { ...DEFAULT_FINDINGS_GATE_SETTINGS, ...definedOnly(parsed.findingsGate ?? {}) },
+      playbooks: { ...DEFAULT_PLAYBOOK_SETTINGS, ...definedOnly(parsed.playbooks ?? {}) },
       triggers: { ...DEFAULT_TRIGGER_SETTINGS, ...definedOnly(parsed.triggers ?? {}) },
     };
   } catch (error) {
-    throw new Error(`invalid workingState/managers/contextNotice/findingsGate/triggers config at ${configPath}: ${readableConfigReason(error)}`);
+    throw new Error(`invalid workingState/managers/contextNotice/findingsGate/playbooks/triggers config at ${configPath}: ${readableConfigReason(error)}`);
   }
 }

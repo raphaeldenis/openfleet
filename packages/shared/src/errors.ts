@@ -74,6 +74,17 @@ export const ERROR_CODES = {
   playbook_cell_not_found: { kind: 'not_found' },
   // The revision was never kept, or was dropped when the playbook went over its ten versions.
   playbook_version_not_found: { kind: 'not_found' },
+  playbook_run_not_found: { kind: 'not_found' },
+
+  // A run is refused: no human approved this content (or an edit cleared the approval), the digest a human confirmed is not the digest of the playbook as it stands,
+  // a script file is not the one that was approved, a script is not under a script root, a cell kind this runner does not execute, a run already in progress.
+  playbook_unapproved: { kind: 'conflict', retry: 'never' },
+  approval_digest_mismatch: { kind: 'conflict', retry: 'after_refresh' },
+  script_changed: { kind: 'conflict', retry: 'never' },
+  script_not_allowed: { kind: 'conflict', retry: 'never' },
+  playbook_not_runnable: { kind: 'conflict', retry: 'never' },
+  playbook_run_busy: { kind: 'conflict', retry: 'later' },
+  playbook_review_backlog: { kind: 'conflict', retry: 'never' },
 
   // The playbook moved since it was read: reloading it shows the current revision. A locked playbook takes writes from the desktop app only.
   playbook_conflict: { kind: 'conflict', retry: 'after_refresh' },

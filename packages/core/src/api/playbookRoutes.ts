@@ -1,7 +1,10 @@
-import { PlaybookInputsSchema, PlaybookNameSchema, PlaybookPolicySchema } from '@openfleet/shared';
+import { HUMAN_ACTOR, OpenFleetError, PlaybookInputsSchema, PlaybookNameSchema, PlaybookPolicySchema } from '@openfleet/shared';
 import { z } from 'zod';
 import { parsePlaybookCell } from '../playbooks/cellParsing.js';
 import type { PlaybookContent, PlaybookRecord } from '../playbooks/playbookRepository.js';
+import type { PlaybookApprovals } from '../playbooks/playbookApprovals.js';
+import type { PlaybookRunner } from '../playbooks/playbookRunner.js';
+import type { PlaybookRunRecord, PlaybookRunRepository } from '../playbooks/playbookRunRepository.js';
 import type { PlaybookService } from '../playbooks/playbookService.js';
 import { json, queryParams, type Router } from './router.js';
 
@@ -27,12 +30,63 @@ const answerOf = (playbooks: PlaybookService, playbook: PlaybookRecord) => {
   return { ...playbook, secrets: referenced, unreferencedSecrets: unreferenced };
 };
 
+/** What the approval and the runs of playbooks need; without it only the authoring routes exist. */
+export interface PlaybookRunning {
+  approvals: PlaybookApprovals;
+  runner: PlaybookRunner;
+  runs: PlaybookRunRepository;
+}
+
+const ApproveBodySchema = z.strictObject({ digest: z.string().min(1) });
+const RunBodySchema = z.strictObject({ inputs: z.record(z.string(), z.unknown()).optional() });
+const RunsQuerySchema = z.object({ playbookId: z.string().min(1) });
+
+/** A run as the desktop reads it: the journal of its steps with outputs already masked. */
+const runViewOf = (running: PlaybookRunning, run: PlaybookRunRecord) => ({ ...run, steps: running.runs.stepsOf(run.id) });
+
+/** The approval and the runs. The approval route and the run route are for the human side only: no MCP tool approves a playbook or runs it. */
+function registerRunRoutes(router: Router, deps: { playbooks: PlaybookService; running: PlaybookRunning }): void {
+  const { playbooks, running } = deps;
+  const runOrNotFound = (id: string): PlaybookRunRecord => {
+    const run = running.runs.get(id);
+    if (run === undefined) throw new OpenFleetError('playbook_run_not_found', 'run not found');
+    return run;
+  };
+
+  router.add('GET', '/api/playbooks/:id/approval', ({ res, params }) => {
+    const approval = running.approvals.preview(playbooks.getById(params.id!));
+    json(res, 200, { ...approval, programs: Object.keys(approval.scripts) });
+  });
+
+  router.add('POST', '/api/playbooks/:id/approve', ({ res, params, body }) => {
+    const { digest } = ApproveBodySchema.parse(body);
+    running.approvals.approve(playbooks.getById(params.id!), { digest, by: HUMAN_ACTOR });
+    json(res, 200, answerOf(playbooks, playbooks.getById(params.id!)));
+  });
+
+  router.add('POST', '/api/playbooks/:id/run', async ({ res, params, body }) => {
+    const { inputs } = RunBodySchema.parse(body ?? {});
+    const run = await running.runner.start({ playbookId: params.id!, inputs: inputs ?? {}, actorKind: 'admin' });
+    json(res, 202, runViewOf(running, run));
+  });
+
+  router.add('GET', '/api/playbook-runs', ({ req, res }) => {
+    const { playbookId } = RunsQuerySchema.parse(queryParams(req));
+    json(res, 200, running.runs.listOfPlaybook(playbookId).map((run) => runViewOf(running, run)));
+  });
+
+  router.add('GET', '/api/playbook-runs/:id', ({ res, params }) => {
+    json(res, 200, runViewOf(running, runOrNotFound(params.id!)));
+  });
+}
+
 /**
  * The human side of the playbooks: every route sits under /api, behind the admin token, and a write names the revision it read (PUT in the body, DELETE in the query).
  * The admin token is not a proof of a human, so these routes ignore `agentLocked`, which binds MCP agents only; each mutation is recorded as an action of the human by the router.
  */
-export function registerPlaybookRoutes(router: Router, deps: { playbooks: PlaybookService }): void {
+export function registerPlaybookRoutes(router: Router, deps: { playbooks: PlaybookService; running?: PlaybookRunning }): void {
   const { playbooks } = deps;
+  if (deps.running) registerRunRoutes(router, { playbooks, running: deps.running });
 
   router.add('GET', '/api/playbooks', ({ req, res }) => {
     const { projectId } = ListQuerySchema.parse(queryParams(req));

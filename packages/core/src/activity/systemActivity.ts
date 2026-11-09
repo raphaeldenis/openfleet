@@ -29,6 +29,16 @@ export class SystemActivity {
     this.recorder.record({ actorKind: 'system', actorLabel: 'triggers', source: 'daemon', action: 'trigger.offer_suppressed', entityKind: 'trigger', entityId: triggerId, outcome: 'denied' });
   }
 
+  /** A playbook run is journaled as started: the id of the run only, never an input or an output. */
+  playbookRunStarted({ runId }: { runId: string; playbookId: string }): void {
+    this.recorder.record({ actorKind: 'system', actorLabel: 'playbooks', source: 'daemon', action: 'playbook.run.started', entityKind: 'playbook_run', entityId: runId, outcome: 'ok' });
+  }
+
+  /** A playbook run settled: the id of the run and whether it succeeded. A run that failed or needs a review is an `error`. */
+  playbookRunEnded({ runId, status }: { runId: string; playbookId: string; status: 'succeeded' | 'failed' | 'needs_review' }): void {
+    this.recorder.record({ actorKind: 'system', actorLabel: 'playbooks', source: 'daemon', action: 'playbook.run.ended', entityKind: 'playbook_run', entityId: runId, outcome: status === 'succeeded' ? 'ok' : 'error' });
+  }
+
   sessionResumed(session: Pick<Session, 'id' | 'name'>, managerId: string): void {
     this.recorder.record({
       actorKind: 'system', actorLabel: 'daemon', source: 'daemon', action: 'session.resume', sessionId: session.id, managerId,
