@@ -103,6 +103,7 @@ export const ERROR_CODES = {
 
   // The fire breaker disarmed a trigger that fired more than 30 times in a minute: only a human arms it again.
   breaker_open: { kind: 'conflict', retry: 'never' },
+  trigger_playbook_changed: { kind: 'conflict', retry: 'never' },
 
   // A conflict retries `never` unless a reload (stale_revision) or waiting (file_unreadable, too_many_pending, children_cap) can change the answer.
   session_closed: { kind: 'conflict', retry: 'never' },
