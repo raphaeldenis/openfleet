@@ -355,11 +355,32 @@ describe('a credential the provider refuses', () => {
     jira.answerWith({ status: 401 });
 
     await poll();
+    const requestsOfTheFirstPass = jira.seen.length;
     await pollAfter(1 * MINUTE);
     await pollAfter(2 * MINUTE);
     await pollAfter(24 * HOUR);
 
+    expect(requestsOfTheFirstPass).toBe(1);
     expect(jira.seen).toHaveLength(3);
+  });
+
+  it('waits one minute, not longer, after the first failure that follows a resumed polling', async () => {
+    const { integration } = await connectedIntegration();
+    jira.answerWith({ status: 401 });
+    await poll();
+    await pollAfter(1 * MINUTE);
+    await pollAfter(2 * MINUTE);
+    await tool('refresh_integration', { integration: integration.id });
+    jira.answerWith({ status: 500 });
+    await poll();
+    const requestsAfterResume = jira.seen.length;
+
+    await pollAfter(MINUTE - 1);
+    const requestsJustBefore = jira.seen.length;
+    await pollAfter(1);
+
+    expect(requestsJustBefore).toBe(requestsAfterResume);
+    expect(jira.seen).toHaveLength(requestsAfterResume + 1);
   });
 
   it('polls again after a refresh finds the credential working', async () => {

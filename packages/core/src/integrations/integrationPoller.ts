@@ -96,7 +96,6 @@ export class IntegrationPoller {
     const provider = connection === undefined ? undefined : this.deps.providers.find(connection.provider);
     const issueSearchPath = provider?.issueSearchPath;
     if (connection === undefined || provider === undefined || issueSearchPath === undefined) return 'settled';
-    if (this.deps.repository.connectionPollingOf(connection.id).isStopped) return 'settled';
 
     const host = this.allowedHostOrUndefined(provider, connection);
     if (host === undefined) {
@@ -161,7 +160,7 @@ export class IntegrationPoller {
     const previous = this.deps.repository.pollStateOf(profile.id);
     const consecutiveFailures = (previous?.consecutiveFailures ?? 0) + 1;
     const retryAfterMs = answer.kind === 'rate_limited' && answer.retryAfterSeconds !== undefined ? answer.retryAfterSeconds * 1000 : 0;
-    const delayMs = Math.min(Math.max(retryDelayMsAfter(consecutiveFailures), retryAfterMs), MAX_RETRY_DELAY_MS);
+    const delayMs = Math.max(retryDelayMsAfter(consecutiveFailures), Math.min(retryAfterMs, MAX_RETRY_DELAY_MS));
     this.deps.repository.saveHealth(profile.id, { status: answer.kind, checkedAt: new Date(now).toISOString() });
     this.deps.repository.savePollState(profile.id, {
       ...(previous?.etag !== undefined && { etag: previous.etag }), consecutiveFailures, nextPollAt: new Date(now + delayMs).toISOString(), lastPolledAt: new Date(now).toISOString(),
