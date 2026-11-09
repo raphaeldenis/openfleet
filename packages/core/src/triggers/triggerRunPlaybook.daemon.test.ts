@@ -1,6 +1,7 @@
 import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { syntheticToken } from '../syntheticTokens.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 import { PROJECT_ID, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
 
@@ -99,13 +100,14 @@ describe('the RUN run_playbook starts the approved playbook the trigger names', 
     const w = await boot();
     writeScript('quick.sh', 'printf done');
     const playbook = await createApprovedPlaybook(w);
-    const triggerId = await armTriggerRunning(w, playbook.id, { inputs: { topic: 'sk-live-secret-looking-value' } });
+    const secretLookingValue = syntheticToken({ shape: 'openai', bodyLength: 28 });
+    const triggerId = await armTriggerRunning(w, playbook.id, { inputs: { topic: secretLookingValue } });
 
     fireOnce(w, triggerId, 'k', { session: { id: 's1', name: HOSTILE_EVENT_TEXT } });
 
     await untilSettled(w, triggerId, 1);
     const activity = JSON.stringify(w.db.prepare('SELECT * FROM activity_log').all());
-    expect(activity).not.toContain('sk-live-secret-looking-value');
+    expect(activity).not.toContain(secretLookingValue);
     expect(activity).not.toContain(HOSTILE_EVENT_TEXT);
   });
 
