@@ -49,7 +49,7 @@ const runPrintingSecret = async ({ secretValue, printed, stream }: { secretValue
   const runner = new PlaybookRunner({
     playbooks: { getById: () => playbook } as never,
     approvals: { assertStillApproved: () => ({}), locatePinned: () => ({ path, sha256: 'unused' }) } as never,
-    runs, secrets: { resolve: async () => secretValue }, clock: () => new Date().toISOString(), newId: () => 'run-1',
+    runs, stores: {} as never, secrets: { resolve: async () => secretValue }, clock: () => new Date().toISOString(), newId: () => 'run-1',
     limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: 50 }, observer: { runStarted: () => {}, runEnded },
   });
 

@@ -513,7 +513,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const scriptLocator = new ScriptLocator(options.playbooks?.scriptRoots ?? playbookSettings.scriptRoots);
   const playbookApprovals = new PlaybookApprovals({ repository: playbookRepository, locator: scriptLocator, clock: () => new Date().toISOString() });
   const playbookRunner = new PlaybookRunner({
-    playbooks, approvals: playbookApprovals, runs: playbookRuns, secrets, clock: () => new Date().toISOString(), newId, httpNetwork: options.playbooks?.httpNetwork,
+    playbooks, stores, approvals: playbookApprovals, runs: playbookRuns, secrets, clock: () => new Date().toISOString(), newId, httpNetwork: options.playbooks?.httpNetwork,
     limits: { maxStepExecutions: options.playbooks?.maxStepExecutions ?? MAX_STEP_EXECUTIONS_PER_RUN, maxConcurrentRuns: options.playbooks?.maxConcurrentRuns ?? MAX_CONCURRENT_RUNS, maxRunsNeedingReview: options.playbooks?.maxRunsNeedingReview ?? MAX_RUNS_NEEDING_REVIEW },
     observer: { runStarted: (run) => systemActivity.playbookRunStarted(run), runEnded: (run) => systemActivity.playbookRunEnded(run) },
   });
