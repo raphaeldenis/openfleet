@@ -124,6 +124,13 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
   list_integrations: { domain: 'integrations', category: 'read_only' },
   refresh_integration: { domain: 'integrations', category: 'execution_external' }, // calls the provider once, inside a cooldown
 
+  get_jira_issue: { domain: 'integrations', category: 'read_only' },
+  list_integration_view_items: { domain: 'integrations', category: 'read_only' },
+  list_jira_issues: { domain: 'integrations', category: 'read_only' },
+  save_integration_view_config: { domain: 'integrations', category: 'destructive' }, // replaces the waiting proposal in place, with no history; the active configuration is never touched
+  search_jira_issues: { domain: 'integrations', category: 'read_only' },
+  validate_integration_view_config: { domain: 'integrations', category: 'read_only' }, // a pure check
+
   get_working_state: { domain: 'working_state', category: 'read_only' },
   update_working_state: { domain: 'working_state', category: 'destructive' },
 

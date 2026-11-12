@@ -169,6 +169,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   integration_view_jql_refused: { what: 'That query uses a clause, a field or an operator the daemon does not run', fix: 'write simple AND clauses on the listed fields, with at most one ORDER BY' },
   integration_view_config_not_found: { what: 'That integration has no view configuration yet', fix: 'write one to propose it' },
   integration_view_proposal_not_found: { what: 'That integration has no proposal waiting for approval', fix: 'write a proposal, then approve it' },
+  integration_item_not_found: { what: 'The daemon kept no issue with that key for this integration', fix: 'use a key from the list of issues' },
   integration_not_found: { what: 'That integration does not exist in this project' },
   integration_connection_not_found: { what: 'That integration connection does not exist' },
   integration_refresh_cooldown: { what: 'This connection was checked a moment ago, or too many checks are running', fix: 'wait for the cooldown to end' },
