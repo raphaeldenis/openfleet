@@ -1,4 +1,4 @@
-import { OpenFleetError, type IntegrationViewConfigView, type SaveViewConfigBody } from '@openfleet/shared';
+import { OpenFleetError, type IntegrationViewConfigView, type SaveViewConfigBody, type ViewConfigContent } from '@openfleet/shared';
 import type { IntegrationProviderRegistry } from './integrationProviders.js';
 import type { IntegrationRepository, ProfileRecord, ViewConfigRecord } from './integrationRepository.js';
 import { activeStatusOf, reviewDigestOf } from './integrationViewConfig.js';
@@ -36,10 +36,16 @@ export class IntegrationViewService {
     const current = this.deps.repository.findViewConfig(profile.id);
     const isOnAnOldRevision = body.expectedRev !== undefined && body.expectedRev !== (current?.contentRev ?? 0);
     if (isOnAnOldRevision) throw staleRevision(current?.contentRev ?? 0);
+    const canonical = this.validate(body);
+    this.deps.repository.saveViewProposal(profile.id, canonical, { now: this.nowIso() });
+    return this.viewOf(profile, this.recordOf(profile));
+  }
+
+  /** Returns the canonical form of a query and its fields, or throws `integration_view_jql_refused` naming the rule that broke and never the text. It reads and writes nothing. */
+  validate(body: Pick<SaveViewConfigBody, 'jql' | 'fields'>): ViewConfigContent {
     const checked = checkViewConfig(body);
     if (!checked.ok) throw new OpenFleetError('integration_view_jql_refused', checked.issues.join(' '));
-    this.deps.repository.saveViewProposal(profile.id, checked.config, { now: this.nowIso() });
-    return this.viewOf(profile, this.recordOf(profile));
+    return checked.config;
   }
 
   /** Approves the proposal at the revision a human reviewed, on the proof of that human; the proof is spent whatever follows it. */

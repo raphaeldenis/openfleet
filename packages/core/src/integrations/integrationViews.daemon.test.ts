@@ -411,12 +411,13 @@ describe('changing an approved view configuration', () => {
 });
 
 describe('the reach of an agent over the view configurations', () => {
-  it('offers no tool that writes or approves a view configuration: I2b-1 is REST only', async () => {
+  it('offers no tool that approves a view configuration: an agent proposes, only a human approves over REST', async () => {
     const lead = await fixture.connect(fixture.lead.id);
 
     const names = (await lead.listTools()).tools.map((tool) => tool.name);
 
-    expect(names.filter((name) => /view_config|integration.*approve|approve.*integration/.test(name))).toEqual([]);
+    expect(names.filter((name) => /view_config|integration.*approve|approve.*integration/.test(name)).sort()).toEqual(['save_integration_view_config', 'validate_integration_view_config']);
+    expect(names.filter((name) => /approve/.test(name) && /integration|view/.test(name))).toEqual([]);
   });
 
   it('has no route under /mcp for the view configuration', async () => {

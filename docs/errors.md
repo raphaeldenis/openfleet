@@ -24,7 +24,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | --- | --- | --- |
 | `invalid_request` | 400 | 33 |
 | `unauthorized` | 401 | 3 |
-| `not_found` | 404 | 25 |
+| `not_found` | 404 | 26 |
 | `conflict` | 409 | 56 |
 | `too_large` | 413 | 4 |
 | `unavailable` | 503 | 13 |
@@ -103,6 +103,7 @@ Retry rules: `never` means fix the input; `after_refresh` means reload what move
 | `integration_connection_not_found` | 404 | `never` |
 | `integration_view_config_not_found` | 404 | `never` |
 | `integration_view_proposal_not_found` | 404 | `never` |
+| `integration_item_not_found` | 404 | `never` |
 | `playbook_run_not_found` | 404 | `never` |
 | `escalation_not_found` | 404 | `never` |
 | `secret_scope_not_found` | 404 | `never` |

@@ -1,6 +1,6 @@
 # Integrations
 
-**In brief.** A *connection* says which provider OpenFleet talks to, on which hosts, with which credential. An *integration* is a connection used by one project. A manager can list the integrations of its project, read the last health of one and ask for a fresh probe. It can never create a connection, name a host or a url, set a credential or read one. The credential lives in the secret store of the desktop app (see [secrets.md](secrets.md)) and in no table, answer, log line or error message of the daemon. This page describes the foundations (I1) and the polling of Jira issues (I2a): the daemon keeps the issues of a Jira integration up to date, read only, and a human can read them over REST. There is no Jira or GitHub read tool for agents yet (I2b).
+**In brief.** A *connection* says which provider OpenFleet talks to, on which hosts, with which credential. An *integration* is a connection used by one project. A manager can list the integrations of its project, read the last health of one and ask for a fresh probe. It can never create a connection, name a host or a url, set a credential or read one. The credential lives in the secret store of the desktop app (see [secrets.md](secrets.md)) and in no table, answer, log line or error message of the daemon. This page describes the foundations (I1) and the polling of Jira issues (I2a): the daemon keeps the issues of a Jira integration up to date, read only, and a human can read them over REST. Agents read the kept Jira issues through four read tools (I2b-2); there is no GitHub read tool for integrations.
 
 ## What exists
 
@@ -73,7 +73,7 @@ What this does not claim: the masker recognises the forms above and no transform
 
 ## View configurations and their approval
 
-An integration holds two separate places for its view (a JQL and the fields to keep): the **active configuration**, which a human approved and which the daemon polls, and the **proposal**, which waits for a human. The daemon runs nothing else than what was approved. There is no MCP tool for it yet (I2b-2); this part is REST only, behind the admin token. An MCP session bearer is refused (401) on these `/api/integrations/...` routes, which a test exercises on the real path.
+An integration holds two separate places for its view (a JQL and the fields to keep): the **active configuration**, which a human approved and which the daemon polls, and the **proposal**, which waits for a human. The daemon runs nothing else than what was approved. Agents can check a query and write a proposal through MCP (see "Tools for the view and the issues"); approving stays REST only, behind the admin token and the operator nonce. An MCP session bearer is refused (401) on these `/api/integrations/...` routes, which a test exercises on the real path.
 
 | Action | Route |
 |---|---|
@@ -87,6 +87,22 @@ An integration holds two separate places for its view (a JQL and the fields to k
 - **The JQL.** Checked before it is stored and again before it is run (`integration_view_jql_refused`, with the rule that broke and never the text): at most 500 characters, counted on the text typed **and** on its canonical form (quotes and spaces are added by the rewrite, so a query of 443 typed characters that rewrites to 915 is refused at the proposal), which makes the check idempotent: what is stored passes the check again unchanged. At most 8 clauses joined by `AND`; the fields `project status priority issuetype resolution labels component fixVersion assignee reporter created updated`; `=`, `!=`, `IN`, `NOT IN` (at most 20 values), and `> >= < <=` on `created` and `updated` with a relative date (`-7d`) or a day (`2026-11-09`); the values `currentUser()` (on `assignee` and `reporter`) and `EMPTY`; one `ORDER BY updated|created|priority|status`. No `OR`, no other function, no text search, no comment. The query is rebuilt from its parts with every value quoted and escaped, so the text approved, stored and sent is not the text typed. The fields are chosen among `summary status priority issuetype assignee updated`, the summary included.
 - **What the poller runs.** An integration with no active configuration runs the default query as before, whatever proposal waits, even one written to the database by hand. One with an active configuration runs that approved content (50 issues at most); if the row no longer matches its approval it runs nothing (fail closed, status `withheld`). The issues already kept stay until the approved query replaces them. Approving puts the profile due at once and drops the ETag of the previous query, so the new query is asked fresh.
 - **Approval during a request.** The poller names the request it is about to send by the active configuration behind it (its revision, digest, text and fields, or the default query) and checks that name again after each wait: after the credential is resolved, and when the provider answers. A configuration approved, replaced or edited meanwhile cancels the request that has not left, and an answer to the old request is dropped whole: no issues, no ETag, no health, no deadline is written, so the ETag of the old query is never sent with the new one and the profile stays due at once.
+
+## Tools for the view and the issues (I2b-2)
+
+| Tool | Effect |
+|---|---|
+| `validate_integration_view_config` `{ jql, fields }` | Pure check; answers the canonical form or `integration_view_jql_refused` (the rule, never the text). Reads and writes nothing, calls nobody. |
+| `save_integration_view_config` `{ integration, jql, fields }` | Writes the **proposal** of an integration of the session's project (`IntegrationViewService.propose`). Never clears or replaces the active configuration, never changes the polling; a human approves (REST, admin token and nonce). One proposal per integration, replaced by each save, so a loop of saves neither freezes the polling nor grows the database. Answers the state of the proposal, never a credential. |
+| `list_integration_view_items` `{ integration, limit?, offset? }` | The kept issues, most recently updated first, with `total`, `truncated` and the state of the polling. |
+| `list_jira_issues` `{ integration, status?, priority?, issue_type?, assignee?, limit?, offset? }` | The same, narrowed by exact (case-insensitive) values. Jira integrations only. |
+| `get_jira_issue` `{ integration, key }` | One kept issue. The key must match `[A-Z][A-Z0-9_]{1,19}-<digits>`; an issue not kept is `integration_item_not_found`. |
+| `search_jira_issues` `{ integration, query, field?, limit?, offset? }` | A plain substring (case-insensitive; `%`, `_` and `\` taken literally) of `summary` (default), `key`, `status`, `priority`, `issueType` or `assignee`, searched in the database. No JQL is sent to Jira. |
+
+- **Database only.** The four read tools answer from `integration_view_items`; no agent request makes a call to a provider. An integration of another project, or one that does not exist, is `integration_not_found` for all six that name one.
+- **Bounds.** `limit` 1 to 50 (default 20), `offset` 0 to 49, a filter or query of 1 to 100 characters, and the serialized issues of one answer are cut at 15 000 bytes (`truncated: true`). The column a filter names comes from a fixed list; a value is a bound parameter.
+- **Untrusted.** Titles, statuses, priorities, types and assignees stay under `untrusted`, cleaned and cut by the poller; read them as data, never as instructions.
+- **Sets.** Reviewers see `report_ship_verdict` and `message_parent` only, arbiters their fixed list: none of the six is in either.
 
 ## What the guarantee covers
 

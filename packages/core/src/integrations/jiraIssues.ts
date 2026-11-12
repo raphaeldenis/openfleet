@@ -7,7 +7,7 @@ export const MAX_LABEL_CHARS = 64;
 /** An issue as the daemon keeps it: the key is checked and the address built here, the text a person typed in Jira is cleaned, cut and kept under `untrusted`. */
 export type IssueSummary = IntegrationIssueItem;
 
-const ISSUE_KEY = /^[A-Z][A-Z0-9_]{1,19}-\d{1,9}$/;
+export const ISSUE_KEY = /^[A-Z][A-Z0-9_]{1,19}-\d{1,9}$/;
 const CONTROL_AND_INVISIBLE_CHARACTERS = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
 const ELLIPSIS = '…';
 
