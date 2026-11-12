@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  INTEGRATION_HEALTH_UNKNOWN, INTEGRATION_TOKEN_SECRET_NAME, OpenFleetError, type CreateIntegrationBody, type CreateIntegrationConnectionBody, type IntegrationConnectionView, type IntegrationItemsView, type IntegrationView,
+  INTEGRATION_HEALTH_UNKNOWN, INTEGRATION_TOKEN_SECRET_NAME, OpenFleetError, type CreateIntegrationBody, type CreateIntegrationConnectionBody, type IntegrationConnectionView, type IntegrationIssueItem, type IntegrationItemsView, type IntegrationPollingState, type IntegrationView,
 } from '@openfleet/shared';
 import { inTransaction } from '../db/transaction.js';
 import { maskedSecrets } from '../redact.js';
@@ -8,7 +8,7 @@ import type { SecretRefRepository } from '../secrets/secretRefRepository.js';
 import type { SecretService } from '../secrets/secretService.js';
 import { allowedHostOf, isAddressAllowedFor, type IntegrationProvider, type IntegrationProviderRegistry } from './integrationProviders.js';
 import type { IntegrationProbe } from './integrationProbe.js';
-import type { ConnectionRecord, IntegrationRepository, ProfileRecord } from './integrationRepository.js';
+import type { ConnectionRecord, IntegrationRepository, ItemFilter, ProfileRecord } from './integrationRepository.js';
 
 export const DEFAULT_REFRESH_COOLDOWN_MS = 60_000;
 
@@ -29,7 +29,10 @@ export interface IntegrationServiceDeps {
   refreshCooldownMs?: number;
 }
 
-const tokenScopeOf = (connectionId: string) => ({ kind: 'connection' as const, id: connectionId });
+/** A page of kept issues, the number of issues that match, and whether the connection still polls. */
+export interface IntegrationIssuePage { items: IntegrationIssueItem[]; total: number; polling: IntegrationPollingState }
+
+const tokenScopeOf =(connectionId: string) => ({ kind: 'connection' as const, id: connectionId });
 
 const looksLikeACredential = (label: string): boolean => maskedSecrets(label) !== label;
 
@@ -106,6 +109,33 @@ export class IntegrationService {
     const profile = this.profileOf(projectId, integrationId);
     const isStopped = this.deps.repository.connectionPollingOf(profile.connectionId).isStopped;
     return { items: this.deps.repository.listItems(profile.id), polling: isStopped ? 'stopped_auth_failed' : 'active' };
+  }
+
+  /**
+   * A page of the kept issues of an integration of the project, most recently updated first, narrowed by filters on the listed columns.
+   * Reads the database only: no call to the provider. `requiresIssueSearch` limits it to an integration whose provider searches issues (Jira).
+   */
+  pageOfIssues(projectId: string, integrationId: string, { filters, limit, offset, requiresIssueSearch }: { filters: readonly ItemFilter[]; limit: number; offset: number; requiresIssueSearch: boolean }): IntegrationIssuePage {
+    const profile = this.profileOf(projectId, integrationId);
+    if (requiresIssueSearch) this.refuseUnlessProviderSearchesIssues(profile);
+    const { items, total } = this.deps.repository.pageOfItems(profile.id, { filters, limit, offset });
+    const isStopped = this.deps.repository.connectionPollingOf(profile.connectionId).isStopped;
+    return { items, total, polling: isStopped ? 'stopped_auth_failed' : 'active' };
+  }
+
+  /** One kept issue of a Jira integration of the project; an issue the poller did not keep is `integration_item_not_found`. Reads the database only. */
+  issueOf(projectId: string, integrationId: string, key: string): IntegrationIssueItem {
+    const profile = this.profileOf(projectId, integrationId);
+    this.refuseUnlessProviderSearchesIssues(profile);
+    const issue = this.deps.repository.findItem(profile.id, key);
+    if (issue === undefined) throw new OpenFleetError('integration_item_not_found', 'the daemon kept no such issue for this integration.');
+    return issue;
+  }
+
+  private refuseUnlessProviderSearchesIssues(profile: ProfileRecord): void {
+    const connection = this.connectionNamed(profile.connectionId);
+    const searchesIssues = this.providerNamed(connection.provider).issueSearchPath !== undefined;
+    if (!searchesIssues) throw new OpenFleetError('invalid_body', 'only an integration whose provider searches issues has Jira issues.');
   }
 
   /**

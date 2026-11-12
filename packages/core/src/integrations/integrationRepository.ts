@@ -92,6 +92,22 @@ const fieldsOfJson = (json: string): string[] => {
 /** The key, inside the JSON of a stored item, of the identity of the request that produced it. */
 const QUERY_IDENTITY_FIELD = 'queryIdentity';
 
+/** The columns of a kept issue that a filter may name, each with its fixed SQL expression: a caller never supplies SQL. */
+export const ITEM_COLUMN_SQL = {
+  key: 'external_id',
+  summary: "json_extract(fields_json, '$.untrusted.summary')",
+  status: "json_extract(fields_json, '$.untrusted.status')",
+  priority: "json_extract(fields_json, '$.untrusted.priority')",
+  issueType: "json_extract(fields_json, '$.untrusted.issueType')",
+  assignee: "json_extract(fields_json, '$.untrusted.assignee')",
+} as const;
+export type ItemField = keyof typeof ITEM_COLUMN_SQL;
+export interface ItemFilter { field: ItemField; match: 'equals' | 'contains'; value: string }
+
+const escapedForLike = (text: string): string => text.replace(/[\\%_]/g, (character) => `\\${character}`);
+
+const toItem = (row: ItemRow): IntegrationIssueItem => ({ key: row.external_id, ...(JSON.parse(row.fields_json) as Omit<IntegrationIssueItem, 'key'>) });
+
 const CONNECTION_COLUMNS ='id, name, provider, credential_kind, allowed_hosts_json';
 const PROFILE_COLUMNS = 'id, project_id, connection_id, name, resource';
 
@@ -246,6 +262,26 @@ export class IntegrationRepository {
   onItemsReplaced(listener: (profileId: string) => void): () => void {
     this.itemsReplacedListeners.add(listener);
     return () => void this.itemsReplacedListeners.delete(listener);
+  }
+
+  /** One kept issue by its key. */
+  findItem(profileId: string, key: string): IntegrationIssueItem | undefined {
+    const row = this.db.prepare('SELECT external_id, fields_json FROM integration_view_items WHERE profile_id = ? AND external_id = ?').get(profileId, key) as ItemRow | undefined;
+    return row === undefined ? undefined : toItem(row);
+  }
+
+  /**
+   * A page of the kept issues, most recently updated first, and the number of issues that match.
+   * A filter names a column of the allow list `ITEM_COLUMN_SQL`; its value is always a bound parameter, and for `contains` the SQL wildcards of the value are escaped.
+   */
+  pageOfItems(profileId: string, { filters, limit, offset }: { filters: readonly ItemFilter[]; limit: number; offset: number }): { items: IntegrationIssueItem[]; total: number } {
+    const conditions = filters.map(({ field, match }) => (match === 'contains' ? `${ITEM_COLUMN_SQL[field]} LIKE ? ESCAPE '\\'` : `${ITEM_COLUMN_SQL[field]} = ? COLLATE NOCASE`));
+    const parameters = filters.map(({ value, match }) => (match === 'contains' ? `%${escapedForLike(value)}%` : value));
+    const where = ['profile_id = ?', ...conditions].join(' AND ');
+    const total = (this.db.prepare(`SELECT COUNT(*) AS total FROM integration_view_items WHERE ${where}`).get(profileId, ...parameters) as { total: number }).total;
+    const rows = this.db.prepare(`SELECT external_id, fields_json FROM integration_view_items WHERE ${where} ORDER BY json_extract(fields_json, '$.updatedAt') DESC, external_id LIMIT ? OFFSET ?`)
+      .all(profileId, ...parameters, limit, offset) as unknown as ItemRow[];
+    return { items: rows.map(toItem), total: Number(total) };
   }
 
   listItems(profileId: string): IntegrationIssueItem[] {

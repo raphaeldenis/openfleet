@@ -17,6 +17,7 @@ interface ProviderBehaviour { status: number; body: string; location?: string; d
 interface SeenRequest { path: string; authorization: string | undefined }
 
 const INTEGRATION_TOOLS = ['get_integration_health', 'list_integrations', 'refresh_integration'];
+const INTEGRATION_VIEW_TOOLS = ['list_integration_view_items', 'save_integration_view_config', 'validate_integration_view_config'];
 const COOLDOWN_MS = 60_000;
 const MAX_CONCURRENT_REFRESHES = 4;
 const START_OF_TEST_TIME = Date.parse('2026-11-06T10:00:00.000Z');
@@ -183,10 +184,10 @@ describe('creating a connection and an integration (REST, admin token)', () => {
 });
 
 describe('the integration tools of a manager', () => {
-  it('are exactly list_integrations, get_integration_health and refresh_integration, and none takes a credential, a host or a url', async () => {
+  it('are exactly the three connection tools and the three view tools, and none takes a credential, a host or a url', async () => {
     const tools = (await lead.listTools()).tools.filter((candidate) => /integration|secret_set|credential/.test(candidate.name) && !/playbook_secret/.test(candidate.name));
 
-    expect(tools.map((candidate) => candidate.name).sort()).toEqual(INTEGRATION_TOOLS);
+    expect(tools.map((candidate) => candidate.name).sort()).toEqual([...INTEGRATION_TOOLS, ...INTEGRATION_VIEW_TOOLS].sort());
     const parameterNames = tools.flatMap((candidate) => Object.keys((candidate.inputSchema as { properties?: object }).properties ?? {}));
     expect(parameterNames.filter((name) => /token|secret|credential|password|authorization|value|host|url/i.test(name))).toEqual([]);
   });
