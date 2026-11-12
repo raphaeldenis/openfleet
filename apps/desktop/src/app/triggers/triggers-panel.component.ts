@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, untracked, viewChild, type Signal } from '@angular/core';
 import type { TriggerFireView } from '@openfleet/shared';
+import { withConditionAdded, withConditionChanged, withConditionRemoved, type ConditionChange } from './conditions-draft';
 import { acceptedOwnerOf, ownerChoicesOf, type OwnerChoice } from './owner-choices';
 import { TriggerEditorComponent } from './trigger-editor.component';
 import type { WhenDraft } from './when-draft';
@@ -127,7 +128,8 @@ const reviewedRuleHasMoved = () => new ApiError(409, 'the reviewed rule changed 
           @if (draft(); as editing) {
             <of-trigger-editor
               [draft]="editing" [problem]="draftProblem()" [managers]="managers()" [isWriting]="isWriting()"
-              (draftChange)="editDraft($event)" (whenChange)="editWhen($event)" (ownerChosen)="chooseOwner($event)" (managersRetried)="loadManagers()"
+              (draftChange)="editDraft($event)" (whenChange)="editWhen($event)"
+              (conditionAdded)="addCondition()" (conditionRemoved)="removeCondition($event)" (conditionChange)="changeCondition($event)" (ownerChosen)="chooseOwner($event)" (managersRetried)="loadManagers()"
               (submitted)="submitEdit($event, trigger)" (cancelled)="cancelEdit()"
             />
           } @else if (unconfirmedState() === undefined) {
@@ -288,6 +290,7 @@ export class TriggersPanelComponent {
   private latestListRequest = 0;
   private latestFiresRequest = 0;
   private latestManagersRequest = 0;
+  private addedConditionCount = 0;
 
   constructor() {
     effect(() => {
@@ -406,6 +409,20 @@ export class TriggersPanelComponent {
   /** The change is merged into the WHEN the draft holds now, never into the one a child saw when it last rendered. */
   protected editWhen(change: Partial<WhenDraft>): void {
     this.draft.update((draft) => (draft?.when === undefined ? draft : { ...draft, when: { ...draft.when, ...change } }));
+  }
+
+  protected addCondition(): void {
+    const key = `new-${++this.addedConditionCount}`;
+    this.draft.update((draft) => (draft === undefined ? draft : { ...draft, conditions: withConditionAdded({ conditions: draft.conditions, key }) }));
+  }
+
+  protected removeCondition(key: string): void {
+    this.draft.update((draft) => (draft === undefined ? draft : { ...draft, conditions: withConditionRemoved({ conditions: draft.conditions, key }) }));
+  }
+
+  /** The change is merged into the condition the draft holds now, never into the one a child saw when it last rendered. */
+  protected changeCondition({ key, change }: { key: string; change: ConditionChange }): void {
+    this.draft.update((draft) => (draft === undefined ? draft : { ...draft, conditions: withConditionChanged({ conditions: draft.conditions, key, change }) }));
   }
 
   protected chooseOwner(chosenValue: string): void {

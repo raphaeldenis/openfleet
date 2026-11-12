@@ -1,5 +1,6 @@
 import { TRIGGER_BACKLOG_POLICIES, TRIGGER_BATCH_MODES, type TriggerPolicy, type TriggerWhen } from '@openfleet/shared';
 import type { TriggerView } from '../core/playbook-trigger-views';
+import { changedConditionsOf, conditionDraftsOf, problemOfConditions, type ConditionDraft } from './conditions-draft';
 import { isSameWhenDraft, whenDraftOf, whenOrProblemOf, type WhenDraft } from './when-draft';
 
 /**
@@ -14,10 +15,12 @@ export interface TriggerEditDraft {
   batchMode: TriggerPolicy['batchMode'];
   backlogPolicy: TriggerPolicy['backlogPolicy'];
   when: WhenDraft | undefined;
+  conditions: ConditionDraft[];
   ownerManagerId: string | null;
   openedAtRev: number;
   openedWithPolicy: TriggerPolicy;
   openedWithWhen: WhenDraft | undefined;
+  openedWithConditions: ConditionDraft[];
   openedWithOwnerManagerId: string | null;
 }
 
@@ -26,6 +29,7 @@ export interface TriggerEditChanges {
   title: string;
   policy: TriggerPolicy;
   when?: TriggerWhen;
+  conditions?: Record<string, unknown>[];
   ownerManagerId?: string | null;
 }
 
@@ -38,12 +42,15 @@ const isWholeNumberFrom = (text: string, minimum: number) => /^\d+$/.test(text.t
 export function draftOf(trigger: TriggerView): TriggerEditDraft {
   const { cooldownSeconds, maxFiresPerDay, batchMode, backlogPolicy } = trigger.policy;
   const when = whenDraftOf(trigger.when);
+  const conditions = conditionDraftsOf({ conditions: trigger.conditions, source: trigger.when.source });
   return {
     title: trigger.title, cooldownSeconds: String(cooldownSeconds), maxFiresPerDay: maxFiresPerDay === undefined ? '' : String(maxFiresPerDay), batchMode, backlogPolicy,
-    when, ownerManagerId: trigger.ownerManagerId,
-    openedAtRev: trigger.contentRev, openedWithPolicy: trigger.policy, openedWithWhen: when, openedWithOwnerManagerId: trigger.ownerManagerId,
+    when, conditions, ownerManagerId: trigger.ownerManagerId,
+    openedAtRev: trigger.contentRev, openedWithPolicy: trigger.policy, openedWithWhen: when, openedWithConditions: conditions, openedWithOwnerManagerId: trigger.ownerManagerId,
   };
 }
+
+const sourceOfDraft = (draft: TriggerEditDraft) => draft.when?.source;
 
 function problemOfWhenDraft(draft: TriggerEditDraft): string | undefined {
   if (draft.when === undefined) return undefined;
@@ -55,7 +62,7 @@ function problemOfWhenDraft(draft: TriggerEditDraft): string | undefined {
 export function problemOfDraft(draft: TriggerEditDraft): string | undefined {
   if (!isWholeNumberFrom(draft.cooldownSeconds, 0)) return 'Le repos doit être un nombre entier de secondes, 0 ou plus.';
   if (!hasNoDailyCap(draft) && !isWholeNumberFrom(draft.maxFiresPerDay, 1)) return 'Le plafond par jour doit être un nombre entier, 1 ou plus, ou rester vide.';
-  return problemOfWhenDraft(draft);
+  return problemOfWhenDraft(draft) ?? problemOfConditions({ conditions: draft.conditions, source: sourceOfDraft(draft) });
 }
 
 function changedWhenOf(draft: TriggerEditDraft): { when: TriggerWhen } | Record<string, never> {
@@ -66,6 +73,9 @@ function changedWhenOf(draft: TriggerEditDraft): { when: TriggerWhen } | Record<
   return 'when' in checked ? { when: checked.when } : {};
 }
 
+const changedConditionsOfDraft = (draft: TriggerEditDraft) =>
+  changedConditionsOf({ conditions: draft.conditions, openedWith: draft.openedWithConditions, source: sourceOfDraft(draft), openedSource: draft.openedWithWhen?.source });
+
 const changedOwnerOf = (draft: TriggerEditDraft) => (draft.ownerManagerId === draft.openedWithOwnerManagerId ? {} : { ownerManagerId: draft.ownerManagerId });
 
 /** The fields a save sends; the policy fields the form does not show (the backlog age) keep the value they had when the form was opened. */
@@ -73,5 +83,5 @@ export function changesOf(draft: TriggerEditDraft): TriggerEditChanges {
   const { maxFiresPerDay: _removedCap, ...policyWithoutCap } = draft.openedWithPolicy;
   const dailyCap = hasNoDailyCap(draft) ? {} : { maxFiresPerDay: Number(draft.maxFiresPerDay) };
   const policy: TriggerPolicy = { ...policyWithoutCap, ...dailyCap, cooldownSeconds: Number(draft.cooldownSeconds), batchMode: draft.batchMode, backlogPolicy: draft.backlogPolicy };
-  return { title: draft.title, policy, ...changedWhenOf(draft), ...changedOwnerOf(draft) };
+  return { title: draft.title, policy, ...changedWhenOf(draft), ...changedConditionsOfDraft(draft), ...changedOwnerOf(draft) };
 }
