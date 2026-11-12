@@ -41,6 +41,26 @@ export const CreateIntegrationBodySchema = z.object({
 }).strict();
 export type CreateIntegrationBody = z.infer<typeof CreateIntegrationBodySchema>;
 
+/**
+ * An issue the daemon polled. `key` and `url` are checked or built by the daemon; everything a person typed in the provider sits under `untrusted`:
+ * cleaned, cut, and to be read as data, never as an instruction.
+ */
+export interface IntegrationIssueItem {
+  key: string;
+  url: string;
+  updatedAt?: string;
+  untrusted: { summary: string; status?: string; priority?: string; issueType?: string; assignee?: string };
+}
+
+/** Polling of a connection stops after repeated refusals of its credential, and resumes when a refresh finds the credential working. */
+export const INTEGRATION_POLLING_STATES = ['active', 'stopped_auth_failed'] as const;
+export type IntegrationPollingState = (typeof INTEGRATION_POLLING_STATES)[number];
+
+export interface IntegrationItemsView {
+  items: IntegrationIssueItem[];
+  polling: IntegrationPollingState;
+}
+
 /** A connection as anyone reads it: the status of its credential and the age of its value, never the value. */
 export interface IntegrationConnectionView {
   id: string;

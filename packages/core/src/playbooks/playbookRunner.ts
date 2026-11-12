@@ -18,10 +18,14 @@ import type { PlaybookRecord } from './playbookRepository.js';
 import { secretNamesReferencedBy, wireErrorOf } from './playbookRules.js';
 import type { PlaybookRunRecord, PlaybookRunRepository } from './playbookRunRepository.js';
 import type { PlaybookService } from './playbookService.js';
+import { readStoreRows, writeStoreRow, type PlaybookStores, type StoreOutcome } from './playbookStoreCells.js';
 import { runScriptStep, withoutControlCharacters } from './scriptStepProcess.js';
+import { resolveStoreRead, resolveStoreWrite } from './storeCellTemplates.js';
 
 export interface PlaybookRunnerDeps {
   playbooks: Pick<PlaybookService, 'getById'>;
+  /** The data stores the store cells read and write; every call is bound to the project of the playbook. */
+  stores: PlaybookStores;
   approvals: Pick<PlaybookApprovals, 'assertStillApproved' | 'locatePinned'>;
   runs: PlaybookRunRepository;
   secrets: Pick<SecretService, 'resolve'>;
@@ -36,10 +40,15 @@ export interface PlaybookRunnerDeps {
 
 type ScriptCell = Extract<PlaybookCell, { kind: 'script' }>;
 type HttpCell = Extract<PlaybookCell, { kind: 'http' }>;
+type ReadFromStoreCell = Extract<PlaybookCell, { kind: 'readFromStore' }>;
+type WriteToStoreCell = Extract<PlaybookCell, { kind: 'writeToStore' }>;
 type Settled = Exclude<PlaybookRunStatus, 'running'>;
 type Verdict = { status: Settled; errorCode?: string };
-/** A script answers its exit code; an http cell answers the status of the response. Both answer the masked output. */
-type StepOutput = { exitCode: number | null; output: string } | { status: number; output: string };
+/**
+ * A script answers its exit code; an http cell answers the status of the response; both answer the masked output.
+ * A read answers its row count and the masked rows as JSON; a write answers whether it inserted or updated, and the id of the row.
+ */
+type StepOutput = { exitCode: number | null; output: string } | { status: number; output: string } | { rowCount: number; output: string } | { outcome: string; rowId: string };
 
 /** What a step answers to the cells after it: its masked output, never a secret value. */
 type StepFields = Record<string, StepOutput>;
@@ -69,11 +78,15 @@ const invalidInput = (reason: string) => new OpenFleetError('invalid_body', reas
 
 const isScriptCell = (cell: PlaybookCell): cell is ScriptCell => cell.kind === 'script';
 const isHttpCell = (cell: PlaybookCell): cell is HttpCell => cell.kind === 'http';
+const isReadFromStoreCell = (cell: PlaybookCell): cell is ReadFromStoreCell => cell.kind === 'readFromStore';
+const isWriteToStoreCell = (cell: PlaybookCell): cell is WriteToStoreCell => cell.kind === 'writeToStore';
 
-/** Only script and http cells that follow their edges run: a retry, a forEach or another kind of cell is refused before anything starts. */
+const RUNNABLE_KINDS: ReadonlySet<PlaybookCell['kind']> = new Set(['script', 'http', 'readFromStore', 'writeToStore']);
+
+/** Only script, http and store cells that follow their edges run: a retry, a forEach or another kind of cell (a tool cell included) is refused before anything starts. */
 function assertCellsCanRun(playbook: PlaybookRecord): void {
   for (const cell of playbook.flow.cells) {
-    if (!isScriptCell(cell) && !isHttpCell(cell)) throw notRunnable(`the cell ${cell.id} is a ${cell.kind} cell: this runner executes script and http cells only.`);
+    if (!RUNNABLE_KINDS.has(cell.kind)) throw notRunnable(`the cell ${cell.id} is a ${cell.kind} cell: this runner executes script, http, readFromStore and writeToStore cells only (a tool cell waits for the run to have an actor and a role).`);
     if (cell.retry !== undefined) throw notRunnable(`the cell ${cell.id} retries: this runner does not retry a step.`);
     const iterates = (cell.next ?? []).some((edge) => edge.forEach !== undefined);
     if (iterates) throw notRunnable(`the cell ${cell.id} iterates with forEach: this runner does not iterate.`);
@@ -263,7 +276,9 @@ export class PlaybookRunner {
     try {
       if (isScriptCell(cell)) return await this.runScriptCell(cell, context, steps);
       if (isHttpCell(cell)) return await this.runHttpCell(cell, context, steps);
-      throw notRunnable(`the cell ${cell.id} is not a script or http cell.`);
+      if (isReadFromStoreCell(cell)) return this.runReadFromStoreCell(cell, context, steps);
+      if (isWriteToStoreCell(cell)) return this.runWriteToStoreCell(cell, context, steps);
+      throw notRunnable(`the cell ${cell.id} is not a script, http or store cell.`);
     } catch (error) {
       return { verdict: verdictOfFailure(error, context.masker) };
     }
@@ -309,6 +324,33 @@ export class PlaybookRunner {
     const stepOutput: StepOutput = { status: outcome.status, output };
     const isSuccess = outcome.status >= 200 && outcome.status < 300;
     return isSuccess ? { verdict: { status: 'succeeded' }, output: stepOutput } : { verdict: { status: 'failed', errorCode: 'http_status_failed' }, output: stepOutput };
+  }
+
+  private runReadFromStoreCell(cell: ReadFromStoreCell, context: RunContext, steps: StepFields): { verdict: Verdict; output?: unknown } {
+    const { scope, untrusted } = this.templateWorldOf(context, steps);
+    const request = resolveStoreRead(cell, scope, untrusted);
+    const outcome = readStoreRows({ stores: this.deps.stores, projectId: context.playbook.projectId, request });
+    // Same order as a script's output: the shape-based layer, then the masker, then the control characters.
+    return this.verdictOfStoreStep(outcome, (output) => ({ ...output, output: withoutControlCharacters(context.masker.mask(maskedSecrets(String(output['output'])))) }));
+  }
+
+  private runWriteToStoreCell(cell: WriteToStoreCell, context: RunContext, steps: StepFields): { verdict: Verdict; output?: unknown } {
+    const { scope, untrusted } = this.templateWorldOf(context, steps);
+    const request = resolveStoreWrite(cell, scope, untrusted);
+    const outcome = writeStoreRow({ stores: this.deps.stores, projectId: context.playbook.projectId, runId: context.run.id, request, mask: (value) => context.masker.mask(value) });
+    return this.verdictOfStoreStep(outcome, (output) => output);
+  }
+
+  private verdictOfStoreStep(outcome: StoreOutcome, maskedOutputOf: (output: Record<string, unknown>) => Record<string, unknown>): { verdict: Verdict; output?: unknown } {
+    if (outcome.kind === 'failed') return { verdict: { status: 'failed', errorCode: outcome.code } };
+    return { verdict: { status: 'succeeded' }, output: maskedOutputOf(outcome.output) };
+  }
+
+  private templateWorldOf(context: RunContext, steps: StepFields): { scope: ResolutionScope; untrusted: UntrustedSources } {
+    return {
+      untrusted: { stepIds: new Set(context.playbook.flow.cells.map((other) => other.id)), isItemUntrusted: true },
+      scope: { inputs: context.inputs, steps, secretValueOf: (name) => context.secretValues.get(name) },
+    };
   }
 
   /** The arguments and environment of a script cell with their tokens resolved. A token is checked in its place again here: a flow stored outside the save path is held to the same rules. */
