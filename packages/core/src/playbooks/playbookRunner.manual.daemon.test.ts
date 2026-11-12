@@ -251,6 +251,17 @@ describe('a wait is bounded', () => {
     expect(table.rows()).toHaveLength(0);
   });
 
+  it('ends the wait at the very instant it is due: an answer at that instant is refused', async () => {
+    const f = await boot();
+    const playbook = await createApprovedPlaybook(f, [manualCell('gate', { timeoutSeconds: 60 })]);
+    const runId = await runUntilParked(f, playbook.id);
+    now += 60 * SECOND;
+
+    const response = await answerWithProof(f, runId);
+
+    expect(await response.json()).toMatchObject({ error: 'manual_wait_expired' });
+  });
+
   it('answers on the last second of the wait', async () => {
     const f = await boot();
     const playbook = await createApprovedPlaybook(f, [manualCell('gate', { timeoutSeconds: 60 })]);
@@ -378,7 +389,7 @@ describe('secrets', () => {
   it('resolves the secrets again at the answer: a secret cleared while waiting refuses the resume, and the run stays parked', async () => {
     const f = await boot();
     const { playbook } = await playbookWithASecret(f, `dummy-canary-built-at-runtime-${randomUUID()}`);
-    const runId = await runUntilParked(f, playbook.id);
+    const runId = await runUntilParked(f, playbook.id, { who: 'v2' });
     await secretStore.clear({ kind: 'playbook', id: playbook.id }, SECRET_NAME);
 
     const response = await answerWithProof(f, runId);
