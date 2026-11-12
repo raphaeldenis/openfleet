@@ -52,6 +52,53 @@ export interface IntegrationIssueItem {
   untrusted: { summary: string; status?: string; priority?: string; issueType?: string; assignee?: string };
 }
 
+/** The Jira fields a view may display; the daemon asks the provider for these and no other. */
+export const VIEW_CONFIG_FIELDS = ['summary', 'status', 'priority', 'issuetype', 'assignee', 'updated'] as const;
+
+/** What a human approves for an integration: the query the daemon runs and the fields it keeps. */
+export interface ViewConfigContent {
+  jql: string;
+  fields: string[];
+}
+
+/** `running` is the content a human approved, still unchanged; `withheld` is an approved row whose content no longer matches its approval: nothing is asked of the provider for it. */
+export const ACTIVE_VIEW_STATUSES = ['running', 'withheld'] as const;
+export type ActiveViewStatus = (typeof ACTIVE_VIEW_STATUSES)[number];
+
+/** The configuration the daemon polls: the proposal a human approved, at the revision it was approved. */
+export interface ActiveViewConfigView extends ViewConfigContent {
+  approvedRev: number;
+  approvedAt: string;
+  status: ActiveViewStatus;
+}
+
+/** The waiting proposal: it has no effect on the polling until a human approves this revision. */
+export interface ViewProposalView extends ViewConfigContent {
+  contentRev: number;
+  /** The digest that approving this revision records: what a human reviews. */
+  reviewDigest: string;
+}
+
+/** An integration holds two separate places: the active configuration and the proposal waiting for approval. */
+export interface IntegrationViewConfigView {
+  integrationId: string;
+  /** The revision of the latest proposal; it only goes up. */
+  contentRev: number;
+  active?: ActiveViewConfigView;
+  proposal?: ViewProposalView;
+}
+
+/** A proposal: the query and the fields. A write replaces the waiting proposal only; the active configuration and the polling are untouched. */
+export const SaveViewConfigBodySchema = z.object({
+  jql: z.string().max(1000),
+  fields: z.array(z.string().max(32)).max(16),
+  expectedRev: z.int().min(1).optional(),
+}).strict();
+export type SaveViewConfigBody = z.infer<typeof SaveViewConfigBodySchema>;
+
+export const ApproveViewConfigBodySchema = z.object({ approvedRev: z.int().min(1) }).strict();
+export type ApproveViewConfigBody = z.infer<typeof ApproveViewConfigBodySchema>;
+
 /** Polling of a connection stops after repeated refusals of its credential, and resumes when a refresh finds the credential working. */
 export const INTEGRATION_POLLING_STATES = ['active', 'stopped_auth_failed'] as const;
 export type IntegrationPollingState = (typeof INTEGRATION_POLLING_STATES)[number];

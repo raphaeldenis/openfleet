@@ -1,5 +1,6 @@
 import type { IntegrationIssueItem } from '@openfleet/shared';
 import { afterEach, describe, expect, it } from 'vitest';
+import { reviewDigestOf } from '../integrations/integrationViewConfig.js';
 import { recentLogLines } from '../logger.js';
 import { MAX_OFFERS_PER_RUN } from './integrationRecordsSource.js';
 import { MINUTE_MS, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
@@ -183,6 +184,44 @@ describe('the scope', () => {
     const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id });
 
     world.daemon.integrationRepository.saveConnectionPolling(integration.connectionId, { consecutiveAuthFailures: 3, isStopped: true });
+    integration.publish([issue('CCM-1'), issue('CCM-2')]);
+
+    expect(world.firesOf(triggerId)).toEqual([]);
+  });
+});
+
+describe('the approved view of the integration', () => {
+  const APPROVED_JQL = 'project = "CCM"';
+  const FIELDS = ['summary'];
+  const approveView = (world: TriggerWorld, integrationId: string, { digest = reviewDigestOf({ jql: APPROVED_JQL, fields: FIELDS }) }: { digest?: string } = {}) => {
+    const { integrationRepository: repository } = world.daemon;
+    const now = new Date(world.nowMs).toISOString();
+    repository.saveViewProposal(integrationId, { jql: APPROVED_JQL, fields: FIELDS }, { now });
+    repository.promoteViewProposal({ profileId: integrationId, approvedRev: repository.findViewConfig(integrationId)!.contentRev, digest, now });
+  };
+
+  it('takes the items of a newly approved query as the new baseline instead of firing them as new items', async () => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    integration.publish([issue('CCM-1')]);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id });
+
+    approveView(world, integration.id);
+    integration.publish([issue('CCM-7'), issue('CCM-8')]);
+    expect(world.firesOf(triggerId)).toEqual([]);
+
+    integration.publish([issue('CCM-7'), issue('CCM-8'), issue('CCM-9')]);
+    expect(world.firesOf(triggerId).map((fire) => fire.dedup_key)).toEqual([`integration:${integration.id}:CCM-9:${FIRST_REVISION}`]);
+  });
+
+  it('offers nothing while the approved view is withheld because its content no longer matches its approval', async () => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    approveView(world, integration.id);
+    world.db.prepare('UPDATE integration_view_configs SET approved_digest = ? WHERE profile_id = ?').run('not-the-digest-that-was-reviewed', integration.id);
+    integration.publish([issue('CCM-1')]);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id });
+
     integration.publish([issue('CCM-1'), issue('CCM-2')]);
 
     expect(world.firesOf(triggerId)).toEqual([]);

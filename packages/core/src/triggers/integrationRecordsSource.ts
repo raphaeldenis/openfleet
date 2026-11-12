@@ -1,4 +1,5 @@
 import type { IntegrationIssueItem, TriggerWhen } from '@openfleet/shared';
+import { pollQueryOf as pollQueryOfViewConfig, type PollQuery } from '../integrations/integrationViewConfig.js';
 import type { IntegrationRepository } from '../integrations/integrationRepository.js';
 import { log } from '../logger.js';
 import { canonicalDigestOf } from '../playbooks/kernel/canonicalDigest.js';
@@ -16,13 +17,13 @@ type IntegrationTrigger = TriggerRecord & { when: IntegrationWhen };
 const isIntegrationTrigger = (trigger: TriggerRecord): trigger is IntegrationTrigger => trigger.when.source === 'integration_records';
 
 /** What an integration trigger remembers: the revision of each item it has dealt with, and whether the first look at the items has been made. */
-interface IntegrationCursor { kind: typeof INTEGRATION_CURSOR_KIND; isBaselined: boolean; revisions: Record<string, string> }
+interface IntegrationCursor { kind: typeof INTEGRATION_CURSOR_KIND; isBaselined: boolean; queryIdentity: string; revisions: Record<string, string> }
 const isIntegrationCursor = (value: unknown): value is IntegrationCursor => {
   const candidate = value as Partial<IntegrationCursor> | null;
   const { revisions } = candidate ?? {};
   const isRevisionMap = typeof revisions === 'object' && revisions !== null && !Array.isArray(revisions)
     && Object.keys(revisions).length <= MAX_CURSOR_ITEMS && Object.values(revisions).every((revision) => typeof revision === 'string');
-  return candidate?.kind === INTEGRATION_CURSOR_KIND && typeof candidate.isBaselined === 'boolean' && isRevisionMap;
+  return candidate?.kind === INTEGRATION_CURSOR_KIND && typeof candidate.isBaselined === 'boolean' && typeof candidate.queryIdentity === 'string' && isRevisionMap;
 };
 
 type Change = 'new' | 'changed';
@@ -42,7 +43,7 @@ const matchesTheFilter = (when: IntegrationWhen, item: IntegrationIssueItem): bo
 };
 
 export interface IntegrationRecordsSourceDeps {
-  integrations: Pick<IntegrationRepository, 'findProfileInProject' | 'listItems' | 'healthOf' | 'connectionPollingOf' | 'onItemsReplaced'>;
+  integrations: Pick<IntegrationRepository, 'findProfileInProject' | 'listItems' | 'healthOf' | 'connectionPollingOf' | 'findViewConfig' | 'onItemsReplaced'>;
   triggers: Pick<TriggerRepository, 'listArmed'>;
   cursors: Pick<TriggerCursors, 'read' | 'save'>;
   engine: Pick<TriggerEngine, 'submit' | 'submitBacklog'>;
@@ -52,7 +53,7 @@ export interface IntegrationRecordsSourceDeps {
 
 /**
  * Offers the engine the items of an integration of the project that are new or changed since the baseline of the trigger. The baseline is the revision of each item at the first look,
- * so the items present at arming never fire. Only the key, the revision and the kind of change leave this source: the text of an item is third-party text and is never read into an offer.
+ * so the items present at arming never fire, and neither do the items of a query a human approved after it. Only the key, the revision and the kind of change leave this source: the text of an item is third-party text and is never read into an offer.
  * A run offers its page to the engine (the ledger keeps the fire once per dedup key), then moves the cursor past it.
  */
 export class IntegrationRecordsSource {
@@ -105,19 +106,29 @@ export class IntegrationRecordsSource {
     return this.deps.integrations.findProfileInProject(trigger.projectId, trigger.when.integrationId) !== undefined;
   }
 
-  /** A refused credential leaves the items as they were last seen: they are stale, so no offer is made of them. */
+  /** A refused credential, or an approved view that is withheld, leaves the items as they were last seen: they are stale, so no offer is made of them. */
   private isReadable(trigger: IntegrationTrigger): boolean {
     const { integrations } = this.deps;
     const profile = integrations.findProfileInProject(trigger.projectId, trigger.when.integrationId);
     if (profile === undefined) return false;
     const isCredentialRefused = integrations.healthOf(profile.id)?.status === 'auth_failed' || integrations.connectionPollingOf(profile.connectionId).isStopped;
-    return !isCredentialRefused;
+    const isViewWithheld = this.pollQueryOf(trigger).kind === 'withheld';
+    return !isCredentialRefused && !isViewWithheld;
+  }
+
+  private pollQueryOf(trigger: IntegrationTrigger): PollQuery {
+    return pollQueryOfViewConfig(this.deps.integrations.findViewConfig(trigger.when.integrationId));
+  }
+
+  /** What the poller asks the provider for: another query gives another set of items, which is no change of the items. */
+  private queryIdentityOf(trigger: IntegrationTrigger): string {
+    return this.pollQueryOf(trigger).identity;
   }
 
   private baselineOf(trigger: IntegrationTrigger): IntegrationCursor {
     const items = this.deps.integrations.listItems(trigger.when.integrationId);
     const hasBeenFetched = items.length > 0;
-    return { kind: INTEGRATION_CURSOR_KIND, isBaselined: hasBeenFetched, revisions: Object.fromEntries(items.map((item) => [item.key, revisionOf(item)])) };
+    return { kind: INTEGRATION_CURSOR_KIND, isBaselined: hasBeenFetched, queryIdentity: this.queryIdentityOf(trigger), revisions: Object.fromEntries(items.map((item) => [item.key, revisionOf(item)])) };
   }
 
   private cursorOf(trigger: TriggerRecord): IntegrationCursor | undefined {
@@ -132,7 +143,8 @@ export class IntegrationRecordsSource {
 
     const cursor = this.cursorOf(trigger);
     const isFirstLook = cursor === undefined || !cursor.isBaselined;
-    if (isFirstLook) return void cursors.save(trigger.id, this.baselineOf(trigger));
+    const isAnotherQuery = cursor !== undefined && cursor.queryIdentity !== this.queryIdentityOf(trigger);
+    if (isFirstLook || isAnotherQuery) return void cursors.save(trigger.id, this.baselineOf(trigger));
 
     const items = integrations.listItems(trigger.when.integrationId);
     const changedItems = items.filter((item) => cursor.revisions[item.key] !== revisionOf(item)).sort((first, second) => revisionOf(first).localeCompare(revisionOf(second)) || first.key.localeCompare(second.key));
@@ -146,7 +158,7 @@ export class IntegrationRecordsSource {
       const revision = deferred.has(item.key) ? cursor.revisions[item.key] : revisionOf(item);
       return revision === undefined ? [] : [[item.key, revision]];
     }));
-    cursors.save(trigger.id, { kind: INTEGRATION_CURSOR_KIND, isBaselined: true, revisions } satisfies IntegrationCursor);
+    cursors.save(trigger.id, { kind: INTEGRATION_CURSOR_KIND, isBaselined: true, queryIdentity: cursor.queryIdentity, revisions } satisfies IntegrationCursor);
     if (deferred.size > 0) this.continueOnTheNextTick(trigger.id);
   }
 

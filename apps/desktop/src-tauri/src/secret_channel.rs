@@ -126,7 +126,7 @@ pub fn operator_nonce_from(random: [u8; OPERATOR_NONCE_BYTES]) -> String {
   random.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// What one operator nonce authorises: one action on one secret, or the arming of one trigger (scope kind `trigger`, the trigger id as scope id and as name). The daemon refuses the nonce for any other action or target.
+/// What one operator nonce authorises: one action on one secret, the arming of one trigger (scope kind `trigger`, the trigger id as scope id and as name), or the approval of the view of one integration (scope kind `integration`, the integration id as scope id and as name). The daemon refuses the nonce for any other action or target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OperatorGrant<'a> {
   pub action: &'a str,
@@ -139,6 +139,8 @@ const SECRET_GRANT_ACTIONS: [&str; 2] = ["set", "clear"];
 const ARM_TRIGGER_ACTION: &str = "trigger.arm";
 const GRANT_SCOPE_KINDS: [&str; 3] = ["playbook", "connection", "trigger"];
 const TRIGGER_SCOPE_KIND: &str = "trigger";
+const APPROVE_VIEW_ACTION: &str = "integration.approve_view";
+const INTEGRATION_SCOPE_KIND: &str = "integration";
 const GRANT_MAX_CHARS: usize = 128;
 
 fn is_secret_name(name: &str) -> bool {
@@ -163,8 +165,14 @@ fn is_acceptable_arm_trigger_grant(grant: &OperatorGrant) -> bool {
   grant.action == ARM_TRIGGER_ACTION && is_trigger_scope && names_the_trigger && has_usable_id(grant.scope_id)
 }
 
+fn is_acceptable_approve_view_grant(grant: &OperatorGrant) -> bool {
+  let is_integration_scope = grant.scope_kind == INTEGRATION_SCOPE_KIND;
+  let names_the_integration = grant.name == grant.scope_id;
+  grant.action == APPROVE_VIEW_ACTION && is_integration_scope && names_the_integration && has_usable_id(grant.scope_id)
+}
+
 fn is_acceptable_grant(grant: &OperatorGrant) -> bool {
-  is_acceptable_secret_grant(grant) || is_acceptable_arm_trigger_grant(grant)
+  is_acceptable_secret_grant(grant) || is_acceptable_arm_trigger_grant(grant) || is_acceptable_approve_view_grant(grant)
 }
 
 /// The line that hands an operator nonce to the daemon over the sidecar's stdin, bound to its grant. A grant the daemon would not accept is refused here, so no nonce is minted for it.
@@ -500,6 +508,32 @@ mod tests {
       OperatorGrant { name: "another-trigger", ..ARM_GRANT },
       OperatorGrant { scope_id: "", name: "", ..ARM_GRANT },
       OperatorGrant { scope_id: &too_long, name: &too_long, ..ARM_GRANT },
+    ];
+
+    for grant in &refused {
+      assert!(operator_nonce_line("abc123", grant).is_err(), "{grant:?}");
+    }
+  }
+
+  const APPROVE_VIEW_GRANT: OperatorGrant = OperatorGrant { action: "integration.approve_view", scope_kind: "integration", scope_id: "0b1c-integration", name: "0b1c-integration" };
+
+  #[test]
+  fn hands_the_daemon_a_nonce_for_approving_the_view_of_one_integration() {
+    let line = operator_nonce_line("abc123", &APPROVE_VIEW_GRANT).unwrap();
+
+    let message: Value = serde_json::from_str(secret_line_payload(&line).unwrap()).unwrap();
+    assert_eq!(message, json!({ "type": "operator_nonce", "nonce": "abc123", "action": "integration.approve_view", "scopeKind": "integration", "scopeId": "0b1c-integration", "name": "0b1c-integration" }));
+  }
+
+  #[test]
+  fn mints_no_view_approval_nonce_that_does_not_name_one_integration() {
+    let too_long = "n".repeat(GRANT_MAX_CHARS + 1);
+    let refused = [
+      OperatorGrant { scope_kind: "connection", ..APPROVE_VIEW_GRANT },
+      OperatorGrant { name: "another-integration", ..APPROVE_VIEW_GRANT },
+      OperatorGrant { scope_id: "", name: "", ..APPROVE_VIEW_GRANT },
+      OperatorGrant { scope_id: &too_long, name: &too_long, ..APPROVE_VIEW_GRANT },
+      OperatorGrant { action: "set", ..APPROVE_VIEW_GRANT },
     ];
 
     for grant in &refused {

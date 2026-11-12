@@ -103,7 +103,7 @@ describe('the integrations migration', () => {
 
     db.exec(readFileSync(new URL(`${INTEGRATIONS_VERSION}.down.sql`, migrationsDownDirectory), 'utf8'));
 
-    expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'integration_%' AND name NOT IN ('integration_poll_state', 'integration_connection_polling', 'integration_view_items')").all()).toEqual([]);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'integration_%' AND name NOT IN ('integration_poll_state', 'integration_connection_polling', 'integration_view_items', 'integration_view_configs')").all()).toEqual([]);
     expect(db.prepare('SELECT COUNT(*) AS n FROM secret_refs').get()).toEqual({ n: 1 });
   });
 });
