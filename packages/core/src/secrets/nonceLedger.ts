@@ -7,12 +7,12 @@ const MIN_REGISTERED_NONCE_CHARS = 16;
 const MAX_REGISTERED_NONCE_CHARS = 128;
 const NONCE_CHARACTERS = /^[A-Za-z0-9_-]+$/;
 
-/** `set` and `clear` act on a secret; `trigger.arm` arms the trigger whose id is both the scope id and the name. */
-export const OPERATOR_ACTIONS = ['set', 'clear', 'trigger.arm'] as const;
+/** `set` and `clear` act on a secret; `trigger.arm` arms the trigger and `integration.approve_view` approves the view of the integration whose id is both the scope id and the name. */
+export const OPERATOR_ACTIONS = ['set', 'clear', 'trigger.arm', 'integration.approve_view'] as const;
 export type OperatorAction = (typeof OPERATOR_ACTIONS)[number];
 
-/** What an operator nonce authorises: one action on one secret, or the arming of one trigger. */
-export type OperatorBinding = { action: OperatorAction; scope: SecretScope; name: string };
+/** What an operator nonce authorises: one action on one secret, the arming of one trigger, or the approval of the view of one integration. */
+export type OperatorBinding = { action: OperatorAction; scope: { kind: SecretScope['kind'] | 'integration'; id: string }; name: string };
 
 const bindingKeyOf = ({ action, scope, name }: OperatorBinding): string => JSON.stringify([action, scope.kind, scope.id, name]);
 

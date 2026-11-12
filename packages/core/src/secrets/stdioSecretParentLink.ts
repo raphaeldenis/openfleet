@@ -26,7 +26,17 @@ const TriggerArmNonceSchema = z.object({
   name: z.string().min(1).max(128),
 }).strict().refine((message) => message.name === message.scopeId);
 
-const OperatorNonceSchema = z.union([SecretOperatorNonceSchema, TriggerArmNonceSchema]);
+/** The approval of the view of an integration: the integration id is the scope id and the name, so a nonce names exactly one integration. */
+const ViewApprovalNonceSchema = z.object({
+  type: z.literal('operator_nonce'),
+  nonce: z.string(),
+  action: z.literal('integration.approve_view'),
+  scopeKind: z.literal('integration'),
+  scopeId: z.string().min(1).max(128),
+  name: z.string().min(1).max(128),
+}).strict().refine((message) => message.name === message.scopeId);
+
+const OperatorNonceSchema = z.union([SecretOperatorNonceSchema, TriggerArmNonceSchema, ViewApprovalNonceSchema]);
 const SecretAnswerLineSchema = z.object({ type: z.literal('secret_answer'), requestId: z.string().min(1) }).and(SecretAnswerSchema);
 
 const parentMessageOf = (line: string): ParentToDaemonMessage | undefined => {
