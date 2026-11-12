@@ -222,6 +222,7 @@ describe('a pass that waits for the answer of the provider', () => {
     readerCalls[0]!.answer.resolve(okAnswer('OLD-1'));
     await pass;
     expect(identityOfTheStoredItems()).toBe(oldIdentity);
+    expect(fixture.daemon.integrationRepository.listItems(integration.id)[0]).not.toHaveProperty('queryIdentity');
 
     await humanApproves(integration.id, { jql: NEW_JQL, fields: ['summary', 'status'] });
     expect(identityOfTheStoredItems()).toBe(oldIdentity);
