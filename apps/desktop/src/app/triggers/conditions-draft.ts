@@ -75,12 +75,15 @@ function conditionDraftOf({ condition, source }: { condition: TriggerCondition; 
 export const conditionDraftsOf = ({ conditions, source }: { conditions: TriggerCondition[]; source: TriggerWhenSource }): ConditionDraft[] =>
   conditions.map((condition) => conditionDraftOf({ condition, source }));
 
-export function newConditionDraft({ key, source }: { key: string; source: TriggerWhenSource | undefined }): EditableConditionDraft {
-  return { kind: 'editable', key, storedId: undefined, join: 'and', namespace: namespacesOf(source)[0] ?? '', path: '', op: 'eq', valueKind: 'text', valueText: '', caseInsensitive: false };
+/** A condition added in the form reads the first namespace the source offers until the human picks another one. */
+const NO_NAMESPACE_CHOSEN = '';
+
+export function newConditionDraft({ key }: { key: string }): EditableConditionDraft {
+  return { kind: 'editable', key, storedId: undefined, join: 'and', namespace: NO_NAMESPACE_CHOSEN, path: '', op: 'eq', valueKind: 'text', valueText: '', caseInsensitive: false };
 }
 
-export function withConditionAdded({ conditions, key, source }: { conditions: ConditionDraft[]; key: string; source: TriggerWhenSource | undefined }): ConditionDraft[] {
-  return canAddCondition(conditions) ? [...conditions, newConditionDraft({ key, source })] : conditions;
+export function withConditionAdded({ conditions, key }: { conditions: ConditionDraft[]; key: string }): ConditionDraft[] {
+  return canAddCondition(conditions) ? [...conditions, newConditionDraft({ key })] : conditions;
 }
 
 export const withConditionRemoved = ({ conditions, key }: { conditions: ConditionDraft[]; key: string }): ConditionDraft[] =>

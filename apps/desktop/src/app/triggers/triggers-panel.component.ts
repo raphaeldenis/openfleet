@@ -413,7 +413,7 @@ export class TriggersPanelComponent {
 
   protected addCondition(): void {
     const key = `new-${++this.addedConditionCount}`;
-    this.draft.update((draft) => (draft === undefined ? draft : { ...draft, conditions: withConditionAdded({ conditions: draft.conditions, key, source: draft.when?.source }) }));
+    this.draft.update((draft) => (draft === undefined ? draft : { ...draft, conditions: withConditionAdded({ conditions: draft.conditions, key }) }));
   }
 
   protected removeCondition(key: string): void {
