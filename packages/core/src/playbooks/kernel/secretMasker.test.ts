@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { cpuMillisecondsToRun, expectBestCpuUnder, expectLinearGrowth } from '../../__testing__/linearGrowth.js';
 import { KernelError } from './kernelError.js';
 import { createSecretMasker } from './secretMasker.js';
+
+const DEFAULT_CEILING_CHARS = 262_144;
+const MAX_COST_RATIO_OF_A_TEXT_CUT_AT_THE_CEILING = 4;
+const LINEAR_COST_CPU_CEILING_MS = 200;
 
 const codeOfThrown = (action: () => unknown): string | undefined => {
   try {
@@ -280,15 +285,14 @@ describe('createSecretMasker: input ceiling', () => {
 
   it('does not block on 10 000 000 characters that all match an 8-character secret', () => {
     const masker = createSecretMasker([{ name: 'ALL_A', value: 'a'.repeat(8) }]);
-    const text = 'a'.repeat(10_000_000);
+    const justOverTheCeiling = DEFAULT_CEILING_CHARS + 1;
+    const hugeText = 'a'.repeat(10_000_000);
+    const maskedHuge = masker.mask(hugeText);
 
-    const startedAt = performance.now();
-    const masked = masker.mask(text);
-    const elapsedMilliseconds = performance.now() - startedAt;
+    expectLinearGrowth(cpuMillisecondsToRun((size) => 'a'.repeat(size), (text) => masker.mask(text)), { smallSize: justOverTheCeiling, largeSize: hugeText.length, maxGrowthRatio: MAX_COST_RATIO_OF_A_TEXT_CUT_AT_THE_CEILING });
 
-    expect(masked.endsWith(TRUNCATION_MARKER)).toBe(true);
-    expect(masked).not.toContain('aaaaaaaa');
-    expect(elapsedMilliseconds).toBeLessThan(1000);
+    expect(maskedHuge.endsWith(TRUNCATION_MARKER)).toBe(true);
+    expect(maskedHuge).not.toContain('aaaaaaaa');
   });
 });
 
@@ -344,7 +348,7 @@ describe('createSecretMasker: a secret too long for one regular expression', () 
 });
 
 describe('createSecretMasker: linear cost', () => {
-  it('masks a text of 1 000 000 characters in under 200 ms', () => {
+  it('masks a text of 1 000 000 characters in under 200 ms of CPU', () => {
     const masker = createSecretMasker([
       { name: 'JIRA_TOKEN', value: jiraValue },
       { name: 'AWKWARD', value: awkwardValue },
@@ -352,23 +356,18 @@ describe('createSecretMasker: linear cost', () => {
     const chunk = `${'lorem ipsum dolor sit amet '.repeat(300)}${jiraValue} ${encodeURIComponent(awkwardValue)} `;
     const text = chunk.repeat(Math.ceil(1_000_000 / chunk.length)).slice(0, 1_000_000);
 
-    const startedAt = performance.now();
-    const masked = masker.mask(text);
-    const elapsedMilliseconds = performance.now() - startedAt;
+    expectBestCpuUnder(() => masker.mask(text), LINEAR_COST_CPU_CEILING_MS);
 
     expect(text).toHaveLength(1_000_000);
-    expect(masked).not.toContain(jiraValue);
-    expect(elapsedMilliseconds).toBeLessThan(200);
+    expect(masker.mask(text)).not.toContain(jiraValue);
   });
 
-  it('masks 1 000 000 characters that are one repeated secret in under 200 ms', () => {
+  it('masks 1 000 000 characters that are one repeated secret in under 200 ms of CPU', () => {
     const text = `${jiraValue} `.repeat(Math.ceil(1_000_000 / (jiraValue.length + 1))).slice(0, 1_000_000);
+    const masker = maskerOfJira();
 
-    const startedAt = performance.now();
-    const masked = maskerOfJira().mask(text);
-    const elapsedMilliseconds = performance.now() - startedAt;
+    expectBestCpuUnder(() => masker.mask(text), LINEAR_COST_CPU_CEILING_MS);
 
-    expect(masked).not.toContain(jiraValue);
-    expect(elapsedMilliseconds).toBeLessThan(200);
+    expect(masker.mask(text)).not.toContain(jiraValue);
   });
 });

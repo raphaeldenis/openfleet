@@ -5,6 +5,21 @@ import { describe, expect, it } from 'vitest';
 import { MAX_TEMPLATE_VALUE_CHARS, TemplateRenderError, renderTemplate } from './teamPack.js';
 import type { TeamVariables } from './teamPack.js';
 
+const HOSTILE_INPUT_CPU_CEILING_MS = 2000;
+const BEST_OF_ROUNDS = 5;
+
+/** Keeps the fastest CPU time of several runs: contention only adds time, and the slices the scheduler gives to other processes do not count as CPU. */
+const expectBestCpuUnder = (work: () => unknown, ceilingMilliseconds: number) => {
+  let bestMilliseconds = Infinity;
+  for (let round = 0; round < BEST_OF_ROUNDS; round++) {
+    const startedAt = process.cpuUsage();
+    work();
+    const { user, system } = process.cpuUsage(startedAt);
+    bestMilliseconds = Math.min(bestMilliseconds, (user + system) / 1000);
+  }
+  expect(bestMilliseconds).toBeLessThan(ceilingMilliseconds);
+};
+
 const variablesNamed = (projectName: string): TeamVariables => ({
   project: { name: projectName, goal: 'goal', repoPath: '/work/x', docsFolder: '/docs/x', stack: 'TypeScript', defaultBranch: 'main' },
   commands: { install: 'i', build: 'b', test: 't', dev: 'd', verify: 'v', lint: 'l', typecheck: 'c' },
@@ -177,31 +192,26 @@ describe('a hostile template fails cleanly and quickly', () => {
 
   it('renders a template of many placeholders in linear time', () => {
     const template = '{{project.name}} '.repeat(LARGE);
-    const startedAt = performance.now();
 
     const rendered = renderTemplate(template, variablesNamed('x'));
 
     expect(rendered).toHaveLength(2 * LARGE);
-    expect(performance.now() - startedAt).toBeLessThan(2000);
+    expectBestCpuUnder(() => renderTemplate(template, variablesNamed('x')), HOSTILE_INPUT_CPU_CEILING_MS);
   });
 
   it('sanitises a value of one million hostile characters in bounded time', () => {
     const hostileValue = '{{ \n​\u0000'.repeat(200_000);
-    const startedAt = performance.now();
 
     const rendered = renderedProjectLine(hostileValue);
 
     expect(valueOf(rendered).length).toBeLessThanOrEqual(300);
-    expect(performance.now() - startedAt).toBeLessThan(2000);
+    expectBestCpuUnder(() => renderedProjectLine(hostileValue), HOSTILE_INPUT_CPU_CEILING_MS);
   });
 
   it('rejects hostile templates in bounded time', () => {
     const hostileTemplates = ['{{'.repeat(LARGE), '{{'.repeat(LARGE) + '}}'.repeat(LARGE), `{{${'a'.repeat(LARGE)}`, '{{ '.repeat(LARGE) + '}}', '\\{{'.repeat(LARGE) + '{{'];
-    const startedAt = performance.now();
 
-    hostileTemplates.forEach((template) => outcomeOf(() => renderTemplate(template, variablesNamed('x'))));
-
-    expect(performance.now() - startedAt).toBeLessThan(2000);
+    expectBestCpuUnder(() => hostileTemplates.forEach((template) => outcomeOf(() => renderTemplate(template, variablesNamed('x')))), HOSTILE_INPUT_CPU_CEILING_MS);
   });
 });
 

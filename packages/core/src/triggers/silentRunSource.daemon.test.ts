@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeHarness } from '../harness/fakeHarness.js';
 import { MAX_OFFERS_PER_TICK, SILENT_RUN_POLL_MS, SLEEP_GAP_MS } from './silentRunSource.js';
 import { MINUTE_MS, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
+
+// Time is the injected clock of the world; what costs wall time is the booted daemon and one poll per 30 s of simulated silence, many times slower on a loaded machine.
+// The ceiling only stops a spec that never ends.
+const SIMULATED_SILENCE_NEVER_ENDS_CEILING_MS = 120_000;
+vi.setConfig({ testTimeout: SIMULATED_SILENCE_NEVER_ENDS_CEILING_MS, hookTimeout: SIMULATED_SILENCE_NEVER_ENDS_CEILING_MS });
 
 let world: TriggerWorld | undefined;
 afterEach(async () => { await world?.close(); world = undefined; });

@@ -2,12 +2,34 @@ import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTempDirTracker } from '../tempDirTracker.js';
-import { runScriptStep, type ScriptStepRun } from './scriptStepProcess.js';
+import { runScriptStep, type ScriptStepClock, type ScriptStepRun } from './scriptStepProcess.js';
 
 const directories = createTempDirTracker();
 afterEach(() => directories.removeAll());
 
 const sleepMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const SCRIPT_STARTUP_BOUND_MS = 300_000;
+const TEST_TIMEOUT_AFTER_THE_STARTUP_BOUND_MS = SCRIPT_STARTUP_BOUND_MS + 30_000;
+const SLOW_NODE_STARTUP_MS = 1_500;
+const VERY_LONG_TIMEOUT_MS = 120_000;
+
+/** Waits for a file the script writes once it runs, however long its process takes to start. */
+const untilScriptWrites = async (marker: string): Promise<void> => {
+  const startedAt = Date.now();
+  while (!existsSync(marker)) {
+    const hasWaitedTooLong = Date.now() - startedAt > SCRIPT_STARTUP_BOUND_MS;
+    if (hasWaitedTooLong) throw new Error(`the script wrote no ${marker} within ${SCRIPT_STARTUP_BOUND_MS} ms`);
+    await sleepMs(10);
+  }
+};
+
+/** A clock whose step timeout fires only when the test calls `fireTimeout`. */
+const createHandClock = (): { clock: ScriptStepClock; fireTimeout: () => void } => {
+  let armed: (() => void) | undefined;
+  const clock: ScriptStepClock = { startTimer: (onElapsed) => { armed = onElapsed; return () => { armed = undefined; }; } };
+  return { clock, fireTimeout: () => armed?.() };
+};
 
 const BACKGROUND_EFFECT_DELAY_SECONDS = 0.7;
 const LONGER_THAN_THE_BACKGROUND_EFFECT_DELAY_MS = 1_300;
@@ -70,29 +92,35 @@ describe('the processes a step leaves behind', () => {
 
   it('kills a descendant that ignores SIGTERM when the step times out', async () => {
     const script = arrangeScript('');
-    writeFileSync(script.path, `#!/bin/sh\n${backgroundEffect(script.marker, { ignoresTermination: true })}\nsleep 30\n`);
+    const readyMarker = `${script.marker}-ready`;
+    writeFileSync(script.path, `#!/bin/sh\n${backgroundEffect(script.marker, { ignoresTermination: true })}\nprintf 1 > '${readyMarker}'\nsleep 30\n`);
+    const { clock, fireTimeout } = createHandClock();
 
-    const outcome = await runScriptStep(runOf(script, { timeoutMs: 300 }));
+    const running = runScriptStep(runOf(script, { timeoutMs: VERY_LONG_TIMEOUT_MS }), clock);
+    await untilScriptWrites(readyMarker);
+    fireTimeout();
+    const outcome = await running;
     await sleepMs(LONGER_THAN_THE_BACKGROUND_EFFECT_DELAY_MS);
 
     expect(outcome.kind).toBe('timeout');
     expect(existsSync(script.marker)).toBe(false);
-  }, 15_000);
+  }, TEST_TIMEOUT_AFTER_THE_STARTUP_BOUND_MS);
 
   it('kills a descendant that ignores SIGTERM when the step is aborted', async () => {
     const script = arrangeScript('');
-    writeFileSync(script.path, `#!/bin/sh\n${backgroundEffect(script.marker, { ignoresTermination: true })}\nsleep 30\n`);
+    const readyMarker = `${script.marker}-ready`;
+    writeFileSync(script.path, `#!/bin/sh\n${backgroundEffect(script.marker, { ignoresTermination: true })}\nprintf 1 > '${readyMarker}'\nsleep 30\n`);
     const abort = new AbortController();
 
     const running = runScriptStep(runOf(script, { signal: abort.signal }));
-    await sleepMs(150);
+    await untilScriptWrites(readyMarker);
     abort.abort();
     const outcome = await running;
     await sleepMs(LONGER_THAN_THE_BACKGROUND_EFFECT_DELAY_MS);
 
     expect(outcome.kind).toBe('aborted');
     expect(existsSync(script.marker)).toBe(false);
-  }, 15_000);
+  }, TEST_TIMEOUT_AFTER_THE_STARTUP_BOUND_MS);
 });
 
 describe('what a step prints is retained up to a cap, as it arrives', () => {
@@ -221,32 +249,26 @@ describe('the signals a step sends to its process group', () => {
     const releaseMarker = `${script.marker}-release`;
     const scriptEndsWhenReleased = [
       "const { existsSync, writeFileSync } = require('node:fs');",
+      `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${SLOW_NODE_STARTUP_MS});`,
       "process.on('SIGTERM', () => {});",
       `writeFileSync(${JSON.stringify(readyMarker)}, '1');`,
       `const waiting = setInterval(() => { if (existsSync(${JSON.stringify(releaseMarker)})) clearInterval(waiting); }, 10);`,
     ].join('\n');
     writeFileSync(script.path, `#!${process.execPath}\n${scriptEndsWhenReleased}\n`);
     const abort = new AbortController();
-    const TIMEOUT_MS = 1_000;
-    const SCRIPT_STARTUP_BOUND_MS = 10_000;
+    const { clock, fireTimeout } = createHandClock();
 
     const late = await signalsAfterResolution(async () => {
-      const startedAt = Date.now();
-      const running = runScriptStep(runOf(script, { signal: abort.signal, timeoutMs: TIMEOUT_MS }));
-      while (!existsSync(readyMarker)) {
-        const hasWaitedTooLong = Date.now() - startedAt > SCRIPT_STARTUP_BOUND_MS;
-        if (hasWaitedTooLong) throw new Error(`the script wrote no ready marker within ${SCRIPT_STARTUP_BOUND_MS} ms`);
-        await sleepMs(10);
-      }
-      const timeoutFiresAt = startedAt + TIMEOUT_MS;
-      await sleepMs(Math.max(0, timeoutFiresAt - Date.now()) + 100);
+      const running = runScriptStep(runOf(script, { signal: abort.signal, timeoutMs: VERY_LONG_TIMEOUT_MS }), clock);
+      await untilScriptWrites(readyMarker);
+      fireTimeout();
       abort.abort();
       writeFileSync(releaseMarker, '1');
       await running;
     });
 
     expect(late).toEqual([]);
-  }, 15_000);
+  }, TEST_TIMEOUT_AFTER_THE_STARTUP_BOUND_MS);
 
   it('sends none after a script that exited 0 resolved the step', async () => {
     const script = arrangeScript('exit 0');

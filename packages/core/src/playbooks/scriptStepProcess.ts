@@ -21,6 +21,18 @@ export type ScriptStepOutcome =
   | { kind: 'aborted'; output: string }
   | { kind: 'spawn_failed'; output: '' };
 
+export interface ScriptStepClock {
+  /** Calls `onElapsed` once after `delayMs` and returns the function that cancels it; tests inject a clock they drive by hand. */
+  startTimer: (onElapsed: () => void, delayMs: number) => () => void;
+}
+
+const realClock: ScriptStepClock = {
+  startTimer: (onElapsed, delayMs) => {
+    const timer = setTimeout(onElapsed, delayMs);
+    return () => clearTimeout(timer);
+  },
+};
+
 const TERMINATION_GRACE_MS = 2_000;
 const STREAMS_CLOSE_GRACE_MS = 200;
 const UNRENDERABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
@@ -45,7 +57,7 @@ function spawnedProcess(run: ScriptStepRun): ChildProcess | undefined {
  * When the script ends (exit, timeout or abort) every process left in its group is killed before the answer. At the timeout, or when the signal aborts, the group first gets SIGTERM, then SIGKILL after a grace period.
  * Every timer is cancelled when the step is answered: no signal reaches the group afterwards.
  */
-export function runScriptStep(run: ScriptStepRun): Promise<ScriptStepOutcome> {
+export function runScriptStep(run: ScriptStepRun, clock: ScriptStepClock = realClock): Promise<ScriptStepOutcome> {
   return new Promise<ScriptStepOutcome>((resolve) => {
     const child = spawnedProcess(run);
     if (child === undefined) return resolve(SPAWN_FAILED);
@@ -67,7 +79,7 @@ export function runScriptStep(run: ScriptStepRun): Promise<ScriptStepOutcome> {
     const finish = (outcome: ScriptStepOutcome): void => {
       if (isFinished) return;
       isFinished = true;
-      clearTimeout(timeoutTimer);
+      cancelTimeout();
       clearTimeout(hardKillTimer);
       clearTimeout(streamsGraceTimer);
       run.signal.removeEventListener('abort', abort);
@@ -99,7 +111,7 @@ export function runScriptStep(run: ScriptStepRun): Promise<ScriptStepOutcome> {
     retainStream(child.stdout);
     retainStream(child.stderr);
 
-    const timeoutTimer = setTimeout(() => { timedOut = true; terminate(); }, run.timeoutMs);
+    const cancelTimeout = clock.startTimer(() => { timedOut = true; terminate(); }, run.timeoutMs);
     const abort = (): void => { wasAborted = true; terminate(); };
     if (run.signal.aborted) abort();
     else run.signal.addEventListener('abort', abort, { once: true });
