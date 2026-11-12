@@ -51,6 +51,29 @@ describe('the stdio link to the desktop app', () => {
     expect(received).toEqual([armingNonce]);
   });
 
+  it('hears the nonce that answers one manual step: the run id is the scope, the sequence number is the name', async () => {
+    const { input, received } = openLink();
+    const resumeNonce = { type: 'operator_nonce', nonce: NONCE, action: 'playbook.resume_manual', scopeKind: 'playbook_run', scopeId: '0b1c-run', name: '3' };
+
+    input.write(lineOf(resumeNonce));
+    await nextTurn();
+
+    expect(received).toEqual([resumeNonce]);
+  });
+
+  it.each([
+    ['a name that is not a sequence number', { scopeKind: 'playbook_run', name: 'step-3' }],
+    ['a sequence number of zero', { scopeKind: 'playbook_run', name: '0' }],
+    ['the scope kind of a secret', { scopeKind: 'playbook', name: '3' }],
+  ])('drops the nonce that answers a manual step with %s', async (_label, wrong) => {
+    const { input, received } = openLink();
+
+    input.write(lineOf({ type: 'operator_nonce', nonce: NONCE, action: 'playbook.resume_manual', scopeId: '0b1c-run', ...wrong }));
+    await nextTurn();
+
+    expect(received).toEqual([]);
+  });
+
   it.each([
     ['a value', { type: 'secret_answer', requestId: 'r1', outcome: 'value', value: 'a-value-of-the-keychain' }],
     ['an outcome without a value', { type: 'secret_answer', requestId: 'r1', outcome: 'ok' }],

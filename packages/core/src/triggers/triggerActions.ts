@@ -31,7 +31,7 @@ const FIRE_REASON_OF_REFUSAL: Partial<Record<string, TriggerFireReason>> = {
   playbook_unapproved: 'playbook_unapproved', script_changed: 'playbook_unapproved',
   playbook_not_found: 'playbook_unavailable', playbook_not_runnable: 'playbook_unavailable', secret_not_connected_on_this_device: 'playbook_unavailable',
   invalid_body: 'playbook_inputs_invalid',
-  playbook_run_busy: 'playbook_busy', playbook_review_backlog: 'playbook_busy', playbook_conflict: 'playbook_busy',
+  playbook_run_busy: 'playbook_busy', playbook_review_backlog: 'playbook_busy', playbook_waiting_backlog: 'playbook_busy', playbook_conflict: 'playbook_busy',
 };
 
 const completed = (): SettledResult => ({ settlement: 'completed' });

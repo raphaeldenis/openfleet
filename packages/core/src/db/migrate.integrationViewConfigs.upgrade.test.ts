@@ -110,7 +110,8 @@ describe('the integration view configuration migration', () => {
 
     applyMigrations(db);
 
-    expect(db.prepare('SELECT version FROM schema_migrations WHERE version >= ? ORDER BY version').all(VIEW_CONFIGS_VERSION)).toEqual([{ version: VIEW_CONFIGS_VERSION }]);
+    const migrationsFrom072 = migrationFileNames.filter((fileName) => fileName >= `${VIEW_CONFIGS_VERSION}.sql`).map((fileName) => ({ version: fileName.replace(/\.sql$/, '') }));
+    expect(db.prepare('SELECT version FROM schema_migrations WHERE version >= ? ORDER BY version').all(VIEW_CONFIGS_VERSION)).toEqual(migrationsFrom072);
     expect(db.prepare('SELECT id FROM integration_profiles').all()).toEqual([{ id: 'i1' }]);
   });
 });

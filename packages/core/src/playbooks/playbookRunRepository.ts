@@ -2,6 +2,9 @@ import type { PlaybookRunActorKind, PlaybookRunStatus } from '@openfleet/shared'
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
 
+/** The states a step or a run ends in: neither running nor waiting for a human. */
+export type SettledStatus = Exclude<PlaybookRunStatus, 'running' | 'waiting_manual'>;
+
 export interface PlaybookRunRecord {
   id: string;
   playbookId: string;
@@ -58,12 +61,12 @@ export class PlaybookRunRepository {
   }
 
   /** Settles a step that is running; the output is stored as given, so the caller masks it first. */
-  settleStep(step: { runId: string; seq: number; status: Exclude<PlaybookRunStatus, 'running'>; output?: unknown; errorCode?: string; endedAt: string }): void {
+  settleStep(step: { runId: string; seq: number; status: SettledStatus; output?: unknown; errorCode?: string; endedAt: string }): void {
     this.db.prepare("UPDATE playbook_run_steps SET status = ?, output_json_masked = ?, error_code = ?, ended_at = ? WHERE run_id = ? AND seq = ? AND status = 'running'")
       .run(step.status, step.output === undefined ? null : JSON.stringify(step.output), step.errorCode ?? null, step.endedAt, step.runId, step.seq);
   }
 
-  settleRun(run: { id: string; status: Exclude<PlaybookRunStatus, 'running'>; errorCode?: string; endedAt: string }): void {
+  settleRun(run: { id: string; status: SettledStatus; errorCode?: string; endedAt: string }): void {
     this.db.prepare("UPDATE playbook_runs SET status = ?, error_code = ?, ended_at = ? WHERE id = ? AND status = 'running'").run(run.status, run.errorCode ?? null, run.endedAt, run.id);
   }
 
@@ -91,8 +94,9 @@ export class PlaybookRunRepository {
     return (this.db.prepare("SELECT COUNT(*) AS n FROM playbook_runs WHERE status = 'needs_review'").get() as { n: number }).n;
   }
 
+  /** A playbook is in progress while a run of it runs or waits for a human: a parked run holds the playbook, but not one of the runs at once. */
   isRunning(playbookId: string): boolean {
-    return this.db.prepare("SELECT 1 AS running FROM playbook_runs WHERE playbook_id = ? AND status = 'running' LIMIT 1").get(playbookId) !== undefined;
+    return this.db.prepare("SELECT 1 AS running FROM playbook_runs WHERE playbook_id = ? AND status IN ('running', 'waiting_manual') LIMIT 1").get(playbookId) !== undefined;
   }
 
   /** Marks every run and step still running as needs_review, and returns how many runs it touched. A step that was running may have had its effect: it is never started again. */

@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { applyMigrations } from '../db/migrate.js';
 import { PlaybookRunner } from './playbookRunner.js';
+import { refusingManualResumeProof } from './manualResumeProof.js';
+import { PlaybookManualRequestRepository } from './playbookManualRequestRepository.js';
 import { PlaybookRunRepository } from './playbookRunRepository.js';
 
 const LIMIT = 3;
@@ -28,8 +30,8 @@ const arrangeRunnerWithRunsNeedingReview = (count: number) => {
   const runner = new PlaybookRunner({
     playbooks: { getById: () => playbook } as never,
     approvals: { assertStillApproved: () => ({}), locatePinned: () => { throw new Error('no script in this test'); } } as never,
-    runs, stores: {} as never, secrets: { resolve: async () => 'unused' }, clock: () => new Date().toISOString(), newId: () => 'new-run',
-    limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: LIMIT }, observer: { runStarted: () => {}, runEnded },
+    runs, manual: new PlaybookManualRequestRepository(db), manualResumeProof: refusingManualResumeProof, stores: {} as never, secrets: { resolve: async () => 'unused' }, clock: () => new Date().toISOString(), newId: () => 'new-run',
+    limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: LIMIT, maxParkedRunsPerProject: 50, maxWaitEvaluations: 1000 }, observer: { runStarted: () => {}, runEnded },
   });
   return { runs, runner, ended };
 };

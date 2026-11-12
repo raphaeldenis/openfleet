@@ -1,6 +1,6 @@
 # Playbook runs
 
-**In brief.** A playbook of script cells runs only after a human approved its digest. The runner starts each script itself, with no shell, journals every step before it starts, and masks the value of every secret before anything is stored or answered. A daemon killed in the middle of a step marks the run `needs_review` at the next boot and never starts the step again. This page describes the runner of script cells (PBK-P3a), `http` cells (PBK-P3b-http) and `readFromStore` and `writeToStore` cells (PBK-P3B-STORE-TOOL); `tool` cells (PBK-P3B-TOOL) and the other kinds come later. A trigger starts a run with the RUN `run_playbook` (see `docs/triggers.md`).
+**In brief.** A playbook of script cells runs only after a human approved its digest. The runner starts each script itself, with no shell, journals every step before it starts, and masks the value of every secret before anything is stored or answered. A daemon killed in the middle of a step marks the run `needs_review` at the next boot and never starts the step again. This page describes the runner of script cells (PBK-P3a), `http` cells (PBK-P3b-http), `readFromStore` and `writeToStore` cells (PBK-P3B-STORE-TOOL), and `manual` and `waitFor` cells (PBK-P4a1); `tool` cells (PBK-P3B-TOOL) and the cells `subPlaybook`, `forEach` and `retry` (PBK-P4A2) come later. A trigger starts a run with the RUN `run_playbook` (see `docs/triggers.md`).
 
 ## Who can do what
 
@@ -10,6 +10,7 @@
 | Approve | `POST /api/playbooks/:id/approve` `{ digest }` | no tool |
 | Run | `POST /api/playbooks/:id/run` `{ inputs }` | no tool until PBK-P4 |
 | Read a run | `GET /api/playbook-runs/:id`, `GET /api/playbook-runs?playbookId=` | no tool until PBK-P4 |
+| Answer a manual step | `POST /api/playbook-runs/:id/steps/:seq/resume` `{ decision }` with the header `x-human-proof` (single-use nonce of the desktop app) | never: no tool answers a manual step |
 
 The admin token is not a proof of a human gesture, by design: whoever holds it, an agent that can read `admin.token` included, can read the digest, approve and run a playbook it wrote itself, and the daemon cannot tell it from a human (there is no desktop nonce on these routes). The approval separates the admin from the MCP token and nothing more: it stops an agent that has only its MCP token, as `agent_locked` does. Treat the admin token as the authority to run the scripts under the script roots; the desktop app is where a human is expected to read the digest before confirming it.
 
@@ -66,6 +67,25 @@ Known limits:
 - The loop guard of the triggers (`tableSource`) sees only the writes of a session acting as an agent. The write of a run is seen by it only if the run was started by a trigger, through the active run of that trigger (PBK-TR6, PR #434); otherwise it carries no chain depth. This change must be merged after #434.
 - With a sort, the matching rows are held in memory to be sorted, up to 256 Kio of cells; a larger set fails with `store_read_too_large` even if `limit` is small.
 - Rows are read with the cells they hold, an empty cell is left out of the answer (an absent cell and a cell set to `null` read the same).
+
+## Manual cells
+
+A `manual` cell puts a question to a human and waits. The run and the step become `waiting_manual`; the question (`playbook_manual_requests`) holds the prompt with its tokens resolved and every secret value masked, and the instant its wait ends: `timeoutSeconds` of the cell after the question, at most 24 hours (the default). Nothing is started while a run waits, and the run holds no process and no timer.
+
+- **The count.** A waiting run is not one of the 4 runs at once and does not count among the runs that await a review. It holds its playbook (one run per playbook). At most 50 runs per project may wait: a new run of a playbook that has a `manual` cell is refused with `playbook_waiting_backlog` at that count, and a run that reaches its `manual` cell at that count fails the step with the same code.
+- **The answer.** `POST /api/playbook-runs/:id/steps/:seq/resume` with `{ "decision": "approve" | "reject" }`, under the admin token and with the header `x-human-proof`: the single-use operator nonce that the desktop app mints for the action `playbook.resume_manual` on exactly this step (scope kind `playbook_run`, the run id as scope id, the sequence number of the step as name). A request without the proof, with a nonce for another run, another step or another action, or with a spent nonce is refused with `human_proof_required`. The admin token alone is not a proof of a human gesture, and no MCP tool answers a manual step: an agent never resumes a run. The answer is recorded once (`manual_already_answered` for the second, even when two arrive together). An approval goes on with the cell after the manual cell, with `{{steps.<id>.decision}}` equal to `approved`; a rejection ends the run `failed` with the code `manual_rejected`.
+- **The checks at the answer.** The order is: the proof is present; the wait is still open (`manual_wait_expired` ends the run `failed`); a place among the 4 runs at once is free (`playbook_run_busy`); the proof is good; the playbook is still the approved content the run started from (the digest of its name, inputs, cells, policy, which holds the allowed hosts, and the sha256 of its scripts, then its revision and flow). A playbook edited, unapproved or changed on a script while the run waited closes the question and ends the run `needs_review` with the code `playbook_changed_while_waiting`, and the answer is refused with the typed code (`playbook_unapproved`, `script_changed` or `playbook_conflict`): the run is never continued. Then the secrets are read again from the keychain of this device (`secret_not_connected_on_this_device` leaves the run waiting).
+- **What is not kept.** No secret value is stored while a run waits: the journal holds masked outputs, and they are read back as they are at the answer. The inputs of the run were stored masked, so an input whose value is a secret reads as `[secret:NAME]` after the answer.
+- **The end of a wait.** The runner has no timer for it: a wait whose time is over is ended (the question `expired`, the step and the run `failed` with `manual_wait_expired`) when the daemon boots, when any run starts and when someone answers, on the injected clock.
+- **A boot.** A run found `waiting_manual` stays so and can still be answered; a step found `running` is `needs_review`, as before.
+
+Known limits: the desktop app has no screen yet for the question (the run screen and the Inbox card are UI2); until then the answer goes through the REST route and the nonce command of the app. A wait that nobody ends with a boot, a start or an answer stays `waiting_manual` after its time, and is counted against the cap of 50 until one of them happens.
+
+## WaitFor cells
+
+A `waitFor` cell holds the step until its `predicate` is true. The predicate is evaluated by the evaluator of conditions that the edges and the triggers use (no `eval`, no expression language), on this scope: `inputs`, `steps` (the outputs so far) and `wait.elapsedMs` / `wait.now` (the injected clock). No secret is in the scope. The step answers `elapsedMs` and `evaluations`.
+
+It evaluates at once, then sleeps `pollMs` on an injected timer between evaluations: 5 seconds by default and never less than 1 second, whatever the cell asks (the schema accepts 100 ms; the runner raises it). The last sleep is the time left before the ceiling. The step fails with `wait_for_timeout` at the ceiling of the cell (`timeoutSeconds`, 600 by default, 86,400 at most) or after 1000 evaluations, whichever comes first. The stop of the daemon cancels the timer and ends the step `needs_review`; a step found running at boot is `needs_review` and is not evaluated again.
 
 ## The tool cell
 
