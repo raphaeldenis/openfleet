@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OWN_PROJECT_ID, OTHER_PROJECT_ID, startGovernanceFixture, type GovernanceFixture } from '../governance/governanceQueue.testkit.js';
-import { createManualTimers, until } from '../integrations/manualTimers.testkit.js';
+import { createManualTimers, until, type ManualTimers } from '../integrations/manualTimers.testkit.js';
 import { createFakeTauriParent, type FakeTauriParent } from '../secrets/fakeTauriParent.testkit.js';
 import type { OperatorAction } from '../secrets/nonceLedger.js';
 import { createInMemorySecretStore, type InMemorySecretStore } from '../secrets/inMemorySecretStore.js';
@@ -35,6 +35,7 @@ const SECRET_NAME = 'GATE_SECRET';
 let fixture: GovernanceFixture | undefined;
 let parent: FakeTauriParent;
 let secretStore: InMemorySecretStore;
+let timers: ManualTimers;
 let now: number;
 afterEach(async () => {
   await fixture?.close();
@@ -45,7 +46,7 @@ const boot = async (limits: { maxConcurrentRuns?: number; maxRunsNeedingReview?:
   now = START_OF_TEST_TIME;
   parent = createFakeTauriParent();
   secretStore = createInMemorySecretStore();
-  const timers = createManualTimers();
+  timers = createManualTimers();
   fixture = await startGovernanceFixture({
     secrets: { store: secretStore, parent: parent.link },
     playbooks: { clock: () => new Date(now).toISOString(), startTimer: timers.startTimer, ...limits },
@@ -286,6 +287,21 @@ describe('a wait is bounded', () => {
     expect((f.db.prepare('SELECT COUNT(*) AS n FROM playbook_runs').get() as { n: number }).n).toBe(runsBefore);
   });
 
+  it('fails the step of a run that reaches its manual cell when the project is at the cap, so the cap holds for runs started before it was reached', async () => {
+    const f = await boot({ maxParkedRunsPerProject: 1 });
+    const waitsFirst = await createApprovedPlaybook(f, [{ id: 'wait', kind: 'waitFor', pollMs: 1000, predicate: [{ lhs: 'wait.elapsedMs', op: 'gte', rhs: 5000 }] }, manualCell('gate')]);
+    const parksAtOnce = await createApprovedPlaybook(f, [manualCell('gate')]);
+    const late = (await startRun(f, waitsFirst.id)).body.id;
+    await until(() => timers.armedCount() === 1);
+    await runUntilParked(f, parksAtOnce.id);
+
+    now += 5 * SECOND;
+    timers.elapseAll();
+    await until(() => statusOfRun(f, late) !== 'running');
+
+    expect(await viewOfRun(f, late)).toMatchObject({ status: 'failed', errorCode: 'playbook_waiting_backlog' });
+  });
+
   it('counts the parked runs per project: another project is not held back', async () => {
     const f = await boot({ maxParkedRunsPerProject: 1 });
     const own = await createApprovedPlaybook(f, [manualCell('gate')]);
@@ -341,21 +357,22 @@ describe('secrets', () => {
     const table = await makeTable(f);
     const neverTaken = [{ to: 'holder', when: [{ lhs: 'steps.gate.decision', op: 'eq', rhs: 'never' }] }];
     const playbook = await createApprovedPlaybook(f, [
-      manualCell('gate'), { ...writeCell('after', table.storeId, table.noteId, 'shipped'), next: neverTaken }, secretHolder,
-    ]);
+      manualCell('gate', { prompt: 'Ship {{inputs.who}}?' }), { ...writeCell('after', table.storeId, table.noteId, 'shipped'), next: neverTaken }, secretHolder,
+    ], { inputs: [{ name: 'who', type: 'string', required: false }] });
     new SecretRefRepository(f.db).declare({ kind: 'playbook', id: playbook.id }, SECRET_NAME);
     await secretStore.set({ kind: 'playbook', id: playbook.id }, SECRET_NAME, value);
     return { playbook, table };
   };
 
-  it('persists no secret value while the run waits', async () => {
+  it('persists no secret value while the run waits, even when an input and the prompt carry it', async () => {
     const f = await boot();
     const value = `dummy-canary-built-at-runtime-${randomUUID()}`;
     const { playbook } = await playbookWithASecret(f, value);
 
-    await runUntilParked(f, playbook.id, {});
+    const runId = await runUntilParked(f, playbook.id, { who: value });
 
     expect(persistedBy(f, ['playbook_runs', 'playbook_run_steps', 'playbook_manual_requests'])).not.toContain(value);
+    expect(f.db.prepare('SELECT prompt_masked FROM playbook_manual_requests WHERE run_id = ?').get(runId)).toEqual({ prompt_masked: `Ship [secret:${SECRET_NAME}]?` });
   });
 
   it('resolves the secrets again at the answer: a secret cleared while waiting refuses the resume, and the run stays parked', async () => {
