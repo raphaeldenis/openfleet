@@ -14,12 +14,15 @@ const tempDirs = createTempDirTracker();
 afterEach(() => tempDirs.removeAll());
 
 const CORE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+// A real boot under tsx takes seconds on an idle machine and many times that on a loaded one; the ceilings only stop a boot that never exits.
+const BOOT_NEVER_EXITS_CEILING_MS = 120_000;
+const BOOT_SPEC_CEILING_MS = BOOT_NEVER_EXITS_CEILING_MS + 30_000;
 
 function bootWithConfigJson(configJson: string) {
   const home = tempDirs.make('of-boot-refusal-');
   writeFileSync(join(home, 'config.json'), configJson);
   const result = spawnSync(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
-    cwd: CORE_ROOT, encoding: 'utf8', timeout: 30_000,
+    cwd: CORE_ROOT, encoding: 'utf8', timeout: BOOT_NEVER_EXITS_CEILING_MS,
     env: { ...process.env, OPENFLEET_HOME: home, OPENFLEET_PORT: '0' },
   });
   return { ...result, configPath: join(home, 'config.json') };
@@ -38,7 +41,7 @@ describe('operator sees a boot refused for an invalid config.json as a fatal err
     expect(stderrLines[0]).toContain(boot.configPath);
     expect(stderrLines[0]).not.toMatch(/uncaughtException|daemon continuing|\n\s+at /);
     expect(stderrLines[0]).not.toContain('"code"');
-  });
+  }, BOOT_SPEC_CEILING_MS);
 });
 
 describe('refuseBootOnFailure', () => {

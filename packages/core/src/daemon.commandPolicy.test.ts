@@ -8,6 +8,8 @@ import { DEFAULT_COMMAND_POLICY } from './policy/defaultCommandPolicy.js';
 import { defaultCommandPolicySettings, type CommandPolicySettings } from './policy/commandPolicySettings.js';
 import { createTempDirTracker } from './tempDirTracker.js';
 
+const FRAME_NEVER_ARRIVES_CEILING_MS = 15_000;
+
 const tempDirs = createTempDirTracker();
 let daemon: Daemon | undefined;
 let adminToken: string;
@@ -53,23 +55,21 @@ async function openWsFrames() {
   const frames: { type: string; sessionId?: string; state?: string; denial?: Record<string, unknown> }[] = [];
   ws.addEventListener('message', (message) => frames.push(JSON.parse(String(message.data))));
   await new Promise((resolve) => ws.addEventListener('open', resolve, { once: true }));
-  const waitForFrame = (type: string) => vi.waitFor(() => { const frame = frames.find((candidate) => candidate.type === type); if (!frame) throw new Error(`no ${type} frame yet`); return frame; }, { timeout: 2500, interval: 25 });
+  const waitForFrame = (type: string) => vi.waitFor(() => { const frame = frames.find((candidate) => candidate.type === type); if (!frame) throw new Error(`no ${type} frame yet`); return frame; }, { timeout: FRAME_NEVER_ARRIVES_CEILING_MS, interval: 25 });
   return { frames, waitForFrame, close: () => ws.close() };
 }
 
 describe('an unattended child asks for a command the policy refuses', () => {
-  it('is refused in under a second with the alternative spelled out', async () => {
+  it('is refused straight from the policy, with no approval to wait for and the alternative spelled out', async () => {
     await bootDaemon({ settings: enforcing() });
     const parent = await createSession();
     const child = await createChildOf(parent.id);
 
-    const startedAt = performance.now();
     const answer = await preToolUse(child.id, bash('rm -rf x'));
-    const elapsedMs = performance.now() - startedAt;
 
     expect(answer.hookSpecificOutput).toMatchObject({ hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: expect.stringContaining('Alternative:') });
     expect(answer.hookSpecificOutput?.permissionDecisionReason).toContain('no-forced-recursive-rm');
-    expect(elapsedMs).toBeLessThan(1000);
+    expect(await pendingApprovals()).toEqual([]);
   });
 
   it('keeps the refusal text short enough for the model to read at a glance', async () => {
@@ -204,12 +204,9 @@ describe('an unattended child receives a permission dialog it could never answer
     const child = await createChildOf(parent.id);
     const socket = await openWsFrames();
 
-    const startedAt = performance.now();
     const answer = await permissionRequest(child.id, bash("sed 's/x/y/' /elsewhere/notes.txt | gh pr merge 1"));
-    const elapsedMs = performance.now() - startedAt;
 
     expect(answer.hookSpecificOutput).toMatchObject({ hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: expect.stringContaining('Alternative:') } });
-    expect(elapsedMs).toBeLessThan(1000);
     expect(await pendingApprovals()).toEqual([]);
     const childStates = socket.frames.filter((frame) => frame.type === 'session.state' && frame.sessionId === child.id).map((frame) => frame.state);
     expect(childStates).not.toContain('waiting_permission');

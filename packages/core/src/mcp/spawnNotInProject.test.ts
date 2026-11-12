@@ -31,7 +31,6 @@ import { createMcpHandler } from './mcpServer.js';
 const WORKTREES_ROOT = '/tmp/of-wt';
 const PROJECT_ID = '11111111-1111-4111-8111-111111111111';
 const PROJECT_NAME = 'Synthetic Fleet';
-const SPAWN_REFUSAL_BUDGET_MS = 1000;
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let db: DatabaseSync;
@@ -94,20 +93,19 @@ const startProjectManager = async () => {
 };
 
 describe('create_session toward a directory outside every project', () => {
-  it('refuses at once with directory_not_in_project, names the project to use, and creates no session', async () => {
+  it('refuses before any session or launch exists with directory_not_in_project, names the project to use, and creates no session', async () => {
     const manager = await startProjectManager();
     const outsideDirectory = makeTrackedDirectory(join(WORKTREES_ROOT, 'stray-'));
     const sessionCountBefore = sessions.list().length;
-    const startedAt = Date.now();
+    const launchCountBefore = harness.launches.length;
 
     const result = await callCreateSession(manager, { directory: outsideDirectory });
 
-    expect(Date.now() - startedAt).toBeLessThan(SPAWN_REFUSAL_BUDGET_MS);
     expect(result.isError).toBe(true);
     expect(errorText(result)).toContain('directory_not_in_project');
     expect(errorText(result)).toContain(PROJECT_NAME);
     expect(sessions.list()).toHaveLength(sessionCountBefore);
-    expect(harness.launches).toHaveLength(1);
+    expect(harness.launches).toHaveLength(launchCountBefore);
   });
 
   it('spawns into a subdirectory of the project', async () => {

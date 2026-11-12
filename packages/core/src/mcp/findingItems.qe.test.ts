@@ -4,13 +4,17 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { E2E_FLAG_ENV, E2E_FLAG_ON } from '@openfleet/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
 import { makeRepo } from '../git/testRepo.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
 import { childEnvironmentForGit } from '../process/childEnvironment.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
+
+// Each spec boots a daemon, adds git worktrees and opens MCP clients: seconds idle, many times that on a loaded machine. The ceiling only stops a spec that never ends.
+const BOOTED_TEAM_NEVER_ENDS_CEILING_MS = 120_000;
+vi.setConfig({ testTimeout: BOOTED_TEAM_NEVER_ENDS_CEILING_MS, hookTimeout: BOOTED_TEAM_NEVER_ENDS_CEILING_MS });
 
 const tempDirs = createTempDirTracker();
 let daemon: Daemon;
