@@ -106,6 +106,18 @@ const itemsOf = (integrationId: string, projectId = OWN_PROJECT_ID) => rest('GET
 const healthOf = async (integrationId: string) => ((await rest('GET', `/api/integrations?projectId=${OWN_PROJECT_ID}`)).json as { id: string; health: string }[]).find((integration) => integration.id === integrationId)!.health;
 
 describe('polling the issues of a Jira integration', () => {
+  it('tells the listeners of the repository which integration got its items replaced, once the items are kept', async () => {
+    const { integration } = await connectedIntegration();
+    jira.answerWith({ status: 200, body: searchBody(issueOf('CCM-1'), issueOf('CCM-2')) });
+    const { integrationRepository } = fixture.daemon;
+    const heard: { integrationId: string; itemsKept: number }[] = [];
+    integrationRepository.onItemsReplaced((integrationId) => heard.push({ integrationId, itemsKept: integrationRepository.listItems(integrationId).length }));
+
+    await poll();
+
+    expect(heard).toEqual([{ integrationId: integration.id, itemsKept: 2 }]);
+  });
+
   it('reads the issues with a GET carrying the credential, from a query fixed by the daemon, and keeps them with a typed health', async () => {
     const { integration, value } = await connectedIntegration();
     jira.answerWith({ status: 200, body: searchBody(issueOf('CCM-2'), issueOf('CCM-1')) });

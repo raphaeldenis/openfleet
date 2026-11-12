@@ -9,7 +9,10 @@ export const TABLE_CURSOR_KIND = 'table';
 /** The `kind` of the cursor of a cron trigger: the instant up to which its slots are dealt with, kept for as long as the trigger lives. */
 export const CRON_CURSOR_KIND = 'cron';
 
-const PERMANENT_CURSOR_KINDS: readonly unknown[] = [TABLE_CURSOR_KIND, CRON_CURSOR_KIND];
+/** The `kind` of the cursor of an integration records trigger: the revision of each item it has dealt with, kept for as long as the trigger lives. */
+export const INTEGRATION_CURSOR_KIND = 'integration';
+
+const PERMANENT_CURSOR_KINDS: readonly unknown[] = [TABLE_CURSOR_KIND, CRON_CURSOR_KIND, INTEGRATION_CURSOR_KIND];
 const isPermanentCursor = (value: unknown): boolean => PERMANENT_CURSOR_KINDS.includes((value as { kind?: unknown } | null)?.kind);
 
 /** What a source remembers about a trigger between two boots, as JSON, one row per trigger. */

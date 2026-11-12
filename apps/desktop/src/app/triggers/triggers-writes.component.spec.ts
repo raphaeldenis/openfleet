@@ -580,7 +580,7 @@ describe('Triggers: the review shows everything the digest covers', () => {
     ['a session_state WHEN', { when: { source: 'session_state', state: 'waiting_permission', minutes: 1313 } }, ['waiting_permission', '1313']],
     ['a silent_run WHEN', { when: { source: 'silent_run', minutes: 2929 } }, ['2929']],
     ['a data_store_query WHEN', { when: { source: 'data_store_query', storeId: 'store-xyz', event: 'row_count', op: 'gt', value: 4747 } }, ['store-xyz', 'row_count', 'gt', '4747']],
-    ['an integration_records WHEN', { when: { source: 'integration_records', itemId: 'item-q', event: 'field_changed', field: 'statut-distinct' } }, ['item-q', 'field_changed', 'statut-distinct']],
+    ['an integration_records WHEN', { when: { source: 'integration_records', integrationId: 'item-q', event: 'changed_record', keyPrefix: 'PREFIX', statuses: ['statut-distinct'] } }, ['item-q', 'changed_record', 'PREFIX', 'statut-distinct']],
     ['a notify RUN', { run: { kind: 'notify', title: 'TITRE-DISTINCT', message: 'MESSAGE-DISTINCT' } }, ['TITRE-DISTINCT', 'MESSAGE-DISTINCT']],
     ['a prompt_session RUN', { run: { kind: 'prompt_session', sessionId: 'session-s7', prompt: 'PROMPT-SESSION-DISTINCT' } }, ['session-s7', 'PROMPT-SESSION-DISTINCT']],
     ['a close_session RUN', { run: { kind: 'close_session', sessionId: 'session-s8' } }, ['session-s8']],

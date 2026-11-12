@@ -12,7 +12,7 @@ const WHEN_FIELDS: Readonly<Record<string, readonly string[]>> = {
   silent_run: ['source', 'minutes'],
   data_store_query: ['source', 'storeId', 'event', 'op', 'value'],
   cron: ['source', 'expression', 'timezone', 'catchUp'],
-  integration_records: ['source', 'itemId', 'event', 'field'],
+  integration_records: ['source', 'integrationId', 'event', 'keyPrefix', 'statuses'],
 };
 
 const RUN_FIELDS: Readonly<Record<string, readonly string[]>> = {

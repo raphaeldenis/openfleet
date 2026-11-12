@@ -14,7 +14,8 @@ describe('the WHEN of a trigger', () => {
     ['data_store_query new rows', { source: 'data_store_query', storeId: 's1', event: 'new_matching_rows' }],
     ['data_store_query row_count', { source: 'data_store_query', storeId: 's1', event: 'row_count', op: 'gte', value: 3 }],
     ['cron', { source: 'cron', expression: '*/5 * * * *', timezone: 'Europe/Paris', catchUp: 'run_once' }],
-    ['integration_records', { source: 'integration_records', itemId: 'i1', event: 'field_changed', field: 'status' }],
+    ['integration_records', { source: 'integration_records', integrationId: 'i1', event: 'changed_record', keyPrefix: 'CCM', statuses: ['Done', 'In Review'] }],
+    ['integration_records with the defaults', { source: 'integration_records', integrationId: 'i1' }],
   ])('accepts the configuration of %s', (_name, when) => {
     expect(TriggerWhenSchema.safeParse(when).success).toBe(true);
   });
@@ -22,7 +23,13 @@ describe('the WHEN of a trigger', () => {
   it.each([
     ['row_count without op and value', { source: 'data_store_query', storeId: 's1', event: 'row_count' }],
     ['row_count with a non finite value', { source: 'data_store_query', storeId: 's1', event: 'row_count', op: 'gt', value: Number.POSITIVE_INFINITY }],
-    ['field_changed without field', { source: 'integration_records', itemId: 'i1', event: 'field_changed' }],
+    ['an integration_records without integration', { source: 'integration_records', event: 'new_record' }],
+    ['an integration_records of the former shape', { source: 'integration_records', itemId: 'i1', event: 'new_record' }],
+    ['an integration_records with an unknown event', { source: 'integration_records', integrationId: 'i1', event: 'record_removed' }],
+    ['an integration_records with a key prefix that is not a project key', { source: 'integration_records', integrationId: 'i1', keyPrefix: 'ccm-1' }],
+    ['an integration_records with no status in the list', { source: 'integration_records', integrationId: 'i1', statuses: [] }],
+    ['an integration_records with nine statuses', { source: 'integration_records', integrationId: 'i1', statuses: Array.from({ length: 9 }, (_, index) => `S${index}`) }],
+    ['an integration_records with a status of 65 characters', { source: 'integration_records', integrationId: 'i1', statuses: ['x'.repeat(65)] }],
     ['idle without minutes', { source: 'session_state', state: 'idle' }],
     ['cron with four fields', { source: 'cron', expression: '* * * *', timezone: 'Europe/Paris' }],
     ['cron with an unknown zone', { source: 'cron', expression: '* * * * *', timezone: 'Mars/Olympus' }],

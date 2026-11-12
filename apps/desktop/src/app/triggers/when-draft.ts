@@ -9,7 +9,7 @@ export const WHEN_FIELDS: Readonly<Record<TriggerWhenSource, readonly string[]>>
   silent_run: ['source', 'minutes'],
   data_store_query: ['source', 'storeId', 'event', 'op', 'value'],
   cron: ['source', 'expression', 'timezone', 'catchUp'],
-  integration_records: ['source', 'itemId', 'event', 'field'],
+  integration_records: ['source', 'integrationId', 'event', 'keyPrefix', 'statuses'],
 };
 
 export const WHEN_SOURCES = TRIGGER_WHEN_SOURCES;
@@ -31,14 +31,22 @@ export interface WhenDraft {
   expression: string;
   timezone: string;
   catchUp: (typeof CRON_CATCH_UPS)[number];
-  itemId: string;
+  integrationId: string;
   integrationEvent: (typeof INTEGRATION_EVENTS)[number];
-  trackedField: string;
+  keyPrefix: string;
+  /** The status names, separated by commas. */
+  statusesText: string;
 }
+
+const STATUS_SEPARATOR = ',';
+const statusesOf = (statusesText: string): string[] | undefined => {
+  const names = statusesText.split(STATUS_SEPARATOR).map((name) => name.trim()).filter((name) => name !== '');
+  return names.length === 0 ? undefined : names;
+};
 
 const EMPTY_WHEN_DRAFT: WhenDraft = {
   source: 'session_state', sessionState: 'idle', minutes: '', storeId: '', storeEvent: 'new_matching_rows', rowCountOp: 'eq', rowCountThreshold: '',
-  expression: '', timezone: DEFAULT_CRON_TIME_ZONE, catchUp: 'skip', itemId: '', integrationEvent: 'new_record', trackedField: '',
+  expression: '', timezone: DEFAULT_CRON_TIME_ZONE, catchUp: 'skip', integrationId: '', integrationEvent: 'new_or_changed_record', keyPrefix: '', statusesText: '',
 };
 
 const textOf = (value: number | undefined) => (value === undefined ? '' : String(value));
@@ -49,7 +57,7 @@ function draftFieldsOf(when: TriggerWhen): Partial<WhenDraft> {
     case 'silent_run': return { minutes: textOf(when.minutes) };
     case 'data_store_query': return { storeId: when.storeId, storeEvent: when.event, rowCountOp: when.op ?? 'eq', rowCountThreshold: textOf(when.value) };
     case 'cron': return { expression: when.expression, timezone: when.timezone, catchUp: when.catchUp };
-    case 'integration_records': return { itemId: when.itemId, integrationEvent: when.event, trackedField: when.field ?? '' };
+    case 'integration_records': return { integrationId: when.integrationId, integrationEvent: when.event, keyPrefix: when.keyPrefix ?? '', statusesText: (when.statuses ?? []).join(`${STATUS_SEPARATOR} `) };
   }
 }
 
@@ -85,8 +93,9 @@ function candidateOf(draft: WhenDraft): unknown {
     }
     case 'cron': return { source: 'cron', expression: draft.expression, timezone: draft.timezone, catchUp: draft.catchUp };
     case 'integration_records': {
-      const tracksAField = draft.integrationEvent === 'field_changed';
-      return { source: 'integration_records', itemId: draft.itemId, event: draft.integrationEvent, ...(tracksAField && { field: nonEmpty(draft.trackedField) }) };
+      const keyPrefix = nonEmpty(draft.keyPrefix);
+      const statuses = statusesOf(draft.statusesText);
+      return { source: 'integration_records', integrationId: draft.integrationId, event: draft.integrationEvent, ...(keyPrefix !== undefined && { keyPrefix }), ...(statuses !== undefined && { statuses }) };
     }
   }
 }

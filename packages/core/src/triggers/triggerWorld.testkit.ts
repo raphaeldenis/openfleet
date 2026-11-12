@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Session } from '@openfleet/shared';
+import type { IntegrationHealthStatus, IntegrationIssueItem, Session } from '@openfleet/shared';
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
@@ -92,6 +92,26 @@ export async function startTriggerWorld({ configJson, letTheEventLoopRun, secret
     };
   };
 
+  /** An integration of a project and the items a poll keeps for it; `publish` replaces the items the way the poller does, through the repository the sources listen to. */
+  const createIntegration = ({ projectId = PROJECT_ID, name = 'Backlog' }: { projectId?: string; name?: string } = {}) => {
+    const { integrationRepository: repository } = daemon;
+    const connectionId = `connection-${name}`;
+    const profileId = `integration-${name}`;
+    const createdAt = new Date(nowMs).toISOString();
+    repository.insertConnection({ id: connectionId, name: `Connection ${name}`, provider: 'jira_cloud', credentialKind: 'token', allowedHosts: ['acme.atlassian.net'] }, { createdAt });
+    repository.insertProfile({ id: profileId, projectId, connectionId, name }, { createdAt });
+    return {
+      id: profileId,
+      connectionId,
+      publish: (items: IntegrationIssueItem[]) => {
+        repository.replaceItems(profileId, items, { fetchedAt: new Date(nowMs).toISOString() });
+        const polledAt = new Date(nowMs).toISOString();
+        repository.savePollState(profileId, { consecutiveFailures: 0, nextPollAt: polledAt, lastPolledAt: polledAt });
+      },
+      setHealth: (status: IntegrationHealthStatus) => repository.saveHealth(profileId, { status, checkedAt: new Date(nowMs).toISOString() }),
+    };
+  };
+
   /** A child session of a manager, in the project of the world. */
   const createChild = async (manager: Session, name = 'Child') => {
     const child = await createSession(name);
@@ -148,7 +168,7 @@ export async function startTriggerWorld({ configJson, letTheEventLoopRun, secret
     get nowMs() { return nowMs; },
     advanceMs: (ms: number) => { nowMs += ms; },
     setNowMs: (ms: number) => { nowMs = ms; },
-    api, json, createSession, createChild, createTable, postHook, crash, createArmedTrigger, connect, openSocket,
+    api, json, createSession, createChild, createTable, createIntegration, postHook, crash, createArmedTrigger, connect, openSocket,
     livingTimers: () => timers.filter((timer) => !timer.isCancelled),
     /** The daily timers of the fire retention, apart from the others so that the tests counting the timers of the sources are not disturbed. */
     livingRetentionTimers: () => retentionTimers.filter((timer) => !timer.isCancelled),
@@ -163,7 +183,7 @@ export async function startTriggerWorld({ configJson, letTheEventLoopRun, secret
     },
     cursorOf: (triggerId: string) => {
       const row = daemon.db.prepare('SELECT cursor_json FROM trigger_cursors WHERE trigger_id = ?').get(triggerId) as { cursor_json: string } | undefined;
-      return row && JSON.parse(row.cursor_json) as { kind?: string; seq?: number; count?: number; tooLarge?: number };
+      return row && JSON.parse(row.cursor_json) as { kind?: string; seq?: number; count?: number; tooLarge?: number; isBaselined?: boolean; revisions?: Record<string, string> };
     },
     messagesTo: (sessionId: string) => daemon.db.prepare('SELECT id, body FROM message_queue WHERE session_id = ? ORDER BY created_at, rowid').all(sessionId) as { id: string; body: string }[],
     firesOf: (triggerId: string) => daemon.db.prepare('SELECT id, dedup_key, ledger_state, settle_reason, fired_at FROM trigger_fires WHERE trigger_id = ? ORDER BY fired_at, rowid').all(triggerId) as unknown as FireRow[],

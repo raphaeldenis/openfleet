@@ -50,9 +50,10 @@ describe('Trigger editor: the WHEN', () => {
     ['cron', { source: 'cron', expression: '*/5 * * * *', timezone: 'Europe/London', catchUp: 'run_once' }, async () => {
       await chooseOption('Source', 'cron'); await replaceText('Expression cron', '*/5 * * * *'); await replaceText('Fuseau horaire', 'Europe/London'); await chooseOption('Rattrapage', 'run_once');
     }],
-    ['integration_records field_changed', { source: 'integration_records', itemId: 'i1', event: 'field_changed', field: 'status' }, async () => {
+    ['integration_records changed_record', { source: 'integration_records', integrationId: 'i1', event: 'changed_record', keyPrefix: 'CCM', statuses: ['Done', 'In Review'] }, async () => {
       await chooseOption('Source', 'integration_records'); await replaceText("Identifiant de l'intégration", 'i1');
-      await chooseOption("Événement de l'intégration", 'field_changed'); await replaceText('Champ suivi', 'status');
+      await chooseOption("Événement de l'intégration", 'changed_record'); await replaceText('Clé de projet (facultatif)', 'CCM');
+      await replaceText('Statuts (facultatif, séparés par des virgules)', 'Done, In Review');
     }],
   ])('sends the WHEN of a %s trigger, against the revision it was opened from', async (_label, expectedWhen, fillForm) => {
     const { api } = await renderTriggers();
@@ -121,7 +122,7 @@ describe('Trigger editor: the WHEN', () => {
     expect(api.updateTrigger).not.toHaveBeenCalled();
   });
 
-  it('refuses a row count without its threshold and a changed field without its name', async () => {
+  it('refuses a row count without its threshold and an integration without its identifier', async () => {
     await renderTriggers({ triggers: [trigger({ when: { source: 'data_store_query', storeId: 's1', event: 'new_matching_rows' } })] });
     await choose(FIRST);
     await openEditor();
@@ -130,10 +131,8 @@ describe('Trigger editor: the WHEN', () => {
     expect(screen.getByRole('button', { name: 'Enregistrer' })).toBeDisabled();
 
     await chooseOption('Source', 'integration_records');
-    await replaceText("Identifiant de l'intégration", 'i1');
-    await chooseOption("Événement de l'intégration", 'field_changed');
     expect(screen.getByRole('button', { name: 'Enregistrer' })).toBeDisabled();
-    await replaceText('Champ suivi', 'status');
+    await replaceText("Identifiant de l'intégration", 'i1');
     expect(screen.getByRole('button', { name: 'Enregistrer' })).toBeEnabled();
   });
 

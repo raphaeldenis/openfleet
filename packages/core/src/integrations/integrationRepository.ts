@@ -55,6 +55,8 @@ const PROFILE_COLUMNS = 'id, project_id, connection_id, name, resource';
 
 /** Connections, the profiles that use them in a project, and the last health of each profile. A credential has no column here. */
 export class IntegrationRepository {
+  private readonly itemsReplacedListeners = new Set<(profileId: string) => void>();
+
   constructor(private readonly db: DatabaseSync) {}
 
   insertConnection(connection: ConnectionRecord, { createdAt }: { createdAt: string }): void {
@@ -147,13 +149,20 @@ export class IntegrationRepository {
     this.db.prepare('UPDATE integration_poll_state SET next_poll_at = ?, consecutive_failures = 0 WHERE profile_id IN (SELECT id FROM integration_profiles WHERE connection_id = ?)').run(nowIso, connectionId);
   }
 
-  /** Replaces the items of a profile by the issues of the last answer, all or nothing. */
+  /** Replaces the items of a profile by the issues of the last answer, all or nothing; the listeners hear of it once the transaction has committed. */
   replaceItems(profileId: string, issues: IntegrationIssueItem[], { fetchedAt }: { fetchedAt: string }): void {
     inTransaction(this.db, 'replaceIntegrationItems', () => {
       this.db.prepare('DELETE FROM integration_view_items WHERE profile_id = ?').run(profileId);
       const insert = this.db.prepare('INSERT INTO integration_view_items (profile_id, external_id, fields_json, fetched_at) VALUES (?, ?, ?, ?)');
       for (const { key, ...fields } of issues) insert.run(profileId, key, JSON.stringify(fields), fetchedAt);
     });
+    for (const listener of this.itemsReplacedListeners) listener(profileId);
+  }
+
+  /** Calls `listener` with the profile id after each replacement of its items commits; returns the function that stops the calls. */
+  onItemsReplaced(listener: (profileId: string) => void): () => void {
+    this.itemsReplacedListeners.add(listener);
+    return () => void this.itemsReplacedListeners.delete(listener);
   }
 
   listItems(profileId: string): IntegrationIssueItem[] {

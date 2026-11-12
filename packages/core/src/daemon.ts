@@ -90,6 +90,7 @@ import { createMcpHandler } from './mcp/mcpServer.js';
 import type { HumanProofVerifier } from './triggers/humanProofVerifier.js';
 import { toSingleLineName } from './managers/singleLineName.js';
 import { CronSource } from './triggers/cronSource.js';
+import { IntegrationRecordsSource } from './triggers/integrationRecordsSource.js';
 import { SessionStateSource } from './triggers/sessionStateSource.js';
 import { SilentRunSource } from './triggers/silentRunSource.js';
 import { TableSource } from './triggers/tableSource.js';
@@ -175,6 +176,8 @@ export interface Daemon {
   ciWatch: CiWatchService;
   /** Polls the issues of the integrations; `pollOnce` runs a pass now, which is how a test drives it. */
   integrationPoller: IntegrationPoller;
+  /** The integrations store: a test writes the items a poll would keep, and the integration records source hears it. */
+  integrationRepository: IntegrationRepository;
   /** The entry point of the trigger sources: they offer events, the engine fires. */
   triggerEngine: TriggerEngine;
   /** The data stores service the REST routes and the tools use. */
@@ -478,7 +481,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const secretChannel = { ignoredAnswerCount: () => secretBridge?.ignoredAnswerCount() ?? 0 };
   const humanProof = options.humanProof ?? createOperatorHumanProof(secretNonces);
   const triggerRepository = new TriggerRepository(db);
-  const triggers = new TriggerService({ repository: triggerRepository, humanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId, onArmed: (armed) => { sessionStateSource.rescan(); tableSource.startFromNow(armed); cronSource.startFromNow(armed); silentRunSource.startFromNow(armed); }, onChanged: (triggerId) => { cronSource.sync(triggerId); silentRunSource.sync(triggerId); } });
+  const triggers = new TriggerService({ repository: triggerRepository, humanProof, projectExists: (projectId) => projects.get(projectId) !== undefined, clock: () => new Date().toISOString(), newId, onArmed: (armed) => { sessionStateSource.rescan(); tableSource.startFromNow(armed); cronSource.startFromNow(armed); silentRunSource.startFromNow(armed); integrationRecordsSource.startFromNow(armed); }, onChanged: (triggerId) => { cronSource.sync(triggerId); silentRunSource.sync(triggerId); } });
   const triggerClock = options.triggers?.clock ?? Date.now;
   const announceBreakerOpened = (trigger: { id: string; title: string }) => {
     log('warn', `trigger ${trigger.id} fired more than the cap in a minute and was disarmed`);
@@ -536,6 +539,9 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     schedule: options.triggers?.schedule ?? scheduleOnRealClock, onOfferSuppressedByCause: (triggerId) => systemActivity.triggerOfferSuppressed({ triggerId }),
   });
   const integrationRepository = new IntegrationRepository(db);
+  const integrationRecordsSource = new IntegrationRecordsSource({
+    integrations: integrationRepository, triggers: triggerRepository, cursors: triggerCursors, engine: triggerEngine, clock: triggerClock, schedule: options.triggers?.schedule ?? scheduleOnRealClock,
+  });
   const integrationProviders = createIntegrationProviderRegistry(options.integrations?.providers ?? shippedIntegrationProviders());
   const integrationClock = options.integrations?.clock ?? Date.now;
   const integrationReader = options.integrations?.reader ?? createPinnedProviderReader({ ...(options.integrations?.resolveAddress !== undefined && { resolve: options.integrations.resolveAddress }) });
@@ -568,6 +574,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     tableSource.stop();
     cronSource.stop();
     silentRunSource.stop();
+    integrationRecordsSource.stop();
     triggerEngine.stop();
     await playbookRunner.stop();
     fireRetention.stop();
@@ -609,6 +616,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     tableSource.start();
     cronSource.start();
     silentRunSource.start();
+    integrationRecordsSource.start();
     childSilence.restore();
     pulseScheduler.start();
     scheduledEvents.start();
@@ -621,5 +629,5 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     throw error;
   }
 
-  return { server, db, degraded, stores, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, integrationPoller, triggerEngine, harnesses, secrets, playbookRunner, secretChannel, close };
+  return { server, db, degraded, stores, askUserGate, criteriaStatusGuard, governanceQueue, scheduledEvents, ciWatch, integrationPoller, integrationRepository, triggerEngine, harnesses, secrets, playbookRunner, secretChannel, close };
 }

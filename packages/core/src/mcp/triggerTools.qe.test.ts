@@ -233,7 +233,7 @@ describe('the prefix lint of the condition paths (TRIG-FIELD-LINT01)', () => {
 
   it('refuses event.row.* on an integration trigger and names event.record.*', async () => {
     const trigger = await created();
-    await call(lead, 'set_trigger_when', { trigger: trigger.id, kind: 'integration_records', args: { itemId: 'i1', event: 'new_record' } });
+    await call(lead, 'set_trigger_when', { trigger: trigger.id, kind: 'integration_records', args: { integrationId: 'i1', event: 'new_record' } });
 
     const refused = await call(lead, 'add_trigger_condition', { trigger: trigger.id, ...conditionOf('event.row.title') });
 
@@ -259,7 +259,7 @@ describe('the prefix lint of the condition paths (TRIG-FIELD-LINT01)', () => {
     const trigger = await tableTrigger();
     await call(lead, 'add_trigger_condition', { trigger: trigger.id, ...conditionOf('event.row.title') });
 
-    const refused = await call(lead, 'set_trigger_when', { trigger: trigger.id, kind: 'integration_records', args: { itemId: 'i1', event: 'new_record' } });
+    const refused = await call(lead, 'set_trigger_when', { trigger: trigger.id, kind: 'integration_records', args: { integrationId: 'i1', event: 'new_record' } });
 
     expect(refused.text).toMatch(/^error trigger_field_prefix: .*event\.record\./);
     expect((await viewOf(trigger.id)).when).toMatchObject({ source: 'data_store_query' });
