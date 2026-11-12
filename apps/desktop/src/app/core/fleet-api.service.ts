@@ -334,8 +334,11 @@ export class FleetApiService {
     return this.call<SecretStatusAnswer>(`/api/secrets/playbook/${encodeURIComponent(playbookId)}/${encodeURIComponent(name)}`);
   }
   listTriggers(projectId: string) { return this.call<TriggerView[]>(`/api/triggers${queryString({ projectId })}`); }
-  /** Replaces the title, the policy and, when given, the WHEN and the owner of a trigger the screen read at `expectedRev`; the daemon clears the arming. */
-  updateTrigger({ triggerId, expectedRev, changes }: { triggerId: string; expectedRev: number; changes: { title?: string; policy?: TriggerPolicy; when?: TriggerWhen; ownerManagerId?: string | null } }) {
+  /** Replaces the title, the policy and, when given, the WHEN, the conditions and the owner of a trigger the screen read at `expectedRev`; the daemon clears the arming. */
+  updateTrigger({ triggerId, expectedRev, changes }: {
+    triggerId: string; expectedRev: number;
+    changes: { title?: string; policy?: TriggerPolicy; when?: TriggerWhen; conditions?: Record<string, unknown>[]; ownerManagerId?: string | null };
+  }) {
     return this.put<TriggerView>(triggerPath(triggerId), { expectedRev, ...changes });
   }
   /** Arms the revision the human reviewed; the proof of the human gesture travels in a header, never the digest. */

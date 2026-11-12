@@ -1,5 +1,7 @@
 import { ChangeDetectionStrategy, Component, ElementRef, Injector, afterNextRender, computed, inject, input, output, viewChild } from '@angular/core';
 import { escapedControlsOf } from '@openfleet/shared';
+import { ConditionsEditorComponent } from './conditions-editor.component';
+import type { ConditionChange } from './conditions-draft';
 import { loadedValueOf, type Load } from './load-state';
 import type { OwnerChoice } from './owner-choices';
 import { BACKLOG_POLICIES, BATCH_MODES, type TriggerEditDraft } from './trigger-edit-draft';
@@ -15,6 +17,7 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
 @Component({
   selector: 'of-trigger-editor',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ConditionsEditorComponent],
   template: `
     <form class="editor" aria-label="Modifier le trigger" data-testid="trigger-editor" (submit)="submitted.emit($event)">
       <p class="muted">Enregistrer désarme le trigger : il faudra relire la règle et l’armer de nouveau.</p>
@@ -83,6 +86,11 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
         }
       </fieldset>
 
+      <of-conditions-editor
+        [conditions]="draft().conditions" [source]="draft().when?.source"
+        (conditionAdded)="conditionAdded.emit()" (conditionRemoved)="conditionRemoved.emit($event)" (conditionChange)="conditionChange.emit($event)"
+      />
+
       <label>Propriétaire
         <select [disabled]="!ownerChoices()" (change)="ownerChosen.emit(valueOf($event))">
           <option value="" [selected]="draft().ownerManagerId === null">Aucun manager</option>
@@ -134,6 +142,9 @@ export class TriggerEditorComponent {
 
   readonly draftChange = output<Partial<TriggerEditDraft>>();
   readonly whenChange = output<Partial<WhenDraft>>();
+  readonly conditionAdded = output<void>();
+  readonly conditionRemoved = output<string>();
+  readonly conditionChange = output<{ key: string; change: ConditionChange }>();
   readonly ownerChosen = output<string>();
   readonly managersRetried = output<void>();
   readonly submitted = output<Event>();
