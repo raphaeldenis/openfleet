@@ -7,6 +7,7 @@ import type { IntegrationHealthStatus, IntegrationIssueItem, Session } from '@op
 import { loadConfig, type Config } from '../config.js';
 import { startDaemon, type Daemon } from '../daemon.js';
 import { FakeHarness } from '../harness/fakeHarness.js';
+import { pollQueryOf } from '../integrations/integrationViewConfig.js';
 import type { SecretStore } from '../secrets/secretStore.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 
@@ -103,12 +104,15 @@ export async function startTriggerWorld({ configJson, letTheEventLoopRun, secret
     return {
       id: profileId,
       connectionId,
+      /** An answer of the provider to the query that is current when it lands, as the poller stores it. */
       publish: (items: IntegrationIssueItem[]) => {
-        repository.replaceItems(profileId, items, { fetchedAt: new Date(nowMs).toISOString() });
+        const { integrationRepository } = daemon;
+        const queryIdentity = pollQueryOf(integrationRepository.findViewConfig(profileId)).identity;
+        integrationRepository.replaceItems(profileId, items, { fetchedAt: new Date(nowMs).toISOString(), queryIdentity });
         const polledAt = new Date(nowMs).toISOString();
-        repository.savePollState(profileId, { consecutiveFailures: 0, nextPollAt: polledAt, lastPolledAt: polledAt });
+        integrationRepository.savePollState(profileId, { consecutiveFailures: 0, nextPollAt: polledAt, lastPolledAt: polledAt });
       },
-      setHealth: (status: IntegrationHealthStatus) => repository.saveHealth(profileId, { status, checkedAt: new Date(nowMs).toISOString() }),
+      setHealth: (status: IntegrationHealthStatus) => daemon.integrationRepository.saveHealth(profileId, { status, checkedAt: new Date(nowMs).toISOString() }),
     };
   };
 

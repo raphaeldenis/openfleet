@@ -1,8 +1,8 @@
 import type { IntegrationIssueItem } from '@openfleet/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { reviewDigestOf } from '../integrations/integrationViewConfig.js';
+import { pollQueryOf, reviewDigestOf } from '../integrations/integrationViewConfig.js';
 import { recentLogLines } from '../logger.js';
-import { MAX_OFFERS_PER_RUN } from './integrationRecordsSource.js';
+import { MAX_KNOWN_ITEMS, MAX_OFFERS_PER_RUN } from './integrationRecordsSource.js';
 import { MINUTE_MS, startTriggerWorld, type TriggerWorld } from './triggerWorld.testkit.js';
 
 let world: TriggerWorld | undefined;
@@ -66,8 +66,8 @@ describe('the baseline of each item', () => {
     expect(statesOf(triggerId)).toEqual(['completed']);
 
     await world.restart({ whileStopped: (db) => {
-      db.prepare('UPDATE integration_view_items SET fields_json = ? WHERE profile_id = ? AND external_id = ?')
-        .run(JSON.stringify({ url: 'https://acme.atlassian.net/browse/CCM-1', updatedAt: SECOND_REVISION, untrusted: { summary: 'x' } }), integration.id, 'CCM-1');
+      db.prepare("UPDATE integration_view_items SET fields_json = json_set(fields_json, '$.updatedAt', ?) WHERE profile_id = ? AND external_id = ?")
+        .run(SECOND_REVISION, integration.id, 'CCM-1');
     } });
 
     expect(world.firesOf(triggerId).map((fire) => fire.dedup_key).sort()).toEqual([
@@ -87,6 +87,64 @@ describe('the baseline of each item', () => {
 
     integration.publish([issue('CCM-1'), issue('CCM-2'), issue('CCM-3')]);
     expect(statesOf(triggerId)).toEqual(['completed']);
+  });
+});
+
+describe('the memory of the items seen', () => {
+  it('does not fire for an item of the baseline that leaves the page and comes back unchanged', async () => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    integration.publish([issue('CCM-1')]);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id });
+
+    integration.publish([]);
+    integration.publish([issue('CCM-1')]);
+
+    expect(world.firesOf(triggerId)).toEqual([]);
+  });
+
+  it('fires once as changed for an item that leaves the page and comes back at another revision, whatever the event asked', async () => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    integration.publish([issue('CCM-1')]);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id, when: { event: 'changed_record' } });
+
+    integration.publish([]);
+    integration.publish([issue('CCM-1', { updatedAt: SECOND_REVISION })]);
+    integration.publish([issue('CCM-1', { updatedAt: SECOND_REVISION })]);
+
+    expect(world.firesOf(triggerId).map((fire) => fire.dedup_key)).toEqual([`integration:${integration.id}:CCM-1:${SECOND_REVISION}`]);
+  });
+
+  it('remembers at most MAX_KNOWN_ITEMS keys, and reads an item it has forgotten as new', async () => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    const secondsBeforeFirstRevision = (seconds: number) => new Date(Date.parse(FIRST_REVISION) - seconds * 1000).toISOString();
+    const evictedCount = 3;
+    const page = Array.from({ length: MAX_KNOWN_ITEMS + evictedCount }, (_, index) => issue(`BULK-${String(index)}`, { updatedAt: secondsBeforeFirstRevision(index) }));
+    integration.publish(page);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id });
+
+    expect(Object.keys(world.cursorOf(triggerId)!.revisions!)).toHaveLength(MAX_KNOWN_ITEMS);
+    integration.publish(page);
+
+    const firedKeys = world.firesOf(triggerId).map((fire) => fire.dedup_key.split(':')[2]).sort();
+    expect(firedKeys).toEqual(['BULK-2000', 'BULK-2001', 'BULK-2002']);
+  });
+
+  it('forgets the key seen longest ago first, not the one that entered first', async () => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    const newest = issue('SEEN-LONG-AGO', { updatedAt: FIRST_REVISION });
+    const others = Array.from({ length: MAX_KNOWN_ITEMS - 1 }, (_, index) => issue(`OTHER-${String(index)}`, { updatedAt: new Date(Date.parse(FIRST_REVISION) - (index + 1) * 1000).toISOString() }));
+    integration.publish([newest, ...others]);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id });
+
+    integration.publish([...others, issue('ARRIVAL', { updatedAt: SECOND_REVISION })]);
+    integration.publish([newest]);
+
+    const firedKeys = world.firesOf(triggerId).map((fire) => fire.dedup_key.split(':')[2]).sort();
+    expect(firedKeys).toEqual(['ARRIVAL', 'SEEN-LONG-AGO']);
   });
 });
 
@@ -214,6 +272,39 @@ describe('the approved view of the integration', () => {
     expect(world.firesOf(triggerId).map((fire) => fire.dedup_key)).toEqual([`integration:${integration.id}:CCM-9:${FIRST_REVISION}`]);
   });
 
+  it('waits for the first answer of a query approved before a restart, and takes it as the baseline instead of firing it', async () => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    integration.publish([issue('CCM-1')]);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id });
+
+    approveView(world, integration.id);
+    await world.restart();
+    world.daemon.integrationRepository.replaceItems(integration.id, [issue('CCM-7')], {
+      fetchedAt: new Date(world.nowMs).toISOString(), queryIdentity: pollQueryOf(world.daemon.integrationRepository.findViewConfig(integration.id)).identity,
+    });
+
+    expect(world.firesOf(triggerId)).toEqual([]);
+    world.daemon.integrationRepository.replaceItems(integration.id, [issue('CCM-7'), issue('CCM-9')], {
+      fetchedAt: new Date(world.nowMs).toISOString(), queryIdentity: pollQueryOf(world.daemon.integrationRepository.findViewConfig(integration.id)).identity,
+    });
+    expect(world.firesOf(triggerId).map((fire) => fire.dedup_key)).toEqual([`integration:${integration.id}:CCM-9:${FIRST_REVISION}`]);
+  });
+
+  it('does not take the page of the previous query as the baseline of a trigger armed after the approval', async () => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    integration.publish([issue('CCM-1')]);
+    approveView(world, integration.id);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id });
+
+    integration.publish([issue('CCM-7')]);
+    expect(world.firesOf(triggerId)).toEqual([]);
+
+    integration.publish([issue('CCM-7'), issue('CCM-9')]);
+    expect(world.firesOf(triggerId).map((fire) => fire.dedup_key)).toEqual([`integration:${integration.id}:CCM-9:${FIRST_REVISION}`]);
+  });
+
   it('offers nothing while the approved view is withheld because its content no longer matches its approval', async () => {
     const { world, lead } = await worldWithLead();
     const integration = world.createIntegration();
@@ -267,6 +358,61 @@ describe('the budget of a run', () => {
 
     expect(world.firesOf(triggerId)).toHaveLength(45);
     expect(new Set(world.firesOf(triggerId).map((fire) => fire.dedup_key)).size).toBe(45);
+  });
+});
+
+describe('items observed live beyond the budget of a run', () => {
+  const THREE_DAYS_MS = 3 * 24 * 60 * MINUTE_MS;
+  const oldRevision = (world: TriggerWorld) => new Date(world.nowMs - THREE_DAYS_MS).toISOString();
+  const publishLiveAdditions = (world: TriggerWorld, integration: ReturnType<TriggerWorld['createIntegration']>, count: number) => {
+    const revision = oldRevision(world);
+    integration.publish([issue('CCM-1'), ...Array.from({ length: count }, (_, index) => issue(`NEW-${String(index + 10)}`, { updatedAt: revision }))]);
+  };
+  const runTheTicks = (world: TriggerWorld, count: number) => {
+    for (let tick = 0; tick < count; tick += 1) {
+      world.advanceMs(MINUTE_MS);
+      world.fireLivingTimers();
+    }
+  };
+
+  it.each(['discard_stale', 'fire_latest_only'])('treats every item alike whatever its rank under %s: all run, none is cancelled', async (backlogPolicy) => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    integration.publish([issue('CCM-1')]);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id, policy: { maxFiresPerDay: 1000, backlogPolicy } });
+
+    publishLiveAdditions(world, integration, 45);
+    runTheTicks(world, 3);
+
+    expect(statesOf(triggerId)).toEqual(Array.from({ length: 45 }, () => 'completed'));
+  });
+
+  it('dates a deferred item from its detection, not from its revision', async () => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    integration.publish([issue('CCM-1')]);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id, policy: { maxFiresPerDay: 1000 } });
+    const detectedAt = new Date(world.nowMs).toISOString();
+
+    publishLiveAdditions(world, integration, MAX_OFFERS_PER_RUN + 1);
+    runTheTicks(world, 1);
+
+    expect(world.firesOf(triggerId)).toHaveLength(MAX_OFFERS_PER_RUN + 1);
+    expect(world.firesOf(triggerId).map((fire) => fire.fired_at)).toEqual(Array.from({ length: MAX_OFFERS_PER_RUN + 1 }, () => detectedAt));
+  });
+
+  it('keeps the catch-up of a restart dated from the revisions: a stale change found at boot is still cancelled as stale', async () => {
+    const { world, lead } = await worldWithLead();
+    const integration = world.createIntegration();
+    integration.publish([issue('CCM-1')]);
+    const triggerId = await armIntegrationTrigger({ integrationId: integration.id, managerId: lead.id, policy: { maxFiresPerDay: 1000, backlogPolicy: 'discard_stale' } });
+    const revision = oldRevision(world);
+
+    await world.restart({ whileStopped: (db) => {
+      db.prepare("UPDATE integration_view_items SET fields_json = json_set(fields_json, '$.updatedAt', ?) WHERE profile_id = ? AND external_id = ?").run(revision, integration.id, 'CCM-1');
+    } });
+
+    expect(world.firesOf(triggerId).map((fire) => [fire.ledger_state, fire.settle_reason])).toEqual([['cancelled', 'stale']]);
   });
 });
 

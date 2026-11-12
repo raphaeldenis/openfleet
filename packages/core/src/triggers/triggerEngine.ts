@@ -74,13 +74,13 @@ export class TriggerEngine {
 
   constructor(private readonly deps: TriggerEngineDeps) {}
 
-  /** Offers one event of a source: it fires when the trigger is armed, its conditions hold and its dedup key is new. */
-  submit(input: { triggerId: string; dedupKey: string; event: Record<string, unknown>; causedByChainDepth?: number }): SubmitResult {
+  /** Offers one event of a source: it fires when the trigger is armed, its conditions hold and its dedup key is new. The fire is dated `observedAtMs`, the moment the source saw the event, or now. */
+  submit(input: { triggerId: string; dedupKey: string; event: Record<string, unknown>; observedAtMs?: number; causedByChainDepth?: number }): SubmitResult {
     const { triggers, clock } = this.deps;
     const trigger = triggers.get(input.triggerId);
     if (trigger === undefined || !isArmedAsItStands(trigger)) return { outcome: 'not_armed' };
 
-    const accepted = this.accept({ trigger, dedupKey: input.dedupKey, event: input.event, firedAtMs: clock(), causedByChainDepth: input.causedByChainDepth });
+    const accepted = this.accept({ trigger, dedupKey: input.dedupKey, event: input.event, firedAtMs: input.observedAtMs ?? clock(), causedByChainDepth: input.causedByChainDepth });
     if (accepted.outcome !== 'accepted') return accepted.outcome === 'duplicate' ? { outcome: 'duplicate', fireId: accepted.fire.id } : { outcome: accepted.outcome };
 
     const ledgerState = this.process({ trigger, fire: accepted.fire, batchSize: 1 });

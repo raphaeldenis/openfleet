@@ -89,6 +89,9 @@ const fieldsOfJson = (json: string): string[] => {
   }
 };
 
+/** The key, inside the JSON of a stored item, of the identity of the request that produced it. */
+const QUERY_IDENTITY_FIELD = 'queryIdentity';
+
 const CONNECTION_COLUMNS ='id, name, provider, credential_kind, allowed_hosts_json';
 const PROFILE_COLUMNS = 'id, project_id, connection_id, name, resource';
 
@@ -226,12 +229,15 @@ export class IntegrationRepository {
     });
   }
 
-  /** Replaces the items of a profile by the issues of the last answer, all or nothing; the listeners hear of it once the transaction has committed. */
-  replaceItems(profileId: string, issues: IntegrationIssueItem[], { fetchedAt }: { fetchedAt: string }): void {
+  /**
+   * Replaces the items of a profile by the issues of the last answer, all or nothing; the listeners hear of it once the transaction has committed.
+   * Each item row carries `queryIdentity`, the identity of the request that produced the answer, beside the fields of the item.
+   */
+  replaceItems(profileId: string, issues: IntegrationIssueItem[], { fetchedAt, queryIdentity }: { fetchedAt: string; queryIdentity: string }): void {
     inTransaction(this.db, 'replaceIntegrationItems', () => {
       this.db.prepare('DELETE FROM integration_view_items WHERE profile_id = ?').run(profileId);
       const insert = this.db.prepare('INSERT INTO integration_view_items (profile_id, external_id, fields_json, fetched_at) VALUES (?, ?, ?, ?)');
-      for (const { key, ...fields } of issues) insert.run(profileId, key, JSON.stringify(fields), fetchedAt);
+      for (const { key, ...fields } of issues) insert.run(profileId, key, JSON.stringify({ ...fields, [QUERY_IDENTITY_FIELD]: queryIdentity }), fetchedAt);
     });
     for (const listener of this.itemsReplacedListeners) listener(profileId);
   }
@@ -243,7 +249,15 @@ export class IntegrationRepository {
   }
 
   listItems(profileId: string): IntegrationIssueItem[] {
+    return this.listItemsWithQueryIdentity(profileId).items;
+  }
+
+  /** The items of the last answer, and the identity of the request that produced it; undefined for no item, or for an answer stored without one. */
+  listItemsWithQueryIdentity(profileId: string): { items: IntegrationIssueItem[]; queryIdentity?: string } {
     const rows = this.db.prepare('SELECT external_id, fields_json FROM integration_view_items WHERE profile_id = ? ORDER BY json_extract(fields_json, \'$.updatedAt\') DESC, external_id').all(profileId) as unknown as ItemRow[];
-    return rows.map((row) => ({ key: row.external_id, ...(JSON.parse(row.fields_json) as Omit<IntegrationIssueItem, 'key'>) }));
+    const stored = rows.map((row) => ({ key: row.external_id, ...(JSON.parse(row.fields_json) as Omit<IntegrationIssueItem, 'key'> & { [QUERY_IDENTITY_FIELD]?: string }) }));
+    const queryIdentity = stored[0]?.[QUERY_IDENTITY_FIELD];
+    const items = stored.map(({ [QUERY_IDENTITY_FIELD]: _identity, ...item }) => item);
+    return { items, ...(queryIdentity !== undefined && { queryIdentity }) };
   }
 }
