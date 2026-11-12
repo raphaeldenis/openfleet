@@ -54,6 +54,7 @@ describe('the tool catalog', () => {
       'delete_trigger_condition',
       'remove_worktree',
       'reorder_data_store_columns',
+      'save_integration_view_config', // replaces the waiting proposal with no history; the active configuration is never touched
       'set_argus_log_store',
       'set_data_store_natural_key',
       'set_manager_profile',
