@@ -52,12 +52,12 @@ export class PlaybookManualRequestRepository {
 
   /**
    * Records the one answer of a question that is still pending and moves its step and run: an approval ends the step and sets the run running again, a rejection ends both as failed.
-   * Returns false, changing nothing, when the question was already answered, expired or cancelled.
+   * Returns false, changing nothing, when the question was already answered, expired or cancelled, or when its wait is over at `answeredAt` (the wait ends at `expiresAt` itself).
    */
   answer(input: { runId: string; seq: number; decision: 'approved' | 'rejected'; answeredAt: string }): boolean {
     return inTransaction(this.db, 'playbook_manual_answer', () => {
-      const claimed = this.db.prepare("UPDATE playbook_manual_requests SET status = 'answered', decision = ?, settled_at = ? WHERE run_id = ? AND seq = ? AND status = 'pending'")
-        .run(input.decision, input.answeredAt, input.runId, input.seq);
+      const claimed = this.db.prepare("UPDATE playbook_manual_requests SET status = 'answered', decision = ?, settled_at = ? WHERE run_id = ? AND seq = ? AND status = 'pending' AND expires_at > ?")
+        .run(input.decision, input.answeredAt, input.runId, input.seq, input.answeredAt);
       const wasPending = Number(claimed.changes) === 1;
       if (!wasPending) return false;
       const output = JSON.stringify({ decision: input.decision });

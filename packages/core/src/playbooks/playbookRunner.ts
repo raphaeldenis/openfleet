@@ -362,7 +362,9 @@ export class PlaybookRunner {
   /**
    * Evaluates the predicate of a waitFor cell with the evaluator of conditions of the kernel, on the inputs, the outputs of the steps so far and `wait` (`elapsedMs`, `now`: the injected clock).
    * No secret is in that scope. It polls every `pollMs` (at least MIN_WAIT_FOR_POLL_MS) on the injected timer, and fails with `wait_for_timeout` at the ceiling of the cell (`timeoutSeconds`, DEFAULT_WAIT_FOR_SECONDS by default)
-   * or after `maxWaitEvaluations` evaluations, whichever comes first. The stop of the daemon ends it as needs_review.
+   * or after `maxWaitEvaluations` evaluations, whichever comes first. The ceiling is checked before the predicate at every wake-up: a wake-up strictly after the ceiling (a timer that overslept, a clock that jumped) fails
+   * even when the predicate holds, and the instant of the ceiling itself is still on time. The deadline is measured on the injected wall clock, so a clock that jumps forward ends the wait early and one that jumps back
+   * lengthens it by the jump at most, still within the cap of evaluations. The stop of the daemon ends it as needs_review.
    */
   private async runWaitForCell(cell: WaitForCell, context: RunContext, steps: StepFields): Promise<StepResult> {
     const { clock, limits } = this.deps;
@@ -374,6 +376,8 @@ export class PlaybookRunner {
     for (let evaluation = 1; evaluation <= limits.maxWaitEvaluations; evaluation += 1) {
       const now = clock();
       const elapsedMs = Date.parse(now) - startedAtMs;
+      const isPastTheCeiling = elapsedMs > ceilingMs;
+      if (isPastTheCeiling) return { verdict: { status: 'failed', errorCode: 'wait_for_timeout' } };
       const holds = evaluateConditions(conditions, { inputs: context.inputs, steps, wait: { elapsedMs, now } });
       if (holds) return { verdict: { status: 'succeeded' }, output: { elapsedMs, evaluations: evaluation } };
 
@@ -412,7 +416,7 @@ export class PlaybookRunner {
    * Throws human_proof_required, playbook_run_not_found, manual_wait_expired, manual_already_answered, playbook_run_busy, playbook_unapproved, script_changed, playbook_conflict or secret_not_connected_on_this_device.
    */
   async resumeManualStep(input: { runId: string; seq: number; decision: ManualDecision; proof: string | undefined }): Promise<PlaybookRunRecord> {
-    const { runs, manual, limits, clock } = this.deps;
+    const { runs, manual, limits } = this.deps;
     this.assertNotStopping();
     const hasNoProof = input.proof === undefined;
     if (hasNoProof) throw humanProofRequired();
@@ -427,22 +431,50 @@ export class PlaybookRunner {
     const isProvenHuman = this.deps.manualResumeProof.consume(input.proof, { runId: input.runId, seq: input.seq });
     if (!isProvenHuman) throw humanProofRequired();
 
-    const playbook = this.deps.playbooks.getById(run.playbookId);
-    const pinnedScripts = this.assertStillTheApprovedRun({ run, playbook, seq: input.seq });
-    const secretValues = await this.resolveSecretsOf(playbook);
-    this.assertNotStopping();
+    const playbookBeforeTheSecrets = this.deps.playbooks.getById(run.playbookId);
+    this.assertStillTheApprovedRun({ run, playbook: playbookBeforeTheSecrets, seq: input.seq });
+    const isApproval = input.decision === 'approve';
+    const secretValues = isApproval ? await this.resolveSecretsOf(playbookBeforeTheSecrets) : new Map<string, string>();
 
-    const decision = input.decision === 'approve' ? 'approved' : 'rejected';
-    const wasRecorded = manual.answer({ runId: input.runId, seq: input.seq, decision, answeredAt: clock() });
-    if (!wasRecorded) throw manualAlreadyAnswered();
+    return this.commitAnswer({ runId: input.runId, seq: input.seq, decision: isApproval ? 'approved' : 'rejected', secretValues });
+  }
+
+  /**
+   * Records the answer and starts the continuation with no `await` between the checks and the write: what the daemon and the playbook are NOW decides, not what they were before the secrets were read.
+   * The playbook is read again and must still be the approved content the run started from; the wait must still be open at this instant; a place among the runs at once must still be free.
+   * The place is taken by the move of the run to running in the same transaction as the answer, so no other start or answer can take it in between. A refusal here leaves the question pending, except an end of wait.
+   */
+  private commitAnswer({ runId, seq, decision, secretValues }: { runId: string; seq: number; decision: 'approved' | 'rejected'; secretValues: Map<string, string> }): PlaybookRunRecord {
+    const { runs, manual, limits, clock } = this.deps;
+    this.assertNotStopping();
+    this.expireOverdueManualWaits();
+    const run = runs.get(runId);
+    const request = manual.get(runId, seq);
+    if (run === undefined || request === undefined) throw runNotFound();
+    this.assertStillOpenForAnswer(request.status);
+
+    const playbook = this.deps.playbooks.getById(run.playbookId);
+    const pinnedScripts = this.assertStillTheApprovedRun({ run, playbook, seq });
+    const needsAPlace = decision === 'approved';
+    if (needsAPlace && runs.countRunning() >= limits.maxConcurrentRuns) throw busy(`${limits.maxConcurrentRuns} runs are already in progress.`);
+
+    const wasRecorded = manual.answer({ runId, seq, decision, answeredAt: clock() });
+    if (!wasRecorded) throw this.refusalOfAnAnswerNotRecorded({ runId, seq });
 
     if (decision === 'rejected') {
       runs.pruneFinishedBeyond(playbook.id, playbook.policy.maxRunsToKeep);
-      this.deps.observer?.runEnded({ runId: run.id, playbookId: playbook.id, status: 'failed' });
-      return runs.get(run.id)!;
+      this.deps.observer?.runEnded({ runId, playbookId: playbook.id, status: 'failed' });
+      return runs.get(runId)!;
     }
-    this.continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, seq: input.seq });
-    return runs.get(run.id)!;
+    this.continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, seq });
+    return runs.get(runId)!;
+  }
+
+  /** Why the repository did not record an answer: the wait ended at this instant (the run is ended as such), or another answer was recorded first. */
+  private refusalOfAnAnswerNotRecorded({ runId, seq }: { runId: string; seq: number }): OpenFleetError {
+    this.expireOverdueManualWaits();
+    const isExpired = this.deps.manual.get(runId, seq)?.status === 'expired';
+    return isExpired ? manualWaitExpired() : manualAlreadyAnswered();
   }
 
   private assertStillOpenForAnswer(status: 'pending' | 'answered' | 'expired' | 'cancelled'): void {

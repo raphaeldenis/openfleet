@@ -44,6 +44,16 @@ describe('the question of a manual step takes one answer', () => {
     expect(runs.get('r1')).toMatchObject({ status: 'failed', errorCode: 'manual_wait_expired' });
   });
 
+  it('refuses an answer given at the instant the wait ends or later, even when nothing ended the wait before, and takes one given a millisecond before', () => {
+    parkARun();
+
+    const atTheEnd = manual.answer({ runId: 'r1', seq: 1, decision: 'approved', answeredAt: '2026-11-12T11:00:00.000Z' });
+    const afterTheEnd = manual.answer({ runId: 'r1', seq: 1, decision: 'approved', answeredAt: '2026-11-12T11:00:00.001Z' });
+    const justBeforeTheEnd = manual.answer({ runId: 'r1', seq: 1, decision: 'approved', answeredAt: '2026-11-12T10:59:59.999Z' });
+
+    expect([atTheEnd, afterTheEnd, justBeforeTheEnd]).toEqual([false, false, true]);
+  });
+
   it('keeps the question pending until its wait is over, and ends it at the very instant it is due', () => {
     parkARun();
 

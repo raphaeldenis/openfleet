@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OWN_PROJECT_ID, OTHER_PROJECT_ID, startGovernanceFixture, type GovernanceFixture } from '../governance/governanceQueue.testkit.js';
-import { createManualTimers, until, type ManualTimers } from '../integrations/manualTimers.testkit.js';
+import { createManualTimers, deferred, until, type ManualTimers } from '../integrations/manualTimers.testkit.js';
 import { createFakeTauriParent, type FakeTauriParent } from '../secrets/fakeTauriParent.testkit.js';
 import type { OperatorAction } from '../secrets/nonceLedger.js';
 import { createInMemorySecretStore, type InMemorySecretStore } from '../secrets/inMemorySecretStore.js';
@@ -362,18 +362,128 @@ describe('the run is checked again when the human answers', () => {
   });
 });
 
-describe('secrets', () => {
-  const secretHolder = { id: 'holder', kind: 'http', method: 'GET', url: 'https://example.invalid/', headers: { 'X-Key': `{{secret:${SECRET_NAME}}}` } };
-  const playbookWithASecret = async (f: GovernanceFixture, value: string) => {
-    const table = await makeTable(f);
-    const neverTaken = [{ to: 'holder', when: [{ lhs: 'steps.gate.decision', op: 'eq', rhs: 'never' }] }];
-    const playbook = await createApprovedPlaybook(f, [
-      manualCell('gate', { prompt: 'Ship {{inputs.who}}?' }), { ...writeCell('after', table.storeId, table.noteId, 'shipped'), next: neverTaken }, secretHolder,
-    ], { inputs: [{ name: 'who', type: 'string', required: false }] });
-    new SecretRefRepository(f.db).declare({ kind: 'playbook', id: playbook.id }, SECRET_NAME);
-    await secretStore.set({ kind: 'playbook', id: playbook.id }, SECRET_NAME, value);
-    return { playbook, table };
+const secretHolder = { id: 'holder', kind: 'http', method: 'GET', url: 'https://example.invalid/', headers: { 'X-Key': `{{secret:${SECRET_NAME}}}` } };
+/** A playbook whose answer must read a secret: a manual cell, a write, and a never-taken edge to a cell that references the secret. */
+const playbookWithASecret = async (f: GovernanceFixture, value: string, manualExtra: Record<string, unknown> = {}) => {
+  const table = await makeTable(f);
+  const neverTaken = [{ to: 'holder', when: [{ lhs: 'steps.gate.decision', op: 'eq', rhs: 'never' }] }];
+  const playbook = await createApprovedPlaybook(f, [
+    manualCell('gate', { prompt: 'Ship {{inputs.who}}?', ...manualExtra }), { ...writeCell('after', table.storeId, table.noteId, 'shipped'), next: neverTaken }, secretHolder,
+  ], { inputs: [{ name: 'who', type: 'string', required: false }] });
+  new SecretRefRepository(f.db).declare({ kind: 'playbook', id: playbook.id }, SECRET_NAME);
+  await secretStore.set({ kind: 'playbook', id: playbook.id }, SECRET_NAME, value);
+  return { playbook, table };
+};
+
+/** Holds every read of a secret until `release`: an answer then stops at the reading of its secrets, and the test acts in that window. */
+const holdSecretReads = () => {
+  const gate = deferred<void>();
+  let reads = 0;
+  const read = secretStore.read.bind(secretStore);
+  secretStore.read = async (scope, name) => {
+    reads += 1;
+    await gate.promise;
+    return read(scope, name);
   };
+  return { release: () => gate.resolve(), reached: (count: number) => until(() => reads >= count) };
+};
+
+describe('the answer is committed after the secrets are read, on what the playbook and the daemon are then', () => {
+  it('cancels the answer of a playbook edited while its secrets are read, and puts the run in review', async () => {
+    const f = await boot();
+    const { playbook, table } = await playbookWithASecret(f, `dummy-canary-built-at-runtime-${randomUUID()}`);
+    const runId = await runUntilParked(f, playbook.id, { who: 'v2' });
+    const held = holdSecretReads();
+    const answering = answerWithProof(f, runId);
+    await held.reached(1);
+
+    const edited = await f.api(`/api/playbooks/${playbook.id}`, { method: 'PUT', body: JSON.stringify({ expectedRev: playbook.contentRev, policy: { allowedHosts: ['example.test'] } }) });
+    held.release();
+    const response = await answering;
+
+    expect(edited.status).toBe(200);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'playbook_unapproved' });
+    expect(await viewOfRun(f, runId)).toMatchObject({ status: 'needs_review', errorCode: 'playbook_changed_while_waiting' });
+    expect(table.rows()).toHaveLength(0);
+  });
+
+  it.each([['after', 61], ['at the very instant', 60]])('refuses an answer whose wait ends %s while its secrets are read: manual_wait_expired, and the run is not resumed', async (_when, secondsLate) => {
+    const f = await boot();
+    const { playbook, table } = await playbookWithASecret(f, `dummy-canary-built-at-runtime-${randomUUID()}`, { timeoutSeconds: 60 });
+    const runId = await runUntilParked(f, playbook.id, { who: 'v2' });
+    now += 30 * SECOND;
+    const held = holdSecretReads();
+    const answering = answerWithProof(f, runId);
+    await held.reached(1);
+
+    now = START_OF_TEST_TIME + secondsLate * SECOND;
+    held.release();
+    const response = await answering;
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'manual_wait_expired' });
+    expect(await viewOfRun(f, runId)).toMatchObject({ status: 'failed', errorCode: 'manual_wait_expired' });
+    expect(table.rows()).toHaveLength(0);
+  });
+
+  it('answers a wait that is still open one second before it ends, even when the secrets are slow', async () => {
+    const f = await boot();
+    const { playbook } = await playbookWithASecret(f, `dummy-canary-built-at-runtime-${randomUUID()}`, { timeoutSeconds: 60 });
+    const runId = await runUntilParked(f, playbook.id, { who: 'v2' });
+    const held = holdSecretReads();
+    const answering = answerWithProof(f, runId);
+    await held.reached(1);
+
+    now = START_OF_TEST_TIME + 59 * SECOND;
+    held.release();
+
+    expect((await answering).status).toBe(200);
+  });
+
+  it('lets only one of two parked runs that answer together take the only place among the runs at once; the other stays parked, its question pending', async () => {
+    const f = await boot({ maxConcurrentRuns: 1 });
+    const first = await playbookWithASecret(f, `dummy-canary-built-at-runtime-${randomUUID()}`);
+    const second = await playbookWithASecret(f, `dummy-canary-built-at-runtime-${randomUUID()}`);
+    const firstRun = await runUntilParked(f, first.playbook.id, { who: 'a' });
+    const secondRun = await runUntilParked(f, second.playbook.id, { who: 'b' });
+    const held = holdSecretReads();
+    const answers = Promise.all([answerWithProof(f, firstRun), answerWithProof(f, secondRun)]);
+    await held.reached(2);
+
+    held.release();
+    const responses = await answers;
+
+    const statuses = responses.map((response) => response.status).sort();
+    expect(statuses).toEqual([200, 409]);
+    const refused = responses.find((response) => response.status === 409)!;
+    expect(await refused.json()).toMatchObject({ error: 'playbook_run_busy' });
+    expect(f.db.prepare("SELECT COUNT(*) AS n FROM playbook_manual_requests WHERE status = 'pending'").get()).toEqual({ n: 1 });
+    expect(f.db.prepare("SELECT COUNT(*) AS n FROM playbook_runs WHERE status = 'waiting_manual'").get()).toEqual({ n: 1 });
+  });
+
+  it('refuses an answer that loses the last place to a run started while its secrets are read, and leaves its question pending', async () => {
+    const f = await boot({ maxConcurrentRuns: 1 });
+    const { playbook } = await playbookWithASecret(f, `dummy-canary-built-at-runtime-${randomUUID()}`);
+    const waiting = await createApprovedPlaybook(f, [{ id: 'wait', kind: 'waitFor', pollMs: 1000, predicate: [{ lhs: 'wait.elapsedMs', op: 'lt', rhs: 0 }] }]);
+    const runId = await runUntilParked(f, playbook.id, { who: 'v2' });
+    const held = holdSecretReads();
+    const answering = answerWithProof(f, runId);
+    await held.reached(1);
+
+    const started = await startRun(f, waiting.id);
+    held.release();
+    const response = await answering;
+
+    expect(started.status).toBe(202);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'playbook_run_busy' });
+    expect(statusOfRun(f, runId)).toBe('waiting_manual');
+    expect(f.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ?').get(runId)).toEqual({ status: 'pending' });
+  });
+});
+
+describe('secrets', () => {
 
   it('persists no secret value while the run waits, even when an input and the prompt carry it', async () => {
     const f = await boot();

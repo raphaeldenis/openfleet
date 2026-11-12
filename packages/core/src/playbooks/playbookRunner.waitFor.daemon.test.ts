@@ -163,6 +163,52 @@ describe('a waitFor cell waits for its predicate on the injected clock', () => {
   });
 });
 
+describe('a waitFor cell never succeeds after its ceiling', () => {
+  const holdsAtTheEnd = (atMs: number) => [{ lhs: 'wait.elapsedMs', op: 'gte', rhs: atMs }];
+
+  it('fails with wait_for_timeout when the timer wakes after the ceiling and the predicate holds only then (oversleep)', async () => {
+    const f = await boot();
+    const playbook = await createApprovedPlaybook(f, [waitForCell({ pollMs: 1000, timeoutSeconds: 1, predicate: holdsAtTheEnd(2000) })]);
+    const runId = await runUntilTimerArmed(f, playbook.id);
+
+    now += 2 * SECOND;
+    timers.elapseAll();
+    await until(() => statusOfRun(f, runId) !== 'running');
+
+    expect(await viewOfRun(f, runId)).toMatchObject({ status: 'failed', errorCode: 'wait_for_timeout' });
+  });
+
+  it('accepts a predicate that holds at exactly the ceiling: the instant of the ceiling is still on time', async () => {
+    const f = await boot();
+    const playbook = await createApprovedPlaybook(f, [waitForCell({ pollMs: 1000, timeoutSeconds: 1, predicate: holdsAtTheEnd(1000) })]);
+    const runId = await runUntilTimerArmed(f, playbook.id);
+
+    now += 1 * SECOND;
+    timers.elapseAll();
+    await until(() => statusOfRun(f, runId) !== 'running');
+
+    expect(statusOfRun(f, runId)).toBe('succeeded');
+  });
+
+  it('fails one millisecond after the ceiling even if the predicate holds', async () => {
+    const f = await boot();
+    const playbook = await createApprovedPlaybook(f, [waitForCell({ pollMs: 1000, timeoutSeconds: 1, predicate: holdsAtTheEnd(1000) })]);
+    const runId = await runUntilTimerArmed(f, playbook.id);
+
+    now += 1 * SECOND + 1;
+    timers.elapseAll();
+    await until(() => statusOfRun(f, runId) !== 'running');
+
+    expect(await viewOfRun(f, runId)).toMatchObject({ status: 'failed', errorCode: 'wait_for_timeout' });
+  });
+
+  const runUntilTimerArmed = async (f: GovernanceFixture, playbookId: string) => {
+    const runId = await startRun(f, playbookId);
+    await until(() => timers.armedCount() === 1);
+    return runId;
+  };
+});
+
 describe('the kinds this runner executes', () => {
   it('still refuses a subPlaybook cell and a tool cell before anything is written', async () => {
     const f = await boot();
