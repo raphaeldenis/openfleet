@@ -148,7 +148,12 @@ describe('describeError: every Error subclass of core is mapped or internal on p
   // KernelError is raised by the playbook kernel, which no route, MCP tool or runner calls: no KernelError reaches describeError,
   // and its codes are not in the shared error registry.
   // Refusal is thrown and caught inside the view query checker (viewConfigJql.ts), which answers with a typed result: it never leaves that module.
-  const INTERNAL_ON_PURPOSE = ['Refusal', 'ConfigFileError', 'DatabaseOpenError', 'PortInUseError', 'DataStoreWriteError', 'BackupFailedError', 'MigrationFailedError', 'SchemaNewerThanCodeError', 'ScapeImportError', 'KernelError'];
+  // NaturalKeyMismatchError and ReadBudgetExceededError are caught by playbookStoreCells.ts, which answers the step codes store_natural_key_mismatch
+  // and store_read_too_large; only the playbook runner reads or writes a store through them, so no REST route or MCP tool throws them.
+  const INTERNAL_ON_PURPOSE = [
+    'Refusal', 'ConfigFileError', 'DatabaseOpenError', 'PortInUseError', 'DataStoreWriteError', 'BackupFailedError', 'MigrationFailedError', 'SchemaNewerThanCodeError', 'ScapeImportError', 'KernelError',
+    'NaturalKeyMismatchError', 'ReadBudgetExceededError',
+  ];
 
   const declaredErrorClasses = (): string[] =>
     readdirSync(CORE_DIRECTORY, { recursive: true, encoding: 'utf8' })

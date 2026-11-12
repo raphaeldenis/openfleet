@@ -12,6 +12,7 @@ export type KernelErrorCode =
   | 'header_injection'
   | 'http_header_refused'
   | 'http_headers_too_large'
+  | 'store_filter_incomplete'
   | 'secret_too_short'
   | 'not_canonical_json';
 

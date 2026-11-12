@@ -293,6 +293,20 @@ export class DataStoreRepository {
     return rows.map(toRow);
   }
 
+  /**
+   * Streams the rows of the store in creation order, one at a time, until `visit` answers false. With `columnIds` the database itself
+   * builds each row from those cells only (an empty or absent cell is left out), so the other cells are never read into memory.
+   */
+  scanRows(storeId: string, { columnIds, visit }: { columnIds: string[] | undefined; visit: (row: { id: string; data: Record<string, unknown>; bytes: number }) => boolean }): void {
+    const projection = columnIds === undefined ? 'data_json' : `json_patch('{}', json_object(${columnIds.map(() => '?, data_json -> ?').join(', ')}))`;
+    const projectionArguments = (columnIds ?? []).flatMap((columnId) => [columnId, `$.${JSON.stringify(columnId)}`]);
+    const statement = this.db.prepare(`SELECT id, ${projection} AS data_json FROM ds_rows WHERE store_id = ? ORDER BY created_at, rowid`);
+    for (const row of statement.iterate(...projectionArguments, storeId) as Iterable<{ id: string; data_json: string }>) {
+      const shouldContinue = visit({ id: row.id, data: JSON.parse(row.data_json) as Record<string, unknown>, bytes: Buffer.byteLength(row.data_json) });
+      if (!shouldContinue) return;
+    }
+  }
+
   countRows(storeId: string): number {
     const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM ds_rows WHERE store_id = ?').get(storeId) as { n: number };
     return n;

@@ -34,10 +34,15 @@ function* leavesOf(value: unknown, path: readonly PathStep[] = []): Generator<Le
 const SLOT_BY_FIELD: Readonly<Record<string, Readonly<Record<string, TemplateSlot>>>> = {
   script: { program: 'script_args', args: 'script_args', env: 'script_env' },
   http: { url: 'http_url', headers: 'http_headers', auth: 'http_auth', body: 'http_body' },
+  readFromStore: { storeID: 'store_identifier', columns: 'store_identifier', whereColumnID: 'store_identifier', sortColumnID: 'store_identifier' },
+  writeToStore: { storeID: 'store_identifier', naturalKeyColumnID: 'store_identifier' },
 };
 
+/** A key of `rowMappings` is the id of a column: it names where the write goes. */
+const isRowMappingColumn = (kind: string, leaf: Leaf): boolean => kind === 'writeToStore' && leaf.path[0] === 'rowMappings' && leaf.path.length === 2;
+
 const slotOf = (kind: string, leaf: Leaf): TemplateSlot => {
-  if (leaf.isObjectKey) return 'text';
+  if (leaf.isObjectKey) return isRowMappingColumn(kind, leaf) ? 'store_identifier' : 'text';
   const [field] = leaf.path;
   return SLOT_BY_FIELD[kind]?.[String(field)] ?? 'text';
 };

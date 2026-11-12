@@ -28,7 +28,7 @@ const arrangeRunnerWithRunsNeedingReview = (count: number) => {
   const runner = new PlaybookRunner({
     playbooks: { getById: () => playbook } as never,
     approvals: { assertStillApproved: () => ({}), locatePinned: () => { throw new Error('no script in this test'); } } as never,
-    runs, secrets: { resolve: async () => 'unused' }, clock: () => new Date().toISOString(), newId: () => 'new-run',
+    runs, stores: {} as never, secrets: { resolve: async () => 'unused' }, clock: () => new Date().toISOString(), newId: () => 'new-run',
     limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: LIMIT }, observer: { runStarted: () => {}, runEnded },
   });
   return { runs, runner, ended };
