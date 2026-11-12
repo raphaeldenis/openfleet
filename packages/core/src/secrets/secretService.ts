@@ -1,4 +1,5 @@
-import { OpenFleetError, type SecretScope, type SecretStatusAnswer } from '@openfleet/shared';
+import { INTEGRATION_TOKEN_SECRET_NAME, OpenFleetError, type SecretScope, type SecretStatusAnswer } from '@openfleet/shared';
+import { tokenAloneOf } from '../integrations/credentialEchoMasker.js';
 import { MIN_SECRET_LENGTH } from '../playbooks/kernel/secretMasker.js';
 import type { SecretRef, SecretRefRepository } from './secretRefRepository.js';
 import type { SecretStore } from './secretStore.js';
@@ -23,10 +24,13 @@ export class SecretService {
     return this.deps.refs.listOf(scope).map((ref) => answerOf(scope, ref));
   }
 
-  /** Stores the value in the secret store, then marks the name stored; a store that fails leaves the name as it was. */
+  /** Stores the value in the secret store, then marks the name stored; a store that fails leaves the name as it was. The token of an `email:token` connection credential has at least the minimum length too, as the masker of provider echoes ignores a shorter one. */
   async set(scope: SecretScope, name: string, value: string, { by }: { by: string }): Promise<SecretStatusAnswer> {
     this.declared(scope, name);
-    const isTooShortToMask = lengthInCharacters(value) < MIN_SECRET_LENGTH;
+    const isConnectionToken = scope.kind === 'connection' && name === INTEGRATION_TOKEN_SECRET_NAME;
+    const tokenHalf = isConnectionToken ? tokenAloneOf(value) : undefined;
+    const isTokenHalfTooShortToMask = tokenHalf !== undefined && lengthInCharacters(tokenHalf) < MIN_SECRET_LENGTH;
+    const isTooShortToMask = lengthInCharacters(value) < MIN_SECRET_LENGTH || isTokenHalfTooShortToMask;
     if (isTooShortToMask) throw new OpenFleetError('secret_too_short', `a secret value has at least ${MIN_SECRET_LENGTH} characters.`);
     await this.deps.store.set(scope, name, value);
     this.deps.refs.markStored(scope, name, { at: new Date(this.deps.clock()).toISOString(), by });

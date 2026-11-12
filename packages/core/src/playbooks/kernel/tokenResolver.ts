@@ -12,7 +12,7 @@ type TemplateToken = { raw: string; start: number } & (
 );
 
 /** Where a template sits in a cell: it decides which tokens are allowed there. */
-export type TemplateSlot = 'script_args' | 'script_env' | 'http_url' | 'http_headers' | 'http_auth' | 'http_body' | 'text';
+export type TemplateSlot = 'script_args' | 'script_env' | 'http_url' | 'http_headers' | 'http_auth' | 'http_body' | 'store_identifier' | 'text';
 
 export type UntrustedSources = {
   /** Steps whose output is data the author did not write: an LLM cell, an http response, integration data. */
@@ -36,7 +36,7 @@ export type ResolutionScope = {
 export type Resolution = { text: string; secretNames: string[] };
 
 const SLOTS_ACCEPTING_SECRETS: ReadonlySet<TemplateSlot> = new Set(['script_env', 'http_headers', 'http_auth']);
-const SLOTS_REFUSING_UNTRUSTED: ReadonlySet<TemplateSlot> = new Set(['script_args', 'script_env', 'http_url', 'http_headers', 'http_auth']);
+const SLOTS_REFUSING_UNTRUSTED: ReadonlySet<TemplateSlot> = new Set(['script_args', 'script_env', 'http_url', 'http_headers', 'http_auth', 'store_identifier']);
 
 const TOKEN_PATTERN = /\{\{([^{}]*)\}\}/g;
 const PATH = '[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*';
