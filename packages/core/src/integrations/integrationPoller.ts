@@ -143,7 +143,7 @@ export class IntegrationPoller {
     });
     if (this.isStopped) return 'settled';
     if (this.isRevokedSince(profile, pollQuery)) return 'settled';
-    this.record({ profile, connection, provider, host, maskText: presentation.maskText }, answer);
+    this.record({ profile, connection, provider, host, maskText: presentation.maskText, queryIdentity: pollQuery.identity }, answer);
     return answer.kind === 'auth_failed' ? 'credential_refused' : 'settled';
   }
 
@@ -177,13 +177,13 @@ export class IntegrationPoller {
     }
   }
 
-  private record(context: { profile: ProfileRecord; connection: ConnectionRecord; provider: IntegrationProvider; host: string; maskText: MaskText }, answer: ProviderAnswer): void {
-    const { profile, connection, provider, host, maskText } = context;
+  private record(context: { profile: ProfileRecord; connection: ConnectionRecord; provider: IntegrationProvider; host: string; maskText: MaskText; queryIdentity: string }, answer: ProviderAnswer): void {
+    const { profile, connection, provider, host, maskText, queryIdentity } = context;
     if (answer.kind === 'not_modified') return this.recordSuccess({ profile, connection }, { health: 'ok', etag: this.deps.repository.pollStateOf(profile.id)?.etag });
     if (answer.kind !== 'ok') return this.recordFailure({ profile, connection }, answer);
     const issues = issuesOfSearchBody(answer.body, originOf(provider, host), { maskText });
     if (issues === undefined) return this.recordFailure({ profile, connection }, { kind: 'unreachable' });
-    this.deps.repository.replaceItems(profile.id, issues, { fetchedAt: this.nowIso() });
+    this.deps.repository.replaceItems(profile.id, issues, { fetchedAt: this.nowIso(), queryIdentity });
     const isEtagFreeOfTheMaskedValue = answer.etag !== undefined && maskText(answer.etag) === answer.etag;
     this.recordSuccess({ profile, connection }, { health: 'ok', ...(isEtagFreeOfTheMaskedValue && { etag: answer.etag }) });
   }

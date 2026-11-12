@@ -27,6 +27,7 @@ trigger_session_state_source_failed the session_state source failed on a session
 trigger_table_source_failed the table source failed on a trigger
 trigger_cron_source_failed the cron source failed on a trigger
 trigger_silent_run_source_failed the silent_run source failed on a trigger
+trigger_integration_records_source_failed the integration records source failed on a trigger
 playbook_runs_interrupted playbook runs left running by a stopped daemon were marked needs_review
 playbook_step_failed_unexpectedly a playbook step failed unexpectedly
 playbook_store_step_failed a playbook store step failed

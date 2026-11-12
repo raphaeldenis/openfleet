@@ -14,7 +14,7 @@ export const PROMPT_MANAGER_ALIAS = 'prompt_argus';
 export const TRIGGER_SESSION_STATES = ['waiting_permission', 'idle', 'closed_with_error'] as const;
 export const TRIGGER_STORE_EVENTS = ['new_matching_rows', 'row_count', 'row_updated'] as const;
 export const TRIGGER_ROW_COUNT_OPS = ['eq', 'gt', 'gte', 'lt', 'lte'] as const;
-export const TRIGGER_INTEGRATION_EVENTS = ['new_record', 'record_removed', 'field_changed'] as const;
+export const TRIGGER_INTEGRATION_EVENTS = ['new_or_changed_record', 'new_record', 'changed_record'] as const;
 export const TRIGGER_CRON_CATCH_UPS = ['skip', 'run_once', 'run_all'] as const;
 export const TRIGGER_BATCH_MODES = ['per_event', 'per_batch'] as const;
 export const TRIGGER_BACKLOG_POLICIES = ['fire_all', 'fire_latest_only', 'discard_stale'] as const;
@@ -136,12 +136,19 @@ const CronWhenSchema = z.strictObject({
   catchUp: z.enum(TRIGGER_CRON_CATCH_UPS).default('skip'),
 });
 
+export const MAX_INTEGRATION_FILTER_STATUSES = 8;
+export const MAX_INTEGRATION_STATUS_CHARS = 64;
+const ITEM_KEY_PREFIX = /^[A-Z][A-Z0-9_]{1,19}$/;
+
 const IntegrationRecordsWhenSchema = z.strictObject({
   source: z.literal('integration_records'),
-  itemId: text(),
-  event: z.enum(TRIGGER_INTEGRATION_EVENTS),
-  field: text().optional(),
-}).refine(({ event, field }) => event !== 'field_changed' || field !== undefined, { message: 'field_changed needs field', path: ['field'] });
+  integrationId: text(),
+  event: z.enum(TRIGGER_INTEGRATION_EVENTS).default('new_or_changed_record'),
+  /** Only the items whose key starts with `<keyPrefix>-` (a Jira project key). */
+  keyPrefix: z.string().regex(ITEM_KEY_PREFIX, 'must be a project key such as CCM').optional(),
+  /** Only the items whose status is one of these names. */
+  statuses: z.array(text(MAX_INTEGRATION_STATUS_CHARS)).min(1).max(MAX_INTEGRATION_FILTER_STATUSES).optional(),
+});
 
 /** The WHEN of a trigger. Only the shape of the configuration is validated; the engine that fires them is not in this schema. */
 export const TriggerWhenSchema = z.union([SessionStateWhenSchema, SilentRunWhenSchema, DataStoreQueryWhenSchema, CronWhenSchema, IntegrationRecordsWhenSchema]);
@@ -206,7 +213,7 @@ export const EVENT_PREFIXES_BY_SOURCE: Readonly<Record<TriggerWhenSource, readon
   silent_run: ['event.session.'],
   data_store_query: ['event.row.', 'event.previous.'],
   cron: ['event.slot.'],
-  integration_records: ['event.record.', 'event.previous.'],
+  integration_records: ['event.record.'],
 };
 
 export const DEFAULT_TRIGGER_WHEN: TriggerWhen = { source: 'session_state', state: 'idle', minutes: 10 };

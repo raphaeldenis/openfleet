@@ -33,7 +33,11 @@ export function whenText(when: TriggerWhen): string {
       return `Dans la table ${when.storeId} : ${STORE_EVENT_LABELS[when.event]}${threshold}`;
     }
     case 'cron': return `Cron « ${when.expression} » (${when.timezone}) ; ${CATCH_UP_LABELS[when.catchUp]}`;
-    case 'integration_records': return `Intégration ${when.itemId} : ${when.event}${when.field === undefined ? '' : ` sur ${when.field}`} (la source ne tire pas encore)`;
+    case 'integration_records': {
+      const keyFilter = when.keyPrefix === undefined ? '' : ` ; clés ${when.keyPrefix}-*`;
+      const statusFilter = when.statuses === undefined ? '' : ` ; statuts ${when.statuses.join(', ')}`;
+      return `Intégration ${when.integrationId} : ${when.event}${keyFilter}${statusFilter}`;
+    }
   }
 }
 

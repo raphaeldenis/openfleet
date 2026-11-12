@@ -28,7 +28,7 @@ const FIELDS_BY_SOURCE = {
   silent_run: { required: ['minutes'], optional: [] },
   data_store_query: { required: ['storeId', 'event'], optional: ['op', 'value (op and value are required for row_count)'] },
   cron: { required: ['expression'], optional: ['timezone (IANA name, default Europe/Paris)', 'catchUp (skip, run_once or run_all; default skip)'] },
-  integration_records: { required: ['itemId', 'event'], optional: ['field (required for field_changed)'] },
+  integration_records: { required: ['integrationId'], optional: ['event (new_or_changed_record, new_record or changed_record; default new_or_changed_record)', 'keyPrefix (a project key such as CCM)', 'statuses (up to 8 status names)'] },
 } as const;
 
 const FIELDS_BY_RUN_KIND = {

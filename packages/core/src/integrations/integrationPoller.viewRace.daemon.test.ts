@@ -5,6 +5,7 @@ import { OWN_PROJECT_ID, startGovernanceFixture, type GovernanceFixture } from '
 import { createFakeTauriParent, type FakeTauriParent } from '../secrets/fakeTauriParent.testkit.js';
 import { createInMemorySecretStore } from '../secrets/inMemorySecretStore.js';
 import { shippedIntegrationProviders, type IntegrationProvider } from './integrationProviders.js';
+import { pollQueryOf } from './integrationViewConfig.js';
 import { deferred, settle, until } from './manualTimers.testkit.js';
 import type { ProviderAnswer, ProviderGet, ProviderReader, ResolvedAddress } from './providerReader.js';
 
@@ -210,6 +211,28 @@ describe('a pass that waits for the answer of the provider', () => {
 
     expect(pollStateOf(integration.id)).toBeUndefined();
     expect(fixture.db.prepare('SELECT status FROM integration_health WHERE profile_id = ?').all(integration.id)).toEqual([]);
+  });
+
+  it('stores with the items the identity of the request that produced them, and keeps the old one until the new query has answered', async () => {
+    const { integration, pass } = await approvedIntegrationWithItsReadInFlight();
+    const identityOfTheRunningQuery = () => pollQueryOf(fixture.daemon.integrationRepository.findViewConfig(integration.id)).identity;
+    const identityOfTheStoredItems = () => fixture.daemon.integrationRepository.listItemsWithQueryIdentity(integration.id).queryIdentity;
+    const oldIdentity = identityOfTheRunningQuery();
+
+    readerCalls[0]!.answer.resolve(okAnswer('OLD-1'));
+    await pass;
+    expect(identityOfTheStoredItems()).toBe(oldIdentity);
+    expect(fixture.daemon.integrationRepository.listItems(integration.id)[0]).not.toHaveProperty('queryIdentity');
+
+    await humanApproves(integration.id, { jql: NEW_JQL, fields: ['summary', 'status'] });
+    expect(identityOfTheStoredItems()).toBe(oldIdentity);
+    expect(identityOfTheRunningQuery()).not.toBe(oldIdentity);
+
+    const nextPass = poll();
+    await until(() => readerCalls.length === 2);
+    readerCalls[1]!.answer.resolve(okAnswer('NEW-1'));
+    await nextPass;
+    expect(identityOfTheStoredItems()).toBe(identityOfTheRunningQuery());
   });
 
   it('keeps the answer when nothing changed during the read, a proposal included', async () => {

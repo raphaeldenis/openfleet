@@ -68,15 +68,14 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
               </label>
             }
             @case ('integration_records') {
-              <label>Identifiant de l'intégration <input type="text" [value]="when.itemId" [attr.aria-describedby]="describedBy()" (input)="whenChange.emit({ itemId: valueOf($event) })" /></label>
+              <label>Identifiant de l'intégration <input type="text" [value]="when.integrationId" [attr.aria-describedby]="describedBy()" (input)="whenChange.emit({ integrationId: valueOf($event) })" /></label>
               <label>Événement de l'intégration
                 <select (change)="whenChange.emit({ integrationEvent: integrationEventOf($event) })">
                   @for (event of integrationEvents; track event) { <option [value]="event" [selected]="event === when.integrationEvent">{{ event }}</option> }
                 </select>
               </label>
-              @if (when.integrationEvent === 'field_changed') {
-                <label>Champ suivi <input type="text" [value]="when.trackedField" [attr.aria-describedby]="describedBy()" (input)="whenChange.emit({ trackedField: valueOf($event) })" /></label>
-              }
+              <label>Clé de projet (facultatif) <input type="text" [value]="when.keyPrefix" [attr.aria-describedby]="describedBy()" (input)="whenChange.emit({ keyPrefix: valueOf($event) })" /></label>
+              <label>Statuts (facultatif, séparés par des virgules) <input type="text" [value]="when.statusesText" [attr.aria-describedby]="describedBy()" (input)="whenChange.emit({ statusesText: valueOf($event) })" /></label>
             }
           }
         } @else {
