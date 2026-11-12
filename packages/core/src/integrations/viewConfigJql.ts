@@ -189,12 +189,15 @@ export type ViewConfigCheck = { ok: true; config: ViewConfigContent } | { ok: fa
  * Checks a view configuration without any effect and rebuilds it in its canonical form.
  * The JQL is read against a short allow list (a few fields, the operators `=` `!=` `IN` `NOT IN`, comparisons on dates, AND, one ORDER BY, `currentUser()` and `EMPTY`)
  * and written back from its parts with every value quoted and escaped, so the text that is approved, stored and sent is never the text that was typed.
+ * Both the typed text and the canonical form hold at most `MAX_JQL_CHARS`, so the canonical form always passes this check again unchanged.
  */
 export const checkViewConfig = (input: { jql: string; fields: readonly string[] }): ViewConfigCheck => {
   try {
-    const isTooLong = input.jql.length > MAX_JQL_CHARS;
-    if (isTooLong) refuse(`a query holds at most ${MAX_JQL_CHARS} characters.`);
+    const isTypedTextTooLong = input.jql.length > MAX_JQL_CHARS;
+    if (isTypedTextTooLong) refuse(`a query holds at most ${MAX_JQL_CHARS} characters.`);
     const jql = new QueryReader(tokensOf(input.jql)).query();
+    const isCanonicalFormTooLong = jql.length > MAX_JQL_CHARS;
+    if (isCanonicalFormTooLong) refuse(`a query holds at most ${MAX_JQL_CHARS} characters once written in its canonical form.`);
     return { ok: true, config: { jql, fields: fieldsOf(input.fields) } };
   } catch (error) {
     if (error instanceof Refusal) return { ok: false, issues: [error.message] };

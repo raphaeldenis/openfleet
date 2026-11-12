@@ -30,9 +30,15 @@ const openMigratedDatabase = () => {
   return db;
 };
 
-const insertConfig = (db: DatabaseSync, approval: { rev: number | null; digest: string | null; at: string | null } = { rev: null, digest: null, at: null }) =>
-  db.prepare("INSERT INTO integration_view_configs (profile_id, jql, fields_json, content_rev, approved_rev, approved_digest, approved_at, updated_at) VALUES ('i1', 'project = \"CCM\"', '[\"summary\"]', 1, ?, ?, ?, 'n')")
-    .run(approval.rev, approval.digest, approval.at);
+interface SlotColumns { pendingJql: string | null; pendingFields: string | null; activeJql: string | null; activeFields: string | null; rev: number | null; digest: string | null; at: string | null }
+const EMPTY_SLOTS: SlotColumns = { pendingJql: 'project = "CCM"', pendingFields: '["summary"]', activeJql: null, activeFields: null, rev: null, digest: null, at: null };
+const ACTIVE_SLOT = { activeJql: 'project = "CCM"', activeFields: '["summary"]', rev: 1, digest: 'd', at: 'n' };
+
+const insertConfig = (db: DatabaseSync, slots: Partial<SlotColumns> = {}) => {
+  const columns = { ...EMPTY_SLOTS, ...slots };
+  return db.prepare(`INSERT INTO integration_view_configs (profile_id, content_rev, pending_jql, pending_fields_json, active_jql, active_fields_json, approved_rev, approved_digest, approved_at, updated_at)
+    VALUES ('i1', 1, ?, ?, ?, ?, ?, ?, ?, 'n')`).run(columns.pendingJql, columns.pendingFields, columns.activeJql, columns.activeFields, columns.rev, columns.digest, columns.at);
+};
 
 describe('the integration view configuration migration', () => {
   it('is the 072 file and replays on an empty database, once', () => {
@@ -49,15 +55,33 @@ describe('the integration view configuration migration', () => {
     insertConfig(db);
 
     expect(() => insertConfig(db)).toThrow(/UNIQUE|PRIMARY KEY/);
-    expect(() => db.prepare("INSERT INTO integration_view_configs (profile_id, jql, fields_json, content_rev, updated_at) VALUES ('ghost', 'x', '[]', 1, 'n')").run()).toThrow(/FOREIGN KEY/);
+    expect(() => db.prepare("INSERT INTO integration_view_configs (profile_id, content_rev, updated_at) VALUES ('ghost', 1, 'n')").run()).toThrow(/FOREIGN KEY/);
   });
 
-  it('refuses an approval that holds a revision without a digest, or a digest without a revision', () => {
+  it('holds the active configuration and the proposal in two separate slots of one row', () => {
     const db = openMigratedDatabase();
 
-    expect(() => insertConfig(db, { rev: 1, digest: null, at: null })).toThrow(/CHECK constraint/);
-    expect(() => insertConfig(db, { rev: null, digest: 'd', at: 'n' })).toThrow(/CHECK constraint/);
-    expect(() => insertConfig(db, { rev: 1, digest: 'd', at: 'n' })).not.toThrow();
+    insertConfig(db, { ...ACTIVE_SLOT, pendingJql: 'project = "OTHER"' });
+
+    expect(db.prepare('SELECT active_jql, pending_jql FROM integration_view_configs').get()).toEqual({ active_jql: 'project = "CCM"', pending_jql: 'project = "OTHER"' });
+  });
+
+  it('refuses an active slot that is half filled: a text without its approval, or an approval without its text', () => {
+    const db = openMigratedDatabase();
+
+    expect(() => insertConfig(db, { ...ACTIVE_SLOT, digest: null })).toThrow(/CHECK constraint/);
+    expect(() => insertConfig(db, { ...ACTIVE_SLOT, rev: null })).toThrow(/CHECK constraint/);
+    expect(() => insertConfig(db, { ...ACTIVE_SLOT, at: null })).toThrow(/CHECK constraint/);
+    expect(() => insertConfig(db, { ...ACTIVE_SLOT, activeFields: null })).toThrow(/CHECK constraint/);
+    expect(() => insertConfig(db, { activeJql: null, activeFields: null, rev: 1, digest: 'd', at: 'n' })).toThrow(/CHECK constraint/);
+    expect(() => insertConfig(db, ACTIVE_SLOT)).not.toThrow();
+  });
+
+  it('refuses a proposal slot that is half filled', () => {
+    const db = openMigratedDatabase();
+
+    expect(() => insertConfig(db, { pendingJql: 'x', pendingFields: null })).toThrow(/CHECK constraint/);
+    expect(() => insertConfig(db, { pendingJql: null, pendingFields: '[]' })).toThrow(/CHECK constraint/);
   });
 
   it('removes the configuration of a deleted integration', () => {

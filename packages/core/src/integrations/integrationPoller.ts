@@ -4,7 +4,7 @@ import type { SecretService } from '../secrets/secretService.js';
 import { credentialEchoMaskerOf, type MaskText } from './credentialEchoMasker.js';
 import { allowedHostOf, isAddressAllowedFor, originOf, type IntegrationProvider, type IntegrationProviderRegistry } from './integrationProviders.js';
 import type { ConnectionRecord, IntegrationRepository, ProfileRecord } from './integrationRepository.js';
-import { pollQueryOf } from './integrationViewConfig.js';
+import { pollQueryOf, type PollQuery } from './integrationViewConfig.js';
 import { MAX_ISSUES_PER_POLL, issuesOfSearchBody } from './jiraIssues.js';
 import type { ProviderAnswer, ProviderReader } from './providerReader.js';
 
@@ -23,7 +23,7 @@ const UNRESOLVED_NEWEST_FIRST = 'resolution = Unresolved ORDER BY updated DESC';
 /**
  * The query the daemon runs against a provider when the integration has no view configuration: fixed by the daemon, never typed by an agent.
  * A profile narrowed to a project key reads that project; any other resource reads what is assigned to the credential's owner.
- * An integration with a view configuration runs the query a human approved, and nothing while that configuration is pending.
+ * An integration with an active view configuration runs the query a human approved; a proposal waiting for approval changes nothing. An active row that no longer matches its approval runs nothing at all.
  */
 export const pollJqlOf = (resource: string | undefined): string => {
   const isProjectKey = resource !== undefined && PROJECT_KEY.test(resource);
@@ -126,6 +126,7 @@ export class IntegrationPoller {
     }
     const presentation = await this.presentationOrUndefined(provider, connection);
     if (this.isStopped) return 'settled';
+    if (this.isRevokedSince(profile, pollQuery)) return 'settled';
     if (presentation === undefined) {
       this.recordNothingToPoll(profile);
       return 'settled';
@@ -141,8 +142,18 @@ export class IntegrationPoller {
       signal: this.abortion.signal,
     });
     if (this.isStopped) return 'settled';
+    if (this.isRevokedSince(profile, pollQuery)) return 'settled';
     this.record({ profile, connection, provider, host, maskText: presentation.maskText }, answer);
     return answer.kind === 'auth_failed' ? 'credential_refused' : 'settled';
+  }
+
+  /**
+   * True when the configuration behind a request is no longer the one it was decided on: approved, replaced or edited while the pass waited.
+   * What was decided for the old configuration is dropped whole, and the profile keeps the deadline and the empty ETag the approval gave it.
+   */
+  private isRevokedSince(profile: ProfileRecord, decidedQuery: PollQuery): boolean {
+    const currentQuery = pollQueryOf(this.deps.repository.findViewConfig(profile.id));
+    return currentQuery.identity !== decidedQuery.identity;
   }
 
   private allowedHostOrUndefined(provider: IntegrationProvider, connection: ConnectionRecord): string | undefined {

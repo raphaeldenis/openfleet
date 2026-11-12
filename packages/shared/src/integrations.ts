@@ -61,20 +61,34 @@ export interface ViewConfigContent {
   fields: string[];
 }
 
-/** `pending` is a proposal that has no effect; `approved` is the content a human reviewed, still unchanged. */
-export const VIEW_CONFIG_STATES = ['pending', 'approved'] as const;
-export type ViewConfigState = (typeof VIEW_CONFIG_STATES)[number];
+/** `running` is the content a human approved, still unchanged; `withheld` is an approved row whose content no longer matches its approval: nothing is asked of the provider for it. */
+export const ACTIVE_VIEW_STATUSES = ['running', 'withheld'] as const;
+export type ActiveViewStatus = (typeof ACTIVE_VIEW_STATUSES)[number];
 
-export interface IntegrationViewConfigView extends ViewConfigContent {
-  integrationId: string;
-  contentRev: number;
-  state: ViewConfigState;
-  /** The digest that approving this revision would record: what a human reviews. */
-  reviewDigest: string;
-  approvedAt?: string;
+/** The configuration the daemon polls: the proposal a human approved, at the revision it was approved. */
+export interface ActiveViewConfigView extends ViewConfigContent {
+  approvedRev: number;
+  approvedAt: string;
+  status: ActiveViewStatus;
 }
 
-/** A proposal: the query and the fields. A write replaces the previous content and puts the configuration back to `pending`. */
+/** The waiting proposal: it has no effect on the polling until a human approves this revision. */
+export interface ViewProposalView extends ViewConfigContent {
+  contentRev: number;
+  /** The digest that approving this revision records: what a human reviews. */
+  reviewDigest: string;
+}
+
+/** An integration holds two separate places: the active configuration and the proposal waiting for approval. */
+export interface IntegrationViewConfigView {
+  integrationId: string;
+  /** The revision of the latest proposal; it only goes up. */
+  contentRev: number;
+  active?: ActiveViewConfigView;
+  proposal?: ViewProposalView;
+}
+
+/** A proposal: the query and the fields. A write replaces the waiting proposal only; the active configuration and the polling are untouched. */
 export const SaveViewConfigBodySchema = z.object({
   jql: z.string().max(1000),
   fields: z.array(z.string().max(32)).max(16),

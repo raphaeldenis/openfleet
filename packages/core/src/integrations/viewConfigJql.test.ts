@@ -80,6 +80,44 @@ describe('the JQL of a view configuration', () => {
   });
 });
 
+describe('the canonical form of the JQL of a view configuration', () => {
+  const labelsInTwentyValues = 'labels in (a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t)';
+  const eightClausesOfTwentyLabels = Array(8).fill(labelsInTwentyValues).join(' and ');
+
+  it('refuses a query whose canonical form exceeds the bound even though the typed text is within it', () => {
+    const typedLength = eightClausesOfTwentyLabels.length;
+
+    const issues = issuesOf(eightClausesOfTwentyLabels);
+
+    expect(typedLength).toBeLessThanOrEqual(MAX_JQL_CHARS);
+    expect(issues).not.toEqual([]);
+  });
+
+  it('names the bound in the refusal, never the text', () => {
+    const issues = issuesOf(eightClausesOfTwentyLabels);
+
+    expect(issues.join(' ')).toContain(String(MAX_JQL_CHARS));
+    expect(issues.join(' ')).not.toContain('labels in');
+  });
+
+  it.each([
+    ['a simple query', 'project = CCM and status in (Open, "In Progress") order by updated desc'],
+    ['bare values that gain quotes', 'labels in (a,b,c) and component = x'],
+    ['escaped quotes and backslashes', 'labels = "a\\"b\\\\c"'],
+    ['the keywords EMPTY and currentUser', 'assignee = currentUser() AND priority != EMPTY'],
+    ['a quoted keyword that stays a string', 'labels = "EMPTY" AND labels = "currentUser"'],
+    ['dates, relative and absolute', 'updated >= -7d AND created < 2026-11-09'],
+    ['mixed case operators and newlines', 'project = CCM\nAND\tstatus not in (Open,Closed)\nORDER BY priority asc'],
+    ['an expansion that just fits', Array(2).fill(labelsInTwentyValues).join(' and ')],
+  ])('is idempotent: validating the canonical form of %s returns the same canonical form', (_name, jql) => {
+    const once = accepted(jql);
+
+    const twice = accepted(once.jql);
+
+    expect(twice).toEqual(once);
+  });
+});
+
 describe('the displayed fields of a view configuration', () => {
   it('keeps the fields of the list, once each, in the order of the list', () => {
     const outcome = checkViewConfig({ jql: 'project = CCM', fields: ['status', 'summary', 'status'] });
