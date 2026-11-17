@@ -1,6 +1,6 @@
 import { createInterface } from 'node:readline';
 import * as z from 'zod';
-import { SECRET_SCOPE_KINDS } from '@openfleet/shared';
+import { PLAYBOOK_RESUME_ACTION, PLAYBOOK_RUN_SCOPE_KIND, SECRET_SCOPE_KINDS } from '@openfleet/shared';
 import { SECRET_NAME } from '../playbooks/kernel/secretName.js';
 import { SecretAnswerSchema, type ParentToDaemonMessage, type SecretParentLink } from './secretParentLink.js';
 
@@ -36,7 +36,17 @@ const ViewApprovalNonceSchema = z.object({
   name: z.string().min(1).max(128),
 }).strict().refine((message) => message.name === message.scopeId);
 
-const OperatorNonceSchema = z.union([SecretOperatorNonceSchema, TriggerArmNonceSchema, ViewApprovalNonceSchema]);
+/** The answer to one manual step: the run id is the scope id and the sequence number of the step (digits, no leading zero) is the name, so a nonce names exactly one step of one run. */
+const ResumeManualNonceSchema = z.object({
+  type: z.literal('operator_nonce'),
+  nonce: z.string(),
+  action: z.literal(PLAYBOOK_RESUME_ACTION),
+  scopeKind: z.literal(PLAYBOOK_RUN_SCOPE_KIND),
+  scopeId: z.string().min(1).max(128),
+  name: z.string().regex(/^[1-9][0-9]{0,3}$/),
+}).strict();
+
+const OperatorNonceSchema = z.union([SecretOperatorNonceSchema, TriggerArmNonceSchema, ViewApprovalNonceSchema, ResumeManualNonceSchema]);
 const SecretAnswerLineSchema = z.object({ type: z.literal('secret_answer'), requestId: z.string().min(1) }).and(SecretAnswerSchema);
 
 const parentMessageOf = (line: string): ParentToDaemonMessage | undefined => {

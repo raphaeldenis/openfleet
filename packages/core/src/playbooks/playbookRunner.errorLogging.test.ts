@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { applyMigrations } from '../db/migrate.js';
 import { recentLogLines } from '../logger.js';
 import { PlaybookRunner } from './playbookRunner.js';
+import { refusingManualResumeProof } from './manualResumeProof.js';
+import { PlaybookManualRequestRepository } from './playbookManualRequestRepository.js';
 import { PlaybookRunRepository } from './playbookRunRepository.js';
 
 const SECRET_NAME = 'API_KEY';
@@ -25,8 +27,8 @@ const arrangeRunnerWhoseScriptLookupFails = (failure: () => never) => {
   const runner = new PlaybookRunner({
     playbooks: { getById: () => playbook } as never,
     approvals: { assertStillApproved: () => ({}), locatePinned: failure },
-    runs, stores: {} as never, secrets: { resolve: async () => secretValue }, clock: () => new Date().toISOString(), newId: () => 'run-1',
-    limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: 50 }, observer: { runStarted: () => {}, runEnded },
+    runs, manual: new PlaybookManualRequestRepository(db), manualResumeProof: refusingManualResumeProof, stores: {} as never, secrets: { resolve: async () => secretValue }, clock: () => new Date().toISOString(), newId: () => 'run-1',
+    limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: 50, maxParkedRunsPerProject: 50, maxWaitEvaluations: 1000 }, observer: { runStarted: () => {}, runEnded },
   });
   return { db, runs, runner, ended };
 };

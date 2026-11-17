@@ -126,7 +126,7 @@ pub fn operator_nonce_from(random: [u8; OPERATOR_NONCE_BYTES]) -> String {
   random.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// What one operator nonce authorises: one action on one secret, the arming of one trigger (scope kind `trigger`, the trigger id as scope id and as name), or the approval of the view of one integration (scope kind `integration`, the integration id as scope id and as name). The daemon refuses the nonce for any other action or target.
+/// What one operator nonce authorises: one action on one secret, the arming of one trigger (scope kind `trigger`, the trigger id as scope id and as name), the approval of the view of one integration (scope kind `integration`, the integration id as scope id and as name), or the answer to one manual step (scope kind `playbook_run`, the run id as scope id, the sequence number of the step as name). The daemon refuses the nonce for any other action or target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OperatorGrant<'a> {
   pub action: &'a str,
@@ -141,6 +141,9 @@ const GRANT_SCOPE_KINDS: [&str; 3] = ["playbook", "connection", "trigger"];
 const TRIGGER_SCOPE_KIND: &str = "trigger";
 const APPROVE_VIEW_ACTION: &str = "integration.approve_view";
 const INTEGRATION_SCOPE_KIND: &str = "integration";
+const RESUME_MANUAL_ACTION: &str = "playbook.resume_manual";
+const PLAYBOOK_RUN_SCOPE_KIND: &str = "playbook_run";
+const STEP_SEQUENCE_MAX_CHARS: usize = 4;
 const GRANT_MAX_CHARS: usize = 128;
 
 fn is_secret_name(name: &str) -> bool {
@@ -171,8 +174,20 @@ fn is_acceptable_approve_view_grant(grant: &OperatorGrant) -> bool {
   grant.action == APPROVE_VIEW_ACTION && is_integration_scope && names_the_integration && has_usable_id(grant.scope_id)
 }
 
+/// The sequence number of a step: digits with no leading zero, at most four of them, as the daemon's schema reads it.
+fn is_step_sequence_number(name: &str) -> bool {
+  let mut characters = name.chars();
+  let starts_well = characters.next().is_some_and(|first| ('1'..='9').contains(&first));
+  starts_well && characters.all(|character| character.is_ascii_digit()) && name.len() <= STEP_SEQUENCE_MAX_CHARS
+}
+
+fn is_acceptable_resume_manual_grant(grant: &OperatorGrant) -> bool {
+  let is_playbook_run_scope = grant.scope_kind == PLAYBOOK_RUN_SCOPE_KIND;
+  grant.action == RESUME_MANUAL_ACTION && is_playbook_run_scope && has_usable_id(grant.scope_id) && is_step_sequence_number(grant.name)
+}
+
 fn is_acceptable_grant(grant: &OperatorGrant) -> bool {
-  is_acceptable_secret_grant(grant) || is_acceptable_arm_trigger_grant(grant) || is_acceptable_approve_view_grant(grant)
+  is_acceptable_secret_grant(grant) || is_acceptable_arm_trigger_grant(grant) || is_acceptable_approve_view_grant(grant) || is_acceptable_resume_manual_grant(grant)
 }
 
 /// The line that hands an operator nonce to the daemon over the sidecar's stdin, bound to its grant. A grant the daemon would not accept is refused here, so no nonce is minted for it.
@@ -534,6 +549,35 @@ mod tests {
       OperatorGrant { scope_id: "", name: "", ..APPROVE_VIEW_GRANT },
       OperatorGrant { scope_id: &too_long, name: &too_long, ..APPROVE_VIEW_GRANT },
       OperatorGrant { action: "set", ..APPROVE_VIEW_GRANT },
+    ];
+
+    for grant in &refused {
+      assert!(operator_nonce_line("abc123", grant).is_err(), "{grant:?}");
+    }
+  }
+
+  const RESUME_MANUAL_GRANT: OperatorGrant = OperatorGrant { action: "playbook.resume_manual", scope_kind: "playbook_run", scope_id: "0b1c-run", name: "3" };
+
+  #[test]
+  fn hands_the_daemon_a_nonce_for_answering_one_manual_step_of_one_run() {
+    let line = operator_nonce_line("abc123", &RESUME_MANUAL_GRANT).unwrap();
+
+    let message: Value = serde_json::from_str(secret_line_payload(&line).unwrap()).unwrap();
+    assert_eq!(message, json!({ "type": "operator_nonce", "nonce": "abc123", "action": "playbook.resume_manual", "scopeKind": "playbook_run", "scopeId": "0b1c-run", "name": "3" }));
+  }
+
+  #[test]
+  fn mints_no_resume_nonce_that_does_not_name_one_step_of_one_run() {
+    let too_long = "n".repeat(GRANT_MAX_CHARS + 1);
+    let refused = [
+      OperatorGrant { scope_kind: "playbook", ..RESUME_MANUAL_GRANT },
+      OperatorGrant { name: "step-3", ..RESUME_MANUAL_GRANT },
+      OperatorGrant { name: "0", ..RESUME_MANUAL_GRANT },
+      OperatorGrant { name: "03", ..RESUME_MANUAL_GRANT },
+      OperatorGrant { name: "", ..RESUME_MANUAL_GRANT },
+      OperatorGrant { scope_id: "", ..RESUME_MANUAL_GRANT },
+      OperatorGrant { scope_id: &too_long, ..RESUME_MANUAL_GRANT },
+      OperatorGrant { action: "set", ..RESUME_MANUAL_GRANT },
     ];
 
     for grant in &refused {

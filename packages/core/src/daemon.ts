@@ -19,7 +19,7 @@ import { CriteriaStatusGuard } from './escalation/criteriaStatusGuard.js';
 import { EscalationRepository } from './escalation/escalationRepository.js';
 import { EscalationService } from './escalation/escalationService.js';
 import { GovernanceQueueService } from './governance/governanceQueueService.js';
-import { MAX_CONCURRENT_RUNS, MAX_RUNS_NEEDING_REVIEW, MAX_STEP_EXECUTIONS_PER_RUN, OpenFleetError, type EscalationView } from '@openfleet/shared';
+import { MAX_CONCURRENT_RUNS, MAX_PARKED_RUNS_PER_PROJECT, MAX_RUNS_NEEDING_REVIEW, MAX_STEP_EXECUTIONS_PER_RUN, MAX_WAIT_FOR_EVALUATIONS, OpenFleetError, type EscalationView } from '@openfleet/shared';
 import { decisionNotification, escalationAnswerNotification } from './governance/decisionNotification.js';
 import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
@@ -46,6 +46,7 @@ import { IntegrationPoller } from './integrations/integrationPoller.js';
 import { IntegrationRepository } from './integrations/integrationRepository.js';
 import { IntegrationService } from './integrations/integrationService.js';
 import { IntegrationViewService } from './integrations/integrationViewService.js';
+import { createOperatorManualResumeProof } from './secrets/operatorManualResumeProof.js';
 import { createOperatorViewApprovalProof } from './secrets/operatorViewApprovalProof.js';
 import { createPinnedProviderReader, type ProviderReader, type ResolvedAddress } from './integrations/providerReader.js';
 
@@ -110,6 +111,7 @@ import { PlaybookService } from './playbooks/playbookService.js';
 import { PlaybookApprovals } from './playbooks/playbookApprovals.js';
 import type { HttpStepNetwork } from './playbooks/httpStepRequest.js';
 import { PlaybookRunner } from './playbooks/playbookRunner.js';
+import { PlaybookManualRequestRepository } from './playbooks/playbookManualRequestRepository.js';
 import { PlaybookRunRepository } from './playbooks/playbookRunRepository.js';
 import { ScriptLocator } from './playbooks/scriptLocator.js';
 import { pendingPermissionViewOf } from './mcp/pendingPermissionView.js';
@@ -256,7 +258,13 @@ export interface DaemonOptions {
    * The runner of playbooks. `scriptRoots` replaces the `playbooks.scriptRoots` of config.json (the directories a script cell may run files from);
    * `maxStepExecutions` and `maxConcurrentRuns` replace the caps of 1000 step executions per run and 4 runs at once, so a test reaches them with a few steps.
    */
-  playbooks?: { scriptRoots?: string[]; maxStepExecutions?: number; maxConcurrentRuns?: number; maxRunsNeedingReview?: number; httpNetwork?: HttpStepNetwork };
+  playbooks?: {
+    scriptRoots?: string[]; maxStepExecutions?: number; maxConcurrentRuns?: number; maxRunsNeedingReview?: number; httpNetwork?: HttpStepNetwork;
+    /** Replace the 50 runs a project may park on a human and the 1000 evaluations of a waitFor cell, so a test reaches them with a few runs. */
+    maxParkedRunsPerProject?: number; maxWaitEvaluations?: number;
+    /** Replace the clock of the runner (an ISO instant) and the timer of the waitFor cells, so a test decides when a wait for a human expires and when a predicate is evaluated again. */
+    clock?: () => string; startTimer?: (onElapsed: () => void, delayMs: number) => () => void;
+  };
   /**
    * The secrets of playbooks. `parent` is the line to the desktop app that spawned the daemon (stdout and stdin of the sidecar); with it the keychain of the app holds the values.
    * `store` replaces the keychain adapter with another holder, so a test needs no desktop app. `clock` and `exchangeTimeoutMs` replace the clock of the nonces and the wait for the app's answer.
@@ -518,8 +526,12 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const scriptLocator = new ScriptLocator(options.playbooks?.scriptRoots ?? playbookSettings.scriptRoots);
   const playbookApprovals = new PlaybookApprovals({ repository: playbookRepository, locator: scriptLocator, clock: () => new Date().toISOString() });
   const playbookRunner = new PlaybookRunner({
-    playbooks, stores, approvals: playbookApprovals, runs: playbookRuns, secrets, clock: () => new Date().toISOString(), newId, httpNetwork: options.playbooks?.httpNetwork,
-    limits: { maxStepExecutions: options.playbooks?.maxStepExecutions ?? MAX_STEP_EXECUTIONS_PER_RUN, maxConcurrentRuns: options.playbooks?.maxConcurrentRuns ?? MAX_CONCURRENT_RUNS, maxRunsNeedingReview: options.playbooks?.maxRunsNeedingReview ?? MAX_RUNS_NEEDING_REVIEW },
+    playbooks, stores, approvals: playbookApprovals, runs: playbookRuns, manual: new PlaybookManualRequestRepository(db), manualResumeProof: createOperatorManualResumeProof(secretNonces),
+    secrets, clock: options.playbooks?.clock ?? (() => new Date().toISOString()), startTimer: options.playbooks?.startTimer, newId, httpNetwork: options.playbooks?.httpNetwork,
+    limits: {
+      maxStepExecutions: options.playbooks?.maxStepExecutions ?? MAX_STEP_EXECUTIONS_PER_RUN, maxConcurrentRuns: options.playbooks?.maxConcurrentRuns ?? MAX_CONCURRENT_RUNS, maxRunsNeedingReview: options.playbooks?.maxRunsNeedingReview ?? MAX_RUNS_NEEDING_REVIEW,
+      maxParkedRunsPerProject: options.playbooks?.maxParkedRunsPerProject ?? MAX_PARKED_RUNS_PER_PROJECT, maxWaitEvaluations: options.playbooks?.maxWaitEvaluations ?? MAX_WAIT_FOR_EVALUATIONS,
+    },
     observer: { runStarted: (run) => systemActivity.playbookRunStarted(run), runEnded: (run) => systemActivity.playbookRunEnded(run) },
   });
   const triggerEngine = new TriggerEngine({

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { SecretScope } from '@openfleet/shared';
+import { PLAYBOOK_RESUME_ACTION, PLAYBOOK_RUN_SCOPE_KIND, type SecretScope } from '@openfleet/shared';
 
 export const NONCE_LIFETIME_MS = 30_000;
 const MAX_LIVE_NONCES = 16;
@@ -7,12 +7,15 @@ const MIN_REGISTERED_NONCE_CHARS = 16;
 const MAX_REGISTERED_NONCE_CHARS = 128;
 const NONCE_CHARACTERS = /^[A-Za-z0-9_-]+$/;
 
-/** `set` and `clear` act on a secret; `trigger.arm` arms the trigger and `integration.approve_view` approves the view of the integration whose id is both the scope id and the name. */
-export const OPERATOR_ACTIONS = ['set', 'clear', 'trigger.arm', 'integration.approve_view'] as const;
+/**
+ * `set` and `clear` act on a secret; `trigger.arm` arms the trigger and `integration.approve_view` approves the view of the integration whose id is both the scope id and the name.
+ * `playbook.resume_manual` answers one manual step: the run id is the scope id and the sequence number of the step is the name.
+ */
+export const OPERATOR_ACTIONS = ['set', 'clear', 'trigger.arm', 'integration.approve_view', PLAYBOOK_RESUME_ACTION] as const;
 export type OperatorAction = (typeof OPERATOR_ACTIONS)[number];
 
-/** What an operator nonce authorises: one action on one secret, the arming of one trigger, or the approval of the view of one integration. */
-export type OperatorBinding = { action: OperatorAction; scope: { kind: SecretScope['kind'] | 'integration'; id: string }; name: string };
+/** What an operator nonce authorises: one action on one secret, the arming of one trigger, the approval of the view of one integration, or the answer to one manual step of one run. */
+export type OperatorBinding = { action: OperatorAction; scope: { kind: SecretScope['kind'] | 'integration' | typeof PLAYBOOK_RUN_SCOPE_KIND; id: string }; name: string };
 
 const bindingKeyOf = ({ action, scope, name }: OperatorBinding): string => JSON.stringify([action, scope.kind, scope.id, name]);
 

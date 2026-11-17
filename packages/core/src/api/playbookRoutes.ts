@@ -1,4 +1,4 @@
-import { HUMAN_ACTOR, OpenFleetError, PlaybookInputsSchema, PlaybookNameSchema, PlaybookPolicySchema } from '@openfleet/shared';
+import { HUMAN_ACTOR, MANUAL_DECISIONS, OpenFleetError, PlaybookInputsSchema, PlaybookNameSchema, PlaybookPolicySchema } from '@openfleet/shared';
 import { z } from 'zod';
 import { parsePlaybookCell } from '../playbooks/cellParsing.js';
 import type { PlaybookContent, PlaybookRecord } from '../playbooks/playbookRepository.js';
@@ -7,6 +7,7 @@ import type { PlaybookRunner } from '../playbooks/playbookRunner.js';
 import type { PlaybookRunRecord, PlaybookRunRepository } from '../playbooks/playbookRunRepository.js';
 import type { PlaybookService } from '../playbooks/playbookService.js';
 import { json, queryParams, type Router } from './router.js';
+import { HUMAN_PROOF_HEADER } from './triggerRoutes.js';
 
 const CellsSchema = z.array(z.record(z.string(), z.unknown()));
 const RevisionSchema = z.int().min(1);
@@ -40,6 +41,9 @@ export interface PlaybookRunning {
 const ApproveBodySchema = z.strictObject({ digest: z.string().min(1) });
 const RunBodySchema = z.strictObject({ inputs: z.record(z.string(), z.unknown()).optional() });
 const RunsQuerySchema = z.object({ playbookId: z.string().min(1) });
+const ResumeBodySchema = z.strictObject({ decision: z.enum(MANUAL_DECISIONS) });
+const StepSeqParamSchema = z.coerce.number().pipe(z.int().min(1));
+const headerValue = (value: string | string[] | undefined): string | undefined => (Array.isArray(value) ? value[0] : value);
 
 /** A run as the desktop reads it: the journal of its steps with outputs already masked. */
 const runViewOf = (running: PlaybookRunning, run: PlaybookRunRecord) => ({ ...run, steps: running.runs.stepsOf(run.id) });
@@ -68,6 +72,13 @@ function registerRunRoutes(router: Router, deps: { playbooks: PlaybookService; r
     const { inputs } = RunBodySchema.parse(body ?? {});
     const run = await running.runner.start({ playbookId: params.id!, inputs: inputs ?? {}, actorKind: 'admin' });
     json(res, 202, runViewOf(running, run));
+  });
+
+  router.add('POST', '/api/playbook-runs/:id/steps/:seq/resume', async ({ req, res, params, body }) => {
+    const { decision } = ResumeBodySchema.parse(body);
+    const seq = StepSeqParamSchema.parse(params.seq);
+    const resumed = await running.runner.resumeManualStep({ runId: params.id!, seq, decision, proof: headerValue(req.headers[HUMAN_PROOF_HEADER]) });
+    json(res, 200, runViewOf(running, resumed));
   });
 
   router.add('GET', '/api/playbook-runs', ({ req, res }) => {

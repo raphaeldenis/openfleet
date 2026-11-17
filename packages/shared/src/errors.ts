@@ -100,6 +100,11 @@ export const ERROR_CODES = {
   playbook_run_busy: { kind: 'conflict', retry: 'later' },
   playbook_review_backlog: { kind: 'conflict', retry: 'never' },
 
+  // A manual step is answered once, by a human, before its wait ends; too many runs parked on a human gate refuse a new run.
+  manual_already_answered: { kind: 'conflict', retry: 'never' },
+  manual_wait_expired: { kind: 'conflict', retry: 'never' },
+  playbook_waiting_backlog: { kind: 'conflict', retry: 'never' },
+
   // The playbook moved since it was read: reloading it shows the current revision. A locked playbook takes writes from the desktop app only.
   playbook_conflict: { kind: 'conflict', retry: 'after_refresh' },
   playbook_locked: { kind: 'conflict', retry: 'never' },
