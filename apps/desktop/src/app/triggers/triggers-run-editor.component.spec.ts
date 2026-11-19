@@ -53,6 +53,27 @@ describe('Trigger editor: the RUN', () => {
       });
     });
 
+    it('saves the RUN against the revision the form was opened from when the list moved on meanwhile', async () => {
+      const armAnswer = deferred<TriggerView>();
+      let changedElsewhere = false;
+      const second = (revision: number) => trigger({ id: 't2', title: 'Surveiller la table', contentRev: revision });
+      const listTriggers = vi.fn(() => Promise.resolve([trigger(), changedElsewhere ? second(6) : second(5)]));
+      const { api, fixture } = await renderTriggers({ api: { listTriggers, armTrigger: vi.fn(() => armAnswer.promise) } });
+      await choose(FIRST);
+      await userEvent.click(screen.getByRole('button', { name: 'Armer la révision 2' }));
+      await letPendingAnswersLand(fixture);
+      await choose('Surveiller la table');
+      await openEditor();
+      changedElsewhere = true;
+      armAnswer.resolve(trigger());
+      await letPendingAnswersLand(fixture);
+      await replaceText('Message', 'Réveillez-la.');
+
+      await save();
+
+      expect(lastUpdate(api)).toMatchObject({ triggerId: 't2', expectedRev: 5, changes: { run: { kind: 'notify', message: 'Réveillez-la.' } } });
+    });
+
     it.each<[string, string, Record<string, string>, TriggerRun]>([
       ['prompt_manager', 'Prompt à un manager', { Prompt: 'Réveille-toi' }, { kind: 'prompt_manager', prompt: 'Réveille-toi' }],
       ['prompt_session', 'Prompt à une session', { 'Identifiant de la session': 's9', Prompt: 'Continue' }, { kind: 'prompt_session', sessionId: 's9', prompt: 'Continue' }],
