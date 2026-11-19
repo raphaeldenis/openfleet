@@ -140,7 +140,7 @@ export function createTriggerActions(deps: TriggerActionsDeps): TriggerActions {
       const playbook = playbooks.getById(run.playbookId);
       const isOfAnotherProject = playbook.projectId !== trigger.projectId;
       if (isOfAnotherProject) return cancelled('playbook_unavailable');
-      const started = await playbookRunner.start({ playbookId: playbook.id, inputs: run.inputs ?? {}, actorKind: 'admin' });
+      const started = await playbookRunner.start({ playbookId: playbook.id, inputs: run.inputs ?? {}, actorKind: 'admin', launchedBy: { kind: 'trigger', ref: trigger.id } });
       return { settlement: 'completed', runId: started.id };
     } catch (error) {
       const reason = error instanceof OpenFleetError ? FIRE_REASON_OF_REFUSAL[error.code] : undefined;

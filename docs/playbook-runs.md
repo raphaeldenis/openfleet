@@ -91,6 +91,20 @@ It evaluates at once, then sleeps `pollMs` on an injected timer between evaluati
 
 A `tool` cell is refused with `playbook_not_runnable` before anything is written. A run has no session, no role and no actor to give the tool, and the handlers of the MCP tools need a session; a cell that calls a tool comes with the actor and the role of a run (PBK-P3B-TOOL).
 
+## Who launched a run
+
+Every run carries `launchedBy: { kind, ref }`, written once when the run is created and never changed (a database guard refuses any later update of the two columns, migration 074):
+
+| `kind` | `ref` | Written when |
+| --- | --- | --- |
+| `admin_api` | `null` | the run starts through `POST /api/playbooks/:id/run` |
+| `trigger` | the id of the trigger | a trigger fires its RUN `run_playbook` |
+| `unknown` | `null` | the run was created before migration 074; no row is rewritten |
+
+`launchedBy` is part of the REST representation of a run (`POST /api/playbooks/:id/run`, `GET /api/playbook-runs/:id`, `GET /api/playbook-runs?playbookId=`). No MCP tool shows it and none changes. The value `agent` is not accepted: it is reserved for PBK-P4B.
+
+Known limit: this is a trace, not a barrier. The column authorises nothing and refuses nothing: no check reads it, and the approval digest and the digest of the flow do not depend on it (a test starts the same playbook by hand and by a trigger and finds the same digests). The id of a trigger names a trigger that may have been deleted since; the column keeps the id as it was.
+
 ## Limits
 
 1000 step executions per run (a flow stored outside the save path with an undocumented loop stops there with `step_limit_exceeded`), 4 runs at once and one per playbook (`playbook_run_busy`), 256 Ki characters of output per step, stdout and stderr together (the rest is dropped as it arrives, so memory stays bounded however the script prints, NUL and other control characters included, and the output ends with `[truncated]`; the characters count as printed, before any cleaning), `maxRunsToKeep` succeeded or failed runs per playbook. A run that `needs_review` is not pruned and does not count in `maxRunsToKeep`: its journal is the evidence of an effect nobody has examined. No route resolves it yet; it goes away only with its playbook. To keep the disk bounded without deleting evidence, at most 50 runs may await a review across all playbooks: at that count a new run is refused with `playbook_review_backlog` (retry `never`), nothing is written and no run is deleted.
