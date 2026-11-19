@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { IntegrationCredentialKind, IntegrationHealthStatus, IntegrationIssueItem } from '@openfleet/shared';
+import { OpenFleetError, type IntegrationCredentialKind, type IntegrationHealthStatus, type IntegrationIssueItem } from '@openfleet/shared';
 import { inTransaction } from '../db/transaction.js';
 
 export interface ConnectionRecord {
@@ -105,6 +105,13 @@ export type ItemField = keyof typeof ITEM_COLUMN_SQL;
 export interface ItemFilter { field: ItemField; match: 'equals' | 'contains'; value: string }
 
 const escapedForLike = (text: string): string => text.replace(/[\\%_]/g, (character) => `\\${character}`);
+
+const NULL_CHARACTER = String.fromCharCode(0);
+/** SQLite `LIKE` stops reading its pattern at a null character, so a text that carries one would match every row. */
+const refuseSearchTextWithNullCharacter = ({ match, value }: ItemFilter): void => {
+  const isSearchTextWithNullCharacter = match === 'contains' && value.includes(NULL_CHARACTER);
+  if (isSearchTextWithNullCharacter) throw new OpenFleetError('invalid_body', 'the search text carries a null character.');
+};
 
 const toItem = (row: ItemRow): IntegrationIssueItem => ({ key: row.external_id, ...(JSON.parse(row.fields_json) as Omit<IntegrationIssueItem, 'key'>) });
 
@@ -272,9 +279,10 @@ export class IntegrationRepository {
 
   /**
    * A page of the kept issues, most recently updated first, and the number of issues that match.
-   * A filter names a column of the allow list `ITEM_COLUMN_SQL`; its value is always a bound parameter, and for `contains` the SQL wildcards of the value are escaped.
+   * A filter names a column of the allow list `ITEM_COLUMN_SQL`; its value is always a bound parameter, and for `contains` the SQL wildcards of the value are escaped and a value with a null character is refused as `invalid_body`.
    */
   pageOfItems(profileId: string, { filters, limit, offset }: { filters: readonly ItemFilter[]; limit: number; offset: number }): { items: IntegrationIssueItem[]; total: number } {
+    filters.forEach(refuseSearchTextWithNullCharacter);
     const conditions = filters.map(({ field, match }) => (match === 'contains' ? `${ITEM_COLUMN_SQL[field]} LIKE ? ESCAPE '\\'` : `${ITEM_COLUMN_SQL[field]} = ? COLLATE NOCASE`));
     const parameters = filters.map(({ value, match }) => (match === 'contains' ? `%${escapedForLike(value)}%` : value));
     const where = ['profile_id = ?', ...conditions].join(' AND ');

@@ -347,6 +347,17 @@ describe('the read tools over the issues the poller kept', () => {
     expect(found.json!.items.map((item: { key: string }) => item.key)).toEqual(expectedKeys);
   });
 
+  it('search_jira_issues refuses a query that carries a null character, without quoting it, instead of listing every issue', async () => {
+    const { integration } = await pollIssues([{ key: 'CCM-1', summary: 'Login page broken' }, { key: 'CCM-2', summary: 'Export to CSV' }]);
+    const query = `quoted-text${String.fromCharCode(0)}`;
+
+    const answer = await tool(lead, 'search_jira_issues', { integration: integration.id, query });
+
+    expect(answer.isError).toBe(true);
+    expect(answer.text).toMatch(/^error invalid_body:/);
+    expect(answer.text).not.toContain('quoted-text');
+  });
+
   it('search_jira_issues searches the listed fields only, and has no parameter that carries a JQL', async () => {
     const { integration } = await pollIssues([{ key: 'CCM-1' }]);
     const schema = (await lead.listTools()).tools.find((candidate) => candidate.name === 'search_jira_issues')!.inputSchema as { properties: Record<string, unknown> };
