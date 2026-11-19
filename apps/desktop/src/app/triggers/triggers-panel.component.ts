@@ -3,6 +3,7 @@ import type { TriggerFireView } from '@openfleet/shared';
 import { withConditionAdded, withConditionChanged, withConditionRemoved, type ConditionChange } from './conditions-draft';
 import { acceptedOwnerOf, ownerChoicesOf, type OwnerChoice } from './owner-choices';
 import { TriggerEditorComponent } from './trigger-editor.component';
+import type { RunDraft } from './run-draft';
 import type { WhenDraft } from './when-draft';
 import { copyFor, retryOfError } from '../core/error-copy';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
@@ -128,7 +129,7 @@ const reviewedRuleHasMoved = () => new ApiError(409, 'the reviewed rule changed 
           @if (draft(); as editing) {
             <of-trigger-editor
               [draft]="editing" [problem]="draftProblem()" [managers]="managers()" [isWriting]="isWriting()"
-              (draftChange)="editDraft($event)" (whenChange)="editWhen($event)"
+              (draftChange)="editDraft($event)" (whenChange)="editWhen($event)" (runChange)="editRun($event)"
               (conditionAdded)="addCondition()" (conditionRemoved)="removeCondition($event)" (conditionChange)="changeCondition($event)" (ownerChosen)="chooseOwner($event)" (managersRetried)="loadManagers()"
               (submitted)="submitEdit($event, trigger)" (cancelled)="cancelEdit()"
             />
@@ -409,6 +410,11 @@ export class TriggersPanelComponent {
   /** The change is merged into the WHEN the draft holds now, never into the one a child saw when it last rendered. */
   protected editWhen(change: Partial<WhenDraft>): void {
     this.draft.update((draft) => (draft?.when === undefined ? draft : { ...draft, when: { ...draft.when, ...change } }));
+  }
+
+  /** The change is merged into the RUN the draft holds now, never into the one a child saw when it last rendered. */
+  protected editRun(change: Partial<RunDraft>): void {
+    this.draft.update((draft) => (draft?.run === undefined ? draft : { ...draft, run: { ...draft.run, ...change } }));
   }
 
   protected addCondition(): void {

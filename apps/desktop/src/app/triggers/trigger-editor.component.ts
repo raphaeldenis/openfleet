@@ -4,11 +4,16 @@ import { ConditionsEditorComponent } from './conditions-editor.component';
 import type { ConditionChange } from './conditions-draft';
 import { loadedValueOf, type Load } from './load-state';
 import type { OwnerChoice } from './owner-choices';
+import { RUN_KINDS, type RunDraft, type RunKind } from './run-draft';
 import { BACKLOG_POLICIES, BATCH_MODES, type TriggerEditDraft } from './trigger-edit-draft';
 import { CRON_CATCH_UPS, INTEGRATION_EVENTS, ROW_COUNT_OPS, SESSION_STATES, STORE_EVENTS, WHEN_SOURCES, type WhenDraft } from './when-draft';
 
 const SOURCE_LABELS: Record<WhenDraft['source'], string> = {
   session_state: 'État d’une session enfant', silent_run: 'Session enfant silencieuse', data_store_query: 'Table de données', cron: 'Horaire (cron)', integration_records: 'Enregistrements d’une intégration',
+};
+
+const RUN_KIND_LABELS: Record<RunKind, string> = {
+  prompt_manager: 'Prompt à un manager', notify: 'Notification', prompt_session: 'Prompt à une session', close_session: 'Fermeture d’une session', run_playbook: 'Lancer un playbook',
 };
 
 const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
@@ -91,6 +96,36 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
         (conditionAdded)="conditionAdded.emit()" (conditionRemoved)="conditionRemoved.emit($event)" (conditionChange)="conditionChange.emit($event)"
       />
 
+      <fieldset>
+        <legend>Alors</legend>
+        @if (draft().run; as run) {
+          <label>Action
+            <select (change)="runChange.emit({ kind: runKindOf($event) })">
+              @for (kind of runKinds; track kind) { <option [value]="kind" [selected]="kind === run.kind">{{ runKindLabels[kind] }}</option> }
+            </select>
+          </label>
+          @switch (run.kind) {
+            @case ('prompt_manager') {
+              <label>Identifiant du manager (facultatif) <input type="text" [value]="run.managerId" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ managerId: valueOf($event) })" /></label>
+              <label>Prompt <textarea [value]="run.prompt" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ prompt: valueOf($event) })"></textarea></label>
+            }
+            @case ('notify') {
+              <label>Titre de la notification <input type="text" [value]="run.title" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ title: valueOf($event) })" /></label>
+              <label>Message <textarea [value]="run.message" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ message: valueOf($event) })"></textarea></label>
+            }
+            @case ('prompt_session') {
+              <label>Identifiant de la session <input type="text" [value]="run.sessionId" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ sessionId: valueOf($event) })" /></label>
+              <label>Prompt <textarea [value]="run.prompt" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ prompt: valueOf($event) })"></textarea></label>
+            }
+            @case ('close_session') {
+              <label>Identifiant de la session <input type="text" [value]="run.sessionId" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ sessionId: valueOf($event) })" /></label>
+            }
+          }
+        } @else {
+          <p class="muted" data-testid="run-not-editable">Cette action n’est pas modifiable ici : elle reste telle qu’elle est enregistrée.</p>
+        }
+      </fieldset>
+
       <label>Propriétaire
         <select [disabled]="!ownerChoices()" (change)="ownerChosen.emit(valueOf($event))">
           <option value="" [selected]="draft().ownerManagerId === null">Aucun manager</option>
@@ -142,6 +177,7 @@ export class TriggerEditorComponent {
 
   readonly draftChange = output<Partial<TriggerEditDraft>>();
   readonly whenChange = output<Partial<WhenDraft>>();
+  readonly runChange = output<Partial<RunDraft>>();
   readonly conditionAdded = output<void>();
   readonly conditionRemoved = output<string>();
   readonly conditionChange = output<{ key: string; change: ConditionChange }>();
@@ -157,6 +193,8 @@ export class TriggerEditorComponent {
   protected readonly rowCountOps = ROW_COUNT_OPS;
   protected readonly catchUps = CRON_CATCH_UPS;
   protected readonly integrationEvents = INTEGRATION_EVENTS;
+  protected readonly runKinds = RUN_KINDS;
+  protected readonly runKindLabels = RUN_KIND_LABELS;
   protected readonly batchModes = BATCH_MODES;
   protected readonly backlogPolicies = BACKLOG_POLICIES;
   protected readonly valueOf = valueOf;
@@ -187,6 +225,7 @@ export class TriggerEditorComponent {
   protected rowCountOpOf(event: Event) { return valueOf(event) as WhenDraft['rowCountOp']; }
   protected catchUpOf(event: Event) { return valueOf(event) as WhenDraft['catchUp']; }
   protected integrationEventOf(event: Event) { return valueOf(event) as WhenDraft['integrationEvent']; }
+  protected runKindOf(event: Event) { return valueOf(event) as RunKind; }
   protected batchModeOf(event: Event) { return valueOf(event) as TriggerEditDraft['batchMode']; }
   protected backlogPolicyOf(event: Event) { return valueOf(event) as TriggerEditDraft['backlogPolicy']; }
 }

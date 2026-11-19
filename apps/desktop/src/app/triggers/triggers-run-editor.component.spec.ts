@@ -7,7 +7,7 @@ import { FIRST, choose, openEditor, renderTriggers, save, trigger, type FakeApi 
 
 const textbox = (name: string) => screen.getByRole('textbox', { name });
 const combobox = (name: string) => screen.getByRole('combobox', { name });
-const replaceText = async (name: string, text: string) => { await userEvent.clear(textbox(name)); await userEvent.type(textbox(name), text); };
+const replaceText = async (name: string, text: string) => { await userEvent.clear(textbox(name)); if (text !== '') await userEvent.type(textbox(name), text); };
 const chooseOption = (name: string, option: string) => userEvent.selectOptions(combobox(name), option);
 const saveButton = () => screen.getByRole('button', { name: 'Enregistrer' });
 
