@@ -29,7 +29,7 @@ const editTheCell = (p: PlaybookWorld, playbook: { id: string; contentRev: numbe
   });
 
 const startRun = (p: PlaybookWorld, playbookId: string) => {
-  const started = p.world.daemon.playbookRunner.start({ playbookId, inputs: {}, actorKind: 'admin' });
+  const started = p.world.daemon.playbookRunner.start({ playbookId, inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null } });
   started.catch(() => {});
   return started;
 };

@@ -70,7 +70,7 @@ function registerRunRoutes(router: Router, deps: { playbooks: PlaybookService; r
 
   router.add('POST', '/api/playbooks/:id/run', async ({ res, params, body }) => {
     const { inputs } = RunBodySchema.parse(body ?? {});
-    const run = await running.runner.start({ playbookId: params.id!, inputs: inputs ?? {}, actorKind: 'admin' });
+    const run = await running.runner.start({ playbookId: params.id!, inputs: inputs ?? {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null } });
     json(res, 202, runViewOf(running, run));
   });
 

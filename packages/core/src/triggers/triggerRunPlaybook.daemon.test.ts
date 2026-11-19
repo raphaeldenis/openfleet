@@ -399,3 +399,78 @@ describe('an edit of a playbook disarms the armed triggers that run it', () => {
     expect((await triggerOf(w, triggerId)).armedAt).not.toBeNull();
   });
 });
+
+type RunView = { id: string; status: string; launchedBy: { kind: string; ref: string | null } };
+const runViewOf = async (w: TriggerWorld, runId: string) => w.json<RunView>(await w.api(`/api/playbook-runs/${runId}`));
+const untilRunEnds = async (w: TriggerWorld, runId: string) => {
+  while ((await runViewOf(w, runId)).status === 'running') await settle();
+};
+const startRunThroughTheAdminApi = async (w: TriggerWorld, playbookId: string) => {
+  const started = await w.api(`/api/playbooks/${playbookId}/run`, { method: 'POST', body: JSON.stringify({ inputs: { topic: 'by-hand' } }) });
+  expect(started.status).toBe(202);
+  const run = await w.json<RunView>(started);
+  await untilRunEnds(w, run.id);
+  return run;
+};
+const approvalDigestOf = async (w: TriggerWorld, playbookId: string) => (await w.json<{ digest: string }>(await w.api(`/api/playbooks/${playbookId}/approval`))).digest;
+
+describe('who launched a run', () => {
+  it('records the admin API as the launcher of a run started by hand, in the answer and when the run is read again', async () => {
+    const w = await boot();
+    writeScript('quick.sh', 'printf done');
+    const playbook = await createApprovedPlaybook(w);
+
+    const started = await startRunThroughTheAdminApi(w, playbook.id);
+
+    const listed = await w.json<RunView[]>(await w.api(`/api/playbook-runs?playbookId=${playbook.id}`));
+    expect(started.launchedBy).toEqual({ kind: 'admin_api', ref: null });
+    expect((await runViewOf(w, started.id)).launchedBy).toEqual({ kind: 'admin_api', ref: null });
+    expect(listed.map((run) => run.launchedBy)).toEqual([{ kind: 'admin_api', ref: null }]);
+  });
+
+  it('records the trigger, by its id, as the launcher of the run it fired', async () => {
+    const w = await boot();
+    writeScript('quick.sh', 'printf done');
+    const playbook = await createApprovedPlaybook(w);
+    const triggerId = await armTriggerRunning(w, playbook.id);
+
+    fireOnce(w, triggerId);
+
+    await untilSettled(w, triggerId, 1);
+    const [run] = runsOf(w, playbook.id);
+    expect((await runViewOf(w, run!.id)).launchedBy).toEqual({ kind: 'trigger', ref: triggerId });
+  });
+
+  it('keeps the launcher of a run after the run has ended', async () => {
+    const w = await boot();
+    writeScript('quick.sh', 'printf done');
+    const playbook = await createApprovedPlaybook(w);
+    const triggerId = await armTriggerRunning(w, playbook.id);
+    fireOnce(w, triggerId);
+    await untilSettled(w, triggerId, 1);
+    const [run] = runsOf(w, playbook.id);
+
+    await untilRunEnds(w, run!.id);
+
+    expect(await runViewOf(w, run!.id)).toMatchObject({ status: 'succeeded', launchedBy: { kind: 'trigger', ref: triggerId } });
+  });
+
+  it('leaves the approval digest and the digest of the flow of a run independent of who launched it', async () => {
+    const w = await boot();
+    writeScript('quick.sh', 'printf done');
+    const playbook = await createApprovedPlaybook(w);
+    const digestBeforeAnyRun = await approvalDigestOf(w, playbook.id);
+    const triggerId = await armTriggerRunning(w, playbook.id);
+    const byHand = await startRunThroughTheAdminApi(w, playbook.id);
+    fireOnce(w, triggerId);
+    await untilSettled(w, triggerId, 1);
+    const [, byTrigger] = runsOf(w, playbook.id);
+    await untilRunEnds(w, byTrigger!.id);
+
+    const flowDigests = w.db.prepare('SELECT id, flow_sha256 FROM playbook_runs WHERE playbook_id = ?').all(playbook.id) as { id: string; flow_sha256: string }[];
+
+    expect(await approvalDigestOf(w, playbook.id)).toBe(digestBeforeAnyRun);
+    expect(flowDigests.map((run) => run.id).sort()).toEqual([byHand.id, byTrigger!.id].sort());
+    expect(new Set(flowDigests.map((run) => run.flow_sha256)).size).toBe(1);
+  });
+});

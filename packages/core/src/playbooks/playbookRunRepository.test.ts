@@ -4,6 +4,7 @@ import { applyMigrations } from '../db/migrate.js';
 import { PlaybookRunRepository } from './playbookRunRepository.js';
 
 const PLAYBOOK_ID = 'pb1';
+const ADMIN_API = { kind: 'admin_api', ref: null } as const;
 
 const arrangeRepository = () => {
   const db = new DatabaseSync(':memory:');
@@ -17,7 +18,7 @@ const arrangeRepository = () => {
 type Repository = ReturnType<typeof arrangeRepository>['runs'];
 
 const addRun = (runs: Repository, { id, startedAt, status }: { id: string; startedAt: string; status: 'running' | 'succeeded' | 'failed' | 'needs_review' }) => {
-  runs.insertRun({ id, playbookId: PLAYBOOK_ID, playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', startedAt });
+  runs.insertRun({ id, playbookId: PLAYBOOK_ID, playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', launchedBy: ADMIN_API, startedAt });
   runs.insertStep({ runId: id, seq: 1, stepId: 'build', startedAt });
   if (status === 'running') return;
   runs.settleStep({ runId: id, seq: 1, status, output: { output: `output of ${id}` }, endedAt: startedAt });
@@ -77,12 +78,41 @@ describe('the retention of the runs of a playbook', () => {
     db.prepare("INSERT INTO playbooks (id, project_id, name, inputs_json, flow_json, policy_json, origin, created_at, updated_at) VALUES ('pb2', 'p1', 'Q', '[]', '{\"cells\":[]}', '{}', 'native', 'n', 'n')").run();
     addRun(runs, { id: 'mine-old', startedAt: '2026-01-01', status: 'succeeded' });
     addRun(runs, { id: 'mine-new', startedAt: '2026-01-02', status: 'succeeded' });
-    runs.insertRun({ id: 'theirs', playbookId: 'pb2', playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', startedAt: '2026-01-01' });
+    runs.insertRun({ id: 'theirs', playbookId: 'pb2', playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', launchedBy: ADMIN_API, startedAt: '2026-01-01' });
     runs.settleRun({ id: 'theirs', status: 'succeeded', endedAt: '2026-01-01' });
 
     runs.pruneFinishedBeyond(PLAYBOOK_ID, 1);
 
     expect(idsKept(runs)).toEqual(['mine-new']);
     expect(runs.listOfPlaybook('pb2').map((run) => run.id)).toEqual(['theirs']);
+  });
+});
+
+describe('who launched a run', () => {
+  it('reads back the launcher written at the creation of the run, settled or not', () => {
+    const { runs } = arrangeRepository();
+    runs.insertRun({ id: 'by-trigger', playbookId: PLAYBOOK_ID, playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', launchedBy: { kind: 'trigger', ref: 'trigger-1' }, startedAt: 't1' });
+
+    const whileRunning = runs.get('by-trigger')?.launchedBy;
+    runs.settleRun({ id: 'by-trigger', status: 'failed', errorCode: 'script_failed', endedAt: 't2' });
+
+    expect(whileRunning).toEqual({ kind: 'trigger', ref: 'trigger-1' });
+    expect(runs.get('by-trigger')?.launchedBy).toEqual({ kind: 'trigger', ref: 'trigger-1' });
+  });
+
+  it('reads a run created before the launcher existed as launched by an unknown, without a reference', () => {
+    const { db, runs } = arrangeRepository();
+    db.prepare("INSERT INTO playbook_runs (id, playbook_id, playbook_rev, flow_sha256, status, inputs_json, actor_kind, started_at) VALUES ('old', ?, 1, 'sha', 'running', '{}', 'admin', 't1')").run(PLAYBOOK_ID);
+
+    expect(runs.get('old')?.launchedBy).toEqual({ kind: 'unknown', ref: null });
+    expect(runs.listOfPlaybook(PLAYBOOK_ID).map((run) => run.launchedBy)).toEqual([{ kind: 'unknown', ref: null }]);
+  });
+
+  it('refuses a trigger launcher without a reference, before anything reaches the table', () => {
+    const { db, runs } = arrangeRepository();
+    const triggerWithoutReference = { kind: 'trigger', ref: null } as never;
+
+    expect(() => runs.insertRun({ id: 'bad', playbookId: PLAYBOOK_ID, playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', launchedBy: triggerWithoutReference, startedAt: 't1' })).toThrow();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM playbook_runs').get()).toEqual({ n: 0 });
   });
 });

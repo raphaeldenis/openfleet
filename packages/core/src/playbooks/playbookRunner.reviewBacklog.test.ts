@@ -22,7 +22,7 @@ const arrangeRunnerWithRunsNeedingReview = (count: number) => {
   const runs = new PlaybookRunRepository(db);
   for (let index = 0; index < count; index += 1) {
     const id = `review-${index}`;
-    runs.insertRun({ id, playbookId: 'pb1', playbookRev: 1, flowSha256: 'x', inputs: {}, actorKind: 'admin', startedAt: `t${index}` });
+    runs.insertRun({ id, playbookId: 'pb1', playbookRev: 1, flowSha256: 'x', inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null }, startedAt: `t${index}` });
     runs.settleRun({ id, status: 'needs_review', endedAt: 'now' });
   }
   let runEnded!: () => void;
@@ -40,7 +40,7 @@ describe('the cap of runs awaiting a review', () => {
   it('refuses a new run with playbook_review_backlog once the cap is reached, and writes nothing', async () => {
     const { runs, runner } = arrangeRunnerWithRunsNeedingReview(LIMIT);
 
-    const refusal = await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin' }).catch((error: unknown) => error);
+    const refusal = await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null } }).catch((error: unknown) => error);
 
     expect(refusal).toMatchObject({ code: 'playbook_review_backlog' });
     expect(runs.get('new-run')).toBeUndefined();
@@ -50,7 +50,7 @@ describe('the cap of runs awaiting a review', () => {
   it('starts a run while the runs awaiting a review stay under the cap', async () => {
     const { runs, runner, ended } = arrangeRunnerWithRunsNeedingReview(LIMIT - 1);
 
-    await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin' });
+    await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null } });
     await ended;
 
     expect(runs.get('new-run')).toBeDefined();
@@ -59,7 +59,7 @@ describe('the cap of runs awaiting a review', () => {
   it('never deletes a run awaiting a review to make room', async () => {
     const { runs, runner } = arrangeRunnerWithRunsNeedingReview(LIMIT + 2);
 
-    await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin' }).catch(() => undefined);
+    await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null } }).catch(() => undefined);
 
     expect(runs.countNeedingReview()).toBe(LIMIT + 2);
   });

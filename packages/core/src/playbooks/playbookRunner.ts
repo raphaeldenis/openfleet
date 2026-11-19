@@ -1,7 +1,7 @@
 import { dirname } from 'node:path';
 import {
   DEFAULT_STEP_TIMEOUT_SECONDS, DEFAULT_WAIT_FOR_POLL_MS, DEFAULT_WAIT_FOR_SECONDS, MAX_MANUAL_WAIT_SECONDS, MAX_PROMPT_CHARS, MAX_STEP_OUTPUT_BYTES, MIN_WAIT_FOR_POLL_MS, OpenFleetError,
-  type ManualDecision, type PlaybookCell, type PlaybookEdge, type PlaybookInputDeclaration, type PlaybookRunActorKind,
+  type ManualDecision, type PlaybookCell, type PlaybookEdge, type PlaybookInputDeclaration, type PlaybookRunActorKind, type PlaybookRunLauncher,
 } from '@openfleet/shared';
 import { log } from '../logger.js';
 import { maskedSecrets } from '../redact.js';
@@ -210,7 +210,7 @@ export class PlaybookRunner {
    * Throws playbook_not_found, playbook_not_runnable, playbook_unapproved, playbook_conflict (the playbook was edited while the run started), script_changed, invalid_body,
    * secret_not_connected_on_this_device (this device holds no value for a secret the playbook uses), playbook_run_busy or playbook_review_backlog (the runs awaiting a review reach their cap).
    */
-  async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind }): Promise<PlaybookRunRecord> {
+  async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher }): Promise<PlaybookRunRecord> {
     this.assertNotStopping();
     this.expireOverdueManualWaits();
     const playbook = this.deps.playbooks.getById(input.playbookId);
@@ -224,7 +224,7 @@ export class PlaybookRunner {
     this.assertRoomForAnotherRun(playbook);
     const run: PlaybookRunRecord = {
       id: this.deps.newId(), playbookId: playbook.id, playbookRev: playbook.contentRev, flowSha256: canonicalDigestOf(playbook.flow),
-      status: 'running', inputs: maskedLeaves(inputs, masker) as Record<string, unknown>, actorKind: input.actorKind, errorCode: null, startedAt: this.deps.clock(), endedAt: null,
+      status: 'running', inputs: maskedLeaves(inputs, masker) as Record<string, unknown>, actorKind: input.actorKind, launchedBy: input.launchedBy, errorCode: null, startedAt: this.deps.clock(), endedAt: null,
     };
     this.deps.runs.insertRun(run);
     this.deps.observer?.runStarted({ runId: run.id, playbookId: run.playbookId });
