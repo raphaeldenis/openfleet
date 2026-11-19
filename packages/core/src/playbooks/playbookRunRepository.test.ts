@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { applyMigrations } from '../db/migrate.js';
-import { PlaybookRunRepository } from './playbookRunRepository.js';
+import { PARENT_LOOKUP_SCAN_LIMIT, PlaybookRunRepository } from './playbookRunRepository.js';
 
 const PLAYBOOK_ID = 'pb1';
 
@@ -84,5 +84,48 @@ describe('the retention of the runs of a playbook', () => {
 
     expect(idsKept(runs)).toEqual(['mine-new']);
     expect(runs.listOfPlaybook('pb2').map((run) => run.id)).toEqual(['theirs']);
+  });
+});
+
+describe('the link from a child run to the step of its parent', () => {
+  const addParentStep = (runs: Repository, { runId, output }: { runId: string; output: unknown }) => {
+    runs.insertRun({ id: runId, playbookId: PLAYBOOK_ID, playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', startedAt: '2026-01-01' });
+    runs.insertStep({ runId, seq: 1, stepId: 'sub', startedAt: '2026-01-01' });
+    runs.writeRunningStepOutput({ runId, seq: 1, output });
+  };
+
+  it('finds the step whose output names the child, while the step still runs', () => {
+    const { runs } = arrangeRepository();
+    addParentStep(runs, { runId: 'parent', output: { childRunId: 'child-1', status: 'running' } });
+
+    expect(runs.parentOf('child-1')).toEqual({ runId: 'parent', seq: 1 });
+    expect(runs.stepsOf('parent')[0]).toMatchObject({ status: 'running', output: { childRunId: 'child-1' } });
+  });
+
+  it('does not read a child run id that a script printed as text', () => {
+    const { runs } = arrangeRepository();
+    addParentStep(runs, { runId: 'parent', output: { exitCode: 0, output: '{"childRunId":"child-1"}' } });
+
+    expect(runs.parentOf('child-1')).toBeUndefined();
+  });
+
+  it('does not rewrite the output of a step that is settled', () => {
+    const { runs } = arrangeRepository();
+    addParentStep(runs, { runId: 'parent', output: { childRunId: 'child-1', status: 'running' } });
+    runs.settleStep({ runId: 'parent', seq: 1, status: 'succeeded', output: { childRunId: 'child-1', status: 'succeeded' }, endedAt: '2026-01-02' });
+
+    runs.writeRunningStepOutput({ runId: 'parent', seq: 1, output: { childRunId: 'other', status: 'running' } });
+
+    expect(runs.stepsOf('parent')[0]!.output).toEqual({ childRunId: 'child-1', status: 'succeeded' });
+  });
+
+  it('looks only at the most recent steps: a link older than the scan limit is not found', () => {
+    const { db, runs } = arrangeRepository();
+    addParentStep(runs, { runId: 'parent', output: { childRunId: 'child-1', status: 'running' } });
+    runs.insertRun({ id: 'busy', playbookId: PLAYBOOK_ID, playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', startedAt: '2026-01-03' });
+    db.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+      INSERT INTO playbook_run_steps (run_id, seq, step_id, status, output_json_masked, started_at) SELECT 'busy', i, 'x', 'running', '{}', '2026-01-03' FROM n`).run(PARENT_LOOKUP_SCAN_LIMIT);
+
+    expect(runs.parentOf('child-1')).toBeUndefined();
   });
 });
