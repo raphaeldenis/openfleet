@@ -9,7 +9,7 @@ let runs: PlaybookRunRepository;
 let manual: PlaybookManualRequestRepository;
 
 const parkARun = () => {
-  runs.insertRun({ id: 'r1', playbookId: 'pb1', playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', startedAt: '2026-11-12T10:00:00.000Z' });
+  runs.insertRun({ id: 'r1', playbookId: 'pb1', playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null }, startedAt: '2026-11-12T10:00:00.000Z' });
   runs.insertStep({ runId: 'r1', seq: 1, stepId: 'gate', startedAt: '2026-11-12T10:00:00.000Z' });
   manual.park({ runId: 'r1', seq: 1, promptMasked: 'Ship it?', requestedAt: '2026-11-12T10:00:00.000Z', expiresAt: '2026-11-12T11:00:00.000Z' });
 };

@@ -37,7 +37,7 @@ describe('an unexpected error during a step', () => {
   it('fails the step with internal_error and logs it with the value of the secret masked', async () => {
     const { runs, runner, ended } = arrangeRunnerWhoseScriptLookupFails(() => { throw new Error(`lookup failed for ${secretValue}`); });
 
-    await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin' });
+    await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null } });
     await ended;
 
     expect(runs.get('run-1')).toMatchObject({ status: 'failed', errorCode: 'internal_error' });
@@ -49,7 +49,7 @@ describe('an unexpected error during a step', () => {
   it('masks a secret thrown as a plain string', async () => {
     const { runner, ended } = arrangeRunnerWhoseScriptLookupFails(() => { throw `lookup failed for ${secretValue}`; });
 
-    await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin' });
+    await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null } });
     await ended;
 
     expect(recentLogLines().join('\n')).not.toContain(secretValue);

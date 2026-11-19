@@ -55,7 +55,7 @@ const runPrintingSecret = async ({ secretValue, printed, stream }: { secretValue
     limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: 50, maxParkedRunsPerProject: 50, maxWaitEvaluations: 1000 }, observer: { runStarted: () => {}, runEnded },
   });
 
-  await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin' });
+  await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null } });
   await ended;
   const persisted = JSON.stringify({ steps: runs.stepsOf('run-1'), run: runs.get('run-1') });
   const output = runs.stepsOf('run-1')[0]?.output as { output: string } | undefined;
