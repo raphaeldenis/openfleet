@@ -161,6 +161,21 @@ An `integration_records` trigger fires for an item of an integration of its proj
 - Loop guard: an item changes in a third party's system, not by a message or a playbook run of OpenFleet (the poller is read only), so no fire is the cause of an offer here: the chain depth of a fire is 1. The bound is the cooldown, `maxFiresPerDay` and the breaker (30 effects started per minute for the daemon; the 31st fire is cancelled `breaker_open` and its trigger is disarmed).
 - Known limits: the memory of the items seen is bounded (`MAX_KNOWN_ITEMS`, 2000 keys), and an item forgotten comes back as new; a deferred item removed before the next tick is not offered; the removal of an item is not an event.
 
+## The RUN in the desktop editor
+
+The Triggers screen edits the RUN ("Alors") of a trigger for the five kinds of `TriggerRunSchema`: `prompt_manager` (manager id, optional, and prompt), `notify` (title and message), `prompt_session` (session id and prompt), `close_session` (session id) and `run_playbook` (a playbook of the project). The form holds the RUN as text and the shared schema judges it: a refusal is shown as `Alors · <field> : <message>` and Enregistrer stays disabled; the screen has no rule of its own.
+
+- A save sends `run` only when the RUN differs from the one the form was opened with, and it goes in the same `PUT /api/triggers/:id` as the other changed parts, with `expectedRev` set to the revision the form was opened from, whatever the list shows since. A refusal of the daemon (a 400, a stale revision) is shown with the wording of the error registry and the form keeps what was typed.
+- A stored RUN this screen cannot rebuild without losing something is shown as stored ("Cette action n'est pas modifiable ici") and never sent back: a kind it does not know, a field it does not know, and a `run_playbook` that holds `inputs`. The rest of the trigger stays editable.
+- The playbook of a `run_playbook` RUN is chosen from a list, never typed. The list is `GET /api/playbooks?projectId=` read when the human picks that action (or opens a trigger that already runs a playbook), filtered again on the screen to the project of the trigger. It announces its loading, offers a retry when it fails, and ignores the answer of a request made for a form that has been closed or for another trigger. The names are third-party text: they are written as plain text, with control and direction characters as their code. A playbook the form was opened with that the project does not list is named as such and stays chosen.
+- Saving a changed RUN clears the arming like any edit. The review before arming then shows the RUN just saved, field by field, as plain text (see "The digest to review before arming").
+- Moving to another action puts the focus on its first field.
+
+Limits:
+
+- The manager id of `prompt_manager` and the session id of `prompt_session` and `close_session` are free text: the screen does not list them. The daemon does not check them when the trigger is written: the REST route and `TriggerRunSchema` only require a non-empty text, and an unknown id is saved. The check happens at fire time: `prompt_manager` and `prompt_session` end the fire `cancelled` with `target_unavailable` when the session is not an open session (a manager, for `prompt_manager`) of the project, and `target_not_eligible` when it is outside the lineage of the owner, or when the trigger has no owner (`prompt_session`); `close_session` ends it `cancelled` with `target_not_eligible` when the session is not a child of the owner in the project. The review before arming shows the id as typed, so the human is the one who checks it.
+- The `inputs` of a `run_playbook` RUN have no editor: such a RUN is shown and kept as stored.
+
 ## The RUN `run_playbook`
 
 `{ kind: 'run_playbook', playbookId, inputs? }` starts a run of the playbook through the runner of `docs/playbook-runs.md`, with the guarantees of a run started by hand.
