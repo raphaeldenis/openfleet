@@ -3,12 +3,18 @@ import { escapedControlsOf } from '@openfleet/shared';
 import { ConditionsEditorComponent } from './conditions-editor.component';
 import type { ConditionChange } from './conditions-draft';
 import { loadedValueOf, type Load } from './load-state';
+import type { PlaybookChoice } from './playbook-choices';
 import type { OwnerChoice } from './owner-choices';
+import { RUN_KINDS, type RunDraft, type RunKind } from './run-draft';
 import { BACKLOG_POLICIES, BATCH_MODES, type TriggerEditDraft } from './trigger-edit-draft';
 import { CRON_CATCH_UPS, INTEGRATION_EVENTS, ROW_COUNT_OPS, SESSION_STATES, STORE_EVENTS, WHEN_SOURCES, type WhenDraft } from './when-draft';
 
 const SOURCE_LABELS: Record<WhenDraft['source'], string> = {
   session_state: 'État d’une session enfant', silent_run: 'Session enfant silencieuse', data_store_query: 'Table de données', cron: 'Horaire (cron)', integration_records: 'Enregistrements d’une intégration',
+};
+
+const RUN_KIND_LABELS: Record<RunKind, string> = {
+  prompt_manager: 'Prompt à un manager', notify: 'Notification', prompt_session: 'Prompt à une session', close_session: 'Fermeture d’une session', run_playbook: 'Lancer un playbook',
 };
 
 const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
@@ -91,6 +97,53 @@ const valueOf = (event: Event) => (event.target as HTMLInputElement).value;
         (conditionAdded)="conditionAdded.emit()" (conditionRemoved)="conditionRemoved.emit($event)" (conditionChange)="conditionChange.emit($event)"
       />
 
+      <fieldset class="run">
+        <legend>Alors</legend>
+        @if (draft().run; as run) {
+          <label>Action
+            <select (change)="switchRunKind($event)">
+              @for (kind of runKinds; track kind) { <option [value]="kind" [selected]="kind === run.kind">{{ runKindLabels[kind] }}</option> }
+            </select>
+          </label>
+          @switch (run.kind) {
+            @case ('prompt_manager') {
+              <label>Identifiant du manager (facultatif) <input data-focus-target type="text" [value]="run.managerId" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ managerId: valueOf($event) })" /></label>
+              <label>Prompt <textarea [value]="run.prompt" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ prompt: valueOf($event) })"></textarea></label>
+            }
+            @case ('notify') {
+              <label>Titre de la notification <input data-focus-target type="text" [value]="run.title" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ title: valueOf($event) })" /></label>
+              <label>Message <textarea [value]="run.message" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ message: valueOf($event) })"></textarea></label>
+            }
+            @case ('prompt_session') {
+              <label>Identifiant de la session <input data-focus-target type="text" [value]="run.sessionId" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ sessionId: valueOf($event) })" /></label>
+              <label>Prompt <textarea [value]="run.prompt" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ prompt: valueOf($event) })"></textarea></label>
+            }
+            @case ('close_session') {
+              <label>Identifiant de la session <input data-focus-target type="text" [value]="run.sessionId" [attr.aria-describedby]="describedBy()" (input)="runChange.emit({ sessionId: valueOf($event) })" /></label>
+            }
+            @case ('run_playbook') {
+              @switch (playbooks().status) {
+                @case ('loading') { <span class="muted" role="status" aria-label="Chargement des playbooks">Chargement des playbooks…</span> }
+                @case ('failed') {
+                  <span class="error" data-testid="playbooks-unavailable">Les playbooks du projet sont indisponibles.</span>
+                  <button type="button" class="of-btn of-btn--compact" (click)="playbooksRetried.emit()">Réessayer les playbooks</button>
+                }
+                @case ('loaded') {
+                  <label>Playbook
+                    <select data-focus-target [attr.aria-describedby]="describedBy()" (change)="runChange.emit({ playbookId: valueOf($event) })">
+                      <option value="" [selected]="run.playbookId === ''">Choisir un playbook</option>
+                      @for (choice of playbookOptions(); track choice.id) { <option [value]="choice.id" [selected]="choice.id === run.playbookId">{{ choice.label }}</option> }
+                    </select>
+                  </label>
+                }
+              }
+            }
+          }
+        } @else {
+          <p class="muted" data-testid="run-not-editable">Cette action n’est pas modifiable ici : elle reste telle qu’elle est enregistrée.</p>
+        }
+      </fieldset>
+
       <label>Propriétaire
         <select [disabled]="!ownerChoices()" (change)="ownerChosen.emit(valueOf($event))">
           <option value="" [selected]="draft().ownerManagerId === null">Aucun manager</option>
@@ -138,15 +191,18 @@ export class TriggerEditorComponent {
   readonly draft = input.required<TriggerEditDraft>();
   readonly problem = input<string | undefined>(undefined);
   readonly managers = input.required<Load<OwnerChoice[]>>();
+  readonly playbooks = input.required<Load<PlaybookChoice[]>>();
   readonly isWriting = input(false);
 
   readonly draftChange = output<Partial<TriggerEditDraft>>();
   readonly whenChange = output<Partial<WhenDraft>>();
+  readonly runChange = output<Partial<RunDraft>>();
   readonly conditionAdded = output<void>();
   readonly conditionRemoved = output<string>();
   readonly conditionChange = output<{ key: string; change: ConditionChange }>();
   readonly ownerChosen = output<string>();
   readonly managersRetried = output<void>();
+  readonly playbooksRetried = output<void>();
   readonly submitted = output<Event>();
   readonly cancelled = output<void>();
 
@@ -157,6 +213,8 @@ export class TriggerEditorComponent {
   protected readonly rowCountOps = ROW_COUNT_OPS;
   protected readonly catchUps = CRON_CATCH_UPS;
   protected readonly integrationEvents = INTEGRATION_EVENTS;
+  protected readonly runKinds = RUN_KINDS;
+  protected readonly runKindLabels = RUN_KIND_LABELS;
   protected readonly batchModes = BATCH_MODES;
   protected readonly backlogPolicies = BACKLOG_POLICIES;
   protected readonly valueOf = valueOf;
@@ -175,10 +233,22 @@ export class TriggerEditorComponent {
     return [...choices, { id: openedOwner, label: `${escapedControlsOf(openedOwner)} — ${whyUnlisted}` }];
   });
 
+  /** The playbooks of the project, then the playbook the form was opened with when the project does not list it, named as such. */
+  protected readonly playbookOptions = computed<PlaybookChoice[]>(() => {
+    const choices = loadedValueOf(this.playbooks()) ?? [];
+    const openedRun = this.draft().openedWithRun;
+    const openedPlaybook = openedRun?.kind === 'run_playbook' ? openedRun.playbookId : '';
+    const isOpenedPlaybookListed = openedPlaybook === '' || choices.some((choice) => choice.id === openedPlaybook);
+    if (isOpenedPlaybookListed) return choices;
+    return [...choices, { id: openedPlaybook, label: `${escapedControlsOf(openedPlaybook)} — introuvable parmi les playbooks du projet` }];
+  });
+
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
   private readonly titleField = viewChild.required<ElementRef<HTMLInputElement>>('titleField');
 
   constructor() {
-    afterNextRender(() => this.titleField().nativeElement.focus(), { injector: inject(Injector) });
+    afterNextRender(() => this.titleField().nativeElement.focus(), { injector: this.injector });
   }
 
   protected sourceOf(event: Event) { return valueOf(event) as WhenDraft['source']; }
@@ -187,6 +257,12 @@ export class TriggerEditorComponent {
   protected rowCountOpOf(event: Event) { return valueOf(event) as WhenDraft['rowCountOp']; }
   protected catchUpOf(event: Event) { return valueOf(event) as WhenDraft['catchUp']; }
   protected integrationEventOf(event: Event) { return valueOf(event) as WhenDraft['integrationEvent']; }
+  /** Once the fields of the new action are drawn, the focus goes to the first one. */
+  protected switchRunKind(event: Event): void {
+    this.runChange.emit({ kind: valueOf(event) as RunKind });
+    afterNextRender(() => this.host.nativeElement.querySelector<HTMLElement>('fieldset.run [data-focus-target]')?.focus(), { injector: this.injector });
+  }
+
   protected batchModeOf(event: Event) { return valueOf(event) as TriggerEditDraft['batchMode']; }
   protected backlogPolicyOf(event: Event) { return valueOf(event) as TriggerEditDraft['backlogPolicy']; }
 }

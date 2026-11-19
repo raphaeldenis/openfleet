@@ -1,6 +1,7 @@
-import { TRIGGER_BACKLOG_POLICIES, TRIGGER_BATCH_MODES, type TriggerPolicy, type TriggerWhen } from '@openfleet/shared';
+import { TRIGGER_BACKLOG_POLICIES, TRIGGER_BATCH_MODES, type TriggerPolicy, type TriggerRun, type TriggerWhen } from '@openfleet/shared';
 import type { TriggerView } from '../core/playbook-trigger-views';
 import { changedConditionsOf, conditionDraftsOf, problemOfConditions, type ConditionDraft } from './conditions-draft';
+import { isSameRunDraft, runDraftOf, runOrProblemOf, type RunDraft } from './run-draft';
 import { isSameWhenDraft, whenDraftOf, whenOrProblemOf, type WhenDraft } from './when-draft';
 
 /**
@@ -16,11 +17,13 @@ export interface TriggerEditDraft {
   backlogPolicy: TriggerPolicy['backlogPolicy'];
   when: WhenDraft | undefined;
   conditions: ConditionDraft[];
+  run: RunDraft | undefined;
   ownerManagerId: string | null;
   openedAtRev: number;
   openedWithPolicy: TriggerPolicy;
   openedWithWhen: WhenDraft | undefined;
   openedWithConditions: ConditionDraft[];
+  openedWithRun: RunDraft | undefined;
   openedWithOwnerManagerId: string | null;
 }
 
@@ -30,6 +33,7 @@ export interface TriggerEditChanges {
   policy: TriggerPolicy;
   when?: TriggerWhen;
   conditions?: Record<string, unknown>[];
+  run?: TriggerRun;
   ownerManagerId?: string | null;
 }
 
@@ -43,10 +47,11 @@ export function draftOf(trigger: TriggerView): TriggerEditDraft {
   const { cooldownSeconds, maxFiresPerDay, batchMode, backlogPolicy } = trigger.policy;
   const when = whenDraftOf(trigger.when);
   const conditions = conditionDraftsOf({ conditions: trigger.conditions, source: trigger.when.source });
+  const run = runDraftOf(trigger.run);
   return {
     title: trigger.title, cooldownSeconds: String(cooldownSeconds), maxFiresPerDay: maxFiresPerDay === undefined ? '' : String(maxFiresPerDay), batchMode, backlogPolicy,
-    when, conditions, ownerManagerId: trigger.ownerManagerId,
-    openedAtRev: trigger.contentRev, openedWithPolicy: trigger.policy, openedWithWhen: when, openedWithConditions: conditions, openedWithOwnerManagerId: trigger.ownerManagerId,
+    when, conditions, run, ownerManagerId: trigger.ownerManagerId,
+    openedAtRev: trigger.contentRev, openedWithPolicy: trigger.policy, openedWithWhen: when, openedWithConditions: conditions, openedWithRun: run, openedWithOwnerManagerId: trigger.ownerManagerId,
   };
 }
 
@@ -58,11 +63,17 @@ function problemOfWhenDraft(draft: TriggerEditDraft): string | undefined {
   return 'problem' in checked ? checked.problem : undefined;
 }
 
+function problemOfRunDraft(draft: TriggerEditDraft): string | undefined {
+  if (draft.run === undefined) return undefined;
+  const checked = runOrProblemOf(draft.run);
+  return 'problem' in checked ? checked.problem : undefined;
+}
+
 /** Says what is wrong with the draft in one French sentence, or nothing when it can be saved. */
 export function problemOfDraft(draft: TriggerEditDraft): string | undefined {
   if (!isWholeNumberFrom(draft.cooldownSeconds, 0)) return 'Le repos doit être un nombre entier de secondes, 0 ou plus.';
   if (!hasNoDailyCap(draft) && !isWholeNumberFrom(draft.maxFiresPerDay, 1)) return 'Le plafond par jour doit être un nombre entier, 1 ou plus, ou rester vide.';
-  return problemOfWhenDraft(draft) ?? problemOfConditions({ conditions: draft.conditions, source: sourceOfDraft(draft) });
+  return problemOfWhenDraft(draft) ?? problemOfConditions({ conditions: draft.conditions, source: sourceOfDraft(draft) }) ?? problemOfRunDraft(draft);
 }
 
 function changedWhenOf(draft: TriggerEditDraft): { when: TriggerWhen } | Record<string, never> {
@@ -76,6 +87,14 @@ function changedWhenOf(draft: TriggerEditDraft): { when: TriggerWhen } | Record<
 const changedConditionsOfDraft = (draft: TriggerEditDraft) =>
   changedConditionsOf({ conditions: draft.conditions, openedWith: draft.openedWithConditions, source: sourceOfDraft(draft), openedSource: draft.openedWithWhen?.source });
 
+function changedRunOf(draft: TriggerEditDraft): { run: TriggerRun } | Record<string, never> {
+  const { run, openedWithRun } = draft;
+  const isUnchanged = run === undefined || (openedWithRun !== undefined && isSameRunDraft(run, openedWithRun));
+  if (isUnchanged) return {};
+  const checked = runOrProblemOf(run);
+  return 'run' in checked ? { run: checked.run } : {};
+}
+
 const changedOwnerOf = (draft: TriggerEditDraft) => (draft.ownerManagerId === draft.openedWithOwnerManagerId ? {} : { ownerManagerId: draft.ownerManagerId });
 
 /** The fields a save sends; the policy fields the form does not show (the backlog age) keep the value they had when the form was opened. */
@@ -83,5 +102,5 @@ export function changesOf(draft: TriggerEditDraft): TriggerEditChanges {
   const { maxFiresPerDay: _removedCap, ...policyWithoutCap } = draft.openedWithPolicy;
   const dailyCap = hasNoDailyCap(draft) ? {} : { maxFiresPerDay: Number(draft.maxFiresPerDay) };
   const policy: TriggerPolicy = { ...policyWithoutCap, ...dailyCap, cooldownSeconds: Number(draft.cooldownSeconds), batchMode: draft.batchMode, backlogPolicy: draft.backlogPolicy };
-  return { title: draft.title, policy, ...changedWhenOf(draft), ...changedConditionsOfDraft(draft), ...changedOwnerOf(draft) };
+  return { title: draft.title, policy, ...changedWhenOf(draft), ...changedConditionsOfDraft(draft), ...changedRunOf(draft), ...changedOwnerOf(draft) };
 }

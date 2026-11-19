@@ -1,8 +1,10 @@
 import { ChangeDetectionStrategy, Component, ElementRef, Injector, afterNextRender, computed, effect, inject, input, signal, untracked, viewChild, type Signal } from '@angular/core';
 import type { TriggerFireView } from '@openfleet/shared';
 import { withConditionAdded, withConditionChanged, withConditionRemoved, type ConditionChange } from './conditions-draft';
+import { playbookChoicesOf, type PlaybookChoice } from './playbook-choices';
 import { acceptedOwnerOf, ownerChoicesOf, type OwnerChoice } from './owner-choices';
 import { TriggerEditorComponent } from './trigger-editor.component';
+import type { RunDraft } from './run-draft';
 import type { WhenDraft } from './when-draft';
 import { copyFor, retryOfError } from '../core/error-copy';
 import { ApiError, FleetApiService } from '../core/fleet-api.service';
@@ -127,9 +129,9 @@ const reviewedRuleHasMoved = () => new ApiError(409, 'the reviewed rule changed 
 
           @if (draft(); as editing) {
             <of-trigger-editor
-              [draft]="editing" [problem]="draftProblem()" [managers]="managers()" [isWriting]="isWriting()"
-              (draftChange)="editDraft($event)" (whenChange)="editWhen($event)"
-              (conditionAdded)="addCondition()" (conditionRemoved)="removeCondition($event)" (conditionChange)="changeCondition($event)" (ownerChosen)="chooseOwner($event)" (managersRetried)="loadManagers()"
+              [draft]="editing" [problem]="draftProblem()" [managers]="managers()" [playbooks]="playbooks()" [isWriting]="isWriting()"
+              (draftChange)="editDraft($event)" (whenChange)="editWhen($event)" (runChange)="editRun($event)"
+              (conditionAdded)="addCondition()" (conditionRemoved)="removeCondition($event)" (conditionChange)="changeCondition($event)" (ownerChosen)="chooseOwner($event)" (managersRetried)="loadManagers()" (playbooksRetried)="loadPlaybooks()"
               (submitted)="submitEdit($event, trigger)" (cancelled)="cancelEdit()"
             />
           } @else if (unconfirmedState() === undefined) {
@@ -235,6 +237,7 @@ export class TriggersPanelComponent {
   protected readonly fires = signal<Load<TriggerFireView[]>>(LOADING);
   protected readonly draft = signal<TriggerEditDraft | undefined>(undefined);
   protected readonly managers = signal<Load<OwnerChoice[]>>(LOADING);
+  protected readonly playbooks = signal<Load<PlaybookChoice[]>>(LOADING);
   private readonly savedTriggerId = signal<string | undefined>(undefined);
   protected readonly writeFailure = signal<WriteFailure | undefined>(undefined);
   private readonly triggerIdsBeingWritten = signal<readonly string[]>([]);
@@ -290,6 +293,7 @@ export class TriggersPanelComponent {
   private latestListRequest = 0;
   private latestFiresRequest = 0;
   private latestManagersRequest = 0;
+  private latestPlaybooksRequest = 0;
   private addedConditionCount = 0;
 
   constructor() {
@@ -345,6 +349,7 @@ export class TriggersPanelComponent {
   /** A list of managers asked for by a form that is closed belongs to no form: its answer is ignored. */
   private closeDraft(): void {
     this.latestManagersRequest += 1;
+    this.latestPlaybooksRequest += 1;
     this.draft.set(undefined);
   }
 
@@ -356,6 +361,18 @@ export class TriggersPanelComponent {
       if (request === this.latestManagersRequest) this.managers.set({ status: 'loaded', value: ownerChoicesOf({ sessions, projectId: this.projectId() }) });
     } catch (error) {
       if (request === this.latestManagersRequest) this.managers.set(failedLoadOf(error));
+    }
+  }
+
+  /** The playbooks of this project, for a RUN that runs one; the answer of a form that is closed or of an older ask is ignored. */
+  protected async loadPlaybooks(): Promise<void> {
+    const request = ++this.latestPlaybooksRequest;
+    this.playbooks.set(LOADING);
+    try {
+      const playbooks = await this.api.listPlaybooks(this.projectId());
+      if (request === this.latestPlaybooksRequest) this.playbooks.set({ status: 'loaded', value: playbookChoicesOf({ playbooks, projectId: this.projectId() }) });
+    } catch (error) {
+      if (request === this.latestPlaybooksRequest) this.playbooks.set(failedLoadOf(error));
     }
   }
 
@@ -393,8 +410,10 @@ export class TriggersPanelComponent {
   protected startEditing(trigger: TriggerView): void {
     this.writeFailure.set(undefined);
     this.savedTriggerId.set(undefined);
-    this.draft.set(draftOf(trigger));
+    const editing = draftOf(trigger);
+    this.draft.set(editing);
     void this.loadManagers();
+    if (editing.run?.kind === 'run_playbook') void this.loadPlaybooks();
   }
 
   protected cancelEdit(): void {
@@ -409,6 +428,12 @@ export class TriggersPanelComponent {
   /** The change is merged into the WHEN the draft holds now, never into the one a child saw when it last rendered. */
   protected editWhen(change: Partial<WhenDraft>): void {
     this.draft.update((draft) => (draft?.when === undefined ? draft : { ...draft, when: { ...draft.when, ...change } }));
+  }
+
+  /** The change is merged into the RUN the draft holds now, never into the one a child saw when it last rendered. */
+  protected editRun(change: Partial<RunDraft>): void {
+    if (change.kind === 'run_playbook') void this.loadPlaybooks();
+    this.draft.update((draft) => (draft?.run === undefined ? draft : { ...draft, run: { ...draft.run, ...change } }));
   }
 
   protected addCondition(): void {
