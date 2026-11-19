@@ -142,9 +142,16 @@ describe('Trigger editor: the RUN', () => {
   });
 
   describe('the playbook of a run_playbook RUN', () => {
-    const playbook = (id: string, name: string, projectId = 'p1') => ({ id, name, projectId });
+    const playbook = (id: string, name: string, projectId = 'p1') => ({ id, name, projectId, contentRev: 1, flow: { cells: [] } });
     const PLAYBOOK_ACTION = 'Lancer un playbook';
     const listOf = (...items: ReturnType<typeof playbook>[]) => vi.fn(() => Promise.resolve(items));
+    /** The Playbooks tab reads the same list when the screen opens; the answers queued here start with the first read made by the editor. */
+    function listAnsweringFromEditor(...answers: Promise<ReturnType<typeof playbook>[]>[]) {
+      let isEditorOpen = false;
+      const queue = [...answers];
+      const listPlaybooks = vi.fn(() => (isEditorOpen && queue.length > 0 ? queue.shift()! : Promise.resolve([] as ReturnType<typeof playbook>[])));
+      return { listPlaybooks, editorOpened: () => { isEditorOpen = true; } };
+    }
 
     it('offers only the playbooks of the project of the trigger and sends the one chosen', async () => {
       const listPlaybooks = listOf(playbook('pb1', 'Nettoyage'), playbook('pb2', 'Autre projet', 'p2'), playbook('pb3', 'Rapport'));
@@ -189,9 +196,10 @@ describe('Trigger editor: the RUN', () => {
     });
 
     it('announces the loading, then the failure with a way to try again', async () => {
-      const answer = deferred<never[]>();
-      const listPlaybooks = vi.fn().mockReturnValueOnce(answer.promise).mockResolvedValue([playbook('pb1', 'Nettoyage')]);
+      const answer = deferred<ReturnType<typeof playbook>[]>();
+      const { listPlaybooks, editorOpened } = listAnsweringFromEditor(answer.promise, Promise.resolve([playbook('pb1', 'Nettoyage')]));
       const { fixture } = await openWith({ api: { listPlaybooks } });
+      editorOpened();
 
       await chooseOption('Action', PLAYBOOK_ACTION);
       expect(await screen.findByRole('status', { name: 'Chargement des playbooks' })).toBeInTheDocument();
@@ -220,15 +228,16 @@ describe('Trigger editor: the RUN', () => {
       await save();
 
       expect(chooser).toHaveValue('pb-gone');
-      expect(screen.queryByRole('option', { name: /pb-gone — introuvable parmi les playbooks du projet/ })).toBeNull();
+      expect(screen.getByRole('option', { name: 'pb-gone — introuvable parmi les playbooks du projet' })).toBeInTheDocument();
       expect(lastUpdate(api).changes).not.toHaveProperty('run');
     });
 
     it('ignores the playbooks that answer late for a trigger the human left', async () => {
       const lateAnswer = deferred<ReturnType<typeof playbook>[]>();
       const second = trigger({ id: 't2', title: 'Surveiller la table' });
-      const listPlaybooks = vi.fn().mockReturnValueOnce(lateAnswer.promise).mockResolvedValue([playbook('pb2', 'Du second')]);
+      const { listPlaybooks, editorOpened } = listAnsweringFromEditor(lateAnswer.promise, Promise.resolve([playbook('pb2', 'Du second')]));
       const { fixture } = await openWith({ api: { listPlaybooks }, triggers: [trigger(), second] });
+      editorOpened();
       await chooseOption('Action', PLAYBOOK_ACTION);
       await userEvent.click(screen.getByRole('button', { name: 'Annuler' }));
       await choose('Surveiller la table');
