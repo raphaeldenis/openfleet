@@ -218,7 +218,7 @@ describe('a daemon that stops during an iteration', () => {
     writeScript('hang.sh', `printf x >> ${join(markers, 'ran')}\nsleep 30`);
     const playbook = await createApprovedPlaybook(f, [entry({ forEach: 'inputs.items' }), { id: 'each', kind: 'script', program: 'hang.sh' }]);
     const { id } = await jsonOf<RunView>(await startRun(f, playbook.id, { items: [1, 2, 3] }));
-    await waitUntil('the first iteration to start', () => existsSync(join(markers, 'ran')));
+    await waitUntil('the first iteration to start', () => existsSync(join(markers, 'ran')) && readFileSync(join(markers, 'ran'), 'utf8') === 'x');
 
     await f.daemon.playbookRunner.stop();
     const run = await viewOfRun(f, id);
