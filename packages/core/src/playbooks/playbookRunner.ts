@@ -1,6 +1,6 @@
 import { dirname } from 'node:path';
 import {
-  DEFAULT_STEP_TIMEOUT_SECONDS, DEFAULT_WAIT_FOR_POLL_MS, DEFAULT_WAIT_FOR_SECONDS, MAX_MANUAL_WAIT_SECONDS, MAX_PROMPT_CHARS, MAX_STEP_OUTPUT_BYTES, MIN_WAIT_FOR_POLL_MS, OpenFleetError,
+  DEFAULT_STEP_TIMEOUT_SECONDS, DEFAULT_WAIT_FOR_POLL_MS, DEFAULT_WAIT_FOR_SECONDS, MAX_FOR_EACH_ITEMS, MAX_MANUAL_WAIT_SECONDS, MAX_PROMPT_CHARS, MAX_STEP_OUTPUT_BYTES, MIN_WAIT_FOR_POLL_MS, OpenFleetError,
   type ManualDecision, type PlaybookCell, type PlaybookEdge, type PlaybookInputDeclaration, type PlaybookRunActorKind,
 } from '@openfleet/shared';
 import { log } from '../logger.js';
@@ -8,6 +8,7 @@ import { maskedSecrets } from '../redact.js';
 import type { SecretService } from '../secrets/secretService.js';
 import { canonicalDigestOf } from './kernel/canonicalDigest.js';
 import { evaluateConditions, type Condition } from './kernel/conditionEvaluator.js';
+import { valueAtDottedPath } from './kernel/dottedPath.js';
 import { KernelError } from './kernel/kernelError.js';
 import { createSecretMasker, type SecretMasker } from './kernel/secretMasker.js';
 import { assertTemplateAllowed, resolveTemplate, type ResolutionScope, type TemplateSlot, type UntrustedSources } from './kernel/tokenResolver.js';
@@ -41,7 +42,7 @@ export interface PlaybookRunnerDeps {
   startTimer?: StartTimer;
   /** The name resolution and the forbidden addresses of http cells; the defaults reach the real network. */
   httpNetwork?: HttpStepNetwork;
-  limits: { maxStepExecutions: number; maxConcurrentRuns: number; maxRunsNeedingReview: number; maxParkedRunsPerProject: number; maxWaitEvaluations: number };
+  limits: { maxStepExecutions: number; maxConcurrentRuns: number; maxRunsNeedingReview: number; maxParkedRunsPerProject: number; maxWaitEvaluations: number; maxForEachIterations: number };
   /** Told once a run is journaled as started and once it is settled, with ids and the status only. */
   observer?: { runStarted: (run: { runId: string; playbookId: string }) => void; runEnded: (run: { runId: string; playbookId: string; status: Settled }) => void };
 }
@@ -64,7 +65,7 @@ type Verdict = { status: Settled; errorCode?: string };
 /** A step ends with a verdict, or parks the run on a human: the journal of a parked step is written by the repository, not settled by the walk. */
 type StepResult = { verdict: Verdict; output?: unknown } | { parked: true };
 /** The state a walk resumes from: the cell after the manual step that was answered, the steps already journaled and their outputs. */
-type ResumePoint = { fromCell: PlaybookCell | undefined; executed: number; steps: StepFields };
+type ResumePoint = { from: Transition | undefined; executed: number; steps: StepFields };
 /**
  * A script answers its exit code; an http cell answers the status of the response; both answer the masked output.
  * A read answers its row count and the masked rows as JSON; a write answers whether it inserted or updated, and the id of the row.
@@ -72,7 +73,11 @@ type ResumePoint = { fromCell: PlaybookCell | undefined; executed: number; steps
  */
 type StepOutput = { exitCode: number | null; output: string } | { status: number; output: string } | { rowCount: number; output: string } | { outcome: string; rowId: string } | { decision: string } | { elapsedMs: number; evaluations: number };
 
-type ExecutionCounter = { executed: number };
+type ExecutionCounter = { executed: number; iterations: number };
+/** The cell an edge leads to, and the list the edge iterates when it carries a forEach. */
+type Transition = { cell: PlaybookCell; forEach?: string };
+/** One element of a forEach edge: `{{item}}` and `{{index}}` of the cell it runs. An element of a list a step produced is untrusted data. */
+type Iteration = { item: unknown; index: number; isItemUntrusted: boolean };
 
 /** What a step answers to the cells after it: its masked output, never a secret value. */
 type StepFields = Record<string, StepOutput>;
@@ -95,6 +100,10 @@ const HTTP_REFUSAL_CODES = {
   timeout: 'http_timeout', failed: 'http_request_failed',
 } as const;
 const RETRY_EXHAUSTED = 'retry_exhausted';
+const STEP_LIMIT_EXCEEDED = 'step_limit_exceeded';
+const FOR_EACH_SOURCE_INVALID = 'for_each_source_invalid';
+const FOR_EACH_LIMIT_EXCEEDED = 'for_each_limit_exceeded';
+const FOR_EACH_ITERATION_FAILED = 'for_each_iteration_failed';
 const SECRET_SCOPE_KIND = 'playbook';
 
 const busy = (reason: string) => new OpenFleetError('playbook_run_busy', reason, { hint: 'Wait for a run to end, then start again.' });
@@ -128,13 +137,13 @@ const cannotBeRetried = (cell: PlaybookCell): boolean => {
 
 const RUNNABLE_KINDS: ReadonlySet<PlaybookCell['kind']> = new Set(['script', 'http', 'readFromStore', 'writeToStore', 'manual', 'waitFor']);
 
-/** Only script, http, store, manual and waitFor cells that follow their edges run: a retry, a forEach or another kind of cell (a tool cell, a subPlaybook cell) is refused before anything starts. */
+/** Only script, http, store, manual and waitFor cells run: another kind of cell (a tool cell, a subPlaybook cell), a retry on a cell whose effect a second attempt would repeat, and a forEach into a manual cell are refused before anything starts. */
 function assertCellsCanRun(playbook: PlaybookRecord): void {
   for (const cell of playbook.flow.cells) {
     if (!RUNNABLE_KINDS.has(cell.kind)) throw notRunnable(`the cell ${cell.id} is a ${cell.kind} cell: this runner executes script, http, readFromStore, writeToStore, manual and waitFor cells only (a tool cell waits for the run to have an actor and a role).`);
     if (cell.retry !== undefined && cannotBeRetried(cell)) throw notRunnable(`the cell ${cell.id} retries, and a ${cell.kind} cell has an effect that a second attempt would repeat: only script, readFromStore, waitFor and http GET or HEAD cells retry.`);
-    const iterates = (cell.next ?? []).some((edge) => edge.forEach !== undefined);
-    if (iterates) throw notRunnable(`the cell ${cell.id} iterates with forEach: this runner does not iterate.`);
+    const iteratesIntoManualCell = (cell.next ?? []).some((edge) => edge.forEach !== undefined && playbook.flow.cells.find((target) => target.id === edge.to)?.kind === 'manual');
+    if (iteratesIntoManualCell) throw notRunnable(`the cell ${cell.id} iterates into a manual cell: a question to a human is never asked once per element.`);
   }
 }
 
@@ -162,6 +171,18 @@ function resolveRunInputs(declared: readonly PlaybookInputDeclaration[], given: 
   });
   return Object.fromEntries(entries);
 }
+
+/** The elements of the list a forEach edge iterates: a list, or the text of a step that printed one as JSON. Anything else is no list. */
+const itemsOf = (source: unknown): unknown[] | undefined => {
+  if (Array.isArray(source)) return source;
+  if (typeof source !== 'string') return undefined;
+  try {
+    const parsed: unknown = JSON.parse(source);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const maskedLeaves = (value: unknown, masker: SecretMasker): unknown => {
   if (typeof value === 'string') return masker.mask(value);
@@ -304,11 +325,13 @@ export class PlaybookRunner {
   private async walk(context: RunContext, resumeFrom?: ResumePoint): Promise<Verdict | typeof PARKED> {
     const cells = context.playbook.flow.cells;
     const steps: StepFields = resumeFrom?.steps ?? {};
-    const counter: ExecutionCounter = { executed: resumeFrom?.executed ?? 0 };
-    const firstCell = resumeFrom === undefined ? cells[0] : resumeFrom.fromCell;
+    const counter: ExecutionCounter = { executed: resumeFrom?.executed ?? 0, iterations: 0 };
+    const first: Transition | undefined = resumeFrom === undefined ? { cell: cells[0]! } : resumeFrom.from;
 
-    for (let cell: PlaybookCell | undefined = firstCell; cell !== undefined; cell = this.cellAfter(cell, cells, { inputs: context.inputs, steps })) {
-      const outcome = await this.executeCellWithItsRetries(cell, context, steps, counter);
+    for (let transition = first; transition !== undefined; transition = this.transitionAfter(transition.cell, cells, { inputs: context.inputs, steps })) {
+      const outcome = transition.forEach === undefined
+        ? await this.executeCellWithItsRetries({ cell: transition.cell, context, steps, counter })
+        : await this.executeForEach({ cell: transition.cell, source: transition.forEach, context, steps, counter });
       if (outcome !== undefined) return outcome;
     }
     return { status: 'succeeded' };
@@ -319,19 +342,19 @@ export class PlaybookRunner {
    * Every attempt is a journaled step and counts among the step executions of the run. Returns undefined when the cell succeeded, else what ends the walk.
    * An attempt that needs a review (the daemon stops) is never followed by another one.
    */
-  private async executeCellWithItsRetries(cell: PlaybookCell, context: RunContext, steps: StepFields, counter: ExecutionCounter): Promise<Verdict | typeof PARKED | undefined> {
+  private async executeCellWithItsRetries({ cell, context, steps, counter, iteration }: { cell: PlaybookCell; context: RunContext; steps: StepFields; counter: ExecutionCounter; iteration?: Iteration }): Promise<Verdict | typeof PARKED | undefined> {
     const { runs, clock, limits } = this.deps;
     const maxAttempts = cell.retry?.maxAttempts ?? 1;
     for (let attempt = 1; ; attempt += 1) {
       const isStopping = this.shutdown.signal.aborted;
       if (isStopping) return { status: 'needs_review', errorCode: INTERRUPTED };
       const hasReachedTheCap = counter.executed >= limits.maxStepExecutions;
-      if (hasReachedTheCap) return { status: 'failed', errorCode: 'step_limit_exceeded' };
+      if (hasReachedTheCap) return { status: 'failed', errorCode: STEP_LIMIT_EXCEEDED };
 
       counter.executed += 1;
       const seq = counter.executed;
       runs.insertStep({ runId: context.run.id, seq, stepId: cell.id, startedAt: clock() });
-      const result = await this.runStep(cell, context, steps, seq);
+      const result = await this.runStep({ cell, context, steps, seq, iteration });
       if ('parked' in result) return PARKED;
 
       const isLastAttempt = attempt >= maxAttempts;
@@ -369,19 +392,47 @@ export class PlaybookRunner {
     return { verdict: isLastAttempt ? exhaustedVerdict : verdict, output, isSatisfied: false };
   }
 
-  /** The cell an edge leads to: with no `next`, the cell that follows in document order; else the first edge whose conditions hold on the inputs and the outputs so far. */
-  private cellAfter(cell: PlaybookCell, cells: readonly PlaybookCell[], scope: { inputs: Record<string, unknown>; steps: StepFields }): PlaybookCell | undefined {
-    if (cell.next === undefined) return cells[cells.indexOf(cell) + 1];
+  /** The transition an edge leads to: with no `next`, the cell that follows in document order; else the first edge whose conditions hold on the inputs and the outputs so far. */
+  private transitionAfter(cell: PlaybookCell, cells: readonly PlaybookCell[], scope: { inputs: Record<string, unknown>; steps: StepFields }): Transition | undefined {
+    if (cell.next === undefined) {
+      const following = cells[cells.indexOf(cell) + 1];
+      return following === undefined ? undefined : { cell: following };
+    }
     const taken = cell.next.find((edge) => edge.when === undefined || evaluateConditions(conditionsOf(edge.when), scope));
-    return cells.find((candidate) => candidate.id === taken?.to);
+    const target = cells.find((candidate) => candidate.id === taken?.to);
+    return target === undefined ? undefined : { cell: target, forEach: taken?.forEach };
   }
 
-  private async runStep(cell: PlaybookCell, context: RunContext, steps: StepFields, seq: number): Promise<StepResult> {
+  /**
+   * Runs the cell an edge leads to once per element of the list the edge iterates, in order, with `{{item}}` and `{{index}}`; every iteration is a journaled step of its own.
+   * The list is checked before any element runs: not a list is `for_each_source_invalid`, more than MAX_FOR_EACH_ITEMS elements, or more iterations than the run still has, is `for_each_limit_exceeded`.
+   * An iteration that fails stops everything: the next elements never start and the run fails with `for_each_iteration_failed` (the step keeps its own code).
+   * An iteration that needs a review, or the cap of step executions of the run, ends the walk with that verdict as it is.
+   */
+  private async executeForEach({ cell, source, context, steps, counter }: { cell: PlaybookCell; source: string; context: RunContext; steps: StepFields; counter: ExecutionCounter }): Promise<Verdict | typeof PARKED | undefined> {
+    const items = itemsOf(valueAtDottedPath({ inputs: context.inputs, steps }, source));
+    if (items === undefined) return { status: 'failed', errorCode: FOR_EACH_SOURCE_INVALID };
+    const hasTooManyItems = items.length > MAX_FOR_EACH_ITEMS;
+    const wouldPassTheIterationsOfTheRun = counter.iterations + items.length > this.deps.limits.maxForEachIterations;
+    if (hasTooManyItems || wouldPassTheIterationsOfTheRun) return { status: 'failed', errorCode: FOR_EACH_LIMIT_EXCEEDED };
+    counter.iterations += items.length;
+
+    const isItemUntrusted = source.startsWith('steps.');
+    for (const [index, item] of items.entries()) {
+      const outcome = await this.executeCellWithItsRetries({ cell, context, steps, counter, iteration: { item, index, isItemUntrusted } });
+      if (outcome === undefined) continue;
+      const isAFailedIteration = outcome !== PARKED && outcome.status === 'failed' && outcome.errorCode !== STEP_LIMIT_EXCEEDED;
+      return isAFailedIteration ? { status: 'failed', errorCode: FOR_EACH_ITERATION_FAILED } : outcome;
+    }
+    return undefined;
+  }
+
+  private async runStep({ cell, context, steps, seq, iteration }: { cell: PlaybookCell; context: RunContext; steps: StepFields; seq: number; iteration?: Iteration }): Promise<StepResult> {
     try {
-      if (isScriptCell(cell)) return await this.runScriptCell(cell, context, steps);
-      if (isHttpCell(cell)) return await this.runHttpCell(cell, context, steps);
-      if (isReadFromStoreCell(cell)) return this.runReadFromStoreCell(cell, context, steps);
-      if (isWriteToStoreCell(cell)) return this.runWriteToStoreCell(cell, context, steps);
+      if (isScriptCell(cell)) return await this.runScriptCell(cell, context, steps, iteration);
+      if (isHttpCell(cell)) return await this.runHttpCell(cell, context, steps, iteration);
+      if (isReadFromStoreCell(cell)) return this.runReadFromStoreCell(cell, context, steps, iteration);
+      if (isWriteToStoreCell(cell)) return this.runWriteToStoreCell(cell, context, steps, iteration);
       if (isManualCell(cell)) return this.parkOnManualCell(cell, context, steps, seq);
       if (isWaitForCell(cell)) return await this.runWaitForCell(cell, context, steps);
       throw notRunnable(`the cell ${cell.id} is not a script, http, store, manual or waitFor cell.`);
@@ -565,16 +616,16 @@ export class PlaybookRunner {
     const manualStepId = journaledSteps.find((step) => step.seq === seq)!.stepId;
     const cells = playbook.flow.cells;
     const manualCell = cells.find((cell) => cell.id === manualStepId)!;
-    const fromCell = this.cellAfter(manualCell, cells, { inputs: run.inputs, steps });
+    const from = this.transitionAfter(manualCell, cells, { inputs: run.inputs, steps });
 
     const context: RunContext = { run, playbook, pinnedScripts, inputs: run.inputs, secretValues, masker: this.maskerOf(secretValues) };
-    const execution = this.execute(context, { fromCell, executed: seq, steps }).finally(() => this.inFlight.delete(execution));
+    const execution = this.execute(context, { from, executed: seq, steps }).finally(() => this.inFlight.delete(execution));
     this.inFlight.add(execution);
   }
 
-  private async runScriptCell(cell: ScriptCell, context: RunContext, steps: StepFields): Promise<{ verdict: Verdict; output?: unknown }> {
+  private async runScriptCell(cell: ScriptCell, context: RunContext, steps: StepFields, iteration?: Iteration): Promise<{ verdict: Verdict; output?: unknown }> {
     const { approvals } = this.deps;
-    const { args, env } = this.resolvedTemplatesOf(cell, context, steps);
+    const { args, env } = this.resolvedTemplatesOf(cell, context, steps, iteration);
     const script = approvals.locatePinned(cell.program, context.pinnedScripts);
 
     const outcome = await runScriptStep({
@@ -593,9 +644,8 @@ export class PlaybookRunner {
     return outcome.exitCode === 0 ? { verdict: { status: 'succeeded' }, output: stepOutput } : { verdict: { status: 'failed', errorCode: 'script_failed' }, output: stepOutput };
   }
 
-  private async runHttpCell(cell: HttpCell, context: RunContext, steps: StepFields): Promise<{ verdict: Verdict; output?: unknown }> {
-    const untrusted: UntrustedSources = { stepIds: new Set(context.playbook.flow.cells.map((other) => other.id)), isItemUntrusted: true };
-    const scope: ResolutionScope = { inputs: context.inputs, steps, secretValueOf: (name) => context.secretValues.get(name) };
+  private async runHttpCell(cell: HttpCell, context: RunContext, steps: StepFields, iteration?: Iteration): Promise<{ verdict: Verdict; output?: unknown }> {
+    const { scope, untrusted } = this.templateWorldOf(context, steps, iteration);
     const { url, headers, body } = resolveHttpRequest(cell, scope, untrusted);
 
     const outcome = await sendHttpStep({
@@ -614,16 +664,16 @@ export class PlaybookRunner {
     return isSuccess ? { verdict: { status: 'succeeded' }, output: stepOutput } : { verdict: { status: 'failed', errorCode: 'http_status_failed' }, output: stepOutput };
   }
 
-  private runReadFromStoreCell(cell: ReadFromStoreCell, context: RunContext, steps: StepFields): { verdict: Verdict; output?: unknown } {
-    const { scope, untrusted } = this.templateWorldOf(context, steps);
+  private runReadFromStoreCell(cell: ReadFromStoreCell, context: RunContext, steps: StepFields, iteration?: Iteration): { verdict: Verdict; output?: unknown } {
+    const { scope, untrusted } = this.templateWorldOf(context, steps, iteration);
     const request = resolveStoreRead(cell, scope, untrusted);
     const outcome = readStoreRows({ stores: this.deps.stores, projectId: context.playbook.projectId, request });
     // Same order as a script's output: the shape-based layer, then the masker, then the control characters.
     return this.verdictOfStoreStep(outcome, (output) => ({ ...output, output: withoutControlCharacters(context.masker.mask(maskedSecrets(String(output['output'])))) }));
   }
 
-  private runWriteToStoreCell(cell: WriteToStoreCell, context: RunContext, steps: StepFields): { verdict: Verdict; output?: unknown } {
-    const { scope, untrusted } = this.templateWorldOf(context, steps);
+  private runWriteToStoreCell(cell: WriteToStoreCell, context: RunContext, steps: StepFields, iteration?: Iteration): { verdict: Verdict; output?: unknown } {
+    const { scope, untrusted } = this.templateWorldOf(context, steps, iteration);
     const request = resolveStoreWrite(cell, scope, untrusted);
     const outcome = writeStoreRow({ stores: this.deps.stores, projectId: context.playbook.projectId, runId: context.run.id, request, mask: (value) => context.masker.mask(value) });
     return this.verdictOfStoreStep(outcome, (output) => output);
@@ -634,17 +684,16 @@ export class PlaybookRunner {
     return { verdict: { status: 'succeeded' }, output: maskedOutputOf(outcome.output) };
   }
 
-  private templateWorldOf(context: RunContext, steps: StepFields): { scope: ResolutionScope; untrusted: UntrustedSources } {
+  private templateWorldOf(context: RunContext, steps: StepFields, iteration?: Iteration): { scope: ResolutionScope; untrusted: UntrustedSources } {
     return {
-      untrusted: { stepIds: new Set(context.playbook.flow.cells.map((other) => other.id)), isItemUntrusted: true },
-      scope: { inputs: context.inputs, steps, secretValueOf: (name) => context.secretValues.get(name) },
+      untrusted: { stepIds: new Set(context.playbook.flow.cells.map((other) => other.id)), isItemUntrusted: iteration?.isItemUntrusted ?? true },
+      scope: { inputs: context.inputs, steps, item: iteration?.item, index: iteration?.index, secretValueOf: (name) => context.secretValues.get(name) },
     };
   }
 
   /** The arguments and environment of a script cell with their tokens resolved. A token is checked in its place again here: a flow stored outside the save path is held to the same rules. */
-  private resolvedTemplatesOf(cell: ScriptCell, context: RunContext, steps: StepFields): { args: string[]; env: Record<string, string> } {
-    const untrusted: UntrustedSources = { stepIds: new Set(context.playbook.flow.cells.map((other) => other.id)), isItemUntrusted: true };
-    const scope: ResolutionScope = { inputs: context.inputs, steps, secretValueOf: (name) => context.secretValues.get(name) };
+  private resolvedTemplatesOf(cell: ScriptCell, context: RunContext, steps: StepFields, iteration?: Iteration): { args: string[]; env: Record<string, string> } {
+    const { scope, untrusted } = this.templateWorldOf(context, steps, iteration);
     const resolveIn = (template: string, slot: TemplateSlot): string => {
       assertTemplateAllowed({ template, slot, untrusted });
       return resolveTemplate({ template, scope }).text;

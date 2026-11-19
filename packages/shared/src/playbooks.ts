@@ -42,6 +42,9 @@ export type PlaybookRunStatus = (typeof PLAYBOOK_RUN_STATUSES)[number];
 export const PLAYBOOK_RUN_ACTOR_KINDS = ['admin'] as const;
 export type PlaybookRunActorKind = (typeof PLAYBOOK_RUN_ACTOR_KINDS)[number];
 export const MAX_STEP_EXECUTIONS_PER_RUN = 1000;
+/** The elements a forEach edge iterates, and the iterations of all the forEach edges of one run. */
+export const MAX_FOR_EACH_ITEMS = 100;
+export const MAX_FOR_EACH_ITERATIONS_PER_RUN = 1000;
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 600;
 export const MAX_STEP_OUTPUT_BYTES = 256 * 1024;
 export const MAX_CONCURRENT_RUNS = 4;
