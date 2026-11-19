@@ -224,11 +224,11 @@ describe('Trigger editor: the RUN', () => {
       const { api } = await openWith({ run: stored, api: { listPlaybooks: listOf(playbook('pb1', 'Nettoyage')) } });
 
       const chooser = await screen.findByRole('combobox', { name: 'Playbook' });
+      expect(chooser).toHaveValue('pb-gone');
+      expect(screen.getByRole('option', { name: 'pb-gone — introuvable parmi les playbooks du projet' })).toBeInTheDocument();
       await userEvent.type(textbox('Titre'), '!');
       await save();
 
-      expect(chooser).toHaveValue('pb-gone');
-      expect(screen.getByRole('option', { name: 'pb-gone — introuvable parmi les playbooks du projet' })).toBeInTheDocument();
       expect(lastUpdate(api).changes).not.toHaveProperty('run');
     });
 
