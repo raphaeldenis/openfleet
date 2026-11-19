@@ -72,6 +72,8 @@ type ResumePoint = { fromCell: PlaybookCell | undefined; executed: number; steps
  */
 type StepOutput = { exitCode: number | null; output: string } | { status: number; output: string } | { rowCount: number; output: string } | { outcome: string; rowId: string } | { decision: string } | { elapsedMs: number; evaluations: number };
 
+type ExecutionCounter = { executed: number };
+
 /** What a step answers to the cells after it: its masked output, never a secret value. */
 type StepFields = Record<string, StepOutput>;
 
@@ -92,6 +94,7 @@ const HTTP_REFUSAL_CODES = {
   host_not_allowed: 'http_host_not_allowed', address_blocked: 'http_address_blocked', redirect_refused: 'http_redirect_refused',
   timeout: 'http_timeout', failed: 'http_request_failed',
 } as const;
+const RETRY_EXHAUSTED = 'retry_exhausted';
 const SECRET_SCOPE_KIND = 'playbook';
 
 const busy = (reason: string) => new OpenFleetError('playbook_run_busy', reason, { hint: 'Wait for a run to end, then start again.' });
@@ -115,13 +118,21 @@ const isWriteToStoreCell = (cell: PlaybookCell): cell is WriteToStoreCell => cel
 const isManualCell = (cell: PlaybookCell): cell is ManualCell => cell.kind === 'manual';
 const isWaitForCell = (cell: PlaybookCell): cell is WaitForCell => cell.kind === 'waitFor';
 
+const SAFE_TO_REPEAT_HTTP_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD']);
+
+/** A second attempt repeats the effect of the first: a write, a request that changes the server, a question to a human and a child run are never attempted twice. */
+const cannotBeRetried = (cell: PlaybookCell): boolean => {
+  if (isHttpCell(cell)) return !SAFE_TO_REPEAT_HTTP_METHODS.has(cell.method);
+  return cell.kind === 'writeToStore' || cell.kind === 'manual' || cell.kind === 'subPlaybook';
+};
+
 const RUNNABLE_KINDS: ReadonlySet<PlaybookCell['kind']> = new Set(['script', 'http', 'readFromStore', 'writeToStore', 'manual', 'waitFor']);
 
 /** Only script, http, store, manual and waitFor cells that follow their edges run: a retry, a forEach or another kind of cell (a tool cell, a subPlaybook cell) is refused before anything starts. */
 function assertCellsCanRun(playbook: PlaybookRecord): void {
   for (const cell of playbook.flow.cells) {
     if (!RUNNABLE_KINDS.has(cell.kind)) throw notRunnable(`the cell ${cell.id} is a ${cell.kind} cell: this runner executes script, http, readFromStore, writeToStore, manual and waitFor cells only (a tool cell waits for the run to have an actor and a role).`);
-    if (cell.retry !== undefined) throw notRunnable(`the cell ${cell.id} retries: this runner does not retry a step.`);
+    if (cell.retry !== undefined && cannotBeRetried(cell)) throw notRunnable(`the cell ${cell.id} retries, and a ${cell.kind} cell has an effect that a second attempt would repeat: only script, readFromStore, waitFor and http GET or HEAD cells retry.`);
     const iterates = (cell.next ?? []).some((edge) => edge.forEach !== undefined);
     if (iterates) throw notRunnable(`the cell ${cell.id} iterates with forEach: this runner does not iterate.`);
   }
@@ -291,29 +302,71 @@ export class PlaybookRunner {
 
   /** Executes the cells from the entry (or from the resume point) along their edges until a cell leads nowhere, a step does not succeed, a manual cell parks the run, or the cap of step executions is reached. */
   private async walk(context: RunContext, resumeFrom?: ResumePoint): Promise<Verdict | typeof PARKED> {
-    const { runs, clock, limits } = this.deps;
     const cells = context.playbook.flow.cells;
     const steps: StepFields = resumeFrom?.steps ?? {};
-    let executed = resumeFrom?.executed ?? 0;
+    const counter: ExecutionCounter = { executed: resumeFrom?.executed ?? 0 };
     const firstCell = resumeFrom === undefined ? cells[0] : resumeFrom.fromCell;
 
     for (let cell: PlaybookCell | undefined = firstCell; cell !== undefined; cell = this.cellAfter(cell, cells, { inputs: context.inputs, steps })) {
-      const isStopping = this.shutdown.signal.aborted;
-      if (isStopping) return { status: 'needs_review', errorCode: INTERRUPTED };
-      const hasReachedTheCap = executed >= limits.maxStepExecutions;
-      if (hasReachedTheCap) return { status: 'failed', errorCode: 'step_limit_exceeded' };
-
-      executed += 1;
-      runs.insertStep({ runId: context.run.id, seq: executed, stepId: cell.id, startedAt: clock() });
-      const result = await this.runStep(cell, context, steps, executed);
-      if ('parked' in result) return PARKED;
-      const { verdict, output } = result;
-      runs.settleStep({ runId: context.run.id, seq: executed, status: verdict.status, output, errorCode: verdict.errorCode, endedAt: clock() });
-      const didNotSucceed = verdict.status !== 'succeeded';
-      if (didNotSucceed) return verdict;
-      steps[cell.id] = output as StepOutput;
+      const outcome = await this.executeCellWithItsRetries(cell, context, steps, counter);
+      if (outcome !== undefined) return outcome;
     }
     return { status: 'succeeded' };
+  }
+
+  /**
+   * Executes a cell, and again after a failed attempt or an attempt whose `until` does not hold, up to `maxAttempts`, waiting `backoffMs` on the injected timer between two attempts.
+   * Every attempt is a journaled step and counts among the step executions of the run. Returns undefined when the cell succeeded, else what ends the walk.
+   * An attempt that needs a review (the daemon stops) is never followed by another one.
+   */
+  private async executeCellWithItsRetries(cell: PlaybookCell, context: RunContext, steps: StepFields, counter: ExecutionCounter): Promise<Verdict | typeof PARKED | undefined> {
+    const { runs, clock, limits } = this.deps;
+    const maxAttempts = cell.retry?.maxAttempts ?? 1;
+    for (let attempt = 1; ; attempt += 1) {
+      const isStopping = this.shutdown.signal.aborted;
+      if (isStopping) return { status: 'needs_review', errorCode: INTERRUPTED };
+      const hasReachedTheCap = counter.executed >= limits.maxStepExecutions;
+      if (hasReachedTheCap) return { status: 'failed', errorCode: 'step_limit_exceeded' };
+
+      counter.executed += 1;
+      const seq = counter.executed;
+      runs.insertStep({ runId: context.run.id, seq, stepId: cell.id, startedAt: clock() });
+      const result = await this.runStep(cell, context, steps, seq);
+      if ('parked' in result) return PARKED;
+
+      const isLastAttempt = attempt >= maxAttempts;
+      const judged = this.judgeAttempt({ cell, context, steps, result, attempt, isLastAttempt });
+      const { verdict, output } = judged;
+      runs.settleStep({ runId: context.run.id, seq, status: verdict.status, output, errorCode: verdict.errorCode, endedAt: clock() });
+
+      if (judged.isSatisfied) return undefined;
+      const canTryAgain = (verdict.status === 'failed' || verdict.status === 'succeeded') && !isLastAttempt;
+      if (!canTryAgain) return verdict;
+
+      const backoffMs = cell.retry?.backoffMs ?? 0;
+      const wakeUp = backoffMs > 0 ? await this.sleep(backoffMs) : 'elapsed';
+      if (wakeUp === 'daemon_stopping') return { status: 'needs_review', errorCode: INTERRUPTED };
+    }
+  }
+
+  /**
+   * Tells what an attempt came to. A succeeded attempt publishes its output to the steps, then its `until` is evaluated on the inputs, the steps and `attempt.number`: a cell with no `until` is satisfied by its success.
+   * A succeeded last attempt whose `until` does not hold fails with `retry_exhausted`; a failed attempt keeps its own code.
+   */
+  private judgeAttempt({ cell, context, steps, result, attempt, isLastAttempt }: { cell: PlaybookCell; context: RunContext; steps: StepFields; result: { verdict: Verdict; output?: unknown }; attempt: number; isLastAttempt: boolean }): { verdict: Verdict; output?: unknown; isSatisfied: boolean } {
+    const { verdict, output } = result;
+    if (verdict.status !== 'succeeded') return { verdict, output, isSatisfied: false };
+
+    steps[cell.id] = output as StepOutput;
+    let isUntilMet: boolean;
+    try {
+      isUntilMet = evaluateConditions(conditionsOf(cell.retry?.until ?? []), { inputs: context.inputs, steps, attempt: { number: attempt } });
+    } catch (error) {
+      return { verdict: verdictOfFailure(error, context.masker), output, isSatisfied: false };
+    }
+    if (isUntilMet) return { verdict, output, isSatisfied: true };
+    const exhaustedVerdict: Verdict = { status: 'failed', errorCode: RETRY_EXHAUSTED };
+    return { verdict: isLastAttempt ? exhaustedVerdict : verdict, output, isSatisfied: false };
   }
 
   /** The cell an edge leads to: with no `next`, the cell that follows in document order; else the first edge whose conditions hold on the inputs and the outputs so far. */

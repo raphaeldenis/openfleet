@@ -7,11 +7,11 @@ import { createTempDirTracker } from '../tempDirTracker.js';
 
 /*
  * Guards of the retry field of a cell, each with the test that fails when the guard is removed (replay: break the line, run this file, restore).
- *  1. retry loop            `runStepWithRetry`            -> 'runs the cell again after a failed attempt ...'
- *  2. until                 `isDoneAfter`                 -> 'keeps trying while until is false ...'
+ *  1. retry loop            `executeCellWithItsRetries` -> 'runs the cell again after a failed attempt ...'
+ *  2. until                 `judgeAttempt`                -> 'keeps trying while until is false ...'
  *  3. attempt cap           `maxAttempts`                 -> 'fails with retry_exhausted ...', 'fails with the code of the last attempt ...'
  *  4. backoff on the timer  `this.sleep(backoffMs)`       -> 'runs the cell again after a failed attempt ...' (delays armed), 'does not arm a timer ...'
- *  5. effects never replayed `refusesRetry`               -> 'refuses a retry on a cell with an effect ...'
+ *  5. effects never replayed `cannotBeRetried`            -> 'refuses a retry on a cell with an effect ...'
  *  6. crash never replays   `recover`                     -> 'never replays an attempt after a crash ...'
  *  7. step cap              `maxStepExecutions`           -> 'counts every attempt among the step executions of the run'
  */
