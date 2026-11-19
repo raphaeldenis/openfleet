@@ -1,6 +1,6 @@
 import { dirname } from 'node:path';
 import {
-  DEFAULT_STEP_TIMEOUT_SECONDS, DEFAULT_WAIT_FOR_POLL_MS, DEFAULT_WAIT_FOR_SECONDS, MAX_FOR_EACH_ITEMS, MAX_MANUAL_WAIT_SECONDS, MAX_PROMPT_CHARS, MAX_STEP_OUTPUT_BYTES, MIN_WAIT_FOR_POLL_MS, OpenFleetError,
+  DEFAULT_STEP_TIMEOUT_SECONDS, DEFAULT_WAIT_FOR_POLL_MS, DEFAULT_WAIT_FOR_SECONDS, MAX_FOR_EACH_ITEMS, MAX_MANUAL_WAIT_SECONDS, MAX_PROMPT_CHARS, MAX_SUB_PLAYBOOK_DEPTH, MAX_STEP_OUTPUT_BYTES, MIN_WAIT_FOR_POLL_MS, OpenFleetError,
   type ManualDecision, type PlaybookCell, type PlaybookEdge, type PlaybookInputDeclaration, type PlaybookRunActorKind,
 } from '@openfleet/shared';
 import { log } from '../logger.js';
@@ -60,6 +60,7 @@ type ReadFromStoreCell = Extract<PlaybookCell, { kind: 'readFromStore' }>;
 type WriteToStoreCell = Extract<PlaybookCell, { kind: 'writeToStore' }>;
 type ManualCell = Extract<PlaybookCell, { kind: 'manual' }>;
 type WaitForCell = Extract<PlaybookCell, { kind: 'waitFor' }>;
+type SubPlaybookCell = Extract<PlaybookCell, { kind: 'subPlaybook' }>;
 type Settled = SettledStatus;
 type Verdict = { status: Settled; errorCode?: string };
 /** A step ends with a verdict, or parks the run on a human: the journal of a parked step is written by the repository, not settled by the walk. */
@@ -70,8 +71,9 @@ type ResumePoint = { from: Transition | undefined; executed: number; steps: Step
  * A script answers its exit code; an http cell answers the status of the response; both answer the masked output.
  * A read answers its row count and the masked rows as JSON; a write answers whether it inserted or updated, and the id of the row.
  * A manual step answers the decision of the human; a waitFor step answers the time it waited and how many times it evaluated its predicate.
+ * A subPlaybook step answers the id and the status of its child run, and the masked, bounded output of the last step of the child.
  */
-type StepOutput = { exitCode: number | null; output: string } | { status: number; output: string } | { rowCount: number; output: string } | { outcome: string; rowId: string } | { decision: string } | { elapsedMs: number; evaluations: number };
+type StepOutput = { exitCode: number | null; output: string } | { status: number; output: string } | { rowCount: number; output: string } | { outcome: string; rowId: string } | { decision: string } | { elapsedMs: number; evaluations: number } | { childRunId: string; status: string; errorCode?: string; output?: string };
 
 type ExecutionCounter = { executed: number; iterations: number };
 /** The cell an edge leads to, and the list the edge iterates when it carries a forEach. */
@@ -89,6 +91,8 @@ interface RunContext {
   inputs: Record<string, unknown>;
   secretValues: ReadonlyMap<string, string>;
   masker: SecretMasker;
+  /** The playbooks of the runs that called this one, then this one: the root run holds only its own playbook. */
+  lineage: readonly string[];
 }
 
 const INTERRUPTED = 'interrupted';
@@ -104,6 +108,7 @@ const STEP_LIMIT_EXCEEDED = 'step_limit_exceeded';
 const FOR_EACH_SOURCE_INVALID = 'for_each_source_invalid';
 const FOR_EACH_LIMIT_EXCEEDED = 'for_each_limit_exceeded';
 const FOR_EACH_ITERATION_FAILED = 'for_each_iteration_failed';
+const SUB_PLAYBOOK_FAILED = 'sub_playbook_failed';
 const SECRET_SCOPE_KIND = 'playbook';
 
 const busy = (reason: string) => new OpenFleetError('playbook_run_busy', reason, { hint: 'Wait for a run to end, then start again.' });
@@ -126,6 +131,7 @@ const isReadFromStoreCell = (cell: PlaybookCell): cell is ReadFromStoreCell => c
 const isWriteToStoreCell = (cell: PlaybookCell): cell is WriteToStoreCell => cell.kind === 'writeToStore';
 const isManualCell = (cell: PlaybookCell): cell is ManualCell => cell.kind === 'manual';
 const isWaitForCell = (cell: PlaybookCell): cell is WaitForCell => cell.kind === 'waitFor';
+const isSubPlaybookCell = (cell: PlaybookCell): cell is SubPlaybookCell => cell.kind === 'subPlaybook';
 
 const SAFE_TO_REPEAT_HTTP_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD']);
 
@@ -135,12 +141,12 @@ const cannotBeRetried = (cell: PlaybookCell): boolean => {
   return cell.kind === 'writeToStore' || cell.kind === 'manual' || cell.kind === 'subPlaybook';
 };
 
-const RUNNABLE_KINDS: ReadonlySet<PlaybookCell['kind']> = new Set(['script', 'http', 'readFromStore', 'writeToStore', 'manual', 'waitFor']);
+const RUNNABLE_KINDS: ReadonlySet<PlaybookCell['kind']> = new Set(['script', 'http', 'readFromStore', 'writeToStore', 'manual', 'waitFor', 'subPlaybook']);
 
-/** Only script, http, store, manual and waitFor cells run: another kind of cell (a tool cell, a subPlaybook cell), a retry on a cell whose effect a second attempt would repeat, and a forEach into a manual cell are refused before anything starts. */
+/** Only script, http, store, manual, waitFor and subPlaybook cells run: another kind of cell (a tool cell), a retry on a cell whose effect a second attempt would repeat, and a forEach into a manual cell are refused before anything starts. */
 function assertCellsCanRun(playbook: PlaybookRecord): void {
   for (const cell of playbook.flow.cells) {
-    if (!RUNNABLE_KINDS.has(cell.kind)) throw notRunnable(`the cell ${cell.id} is a ${cell.kind} cell: this runner executes script, http, readFromStore, writeToStore, manual and waitFor cells only (a tool cell waits for the run to have an actor and a role).`);
+    if (!RUNNABLE_KINDS.has(cell.kind)) throw notRunnable(`the cell ${cell.id} is a ${cell.kind} cell: this runner executes script, http, readFromStore, writeToStore, manual, waitFor and subPlaybook cells only (a tool cell waits for the run to have an actor and a role).`);
     if (cell.retry !== undefined && cannotBeRetried(cell)) throw notRunnable(`the cell ${cell.id} retries, and a ${cell.kind} cell has an effect that a second attempt would repeat: only script, readFromStore, waitFor and http GET or HEAD cells retry.`);
     const iteratesIntoManualCell = (cell.next ?? []).some((edge) => edge.forEach !== undefined && playbook.flow.cells.find((target) => target.id === edge.to)?.kind === 'manual');
     if (iteratesIntoManualCell) throw notRunnable(`the cell ${cell.id} iterates into a manual cell: a question to a human is never asked once per element.`);
@@ -243,14 +249,31 @@ export class PlaybookRunner {
    * secret_not_connected_on_this_device (this device holds no value for a secret the playbook uses), playbook_run_busy or playbook_review_backlog (the runs awaiting a review reach their cap).
    */
   async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind }): Promise<PlaybookRunRecord> {
+    const context = await this.beginRun({ ...input, lineage: [] });
+    const execution = this.execute(context).then(() => undefined).finally(() => this.inFlight.delete(execution));
+    this.inFlight.add(execution);
+    return context.run;
+  }
+
+  /**
+   * Validates a run and journals it as running, with nothing between the last check and the journal: what the daemon, the playbook and the capacity are AFTER the secrets were read decides.
+   * A run called by another one (`lineage` holds the playbooks above it, `projectId` the project it must belong to) is refused beyond MAX_SUB_PLAYBOOK_DEPTH levels, when its playbook is already above it (a cycle),
+   * when it waits for a human (a parent cannot park on its child) and when its playbook is of another project, which answers playbook_not_found like a playbook that does not exist.
+   * `beforeJournal` is told the id of the run right before it is written, in the same turn of the event loop.
+   */
+  private async beginRun(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; lineage: readonly string[]; projectId?: string; beforeJournal?: (runId: string) => void }): Promise<RunContext> {
     this.assertNotStopping();
     this.expireOverdueManualWaits();
     const playbook = this.deps.playbooks.getById(input.playbookId);
+    const isCalled = input.lineage.length > 0;
+    this.assertBelongsToProject(playbook, input.projectId);
+    if (isCalled) this.assertMayBeCalledFrom(playbook, input.lineage);
     assertCellsCanRun(playbook);
     const pinnedScripts = this.deps.approvals.assertStillApproved(playbook);
     const inputs = resolveRunInputs(playbook.inputs, input.inputs);
     const secretValues = await this.resolveSecretsOf(playbook);
     this.assertStillStartableAfterTheWait(playbook);
+    this.assertBelongsToProject(this.deps.playbooks.getById(playbook.id), input.projectId);
     const masker = this.maskerOf(secretValues);
 
     this.assertRoomForAnotherRun(playbook);
@@ -258,12 +281,23 @@ export class PlaybookRunner {
       id: this.deps.newId(), playbookId: playbook.id, playbookRev: playbook.contentRev, flowSha256: canonicalDigestOf(playbook.flow),
       status: 'running', inputs: maskedLeaves(inputs, masker) as Record<string, unknown>, actorKind: input.actorKind, errorCode: null, startedAt: this.deps.clock(), endedAt: null,
     };
+    input.beforeJournal?.(run.id);
     this.deps.runs.insertRun(run);
     this.deps.observer?.runStarted({ runId: run.id, playbookId: run.playbookId });
+    return { run, playbook, pinnedScripts, inputs, secretValues, masker, lineage: [...input.lineage, playbook.id] };
+  }
 
-    const execution = this.execute({ run, playbook, pinnedScripts, inputs, secretValues, masker }).finally(() => this.inFlight.delete(execution));
-    this.inFlight.add(execution);
-    return run;
+  private assertBelongsToProject(playbook: PlaybookRecord, projectId: string | undefined): void {
+    const isOfAnotherProject = projectId !== undefined && playbook.projectId !== projectId;
+    if (isOfAnotherProject) throw new OpenFleetError('playbook_not_found', 'no such playbook in this project.');
+  }
+
+  private assertMayBeCalledFrom(playbook: PlaybookRecord, lineage: readonly string[]): void {
+    const isACycle = lineage.includes(playbook.id);
+    if (isACycle) throw notRunnable('this playbook is already running above this call: a playbook never calls itself, even through another one.');
+    const isTooDeep = lineage.length > MAX_SUB_PLAYBOOK_DEPTH;
+    if (isTooDeep) throw notRunnable(`playbooks call each other ${MAX_SUB_PLAYBOOK_DEPTH} levels deep at most.`);
+    if (hasManualCell(playbook)) throw notRunnable('a playbook that waits for a human cannot be called by another one: the run that calls it would wait with no one to answer.');
   }
 
   private assertNotStopping(): void {
@@ -306,7 +340,7 @@ export class PlaybookRunner {
   }
 
   /** Walks the run, from the entry or from the point a manual answer resumes it, and settles it, unless a manual cell parked it: a parked run is settled by its answer, or by the end of its wait. */
-  private async execute(context: RunContext, resumeFrom?: ResumePoint): Promise<void> {
+  private async execute(context: RunContext, resumeFrom?: ResumePoint): Promise<Verdict | typeof PARKED> {
     const { runs, clock, observer } = this.deps;
     const { run, playbook } = context;
     let outcome: Verdict | typeof PARKED;
@@ -315,10 +349,11 @@ export class PlaybookRunner {
     } catch (error) {
       outcome = verdictOfFailure(error, context.masker);
     }
-    if (outcome.status === 'waiting_manual') return;
+    if (outcome.status === 'waiting_manual') return outcome;
     runs.settleRun({ id: run.id, status: outcome.status, errorCode: outcome.errorCode, endedAt: clock() });
     runs.pruneFinishedBeyond(playbook.id, playbook.policy.maxRunsToKeep);
     observer?.runEnded({ runId: run.id, playbookId: playbook.id, status: outcome.status });
+    return outcome;
   }
 
   /** Executes the cells from the entry (or from the resume point) along their edges until a cell leads nowhere, a step does not succeed, a manual cell parks the run, or the cap of step executions is reached. */
@@ -435,7 +470,8 @@ export class PlaybookRunner {
       if (isWriteToStoreCell(cell)) return this.runWriteToStoreCell(cell, context, steps, iteration);
       if (isManualCell(cell)) return this.parkOnManualCell(cell, context, steps, seq);
       if (isWaitForCell(cell)) return await this.runWaitForCell(cell, context, steps);
-      throw notRunnable(`the cell ${cell.id} is not a script, http, store, manual or waitFor cell.`);
+      if (isSubPlaybookCell(cell)) return await this.runSubPlaybookCell({ cell, context, steps, seq, iteration });
+      throw notRunnable(`the cell ${cell.id} is not a script, http, store, manual, waitFor or subPlaybook cell.`);
     } catch (error) {
       return { verdict: verdictOfFailure(error, context.masker) };
     }
@@ -493,6 +529,46 @@ export class PlaybookRunner {
       if (wakeUp === 'daemon_stopping') return { verdict: { status: 'needs_review', errorCode: INTERRUPTED } };
     }
     return { verdict: { status: 'failed', errorCode: 'wait_for_timeout' } };
+  }
+
+  /**
+   * Runs the playbook the cell names as a run of its own, for the actor of this run, and waits for it to end.
+   * The child is journaled like any run: it is approved, it takes a place among the runs at once (the parent keeps its own, so `maxConcurrentRuns = 1` refuses the child with playbook_run_busy), and its secrets are its own.
+   * The step names its child (`{ childRunId, status: 'running' }`) right before the child is journaled, so the run of a child leads to the step of its parent (`parentOf`) and a crash leaves the link behind.
+   * The inputs of the child are the inputs of the cell with their tokens resolved and the secrets of this run masked; the answer of the child is untrusted data and goes through the same masker, the shape-based layer and the cap as any output.
+   */
+  private async runSubPlaybookCell({ cell, context, steps, seq, iteration }: { cell: SubPlaybookCell; context: RunContext; steps: StepFields; seq: number; iteration?: Iteration }): Promise<StepResult> {
+    const childInputs = this.inputsOfChild(cell, context, steps, iteration);
+    const childContext = await this.beginRun({
+      playbookId: cell.playbookId, inputs: childInputs, actorKind: context.run.actorKind, lineage: context.lineage, projectId: context.playbook.projectId,
+      beforeJournal: (childRunId) => this.deps.runs.writeRunningStepOutput({ runId: context.run.id, seq, output: { childRunId, status: 'running' } }),
+    });
+    const childRunId = childContext.run.id;
+    await this.execute(childContext);
+
+    const childRun = this.deps.runs.get(childRunId)!;
+    const lastOutput = this.deps.runs.stepsOf(childRunId).filter((step) => step.status === 'succeeded').at(-1)?.output;
+    const output: StepOutput = { childRunId, status: childRun.status, ...(childRun.errorCode === null ? {} : { errorCode: childRun.errorCode }), ...(lastOutput === undefined || lastOutput === null ? {} : { output: this.untrustedTextOf(lastOutput, context.masker) }) };
+    if (childRun.status === 'succeeded') return { verdict: { status: 'succeeded' }, output };
+    if (childRun.status === 'needs_review') return { verdict: { status: 'needs_review', errorCode: INTERRUPTED }, output };
+    return { verdict: { status: 'failed', errorCode: SUB_PLAYBOOK_FAILED }, output };
+  }
+
+  /** The inputs of a subPlaybook cell: every text resolved in this run (no untrusted data, no secret) and masked with the secrets of this run; a number and a boolean go through as they are. */
+  private inputsOfChild(cell: SubPlaybookCell, context: RunContext, steps: StepFields, iteration?: Iteration): Record<string, unknown> {
+    const { scope, untrusted } = this.templateWorldOf(context, steps, iteration);
+    const resolved = Object.entries(cell.inputs ?? {}).map(([name, value]): [string, unknown] => {
+      if (typeof value !== 'string') return [name, value];
+      assertTemplateAllowed({ template: value, slot: 'child_input', untrusted });
+      return [name, context.masker.mask(resolveTemplate({ template: value, scope }).text)];
+    });
+    return Object.fromEntries(resolved);
+  }
+
+  /** What a child answered, as the text a step of this run keeps: the shape-based layer, the masker of this run, the control characters out, and the cap of the output of a step. */
+  private untrustedTextOf(value: unknown, masker: SecretMasker): string {
+    const text = JSON.stringify(value).slice(0, MAX_STEP_OUTPUT_BYTES + masker.longestSpellingLength);
+    return withoutControlCharacters(masker.mask(maskedSecrets(text))).slice(0, MAX_STEP_OUTPUT_BYTES);
   }
 
   /** Sleeps on the injected timer; the stop of the daemon cancels the timer and ends the sleep at once. */
@@ -618,8 +694,8 @@ export class PlaybookRunner {
     const manualCell = cells.find((cell) => cell.id === manualStepId)!;
     const from = this.transitionAfter(manualCell, cells, { inputs: run.inputs, steps });
 
-    const context: RunContext = { run, playbook, pinnedScripts, inputs: run.inputs, secretValues, masker: this.maskerOf(secretValues) };
-    const execution = this.execute(context, { from, executed: seq, steps }).finally(() => this.inFlight.delete(execution));
+    const context: RunContext = { run, playbook, pinnedScripts, inputs: run.inputs, secretValues, masker: this.maskerOf(secretValues), lineage: [playbook.id] };
+    const execution = this.execute(context, { from, executed: seq, steps }).then(() => undefined).finally(() => this.inFlight.delete(execution));
     this.inFlight.add(execution);
   }
 

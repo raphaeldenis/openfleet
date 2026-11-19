@@ -9,7 +9,7 @@ import { createManualTimers, until, type ManualTimers } from '../integrations/ma
  *  3. poll floor                `MIN_WAIT_POLL_MS` -> 'never polls faster than once a second ...'
  *  4. evaluation cap            `maxWaitEvaluations` -> 'stops after the cap of evaluations ...'
  *  5. shared evaluator          `evaluateConditions` -> 'waits for a date', 'ends at once when the predicate already holds'
- *  6. kinds                     `assertCellsCanRun` -> 'still refuses a subPlaybook cell ...'
+ *  6. kinds                     `assertCellsCanRun` -> 'still refuses a tool cell ...'
  */
 type RunView = { id: string; status: string; errorCode: string | null; steps: { stepId: string; status: string; errorCode: string | null; output: Record<string, unknown> | null }[] };
 
@@ -210,9 +210,9 @@ describe('a waitFor cell never succeeds after its ceiling', () => {
 });
 
 describe('the kinds this runner executes', () => {
-  it('still refuses a subPlaybook cell and a tool cell before anything is written', async () => {
+  it('still refuses a tool cell before anything is written', async () => {
     const f = await boot();
-    const playbook = await createApprovedPlaybook(f, [waitForCell({ predicate: [{ lhs: 'wait.elapsedMs', op: 'gte', rhs: 0 }] }), { id: 'child', kind: 'subPlaybook', playbookId: 'any' }]);
+    const playbook = await createApprovedPlaybook(f, [waitForCell({ predicate: [{ lhs: 'wait.elapsedMs', op: 'gte', rhs: 0 }] }), { id: 'child', kind: 'tool', tool: 'any' }]);
 
     const refused = await f.api(`/api/playbooks/${playbook.id}/run`, { method: 'POST', body: JSON.stringify({ inputs: {} }) });
 

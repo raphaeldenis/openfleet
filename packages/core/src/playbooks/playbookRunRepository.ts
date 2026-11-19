@@ -2,6 +2,9 @@ import type { PlaybookRunActorKind, PlaybookRunStatus } from '@openfleet/shared'
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
 
+/** How many of the most recent steps `parentOf` looks at: the lookup stays cheap however many steps the journal holds. */
+export const PARENT_LOOKUP_SCAN_LIMIT = 10_000;
+
 /** The states a step or a run ends in: neither running nor waiting for a human. */
 export type SettledStatus = Exclude<PlaybookRunStatus, 'running' | 'waiting_manual'>;
 
@@ -64,6 +67,18 @@ export class PlaybookRunRepository {
   settleStep(step: { runId: string; seq: number; status: SettledStatus; output?: unknown; errorCode?: string; endedAt: string }): void {
     this.db.prepare("UPDATE playbook_run_steps SET status = ?, output_json_masked = ?, error_code = ?, ended_at = ? WHERE run_id = ? AND seq = ? AND status = 'running'")
       .run(step.status, step.output === undefined ? null : JSON.stringify(step.output), step.errorCode ?? null, step.endedAt, step.runId, step.seq);
+  }
+
+  /** Rewrites the output of a step that is still running (a subPlaybook step names its child before the child starts); a settled step is left as it is. */
+  writeRunningStepOutput(step: { runId: string; seq: number; output: unknown }): void {
+    this.db.prepare("UPDATE playbook_run_steps SET output_json_masked = ? WHERE run_id = ? AND seq = ? AND status = 'running'").run(JSON.stringify(step.output), step.runId, step.seq);
+  }
+
+  /** The step of the parent run whose output names `childRunId` (`{ childRunId }`, written by the runner); only the PARENT_LOOKUP_SCAN_LIMIT most recent steps are read. */
+  parentOf(childRunId: string): { runId: string; seq: number } | undefined {
+    const row = this.db.prepare(`SELECT run_id, seq FROM (SELECT run_id, seq, output_json_masked FROM playbook_run_steps ORDER BY rowid DESC LIMIT ?)
+      WHERE CASE WHEN json_valid(output_json_masked) THEN json_extract(output_json_masked, '$.childRunId') END = ? LIMIT 1`).get(PARENT_LOOKUP_SCAN_LIMIT, childRunId) as { run_id: string; seq: number } | undefined;
+    return row && { runId: row.run_id, seq: row.seq };
   }
 
   settleRun(run: { id: string; status: SettledStatus; errorCode?: string; endedAt: string }): void {

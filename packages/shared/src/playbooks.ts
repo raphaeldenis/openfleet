@@ -44,6 +44,8 @@ export type PlaybookRunActorKind = (typeof PLAYBOOK_RUN_ACTOR_KINDS)[number];
 export const MAX_STEP_EXECUTIONS_PER_RUN = 1000;
 /** The elements a forEach edge iterates, and the iterations of all the forEach edges of one run. */
 export const MAX_FOR_EACH_ITEMS = 100;
+/** How many levels of subPlaybook cells one run may nest: the root run is level 0, so the eleventh child is refused. */
+export const MAX_SUB_PLAYBOOK_DEPTH = 10;
 export const MAX_FOR_EACH_ITERATIONS_PER_RUN = 1000;
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 600;
 export const MAX_STEP_OUTPUT_BYTES = 256 * 1024;

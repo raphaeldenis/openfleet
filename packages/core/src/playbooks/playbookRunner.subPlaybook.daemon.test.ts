@@ -220,8 +220,7 @@ describe('the depth and the cycles of subPlaybook cells', () => {
     expect(runsAfterTheAccepted).toBe(11);
     expect(refused.status).toBe('failed');
     expect(allRuns(f).length - runsAfterTheAccepted).toBe(11);
-    const deepest = f.db.prepare("SELECT error_code FROM playbook_run_steps WHERE status = 'failed' ORDER BY started_at DESC, rowid DESC LIMIT 1").get() as { error_code: string };
-    expect(deepest.error_code).toBe('sub_playbook_failed');
+    expect(refused.steps[0]).toMatchObject({ status: 'failed', errorCode: 'sub_playbook_failed' });
     const refusals = f.db.prepare("SELECT COUNT(*) AS n FROM playbook_run_steps WHERE error_code = 'playbook_not_runnable'").get() as { n: number };
     expect(refusals.n).toBe(1);
   });
