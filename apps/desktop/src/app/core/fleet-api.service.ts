@@ -5,7 +5,7 @@ import type {
   LawView, ManagerGovernanceWithLawsView, ManagerProfile, ManagerView, NoteVersionSummary, NoteView, OrderTerm, Page, PermissionMode, Project, ReopenMode, RestoreNoteRequest, Session, SessionSpec, SessionTodos,
   RemovedWorktree, ToolSummary, UpdateManager, UpdateNoteRequest, UpdateProjectRequest, WhereClause, WorkingState, WorktreeList,
 } from '@openfleet/shared';
-import type { SecretStatusAnswer, TriggerFireView, TriggerPolicy, TriggerWhen } from '@openfleet/shared';
+import type { SecretStatusAnswer, TriggerFireView, TriggerPolicy, TriggerRun, TriggerWhen } from '@openfleet/shared';
 import { environment } from '../../environments/environment';
 import type { PlaybookVersionContent, PlaybookVersionList, PlaybookView, TriggerView } from './playbook-trigger-views';
 import { parseActivityPage } from './activity-page-parser';
@@ -334,10 +334,10 @@ export class FleetApiService {
     return this.call<SecretStatusAnswer>(`/api/secrets/playbook/${encodeURIComponent(playbookId)}/${encodeURIComponent(name)}`);
   }
   listTriggers(projectId: string) { return this.call<TriggerView[]>(`/api/triggers${queryString({ projectId })}`); }
-  /** Replaces the title, the policy and, when given, the WHEN, the conditions and the owner of a trigger the screen read at `expectedRev`; the daemon clears the arming. */
+  /** Replaces the title, the policy and, when given, the WHEN, the conditions, the RUN and the owner of a trigger the screen read at `expectedRev`; the daemon clears the arming. */
   updateTrigger({ triggerId, expectedRev, changes }: {
     triggerId: string; expectedRev: number;
-    changes: { title?: string; policy?: TriggerPolicy; when?: TriggerWhen; conditions?: Record<string, unknown>[]; ownerManagerId?: string | null };
+    changes: { title?: string; policy?: TriggerPolicy; when?: TriggerWhen; conditions?: Record<string, unknown>[]; run?: TriggerRun; ownerManagerId?: string | null };
   }) {
     return this.put<TriggerView>(triggerPath(triggerId), { expectedRev, ...changes });
   }
