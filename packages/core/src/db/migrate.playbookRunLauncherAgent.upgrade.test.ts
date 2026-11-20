@@ -145,6 +145,80 @@ describe('the down of the agent run launcher migration', () => {
     expect(() => db.exec("UPDATE playbook_runs SET launched_by_kind = 'unknown' WHERE id = 'live'")).toThrow(/fixed at creation/);
   });
 
+  describe('a run an agent launched that still waits for a human', () => {
+    const insertWaitingRun = (db: DatabaseSync, { id, kind, ref }: { id: string; kind: string; ref: string | null }) => {
+      insertRunWithLauncher(db, { id, kind, ref });
+      db.prepare("UPDATE playbook_runs SET status = 'waiting_manual' WHERE id = ?").run(id);
+      db.prepare("INSERT INTO playbook_run_steps (run_id, seq, step_id, status, started_at) VALUES (?, 1, 'gate', 'waiting_manual', 't5')").run(id);
+      db.prepare("INSERT INTO playbook_manual_requests (run_id, seq, prompt_masked, status, requested_at, expires_at) VALUES (?, 1, 'Ship it?', 'pending', 't5', 't9')").run(id);
+    };
+    const databaseWithWaitingRunsOfEveryProvenance = () => {
+      const db = openPopulatedDatabaseBeforeTheMigration();
+      applyTheMigration(db);
+      insertWaitingRun(db, { id: 'agent-parked', kind: 'agent', ref: 'session-7' });
+      insertWaitingRun(db, { id: 'admin-parked', kind: 'admin_api', ref: null });
+      insertWaitingRun(db, { id: 'trigger-parked', kind: 'trigger', ref: 'trigger-2' });
+      insertRunWithLauncher(db, { id: 'agent-live', kind: 'agent', ref: 'session-7' });
+      db.prepare("INSERT INTO playbook_run_steps (run_id, seq, step_id, status, started_at) VALUES ('agent-live', 1, 'work', 'running', 't5')").run();
+      insertRunWithLauncher(db, { id: 'agent-done', kind: 'agent', ref: 'session-7' });
+      db.prepare("UPDATE playbook_runs SET status = 'succeeded', ended_at = 't6' WHERE id = 'agent-done'").run();
+      db.prepare("INSERT INTO playbook_run_steps (run_id, seq, step_id, status, output_json_masked, started_at, ended_at) VALUES ('agent-done', 1, 'work', 'succeeded', '{\"ok\":1}', 't5', 't6')").run();
+      return db;
+    };
+    const runOf = (db: DatabaseSync, id: string) => rowsOf(db, `SELECT id, status, error_code, ended_at IS NOT NULL AS has_ended, launched_by_kind, launched_by_ref FROM playbook_runs WHERE id = '${id}'`)[0];
+    const stepsOf = (db: DatabaseSync, id: string) => rowsOf(db, `SELECT step_id, status, error_code, output_json_masked, ended_at IS NOT NULL AS has_ended FROM playbook_run_steps WHERE run_id = '${id}' ORDER BY seq`);
+    const requestOf = (db: DatabaseSync, id: string) => rowsOf(db, `SELECT status, decision, settled_at IS NOT NULL AS is_settled FROM playbook_manual_requests WHERE run_id = '${id}'`);
+    const everythingOf = (db: DatabaseSync, id: string) => [runOf(db, id), stepsOf(db, id), requestOf(db, id)];
+    const thingsThatCouldStillBeAnswered = (db: DatabaseSync) => rowsOf(db, "SELECT run_id FROM playbook_manual_requests WHERE status = 'pending' AND run_id LIKE 'agent-%'");
+
+    it('is closed for review by the down: the run, its live steps and its question, so that nothing can answer it', () => {
+      const db = databaseWithWaitingRunsOfEveryProvenance();
+
+      db.exec(downSqlOf(AGENT_LAUNCHER_VERSION));
+
+      expect(runOf(db, 'agent-parked')).toMatchObject({ status: 'needs_review', error_code: 'interrupted', has_ended: 1, launched_by_kind: 'unknown', launched_by_ref: null });
+      expect(stepsOf(db, 'agent-parked')).toEqual([expect.objectContaining({ step_id: 'gate', status: 'needs_review', error_code: 'interrupted', has_ended: 1 })]);
+      expect(requestOf(db, 'agent-parked')).toEqual([{ status: 'cancelled', decision: null, is_settled: 1 }]);
+      expect(runOf(db, 'agent-live')).toMatchObject({ status: 'needs_review', error_code: 'interrupted', has_ended: 1, launched_by_kind: 'unknown' });
+      expect(stepsOf(db, 'agent-live')).toEqual([expect.objectContaining({ status: 'needs_review', error_code: 'interrupted', has_ended: 1 })]);
+      expect(thingsThatCouldStillBeAnswered(db)).toEqual([]);
+      expect(rowsOf(db, "SELECT id FROM playbook_runs WHERE launched_by_kind IS NOT 'admin_api' AND launched_by_kind IS NOT 'trigger' AND status IN ('running', 'waiting_manual') AND id LIKE 'agent-%'")).toEqual([]);
+      expect(rowsOf(db, 'PRAGMA foreign_key_check')).toEqual([]);
+    });
+
+    it('stays closed when 076 is applied again: the run is not waiting and its question is not pending', () => {
+      const db = databaseWithWaitingRunsOfEveryProvenance();
+      db.exec(downSqlOf(AGENT_LAUNCHER_VERSION));
+      db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(AGENT_LAUNCHER_VERSION);
+
+      applyTheMigration(db);
+
+      expect(runOf(db, 'agent-parked')).toMatchObject({ status: 'needs_review', error_code: 'interrupted' });
+      expect(requestOf(db, 'agent-parked')).toEqual([{ status: 'cancelled', decision: null, is_settled: 1 }]);
+      expect(rowsOf(db, "SELECT id FROM playbook_runs WHERE id LIKE 'agent-%' AND status IN ('running', 'waiting_manual')")).toEqual([]);
+    });
+
+    it('keeps the journal of a run of an agent that already ended, under an unknown launcher', () => {
+      const db = databaseWithWaitingRunsOfEveryProvenance();
+
+      db.exec(downSqlOf(AGENT_LAUNCHER_VERSION));
+
+      expect(runOf(db, 'agent-done')).toMatchObject({ status: 'succeeded', error_code: null, launched_by_kind: 'unknown', launched_by_ref: null });
+      expect(stepsOf(db, 'agent-done')).toEqual([expect.objectContaining({ step_id: 'work', status: 'succeeded', output_json_masked: '{"ok":1}' })]);
+    });
+
+    it('leaves a run waiting for a human that an admin or a trigger launched exactly as it was', () => {
+      const db = databaseWithWaitingRunsOfEveryProvenance();
+      const before = ['admin-parked', 'trigger-parked', 'parked'].map((id) => everythingOf(db, id));
+
+      db.exec(downSqlOf(AGENT_LAUNCHER_VERSION));
+
+      expect(['admin-parked', 'trigger-parked', 'parked'].map((id) => everythingOf(db, id))).toEqual(before);
+      expect(runOf(db, 'admin-parked')).toMatchObject({ status: 'waiting_manual', launched_by_kind: 'admin_api' });
+      expect(requestOf(db, 'trigger-parked')).toEqual([{ status: 'pending', decision: null, is_settled: 0 }]);
+    });
+  });
+
   it('lets the 075 down run after it, then the migrations apply again', () => {
     const db = openPopulatedDatabaseBeforeTheMigration();
     applyTheMigration(db);

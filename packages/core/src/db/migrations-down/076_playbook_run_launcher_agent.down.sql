@@ -1,4 +1,14 @@
 -- Restores the shape of 075: the pair CHECK without the agent kind. A run launched by an agent keeps its row, its steps and its manual requests, and reads as an unknown launcher: the 075 pair CHECK cannot hold an agent.
+-- A run an agent launched that is still running or waiting for a human cannot go on under an unknown launcher: the checks that depend on the agent launcher (untrusted inputs, the lock against agents) would no longer apply
+-- when a human answers its question. Before the launcher is erased, such a run is closed for review as the down of 073 closes a run that waits (needs_review, `interrupted`), its live steps with it, and its pending questions are cancelled,
+-- so nothing can answer them, not even after 076 is applied again. A run an admin or a trigger launched, and every run that already ended, keep their state.
+UPDATE playbook_manual_requests SET status = 'cancelled', settled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE status = 'pending' AND run_id IN (SELECT id FROM playbook_runs WHERE launched_by_kind = 'agent');
+UPDATE playbook_run_steps SET status = 'needs_review', error_code = 'interrupted', ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE status IN ('running', 'waiting_manual') AND run_id IN (SELECT id FROM playbook_runs WHERE launched_by_kind = 'agent');
+UPDATE playbook_runs SET status = 'needs_review', error_code = 'interrupted', ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE status IN ('running', 'waiting_manual') AND launched_by_kind = 'agent';
+
 CREATE TABLE playbook_run_steps_kept AS SELECT * FROM playbook_run_steps;
 CREATE TABLE playbook_manual_requests_kept AS SELECT * FROM playbook_manual_requests;
 DROP TABLE playbook_manual_requests;
