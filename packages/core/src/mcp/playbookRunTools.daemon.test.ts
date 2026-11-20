@@ -354,11 +354,14 @@ describe('get_playbook_run', () => {
     const playbook = await approvedPlaybook([scriptCell('prepare', 'quick.sh'), { id: 'gate', kind: 'manual', prompt: question }]);
     const run = await startedRun(lead, playbook.id);
     await until(() => statusOfRun(run.id) === 'waiting_manual');
+    const internalBudgetNote = `internal-budget-${randomUUID()}`;
+    fixture.db.prepare("UPDATE playbook_run_steps SET output_json_masked = ? WHERE run_id = ? AND step_id = 'gate'").run(JSON.stringify({ budget: internalBudgetNote }), run.id);
 
     const read = await tool(lead, 'get_playbook_run', { run_id: run.id });
 
     expect(read.json!.run).toMatchObject({ status: 'waiting_manual', awaiting: 'human' });
     expect(read.text).not.toContain(question);
+    expect(read.text).not.toContain(internalBudgetNote);
     const gateStep = (read.json!.run.steps as { step_id: string; untrusted?: unknown }[]).find((step) => step.step_id === 'gate')!;
     expect(gateStep.untrusted).toBeUndefined();
     const names = (await lead.listTools()).tools.map((candidate) => candidate.name);
