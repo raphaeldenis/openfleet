@@ -99,9 +99,13 @@ Every run carries `launchedBy: { kind, ref }`, written once when the run is crea
 | --- | --- | --- |
 | `admin_api` | `null` | the run starts through `POST /api/playbooks/:id/run` |
 | `trigger` | the id of the trigger | a trigger fires its RUN `run_playbook` |
-| `unknown` | `null` | the run was created before migration 074; no row is rewritten |
+| `unknown` | `null` | the run has no known launcher: it was created before migration 074, or its two columns were set back to NULL (a rollback of 074 followed by a new upgrade), or the database was replaced directly; no row is rewritten |
 
 `launchedBy` is part of the REST representation of a run (`POST /api/playbooks/:id/run`, `GET /api/playbook-runs/:id`, `GET /api/playbook-runs?playbookId=`). No MCP tool shows it and none changes. The value `agent` is not accepted: it is reserved for PBK-P4B.
+
+Direct database maintenance (migration 075): a CHECK on the pair refuses a row whose launcher the application could not read (`trigger` without a ref, a ref on `admin_api` or `unknown`, a ref without a kind, any other kind). Two limits remain. An INSERT that omits both columns stores NULL and reads as `unknown`, like a pre-074 run. The guard fires on UPDATE only: `INSERT OR REPLACE`, or a DELETE followed by an INSERT, replaces the row and so replaces its attribution. No production path does either.
+
+Rollback: applying the down of 074 drops the two columns, so a run kept through a rollback loses its attribution and reads `unknown` after the upgrade is applied again, even if its launcher was known before. Replacing the database file does the same for the runs it does not carry. The sentence "never changed" holds for the daemon and for any UPDATE, not for a rollback or a direct replacement of a row.
 
 Known limit: this is a trace, not a barrier. The column authorises nothing and refuses nothing: no check reads it, and the approval digest and the digest of the flow do not depend on it (a test starts the same playbook by hand and by a trigger and finds the same digests). The id of a trigger names a trigger that may have been deleted since; the column keeps the id as it was.
 
