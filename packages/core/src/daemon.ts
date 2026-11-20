@@ -19,7 +19,7 @@ import { CriteriaStatusGuard } from './escalation/criteriaStatusGuard.js';
 import { EscalationRepository } from './escalation/escalationRepository.js';
 import { EscalationService } from './escalation/escalationService.js';
 import { GovernanceQueueService } from './governance/governanceQueueService.js';
-import { MAX_CONCURRENT_RUNS, MAX_FOR_EACH_ITERATIONS_PER_RUN, MAX_PARKED_RUNS_PER_PROJECT, MAX_RUNS_NEEDING_REVIEW, MAX_STEP_EXECUTIONS_PER_RUN, MAX_WAIT_FOR_EVALUATIONS, OpenFleetError, type EscalationView } from '@openfleet/shared';
+import { MAX_CHILD_RUNS_PER_ROOT, MAX_CONCURRENT_RUNS, MAX_EMPTY_TRANSITIONS_PER_RUN, MAX_FOR_EACH_ITERATIONS_PER_RUN, MAX_PARKED_RUNS_PER_PROJECT, MAX_RUNS_NEEDING_REVIEW, MAX_STEP_EXECUTIONS_PER_RUN, MAX_WAIT_FOR_EVALUATIONS, OpenFleetError, type EscalationView } from '@openfleet/shared';
 import { decisionNotification, escalationAnswerNotification } from './governance/decisionNotification.js';
 import { loadPermissionSettings } from './governance/permissionSettings.js';
 import { SilentBlockDetector } from './governance/silentBlockDetector.js';
@@ -261,7 +261,7 @@ export interface DaemonOptions {
   playbooks?: {
     scriptRoots?: string[]; maxStepExecutions?: number; maxConcurrentRuns?: number; maxRunsNeedingReview?: number; httpNetwork?: HttpStepNetwork;
     /** Replace the 50 runs a project may park on a human and the 1000 evaluations of a waitFor cell, so a test reaches them with a few runs. */
-    maxParkedRunsPerProject?: number; maxWaitEvaluations?: number; maxForEachIterations?: number;
+    maxParkedRunsPerProject?: number; maxWaitEvaluations?: number; maxForEachIterations?: number; maxEmptyTransitions?: number; maxChildRunsPerRoot?: number;
     /** Replace the clock of the runner (an ISO instant) and the timer of the waitFor cells, so a test decides when a wait for a human expires and when a predicate is evaluated again. */
     clock?: () => string; startTimer?: (onElapsed: () => void, delayMs: number) => () => void;
   };
@@ -531,7 +531,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
     limits: {
       maxStepExecutions: options.playbooks?.maxStepExecutions ?? MAX_STEP_EXECUTIONS_PER_RUN, maxConcurrentRuns: options.playbooks?.maxConcurrentRuns ?? MAX_CONCURRENT_RUNS, maxRunsNeedingReview: options.playbooks?.maxRunsNeedingReview ?? MAX_RUNS_NEEDING_REVIEW,
       maxParkedRunsPerProject: options.playbooks?.maxParkedRunsPerProject ?? MAX_PARKED_RUNS_PER_PROJECT, maxWaitEvaluations: options.playbooks?.maxWaitEvaluations ?? MAX_WAIT_FOR_EVALUATIONS,
-      maxForEachIterations: options.playbooks?.maxForEachIterations ?? MAX_FOR_EACH_ITERATIONS_PER_RUN,
+      maxForEachIterations: options.playbooks?.maxForEachIterations ?? MAX_FOR_EACH_ITERATIONS_PER_RUN, maxEmptyTransitions: options.playbooks?.maxEmptyTransitions ?? MAX_EMPTY_TRANSITIONS_PER_RUN, maxChildRunsPerRoot: options.playbooks?.maxChildRunsPerRoot ?? MAX_CHILD_RUNS_PER_ROOT,
     },
     observer: { runStarted: (run) => systemActivity.playbookRunStarted(run), runEnded: (run) => systemActivity.playbookRunEnded(run) },
   });

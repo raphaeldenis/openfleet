@@ -31,7 +31,7 @@ const arrangeRunnerWithRunsNeedingReview = (count: number) => {
     playbooks: { getById: () => playbook } as never,
     approvals: { assertStillApproved: () => ({}), locatePinned: () => { throw new Error('no script in this test'); } } as never,
     runs, manual: new PlaybookManualRequestRepository(db), manualResumeProof: refusingManualResumeProof, stores: {} as never, secrets: { resolve: async () => 'unused' }, clock: () => new Date().toISOString(), newId: () => 'new-run',
-    limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: LIMIT, maxParkedRunsPerProject: 50, maxWaitEvaluations: 1000, maxForEachIterations: 1000 }, observer: { runStarted: () => {}, runEnded },
+    limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: LIMIT, maxParkedRunsPerProject: 50, maxWaitEvaluations: 1000, maxForEachIterations: 1000, maxEmptyTransitions: 1000, maxChildRunsPerRoot: 100 }, observer: { runStarted: () => {}, runEnded },
   });
   return { runs, runner, ended };
 };

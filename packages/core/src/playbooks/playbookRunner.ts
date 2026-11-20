@@ -10,7 +10,7 @@ import { canonicalDigestOf } from './kernel/canonicalDigest.js';
 import { evaluateConditions, type Condition } from './kernel/conditionEvaluator.js';
 import { valueAtDottedPath } from './kernel/dottedPath.js';
 import { KernelError } from './kernel/kernelError.js';
-import { createSecretMasker, type SecretMasker } from './kernel/secretMasker.js';
+import { createSecretMasker, type SecretMasker, type SecretToMask } from './kernel/secretMasker.js';
 import { assertTemplateAllowed, resolveTemplate, type ResolutionScope, type TemplateSlot, type UntrustedSources } from './kernel/tokenResolver.js';
 import { sendHttpStep, type HttpStepNetwork } from './httpStepRequest.js';
 import { resolveHttpRequest } from './httpStepTemplates.js';
@@ -42,7 +42,7 @@ export interface PlaybookRunnerDeps {
   startTimer?: StartTimer;
   /** The name resolution and the forbidden addresses of http cells; the defaults reach the real network. */
   httpNetwork?: HttpStepNetwork;
-  limits: { maxStepExecutions: number; maxConcurrentRuns: number; maxRunsNeedingReview: number; maxParkedRunsPerProject: number; maxWaitEvaluations: number; maxForEachIterations: number };
+  limits: { maxStepExecutions: number; maxConcurrentRuns: number; maxRunsNeedingReview: number; maxParkedRunsPerProject: number; maxWaitEvaluations: number; maxForEachIterations: number; maxEmptyTransitions: number; maxChildRunsPerRoot: number };
   /** Told once a run is journaled as started and once it is settled, with ids and the status only. */
   observer?: { runStarted: (run: { runId: string; playbookId: string }) => void; runEnded: (run: { runId: string; playbookId: string; status: Settled }) => void };
 }
@@ -75,7 +75,10 @@ type ResumePoint = { from: Transition | undefined; executed: number; steps: Step
  */
 type StepOutput = { exitCode: number | null; output: string } | { status: number; output: string } | { rowCount: number; output: string } | { outcome: string; rowId: string } | { decision: string } | { elapsedMs: number; evaluations: number } | { childRunId: string; status: string; errorCode?: string; output?: string };
 
-type ExecutionCounter = { executed: number; iterations: number };
+/** What one walk of a run counts: the steps it journaled (its `seq`), its forEach iterations, the edges it followed over an empty list, and the output of the last step that succeeded. */
+type WalkState = { executed: number; iterations: number; emptyTransitions: number; lastOutput: unknown };
+/** The budget a root run shares with every run it calls, in depth and in sequence: the steps all of them executed, and the children it started. */
+type TreeBudget = { stepsExecuted: number; childrenStarted: number };
 /** The cell an edge leads to, and the list the edge iterates when it carries a forEach. */
 type Transition = { cell: PlaybookCell; forEach?: string };
 /** One element of a forEach edge: `{{item}}` and `{{index}}` of the cell it runs. An element of a list a step produced is untrusted data. */
@@ -93,6 +96,9 @@ interface RunContext {
   masker: SecretMasker;
   /** The playbooks of the runs that called this one, then this one: the root run holds only its own playbook. */
   lineage: readonly string[];
+  /** The secrets this run masks: its own, and those of every run above it, which a child never reads but never writes in the clear either. */
+  secretsToMask: readonly SecretToMask[];
+  tree: TreeBudget;
 }
 
 const INTERRUPTED = 'interrupted';
@@ -109,6 +115,7 @@ const FOR_EACH_SOURCE_INVALID = 'for_each_source_invalid';
 const FOR_EACH_LIMIT_EXCEEDED = 'for_each_limit_exceeded';
 const FOR_EACH_ITERATION_FAILED = 'for_each_iteration_failed';
 const SUB_PLAYBOOK_FAILED = 'sub_playbook_failed';
+const SUB_PLAYBOOK_LIMIT_EXCEEDED = 'sub_playbook_limit_exceeded';
 const SECRET_SCOPE_KIND = 'playbook';
 
 const busy = (reason: string) => new OpenFleetError('playbook_run_busy', reason, { hint: 'Wait for a run to end, then start again.' });
@@ -190,6 +197,8 @@ const itemsOf = (source: unknown): unknown[] | undefined => {
   }
 };
 
+const secretsToMaskOf = (secretValues: ReadonlyMap<string, string>): SecretToMask[] => [...secretValues].map(([name, value]) => ({ name, value }));
+
 const maskedLeaves = (value: unknown, masker: SecretMasker): unknown => {
   if (typeof value === 'string') return masker.mask(value);
   if (Array.isArray(value)) return value.map((member) => maskedLeaves(member, masker));
@@ -249,7 +258,7 @@ export class PlaybookRunner {
    * secret_not_connected_on_this_device (this device holds no value for a secret the playbook uses), playbook_run_busy or playbook_review_backlog (the runs awaiting a review reach their cap).
    */
   async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind }): Promise<PlaybookRunRecord> {
-    const context = await this.beginRun({ ...input, lineage: [] });
+    const context = await this.beginRun({ ...input, lineage: [], inheritedSecrets: [], tree: { stepsExecuted: 0, childrenStarted: 0 } });
     const execution = this.execute(context).then(() => undefined).finally(() => this.inFlight.delete(execution));
     this.inFlight.add(execution);
     return context.run;
@@ -259,9 +268,10 @@ export class PlaybookRunner {
    * Validates a run and journals it as running, with nothing between the last check and the journal: what the daemon, the playbook and the capacity are AFTER the secrets were read decides.
    * A run called by another one (`lineage` holds the playbooks above it, `projectId` the project it must belong to) is refused beyond MAX_SUB_PLAYBOOK_DEPTH levels, when its playbook is already above it (a cycle),
    * when it waits for a human (a parent cannot park on its child) and when its playbook is of another project, which answers playbook_not_found like a playbook that does not exist.
-   * `beforeJournal` is told the id of the run right before it is written, in the same turn of the event loop.
+   * A called run (`parentStep` names the step of the run that calls it) is journaled in one transaction with the link written in that step, and only while the parent run still runs and its step is still running:
+   * a parent whose playbook was deleted while the secrets of the child were read starts no child. It masks the secrets of every run above it (`inheritedSecrets`) from its first journal write, and takes its place in the budget of the tree.
    */
-  private async beginRun(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; lineage: readonly string[]; projectId?: string; beforeJournal?: (runId: string) => void }): Promise<RunContext> {
+  private async beginRun(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; lineage: readonly string[]; inheritedSecrets: readonly SecretToMask[]; tree: TreeBudget; projectId?: string; parentStep?: { runId: string; seq: number } }): Promise<RunContext> {
     this.assertNotStopping();
     this.expireOverdueManualWaits();
     const playbook = this.deps.playbooks.getById(input.playbookId);
@@ -274,17 +284,28 @@ export class PlaybookRunner {
     const secretValues = await this.resolveSecretsOf(playbook);
     this.assertStillStartableAfterTheWait(playbook);
     this.assertBelongsToProject(this.deps.playbooks.getById(playbook.id), input.projectId);
-    const masker = this.maskerOf(secretValues);
+    const secretsToMask = [...input.inheritedSecrets, ...secretsToMaskOf(secretValues)];
+    const masker = this.maskerOf(secretsToMask);
 
     this.assertRoomForAnotherRun(playbook);
     const run: PlaybookRunRecord = {
       id: this.deps.newId(), playbookId: playbook.id, playbookRev: playbook.contentRev, flowSha256: canonicalDigestOf(playbook.flow),
       status: 'running', inputs: maskedLeaves(inputs, masker) as Record<string, unknown>, actorKind: input.actorKind, errorCode: null, startedAt: this.deps.clock(), endedAt: null,
     };
-    input.beforeJournal?.(run.id);
-    this.deps.runs.insertRun(run);
+    this.journalTheRun(run, input.parentStep);
+    if (input.parentStep !== undefined) input.tree.childrenStarted += 1;
     this.deps.observer?.runStarted({ runId: run.id, playbookId: run.playbookId });
-    return { run, playbook, pinnedScripts, inputs, secretValues, masker, lineage: [...input.lineage, playbook.id] };
+    return { run, playbook, pinnedScripts, inputs, secretValues, masker, lineage: [...input.lineage, playbook.id], secretsToMask, tree: input.tree };
+  }
+
+  /** Writes the run; a called run is written together with the link in the step of its parent, which must still be running. */
+  private journalTheRun(run: PlaybookRunRecord, parentStep: { runId: string; seq: number } | undefined): void {
+    if (parentStep === undefined) {
+      this.deps.runs.insertRun(run);
+      return;
+    }
+    const outcome = this.deps.runs.insertRunLinkedToStep({ run, parentStep });
+    if (outcome === 'parent_gone') throw notRunnable('the run that calls this playbook no longer runs: its playbook was deleted or the run ended.');
   }
 
   private assertBelongsToProject(playbook: PlaybookRecord, projectId: string | undefined): void {
@@ -330,9 +351,9 @@ export class PlaybookRunner {
     return values;
   }
 
-  private maskerOf(secretValues: ReadonlyMap<string, string>): SecretMasker {
+  private maskerOf(secretsToMask: readonly SecretToMask[]): SecretMasker {
     try {
-      return createSecretMasker([...secretValues].map(([name, value]) => ({ name, value })), { maxInputChars: MAX_STEP_OUTPUT_BYTES });
+      return createSecretMasker(secretsToMask, { maxInputChars: MAX_STEP_OUTPUT_BYTES });
     } catch (error) {
       if (error instanceof KernelError) throw wireErrorOf(error);
       throw error;
@@ -340,33 +361,47 @@ export class PlaybookRunner {
   }
 
   /** Walks the run, from the entry or from the point a manual answer resumes it, and settles it, unless a manual cell parked it: a parked run is settled by its answer, or by the end of its wait. */
-  private async execute(context: RunContext, resumeFrom?: ResumePoint): Promise<Verdict | typeof PARKED> {
+  private async execute(context: RunContext, resumeFrom?: ResumePoint): Promise<{ outcome: Verdict | typeof PARKED; lastOutput: unknown }> {
     const { runs, clock, observer } = this.deps;
     const { run, playbook } = context;
+    const state = this.stateOfAWalk(resumeFrom);
     let outcome: Verdict | typeof PARKED;
     try {
-      outcome = await this.walk(context, resumeFrom);
+      outcome = await this.walk(context, state, resumeFrom);
     } catch (error) {
       outcome = verdictOfFailure(error, context.masker);
     }
-    if (outcome.status === 'waiting_manual') return outcome;
+    if (outcome.status === 'waiting_manual') return { outcome, lastOutput: state.lastOutput };
     runs.settleRun({ id: run.id, status: outcome.status, errorCode: outcome.errorCode, endedAt: clock() });
     runs.pruneFinishedBeyond(playbook.id, playbook.policy.maxRunsToKeep);
     observer?.runEnded({ runId: run.id, playbookId: playbook.id, status: outcome.status });
-    return outcome;
+    return { outcome, lastOutput: state.lastOutput };
   }
 
-  /** Executes the cells from the entry (or from the resume point) along their edges until a cell leads nowhere, a step does not succeed, a manual cell parks the run, or the cap of step executions is reached. */
-  private async walk(context: RunContext, resumeFrom?: ResumePoint): Promise<Verdict | typeof PARKED> {
+  /**
+   * The counters of a walk. A walk resumed after a manual answer starts its iterations at the steps already journaled: every iteration is at least one step, so the count never falls short of the iterations
+   * the run ran before it parked (it can overcount, and then refuses a batch that an exact count would have accepted).
+   */
+  private stateOfAWalk(resumeFrom?: ResumePoint): WalkState {
+    const journaledSteps = resumeFrom?.executed ?? 0;
+    return { executed: journaledSteps, iterations: journaledSteps, emptyTransitions: 0, lastOutput: undefined };
+  }
+
+  /**
+   * Executes the cells from the entry (or from the resume point) along their edges until a cell leads nowhere, a step does not succeed, a manual cell parks the run, or a cap is reached.
+   * The stop of the daemon is checked at every edge followed, and an edge that runs nothing (a forEach over an empty list) is counted by `emptyTransitions` in `executeForEach`.
+   */
+  private async walk(context: RunContext, state: WalkState, resumeFrom?: ResumePoint): Promise<Verdict | typeof PARKED> {
     const cells = context.playbook.flow.cells;
     const steps: StepFields = resumeFrom?.steps ?? {};
-    const counter: ExecutionCounter = { executed: resumeFrom?.executed ?? 0, iterations: 0 };
     const first: Transition | undefined = resumeFrom === undefined ? { cell: cells[0]! } : resumeFrom.from;
 
     for (let transition = first; transition !== undefined; transition = this.transitionAfter(transition.cell, cells, { inputs: context.inputs, steps })) {
+      const isStopping = this.shutdown.signal.aborted;
+      if (isStopping) return { status: 'needs_review', errorCode: INTERRUPTED };
       const outcome = transition.forEach === undefined
-        ? await this.executeCellWithItsRetries({ cell: transition.cell, context, steps, counter })
-        : await this.executeForEach({ cell: transition.cell, source: transition.forEach, context, steps, counter });
+        ? await this.executeCellWithItsRetries({ cell: transition.cell, context, steps, state })
+        : await this.executeForEach({ cell: transition.cell, source: transition.forEach, context, steps, state });
       if (outcome !== undefined) return outcome;
     }
     return { status: 'succeeded' };
@@ -374,20 +409,21 @@ export class PlaybookRunner {
 
   /**
    * Executes a cell, and again after a failed attempt or an attempt whose `until` does not hold, up to `maxAttempts`, waiting `backoffMs` on the injected timer between two attempts.
-   * Every attempt is a journaled step and counts among the step executions of the run. Returns undefined when the cell succeeded, else what ends the walk.
+   * Every attempt is a journaled step and counts among the step executions of the whole tree of runs (the root run and every run it calls share one budget). Returns undefined when the cell succeeded, else what ends the walk.
    * An attempt that needs a review (the daemon stops) is never followed by another one.
    */
-  private async executeCellWithItsRetries({ cell, context, steps, counter, iteration }: { cell: PlaybookCell; context: RunContext; steps: StepFields; counter: ExecutionCounter; iteration?: Iteration }): Promise<Verdict | typeof PARKED | undefined> {
+  private async executeCellWithItsRetries({ cell, context, steps, state, iteration }: { cell: PlaybookCell; context: RunContext; steps: StepFields; state: WalkState; iteration?: Iteration }): Promise<Verdict | typeof PARKED | undefined> {
     const { runs, clock, limits } = this.deps;
     const maxAttempts = cell.retry?.maxAttempts ?? 1;
     for (let attempt = 1; ; attempt += 1) {
       const isStopping = this.shutdown.signal.aborted;
       if (isStopping) return { status: 'needs_review', errorCode: INTERRUPTED };
-      const hasReachedTheCap = counter.executed >= limits.maxStepExecutions;
+      const hasReachedTheCap = context.tree.stepsExecuted >= limits.maxStepExecutions;
       if (hasReachedTheCap) return { status: 'failed', errorCode: STEP_LIMIT_EXCEEDED };
 
-      counter.executed += 1;
-      const seq = counter.executed;
+      context.tree.stepsExecuted += 1;
+      state.executed += 1;
+      const seq = state.executed;
       runs.insertStep({ runId: context.run.id, seq, stepId: cell.id, startedAt: clock() });
       const result = await this.runStep({ cell, context, steps, seq, iteration });
       if ('parked' in result) return PARKED;
@@ -397,7 +433,10 @@ export class PlaybookRunner {
       const { verdict, output } = judged;
       runs.settleStep({ runId: context.run.id, seq, status: verdict.status, output, errorCode: verdict.errorCode, endedAt: clock() });
 
-      if (judged.isSatisfied) return undefined;
+      if (judged.isSatisfied) {
+        state.lastOutput = output;
+        return undefined;
+      }
       const canTryAgain = (verdict.status === 'failed' || verdict.status === 'succeeded') && !isLastAttempt;
       if (!canTryAgain) return verdict;
 
@@ -442,19 +481,30 @@ export class PlaybookRunner {
    * Runs the cell an edge leads to once per element of the list the edge iterates, in order, with `{{item}}` and `{{index}}`; every iteration is a journaled step of its own.
    * The list is checked before any element runs: not a list is `for_each_source_invalid`, more than MAX_FOR_EACH_ITEMS elements, or more iterations than the run still has, is `for_each_limit_exceeded`.
    * An iteration that fails stops everything: the next elements never start and the run fails with `for_each_iteration_failed` (the step keeps its own code).
-   * An iteration that needs a review, or the cap of step executions of the run, ends the walk with that verdict as it is.
+   * An iteration that needs a review, or the cap of step executions of the tree, ends the walk with that verdict as it is.
+   * An empty list runs nothing, so no step cap stops a cycle of such edges: each one is counted, the run fails with `for_each_limit_exceeded` beyond `maxEmptyTransitions`,
+   * and the walk gives the event loop a turn at each one, so the daemon keeps serving requests and can stop.
    */
-  private async executeForEach({ cell, source, context, steps, counter }: { cell: PlaybookCell; source: string; context: RunContext; steps: StepFields; counter: ExecutionCounter }): Promise<Verdict | typeof PARKED | undefined> {
+  private async executeForEach({ cell, source, context, steps, state }: { cell: PlaybookCell; source: string; context: RunContext; steps: StepFields; state: WalkState }): Promise<Verdict | typeof PARKED | undefined> {
     const items = itemsOf(valueAtDottedPath({ inputs: context.inputs, steps }, source));
     if (items === undefined) return { status: 'failed', errorCode: FOR_EACH_SOURCE_INVALID };
     const hasTooManyItems = items.length > MAX_FOR_EACH_ITEMS;
-    const wouldPassTheIterationsOfTheRun = counter.iterations + items.length > this.deps.limits.maxForEachIterations;
+    const wouldPassTheIterationsOfTheRun = state.iterations + items.length > this.deps.limits.maxForEachIterations;
     if (hasTooManyItems || wouldPassTheIterationsOfTheRun) return { status: 'failed', errorCode: FOR_EACH_LIMIT_EXCEEDED };
-    counter.iterations += items.length;
+
+    const isEmpty = items.length === 0;
+    if (isEmpty) {
+      state.emptyTransitions += 1;
+      const hasPassedTheEmptyTransitions = state.emptyTransitions > this.deps.limits.maxEmptyTransitions;
+      if (hasPassedTheEmptyTransitions) return { status: 'failed', errorCode: FOR_EACH_LIMIT_EXCEEDED };
+      await new Promise<void>((resume) => setImmediate(resume));
+      return undefined;
+    }
+    state.iterations += items.length;
 
     const isItemUntrusted = source.startsWith('steps.');
     for (const [index, item] of items.entries()) {
-      const outcome = await this.executeCellWithItsRetries({ cell, context, steps, counter, iteration: { item, index, isItemUntrusted } });
+      const outcome = await this.executeCellWithItsRetries({ cell, context, steps, state, iteration: { item, index, isItemUntrusted } });
       if (outcome === undefined) continue;
       const isAFailedIteration = outcome !== PARKED && outcome.status === 'failed' && outcome.errorCode !== STEP_LIMIT_EXCEEDED;
       return isAFailedIteration ? { status: 'failed', errorCode: FOR_EACH_ITERATION_FAILED } : outcome;
@@ -534,23 +584,31 @@ export class PlaybookRunner {
   /**
    * Runs the playbook the cell names as a run of its own, for the actor of this run, and waits for it to end.
    * The child is journaled like any run: it is approved, it takes a place among the runs at once (the parent keeps its own, so `maxConcurrentRuns = 1` refuses the child with playbook_run_busy), and its secrets are its own.
-   * The step names its child (`{ childRunId, status: 'running' }`) right before the child is journaled, so the run of a child leads to the step of its parent (`parentOf`) and a crash leaves the link behind.
-   * The inputs of the child are the inputs of the cell with their tokens resolved and the secrets of this run masked; the answer of the child is untrusted data and goes through the same masker, the shape-based layer and the cap as any output.
+   * The step names its child (`{ childRunId, status: 'running' }`) in the same transaction that journals the child, and only while this run still runs, so a parent deleted while the secrets of the child were read starts no child (`parentOf`).
+   * The inputs of the child are the inputs of the cell with their tokens resolved and the secrets of this run masked; the child masks the secrets of this run too, from its first write.
+   * The result comes back from the execution of the child, not from its journal: a child whose journal was deleted or pruned still answers its result. The answer of the child is untrusted data and goes through the masker, the shape-based layer and the cap as any output.
+   * A root starts at most `maxChildRunsPerRoot` children over its whole tree: the child over that budget fails the step with `sub_playbook_limit_exceeded`.
+   * Editing the playbook of this run while its child runs changes nothing for this run: it goes on with the content it was approved with, and the edit takes effect at the next run.
    */
   private async runSubPlaybookCell({ cell, context, steps, seq, iteration }: { cell: SubPlaybookCell; context: RunContext; steps: StepFields; seq: number; iteration?: Iteration }): Promise<StepResult> {
+    const hasReachedTheChildrenOfTheTree = context.tree.childrenStarted >= this.deps.limits.maxChildRunsPerRoot;
+    if (hasReachedTheChildrenOfTheTree) return { verdict: { status: 'failed', errorCode: SUB_PLAYBOOK_LIMIT_EXCEEDED } };
+
     const childInputs = this.inputsOfChild(cell, context, steps, iteration);
     const childContext = await this.beginRun({
       playbookId: cell.playbookId, inputs: childInputs, actorKind: context.run.actorKind, lineage: context.lineage, projectId: context.playbook.projectId,
-      beforeJournal: (childRunId) => this.deps.runs.writeRunningStepOutput({ runId: context.run.id, seq, output: { childRunId, status: 'running' } }),
+      inheritedSecrets: context.secretsToMask, tree: context.tree, parentStep: { runId: context.run.id, seq },
     });
-    const childRunId = childContext.run.id;
-    await this.execute(childContext);
+    const { outcome: childOutcome, lastOutput } = await this.execute(childContext);
 
-    const childRun = this.deps.runs.get(childRunId)!;
-    const lastOutput = this.deps.runs.stepsOf(childRunId).filter((step) => step.status === 'succeeded').at(-1)?.output;
-    const output: StepOutput = { childRunId, status: childRun.status, ...(childRun.errorCode === null ? {} : { errorCode: childRun.errorCode }), ...(lastOutput === undefined || lastOutput === null ? {} : { output: this.untrustedTextOf(lastOutput, context.masker) }) };
-    if (childRun.status === 'succeeded') return { verdict: { status: 'succeeded' }, output };
-    if (childRun.status === 'needs_review') return { verdict: { status: 'needs_review', errorCode: INTERRUPTED }, output };
+    const childStatus = childOutcome.status;
+    const childErrorCode = 'errorCode' in childOutcome ? childOutcome.errorCode : undefined;
+    const output: StepOutput = {
+      childRunId: childContext.run.id, status: childStatus, ...(childErrorCode === undefined ? {} : { errorCode: childErrorCode }),
+      ...(lastOutput === undefined ? {} : { output: this.untrustedTextOf(lastOutput, context.masker) }),
+    };
+    if (childStatus === 'succeeded') return { verdict: { status: 'succeeded' }, output };
+    if (childStatus === 'needs_review') return { verdict: { status: 'needs_review', errorCode: INTERRUPTED }, output };
     return { verdict: { status: 'failed', errorCode: SUB_PLAYBOOK_FAILED }, output };
   }
 
@@ -565,10 +623,13 @@ export class PlaybookRunner {
     return Object.fromEntries(resolved);
   }
 
-  /** What a child answered, as the text a step of this run keeps: the shape-based layer, the masker of this run, the control characters out, and the cap of the output of a step. */
+  /**
+   * What a child answered, as the text a step of this run keeps: every text leaf masked with the secrets of this run before the answer is serialized again (an escaped form of a secret then still matches),
+   * the whole text masked once more, the control characters out, and the cap of the output of a step. The shape-based layer already ran in the child, and would read the marker `[secret:NAME]` it left as a secret-named key.
+   */
   private untrustedTextOf(value: unknown, masker: SecretMasker): string {
-    const text = JSON.stringify(value).slice(0, MAX_STEP_OUTPUT_BYTES + masker.longestSpellingLength);
-    return withoutControlCharacters(masker.mask(maskedSecrets(text))).slice(0, MAX_STEP_OUTPUT_BYTES);
+    const text = JSON.stringify(maskedLeaves(value, masker)).slice(0, MAX_STEP_OUTPUT_BYTES + masker.longestSpellingLength);
+    return withoutControlCharacters(masker.mask(text)).slice(0, MAX_STEP_OUTPUT_BYTES);
   }
 
   /** Sleeps on the injected timer; the stop of the daemon cancels the timer and ends the sleep at once. */
@@ -694,7 +755,9 @@ export class PlaybookRunner {
     const manualCell = cells.find((cell) => cell.id === manualStepId)!;
     const from = this.transitionAfter(manualCell, cells, { inputs: run.inputs, steps });
 
-    const context: RunContext = { run, playbook, pinnedScripts, inputs: run.inputs, secretValues, masker: this.maskerOf(secretValues), lineage: [playbook.id] };
+    const secretsToMask = secretsToMaskOf(secretValues);
+    const tree: TreeBudget = { stepsExecuted: seq, childrenStarted: 0 };
+    const context: RunContext = { run, playbook, pinnedScripts, inputs: run.inputs, secretValues, masker: this.maskerOf(secretsToMask), lineage: [playbook.id], secretsToMask, tree };
     const execution = this.execute(context, { from, executed: seq, steps }).then(() => undefined).finally(() => this.inFlight.delete(execution));
     this.inFlight.add(execution);
   }

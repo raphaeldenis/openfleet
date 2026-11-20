@@ -3,7 +3,7 @@ import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OTHER_PROJECT_ID, OWN_PROJECT_ID, startGovernanceFixture, type GovernanceFixture } from '../governance/governanceQueue.testkit.js';
-import { deferred, until } from '../integrations/manualTimers.testkit.js';
+import { deferred, settle, until } from '../integrations/manualTimers.testkit.js';
 import { createInMemorySecretStore, type InMemorySecretStore } from '../secrets/inMemorySecretStore.js';
 import { SecretRefRepository } from '../secrets/secretRefRepository.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
@@ -427,6 +427,7 @@ describe('a parent that disappears or changes while its child starts or runs', (
 
     const deleted = await deleteOf(f, parent);
     held.release();
+    await settle(30);
     await f.daemon.playbookRunner.stop();
 
     expect(deleted.status).toBe(200);
