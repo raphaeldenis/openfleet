@@ -32,6 +32,8 @@ export interface PlaybookServiceDeps {
   /** Told once the write is committed which triggers it disarmed, never when it rolls back. */
   onTriggersDisarmed: (disarmed: { playbookId: string; triggerIds: string[] }) => void;
   projectExists: (projectId: string) => boolean;
+  /** Ends the runs whose wait for a human is over, so a deletion never sees a wait that already ended as live. */
+  endOverdueManualWaits: () => void;
   clock: () => string;
   newId: () => string;
 }
@@ -106,6 +108,7 @@ export class PlaybookService {
 
   /** Deletes the playbook and the declarations of its secrets that hold no value; a stored value keeps its declaration so a human can clear it. */
   delete(id: string, { writer, expectedRev }: WriteOptions): void {
+    this.deps.endOverdueManualWaits();
     const playbook = this.getById(id);
     this.assertWriterMayWrite(playbook, writer);
     const isOnAnOldRevision = expectedRev !== playbook.contentRev;

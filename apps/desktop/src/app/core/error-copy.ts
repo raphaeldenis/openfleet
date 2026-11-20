@@ -90,7 +90,7 @@ const COPY_BY_CODE: Record<ErrorCode, CodeCopy> = {
   script_changed: { what: 'A script is not the file that was approved', fix: 'review the script, then approve the playbook again' },
   script_not_allowed: { what: 'A script is outside the script roots or unsafe to start', fix: 'put the file under a script root, owned by you and writable by you only' },
   playbook_not_runnable: { what: 'This playbook has a cell the runner does not execute yet', fix: 'only script cells run for now' },
-  playbook_run_busy: { what: 'A run is already in progress', fix: 'wait for it to end, then start again' },
+  playbook_run_busy: { what: 'A run is in progress', fix: 'wait for it to end' },
   playbook_review_backlog: { what: 'Too many runs await a review', fix: 'examine the interrupted runs before starting another' },
   manual_already_answered: { what: 'This step was already answered', fix: 'open the run to see its outcome' },
   manual_wait_expired: { what: 'The wait for this answer is over and the run has ended', fix: 'start the playbook again' },

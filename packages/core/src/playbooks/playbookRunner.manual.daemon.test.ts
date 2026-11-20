@@ -630,4 +630,97 @@ describe('a playbook with a run that waits for a human cannot be deleted', () =>
     expect(await whileWaiting.json()).toMatchObject({ error: 'playbook_run_busy' });
     expect(afterTheEnd.status).toBe(200);
   });
+
+  it('deletes the playbook when the first operation after the end of the wait is the deletion: the overdue wait is ended first', async () => {
+    const f = await boot();
+    const playbook = await createApprovedPlaybook(f, [manualCell('gate', { timeoutSeconds: 60 })]);
+    const runId = await runUntilParked(f, playbook.id);
+    now += 61 * SECOND;
+
+    const deletion = await f.api(`/api/playbooks/${playbook.id}?expectedRev=${playbook.contentRev}`, { method: 'DELETE' });
+
+    expect(deletion.status).toBe(200);
+    expect(f.db.prepare('SELECT COUNT(*) AS n FROM playbook_runs WHERE id = ?').get(runId)).toEqual({ n: 0 });
+  });
+});
+
+describe('the tree budget journaled when the run parked is validated when the answer reads it back', () => {
+  const PARKED_STEP_SEQ = 1;
+  const INCONSISTENT_JOURNAL = 'parked_tree_budget_invalid';
+  const journalTheParkedOutput = (f: GovernanceFixture, runId: string, output: unknown) =>
+    f.db.prepare('UPDATE playbook_run_steps SET output_json_masked = ? WHERE run_id = ? AND seq = ?').run(JSON.stringify(output), runId, PARKED_STEP_SEQ);
+  const parkedWith = async (output: unknown) => {
+    const f = await boot();
+    const table = await makeTable(f);
+    const playbook = await createApprovedPlaybook(f, [manualCell('gate'), writeCell('after', table.storeId, table.noteId, 'shipped')]);
+    const runId = await runUntilParked(f, playbook.id);
+    journalTheParkedOutput(f, runId, output);
+    return { f, runId, table };
+  };
+
+  it.each([
+    ['a budget inside the bounds', { treeBudget: { stepsExecuted: 1, childrenStarted: 0 } }],
+    ['a budget exactly on the caps', { treeBudget: { stepsExecuted: 1000, childrenStarted: 100 } }],
+    ['no budget (a run parked before the budget was journaled)', {}],
+  ])('resumes the run with %s', async (_what, output) => {
+    const { f, runId } = await parkedWith(output);
+
+    const response = await answerWithProof(f, runId);
+
+    expect(response.status).toBe(200);
+  });
+
+  it('resumes from the steps of the run itself when the budget is absent', async () => {
+    const { f, runId, table } = await parkedWith({});
+
+    await answerWithProof(f, runId);
+
+    await eventually(f, runId, 'succeeded');
+    expect(table.rows()).toHaveLength(1);
+  });
+
+  it.each([
+    ['a negative count of steps', { stepsExecuted: -1, childrenStarted: 0 }],
+    ['a negative count of children', { stepsExecuted: 1, childrenStarted: -1 }],
+    ['a count of steps over the cap', { stepsExecuted: 1001, childrenStarted: 0 }],
+    ['a count of children over the cap', { stepsExecuted: 1, childrenStarted: 101 }],
+    ['a count that is not an integer', { stepsExecuted: 1.5, childrenStarted: 0 }],
+    ['a budget with a missing count', { stepsExecuted: 1 }],
+    ['a budget that is not an object', 'many'],
+  ])('puts the run in review and writes nothing on %s', async (_what, treeBudget) => {
+    const { f, runId, table } = await parkedWith({ treeBudget });
+
+    const response = await answerWithProof(f, runId);
+
+    expect(response.ok).toBe(false);
+    expect(await viewOfRun(f, runId)).toMatchObject({ status: 'needs_review', errorCode: INCONSISTENT_JOURNAL });
+    expect(f.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ?').get(runId)).toEqual({ status: 'cancelled' });
+    expect(table.rows()).toHaveLength(0);
+  });
+});
+
+describe('a secret that cannot be masked at the answer refuses the answer without consuming it', () => {
+  const UNMASKABLE_VALUE = 'ab';
+  const SINGLE_PLACE = { maxConcurrentRuns: 1 };
+
+  it('leaves the question pending and the run waiting, frees the place, and accepts the answer once the secret is maskable again', async () => {
+    const f = await boot(SINGLE_PLACE);
+    const secretValue = `dummy-canary-built-at-runtime-${randomUUID()}`;
+    const { playbook, table } = await playbookWithASecret(f, secretValue);
+    const runId = await runUntilParked(f, playbook.id, { who: 'v2' });
+    await secretStore.set({ kind: 'playbook', id: playbook.id }, SECRET_NAME, UNMASKABLE_VALUE);
+
+    const refused = await answerWithProof(f, runId);
+
+    expect(refused.ok).toBe(false);
+    expect(await viewOfRun(f, runId)).toMatchObject({ status: 'waiting_manual', errorCode: null });
+    expect(f.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ?').get(runId)).toEqual({ status: 'pending' });
+    const another = await createApprovedPlaybook(f, [manualCell('gate')]);
+    expect((await startRun(f, another.id)).status).toBe(202);
+
+    await secretStore.set({ kind: 'playbook', id: playbook.id }, SECRET_NAME, secretValue);
+    expect((await answerWithProof(f, runId)).status).toBe(200);
+    await eventually(f, runId, 'succeeded');
+    expect(table.rows()).toHaveLength(1);
+  });
 });
