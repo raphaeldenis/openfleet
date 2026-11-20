@@ -1,6 +1,6 @@
 import { dirname } from 'node:path';
 import {
-  DEFAULT_STEP_TIMEOUT_SECONDS, DEFAULT_WAIT_FOR_POLL_MS, DEFAULT_WAIT_FOR_SECONDS, MAX_FOR_EACH_ITEMS, MAX_MANUAL_WAIT_SECONDS, MAX_PROMPT_CHARS, MAX_SUB_PLAYBOOK_DEPTH, MAX_STEP_OUTPUT_BYTES, MIN_WAIT_FOR_POLL_MS, OpenFleetError,
+  DEFAULT_STEP_TIMEOUT_SECONDS, DEFAULT_WAIT_FOR_POLL_MS, DEFAULT_WAIT_FOR_SECONDS, MAX_CHILD_RUNS_PER_ROOT, MAX_FOR_EACH_ITEMS,MAX_MANUAL_WAIT_SECONDS, MAX_PROMPT_CHARS, MAX_STEP_EXECUTIONS_PER_RUN, MAX_SUB_PLAYBOOK_DEPTH, MAX_STEP_OUTPUT_BYTES,MIN_WAIT_FOR_POLL_MS, OpenFleetError,
   type ManualDecision, type PlaybookCell, type PlaybookEdge, type PlaybookInputDeclaration, type PlaybookRunActorKind, type PlaybookRunLauncher,
 } from '@openfleet/shared';
 import { log } from '../logger.js';
@@ -106,6 +106,13 @@ interface RunContext {
 
 const INTERRUPTED = 'interrupted';
 const PLAYBOOK_CHANGED_WHILE_WAITING = 'playbook_changed_while_waiting';
+/** Journal only, never on the wire: the tree budget written when the run parked is out of its bounds. */
+const PARKED_TREE_BUDGET_INVALID = 'parked_tree_budget_invalid';
+
+/** What the journal of a parked step holds about the tree budget: nothing (parked before it was journaled), a budget inside its bounds, or an inconsistent value. */
+type ParkedTreeBudget = { kind: 'absent' } | { kind: 'invalid' } | { kind: 'valid'; tree: TreeBudget };
+
+const isCountWithin = (value: unknown, cap: number): value is number => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= cap;
 /** What a walk answers when a manual cell parked the run: nothing is settled, the answer of the human or the end of the wait does it. */
 const PARKED = { status: 'waiting_manual' } as const;
 const HTTP_REFUSAL_CODES = {
@@ -663,7 +670,7 @@ export class PlaybookRunner {
   /**
    * Answers a manual step with the decision of a human and, on an approval, goes on with the cell after it.
    * Order of the refusals: the proof of a human gesture for exactly this step is required first, then the wait must still be open (`manual_wait_expired`) and unanswered (`manual_already_answered`),
-   * a place among the runs at once must be free (`playbook_run_busy`), the playbook must be the approved content the run started from (the run goes to needs_review otherwise), and the secrets must resolve again.
+   * a place among the runs at once must be free (`playbook_run_busy`), the playbook must be the approved content the run started from (the run goes to needs_review otherwise), and the secrets must resolve again and be maskable (a value that cannot be masked refuses the answer and leaves the question pending); an inconsistent tree budget in the journal of the parked step puts the run in review.
    * Only then is the answer recorded, once: a second answer, even at the same time, is refused. A rejection ends the run as failed. No secret value was kept while the run waited.
    * Throws human_proof_required, playbook_run_not_found, manual_wait_expired, manual_already_answered, playbook_run_busy, playbook_unapproved, script_changed, playbook_conflict or secret_not_connected_on_this_device.
    */
@@ -688,7 +695,9 @@ export class PlaybookRunner {
     const isApproval = input.decision === 'approve';
     const secretValues = isApproval ? await this.resolveSecretsOf(playbookBeforeTheSecrets) : new Map<string, string>();
 
-    return this.commitAnswer({ runId: input.runId, seq: input.seq, decision: isApproval ? 'approved' : 'rejected', secretValues });
+    const secretsToMask = secretsToMaskOf(secretValues);
+    const masker = this.maskerOf(secretsToMask);
+    return this.commitAnswer({ runId: input.runId, seq: input.seq, decision: isApproval ? 'approved' : 'rejected', secretValues, secretsToMask, masker });
   }
 
   /**
@@ -696,7 +705,7 @@ export class PlaybookRunner {
    * The playbook is read again and must still be the approved content the run started from; the wait must still be open at this instant; a place among the runs at once must still be free.
    * The place is taken by the move of the run to running in the same transaction as the answer, so no other start or answer can take it in between. A refusal here leaves the question pending, except an end of wait.
    */
-  private commitAnswer({ runId, seq, decision, secretValues }: { runId: string; seq: number; decision: 'approved' | 'rejected'; secretValues: Map<string, string> }): PlaybookRunRecord {
+  private commitAnswer({ runId, seq, decision, secretValues, secretsToMask, masker }: { runId: string; seq: number; decision: 'approved' | 'rejected'; secretValues: Map<string, string>; secretsToMask: SecretToMask[]; masker: SecretMasker }): PlaybookRunRecord {
     const { runs, manual, limits, clock } = this.deps;
     this.assertNotStopping();
     this.expireOverdueManualWaits();
@@ -710,7 +719,14 @@ export class PlaybookRunner {
     const needsAPlace = decision === 'approved';
     if (needsAPlace && runs.countRunning() >= limits.maxConcurrentRuns) throw busy(`${limits.maxConcurrentRuns} runs are already in progress.`);
 
-    const treeBudgetWhenParked = this.treeBudgetParkedWith(runs.stepOutputOf(runId, seq));
+    const parkedBudget = this.treeBudgetParkedWith(runs.stepOutputOf(runId, seq));
+    const isJournalInconsistent = needsAPlace && parkedBudget.kind === 'invalid';
+    if (isJournalInconsistent) {
+      this.deps.manual.cancel({ runId, seq, errorCode: PARKED_TREE_BUDGET_INVALID, at: clock() });
+      this.deps.observer?.runEnded({ runId, playbookId: playbook.id, status: 'needs_review' });
+      throw manualAlreadyAnswered();
+    }
+    const treeBudgetWhenParked = parkedBudget.kind === 'valid' ? parkedBudget.tree : undefined;
     const wasRecorded = manual.answer({ runId, seq, decision, answeredAt: clock() });
     if (!wasRecorded) throw this.refusalOfAnAnswerNotRecorded({ runId, seq });
 
@@ -719,7 +735,7 @@ export class PlaybookRunner {
       this.deps.observer?.runEnded({ runId, playbookId: playbook.id, status: 'failed' });
       return runs.get(runId)!;
     }
-    this.continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, seq, tree: treeBudgetWhenParked ?? { stepsExecuted: seq, childrenStarted: 0 } });
+    this.continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, secretsToMask, masker, seq, tree:treeBudgetWhenParked ?? { stepsExecuted: seq, childrenStarted: 0 } });
     return runs.get(runId)!;
   }
 
@@ -727,10 +743,13 @@ export class PlaybookRunner {
    * The budget of the tree of runs the root consumed when it parked, as the parked step journaled it: the steps of every run of the tree and the children started, among those that
    * retention or a deletion removed since. A run parked before the budget was journaled has none, and resumes from its own steps.
    */
-  private treeBudgetParkedWith(parkedStepOutput: unknown): TreeBudget | undefined {
-    const journaled = (parkedStepOutput as { treeBudget?: Partial<TreeBudget> } | null | undefined)?.treeBudget;
-    const isWellFormed = Number.isSafeInteger(journaled?.stepsExecuted) && Number.isSafeInteger(journaled?.childrenStarted);
-    return isWellFormed ? { stepsExecuted: journaled!.stepsExecuted!, childrenStarted: journaled!.childrenStarted! } : undefined;
+  private treeBudgetParkedWith(parkedStepOutput: unknown): ParkedTreeBudget {
+    const journaled = (parkedStepOutput as { treeBudget?: unknown } | null | undefined)?.treeBudget;
+    const isAbsent = journaled === undefined;
+    if (isAbsent) return { kind: 'absent' };
+    const { stepsExecuted, childrenStarted } = (journaled ?? {}) as Partial<TreeBudget>;
+    const isWithinTheBounds = isCountWithin(stepsExecuted, MAX_STEP_EXECUTIONS_PER_RUN) && isCountWithin(childrenStarted, MAX_CHILD_RUNS_PER_ROOT);
+    return isWithinTheBounds ? { kind: 'valid', tree: { stepsExecuted, childrenStarted } } : { kind: 'invalid' };
   }
 
   /** Why the repository did not record an answer: the wait ended at this instant (the run is ended as such), or another answer was recorded first. */
@@ -769,7 +788,7 @@ export class PlaybookRunner {
   }
 
   /** Rebuilds the context of a run from its journal and walks on from the cell after the manual step: the masked outputs of the steps are read back, the secrets are the ones resolved again. */
-  private continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, seq, tree }: { run: PlaybookRunRecord; playbook: PlaybookRecord; pinnedScripts: Record<string, string>; secretValues: Map<string, string>; seq: number; tree: TreeBudget }): void {
+  private continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, secretsToMask, masker, seq, tree }: { run: PlaybookRunRecord; playbook: PlaybookRecord; pinnedScripts: Record<string, string>; secretValues: Map<string, string>; secretsToMask: SecretToMask[]; masker: SecretMasker; seq: number; tree: TreeBudget }): void {
     const journaledSteps = this.deps.runs.stepsOf(run.id);
     const steps: StepFields = Object.fromEntries(journaledSteps.filter((step) => step.status === 'succeeded').map((step) => [step.stepId, step.output as StepOutput]));
     const manualStepId = journaledSteps.find((step) => step.seq === seq)!.stepId;
@@ -777,8 +796,7 @@ export class PlaybookRunner {
     const manualCell = cells.find((cell) => cell.id === manualStepId)!;
     const from = this.transitionAfter(manualCell, cells, { inputs: run.inputs, steps });
 
-    const secretsToMask = secretsToMaskOf(secretValues);
-    const context: RunContext = { run, playbook, pinnedScripts, inputs: run.inputs, secretValues, masker: this.maskerOf(secretsToMask), lineage: [playbook.id], secretsToMask, tree };
+    const context: RunContext = { run, playbook, pinnedScripts, inputs: run.inputs, secretValues, masker, lineage: [playbook.id], secretsToMask, tree };
     const execution = this.execute(context, { from, executed: seq, steps }).then(() => undefined).finally(() => this.inFlight.delete(execution));
     this.inFlight.add(execution);
   }

@@ -80,6 +80,12 @@ describe('copyFor', () => {
     expect(text).toBe('The docs folder is not writable — fix the folder permissions, then try again.');
   });
 
+  it('words a busy run for a refused start and a refused deletion alike: wait for the run to end, then try again', () => {
+    const { text } = copyFor(apiErrorOf(envelopeOf('playbook_run_busy')), { action: 'generic' });
+
+    expect(text).toBe('A run is in progress — wait for it to end, then try again.');
+  });
+
   it('tells the user to pick another handoff, without a retry, when the handoff is gone', () => {
     const { text } = copyFor(apiErrorOf(envelopeOf('handoff_not_found')), { action: 'create_session' });
 
