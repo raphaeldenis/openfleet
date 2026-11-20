@@ -174,10 +174,11 @@ const typeAccepts: Record<PlaybookInputDeclaration['type'], (value: unknown) => 
 function resolveRunInputs(declared: readonly PlaybookInputDeclaration[], given: Record<string, unknown>): Record<string, unknown> {
   const declaredNames = new Set(declared.map((input) => input.name));
   const undeclared = Object.keys(given).filter((name) => !declaredNames.has(name));
-  if (undeclared.length > 0) throw invalidInput(`the playbook declares no input named ${undeclared.join(', ')}.`);
+  if (undeclared.length > 0) throw invalidInput(`${undeclared.length} of the inputs given are not declared by the playbook.`);
 
   const entries = declared.flatMap((input): [string, unknown][] => {
-    const value = given[input.name] ?? input.default;
+    const givenValue = Object.hasOwn(given, input.name) ? given[input.name] : undefined;
+    const value = givenValue ?? input.default;
     if (value === undefined) {
       if (input.required) throw invalidInput(`the input ${input.name} is required.`);
       return [];

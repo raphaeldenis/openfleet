@@ -48,7 +48,7 @@ const headerValue = (value: string | string[] | undefined): string | undefined =
 /** A run as the desktop reads it: the journal of its steps with outputs already masked. */
 const runViewOf = (running: PlaybookRunning, run: PlaybookRunRecord) => ({ ...run, steps: running.runs.stepsOf(run.id) });
 
-/** The approval and the runs. The approval route and the run route are for the human side only: no MCP tool approves a playbook or runs it. */
+/** The approval and the runs. The approval route and the answer to a manual step are for the human side only: no MCP tool approves a playbook or answers a question. An agent starts and reads runs through `run_playbook`, `get_playbook_run` and `list_playbook_runs`. */
 function registerRunRoutes(router: Router, deps: { playbooks: PlaybookService; running: PlaybookRunning }): void {
   const { playbooks, running } = deps;
   const runOrNotFound = (id: string): PlaybookRunRecord => {
