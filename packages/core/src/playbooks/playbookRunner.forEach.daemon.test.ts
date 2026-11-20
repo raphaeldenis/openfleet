@@ -14,6 +14,7 @@ import { createTempDirTracker } from '../tempDirTracker.js';
  *  6. the source is a list               `itemsOf`                   -> 'refuses a source that is not a list', 'iterates a list that a step printed as JSON'
  *  7. no manual target                   `assertCellsCanRun`         -> 'refuses a forEach edge into a manual cell'
  *  8. stop and crash never replay        `executeForEach`            -> 'never starts the next iteration after the daemon stopped'
+ * 10. empty cycles                     `emptyTransitions`          -> 'fails a cycle of forEach edges over empty lists on a finite budget', 'stops a cycle of empty ... when the daemon stops'
  *  9. step cap                           `maxStepExecutions`         -> 'counts every iteration among the step executions of the run'
  */
 type RunView = { id: string; status: string; errorCode: string | null; steps: { seq: number; stepId: string; status: string; errorCode: string | null; output: { output?: string } | null }[] };
@@ -24,7 +25,7 @@ let scriptRoot = '';
 let markers = '';
 afterEach(async () => { await fixture?.close(); fixture = undefined; directories.removeAll(); });
 
-const boot = async (playbooks: { maxStepExecutions?: number; maxForEachIterations?: number } = {}) => {
+const boot = async (playbooks: { maxStepExecutions?: number; maxForEachIterations?: number; maxEmptyTransitions?: number } = {}) => {
   scriptRoot = directories.make('playbook-scripts-');
   markers = directories.make('playbook-markers-');
   fixture = await startGovernanceFixture({ playbooks: { scriptRoots: [scriptRoot], ...playbooks } });
@@ -226,5 +227,35 @@ describe('a daemon that stops during an iteration', () => {
     expect(run).toMatchObject({ status: 'needs_review', errorCode: 'interrupted' });
     expect(run.steps.map((step) => step.status)).toEqual(['succeeded', 'needs_review']);
     expect(readFileSync(join(markers, 'ran'), 'utf8')).toBe('x');
+  }, 25_000);
+});
+
+describe('a cycle of forEach edges over empty lists', () => {
+  const emptyCycle = [
+    { id: 'a', kind: 'script', program: 'noop.sh', next: [{ to: 'b', forEach: 'inputs.items' }] },
+    { id: 'b', kind: 'script', program: 'noop.sh', next: [{ to: 'a', forEach: 'inputs.items' }] },
+  ];
+
+  it('fails on a finite budget of empty transitions, with no step beyond the first', async () => {
+    const f = await boot({ maxEmptyTransitions: 50 });
+    const playbook = await createApprovedPlaybook(f, emptyCycle);
+
+    const run = await runToTheEnd(f, playbook.id, { items: [] });
+
+    expect(run).toMatchObject({ status: 'failed', errorCode: 'for_each_limit_exceeded' });
+    expect(stepIdsOf(run)).toEqual(['a']);
+  });
+
+  it('stops when the daemon stops, and leaves the event loop free to stop it', async () => {
+    const f = await boot({ maxEmptyTransitions: 1_000_000_000 });
+    const playbook = await createApprovedPlaybook(f, emptyCycle);
+    const { id } = await jsonOf<RunView>(await startRun(f, playbook.id, { items: [] }));
+    await waitUntil('the first step to be journaled', () => (f.db.prepare('SELECT COUNT(*) AS n FROM playbook_run_steps WHERE run_id = ?').get(id) as { n: number }).n === 1);
+
+    await f.daemon.playbookRunner.stop();
+    const run = await viewOfRun(f, id);
+
+    expect(run).toMatchObject({ status: 'needs_review', errorCode: 'interrupted' });
+    expect(stepIdsOf(run)).toEqual(['a']);
   }, 25_000);
 });
