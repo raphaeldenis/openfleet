@@ -94,9 +94,13 @@ describe('the link from a child run to the step of its parent', () => {
     runs.writeRunningStepOutput({ runId, seq: 1, output });
   };
 
+  const addChildRun = (runs: Repository, { id, playbookId = PLAYBOOK_ID }: { id: string; playbookId?: string }) =>
+    runs.insertRun({ id, playbookId, playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', startedAt: '2026-01-02' });
+
   it('finds the step whose output names the child, while the step still runs', () => {
     const { runs } = arrangeRepository();
     addParentStep(runs, { runId: 'parent', output: { childRunId: 'child-1', status: 'running' } });
+    addChildRun(runs, { id: 'child-1' });
 
     expect(runs.parentOf('child-1')).toEqual({ runId: 'parent', seq: 1 });
     expect(runs.stepsOf('parent')[0]).toMatchObject({ status: 'running', output: { childRunId: 'child-1' } });
@@ -105,8 +109,62 @@ describe('the link from a child run to the step of its parent', () => {
   it('does not read a child run id that a script printed as text', () => {
     const { runs } = arrangeRepository();
     addParentStep(runs, { runId: 'parent', output: { exitCode: 0, output: '{"childRunId":"child-1"}' } });
+    addChildRun(runs, { id: 'child-1' });
 
     expect(runs.parentOf('child-1')).toBeUndefined();
+  });
+
+  it('finds no parent for a child run that does not exist', () => {
+    const { runs } = arrangeRepository();
+    addParentStep(runs, { runId: 'parent', output: { childRunId: 'child-1', status: 'running' } });
+
+    expect(runs.parentOf('child-1')).toBeUndefined();
+  });
+
+  it('finds no parent when the child and the parent belong to different projects', () => {
+    const { db, runs } = arrangeRepository();
+    db.prepare("INSERT INTO projects (id, name, created_at) VALUES ('p2', 'Two', 't0')").run();
+    db.prepare("INSERT INTO playbooks (id, project_id, name, inputs_json, flow_json, policy_json, origin, created_at, updated_at) VALUES ('pb-other', 'p2', 'Q', '[]', '{\"cells\":[]}', '{}', 'native', 'n', 'n')").run();
+    addParentStep(runs, { runId: 'parent', output: { childRunId: 'child-1', status: 'running' } });
+    addChildRun(runs, { id: 'child-1', playbookId: 'pb-other' });
+
+    expect(runs.parentOf('child-1')).toBeUndefined();
+  });
+
+  describe('journaling the child and the link in one transaction', () => {
+    const childRun = { id: 'child-1', playbookId: PLAYBOOK_ID, playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin' as const, startedAt: '2026-01-02' };
+
+    it('writes the link and the child together while the parent step runs', () => {
+      const { runs } = arrangeRepository();
+      addParentStep(runs, { runId: 'parent', output: {} });
+
+      const outcome = runs.insertRunLinkedToStep({ run: childRun, parentStep: { runId: 'parent', seq: 1 } });
+
+      expect(outcome).toBe('inserted');
+      expect(runs.parentOf('child-1')).toEqual({ runId: 'parent', seq: 1 });
+      expect(runs.get('child-1')).toMatchObject({ status: 'running' });
+    });
+
+    it('inserts no child when the parent run is gone', () => {
+      const { runs } = arrangeRepository();
+
+      const outcome = runs.insertRunLinkedToStep({ run: childRun, parentStep: { runId: 'no-such-run', seq: 1 } });
+
+      expect(outcome).toBe('parent_gone');
+      expect(runs.get('child-1')).toBeUndefined();
+    });
+
+    it('inserts no child when the parent run no longer runs', () => {
+      const { runs } = arrangeRepository();
+      addParentStep(runs, { runId: 'parent', output: {} });
+      runs.settleStep({ runId: 'parent', seq: 1, status: 'failed', endedAt: '2026-01-02' });
+      runs.settleRun({ id: 'parent', status: 'failed', endedAt: '2026-01-02' });
+
+      const outcome = runs.insertRunLinkedToStep({ run: childRun, parentStep: { runId: 'parent', seq: 1 } });
+
+      expect(outcome).toBe('parent_gone');
+      expect(runs.get('child-1')).toBeUndefined();
+    });
   });
 
   it('does not rewrite the output of a step that is settled', () => {
@@ -122,6 +180,7 @@ describe('the link from a child run to the step of its parent', () => {
   it('looks only at the most recent steps: a link older than the scan limit is not found', () => {
     const { db, runs } = arrangeRepository();
     addParentStep(runs, { runId: 'parent', output: { childRunId: 'child-1', status: 'running' } });
+    addChildRun(runs, { id: 'child-1' });
     runs.insertRun({ id: 'busy', playbookId: PLAYBOOK_ID, playbookRev: 1, flowSha256: 'sha', inputs: {}, actorKind: 'admin', startedAt: '2026-01-03' });
     db.prepare(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
       INSERT INTO playbook_run_steps (run_id, seq, step_id, status, output_json_masked, started_at) SELECT 'busy', i, 'x', 'running', '{}', '2026-01-03' FROM n`).run(PARENT_LOOKUP_SCAN_LIMIT);

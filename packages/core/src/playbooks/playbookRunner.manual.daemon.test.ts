@@ -42,7 +42,7 @@ afterEach(async () => {
   fixture = undefined;
 });
 
-const boot = async (limits: { maxConcurrentRuns?: number; maxRunsNeedingReview?: number; maxParkedRunsPerProject?: number } = {}) => {
+const boot = async (limits: { maxConcurrentRuns?: number; maxRunsNeedingReview?: number; maxParkedRunsPerProject?: number; maxForEachIterations?: number } = {}) => {
   now = START_OF_TEST_TIME;
   parent = createFakeTauriParent();
   secretStore = createInMemorySecretStore();
@@ -534,5 +534,26 @@ describe('a boot', () => {
 
     await eventually(f, runId, 'succeeded');
     expect(table.rows()).toHaveLength(1);
+  });
+});
+
+describe('the forEach iterations of a run are counted across an answer to a manual step', () => {
+  const quickWait = (id: string, extra: Record<string, unknown> = {}) => ({ id, kind: 'waitFor', predicate: [{ lhs: 'wait.elapsedMs', op: 'gte', rhs: 0 }], ...extra });
+
+  it('refuses a second batch that the iterations already journaled before the answer leave no room for', async () => {
+    const f = await boot({ maxForEachIterations: 3 });
+    const playbook = await createApprovedPlaybook(f, [
+      quickWait('start', { next: [{ to: 'one', forEach: 'inputs.items' }] }),
+      quickWait('one', { next: [{ to: 'ask' }] }),
+      manualCell('ask', { next: [{ to: 'two', forEach: 'inputs.items' }] }),
+      quickWait('two'),
+    ], { inputs: [{ name: 'items', type: 'json', required: false }] });
+    const runId = await runUntilParked(f, playbook.id, { items: [1, 2] });
+
+    expect((await answerWithProof(f, runId, 4)).status).toBe(200);
+
+    const run = await eventually(f, runId, 'failed');
+    expect(run).toMatchObject({ errorCode: 'for_each_limit_exceeded' });
+    expect(run.steps.filter((step) => step.stepId === 'two')).toHaveLength(0);
   });
 });

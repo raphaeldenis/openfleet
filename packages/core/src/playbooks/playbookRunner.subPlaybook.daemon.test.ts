@@ -34,7 +34,7 @@ let secretStore: InMemorySecretStore;
 afterEach(async () => { await fixture?.close(); fixture = undefined; directories.removeAll(); });
 
 const SECRET_NAME = 'API_KEY';
-const boot = async (playbooks: { maxConcurrentRuns?: number } = {}) => {
+const boot = async (playbooks: { maxConcurrentRuns?: number; maxStepExecutions?: number; maxChildRunsPerRoot?: number } = {}) => {
   scriptRoot = directories.make('playbook-scripts-');
   markers = directories.make('playbook-markers-');
   secretStore = createInMemorySecretStore();
@@ -337,7 +337,7 @@ describe('what a child answers is data the parent did not write', () => {
     expect(everythingPersisted).not.toContain(value);
   });
 
-  it('masks in its answer a secret of the parent that the child read from a table in the clear', async () => {
+  it('masks a secret of the parent in the journal of the child, and in the answer of the parent', async () => {
     const f = await boot();
     const value = dummySecret();
     const storeId = await f.createTable(OWN_PROJECT_ID, `T-${randomUUID()}`);
@@ -349,10 +349,28 @@ describe('what a child answers is data the parent did not write', () => {
 
     const run = await runToTheEnd(f, parent.id);
 
+    const everythingPersisted = JSON.stringify(['playbook_runs', 'playbook_run_steps'].map((table) => f.db.prepare(`SELECT * FROM ${table}`).all()));
     const childAnswer = JSON.stringify((await viewOfRun(f, runsOf(f, child.id)[0]!.id)).steps[0]!.output);
-    expect(childAnswer).toContain(value);
-    expect(JSON.stringify(run.steps[0]!.output)).not.toContain(value);
+    expect(everythingPersisted).not.toContain(value);
+    expect(childAnswer).toContain(`[secret:${SECRET_NAME}]`);
     expect(JSON.stringify(run.steps[0]!.output)).toContain(`[secret:${SECRET_NAME}]`);
+  });
+
+  it('masks a secret of a grandparent in the journal of the grandchild', async () => {
+    const f = await boot();
+    const value = dummySecret();
+    const storeId = await f.createTable(OWN_PROJECT_ID, `T-${randomUUID()}`);
+    const columnId = f.daemon.stores.addColumn(storeId, { projectId: OWN_PROJECT_ID, displayName: 'note', columnType: 'text' }).id;
+    f.daemon.stores.insertRow(storeId, { projectId: OWN_PROJECT_ID, actor: { kind: 'human', label: 'tester' }, data: { [columnId]: value } });
+    const grandchild = await createApprovedPlaybook(f, [{ id: 'read', kind: 'readFromStore', storeID: storeId, columns: [columnId] }]);
+    const child = await createApprovedPlaybook(f, [subCell(grandchild.id)]);
+    const parent = await createApprovedPlaybook(f, [subCell(child.id, { next: [{ to: 'holder', when: NEVER }] }), secretHolderCell]);
+    await withASecret(f, parent.id, value);
+
+    await runToTheEnd(f, parent.id);
+
+    const everythingPersisted = JSON.stringify(['playbook_runs', 'playbook_run_steps'].map((table) => f.db.prepare(`SELECT * FROM ${table}`).all()));
+    expect(everythingPersisted).not.toContain(value);
   });
 
   it('bounds the output of the child at the cap of the output of a step', async () => {
@@ -393,4 +411,103 @@ describe('a daemon that stops while a child runs', () => {
     expect(await viewOfRun(f, parentRunId)).toMatchObject({ status: 'needs_review', errorCode: 'interrupted', steps: [{ status: 'needs_review', errorCode: 'interrupted' }] });
     expect(runsOf(f, child.id)[0]).toMatchObject({ status: 'needs_review', errorCode: 'interrupted' });
   }, 25_000);
+});
+
+describe('a parent that disappears or changes while its child starts or runs', () => {
+  const deleteOf = (f: GovernanceFixture, playbook: { id: string; contentRev: number }) => f.api(`/api/playbooks/${playbook.id}?expectedRev=${playbook.contentRev}`, { method: 'DELETE' });
+
+  it('starts no child when the parent playbook is deleted while the secrets of the child are read', async () => {
+    const f = await boot();
+    const child = await createApprovedPlaybook(f, [secretHolderCell]);
+    await withASecret(f, child.id, dummySecret());
+    const parent = await createApprovedPlaybook(f, [subCell(child.id)]);
+    const held = holdSecretReads();
+    await startedRunId(f, parent.id);
+    await held.reached(1);
+
+    const deleted = await deleteOf(f, parent);
+    held.release();
+    await f.daemon.playbookRunner.stop();
+
+    expect(deleted.status).toBe(200);
+    expect(runsOf(f, child.id)).toHaveLength(0);
+  });
+
+  it('hands the result of the child to the parent when the playbook of the child is deleted while it runs', async () => {
+    const f = await boot();
+    const child = await createApprovedPlaybook(f, [{ id: 'hold', kind: 'script', program: 'hold.sh' }]);
+    const parent = await createApprovedPlaybook(f, [subCell(child.id)]);
+    const parentRunId = await startedRunId(f, parent.id);
+    await waitUntil('the child to run', () => runsOf(f, child.id).length === 1);
+
+    const deleted = await deleteOf(f, child);
+    release();
+    await waitUntil('the parent to end', () => statusOfRun(f, parentRunId) !== 'running');
+
+    expect(deleted.status).toBe(200);
+    const parentRun = await viewOfRun(f, parentRunId);
+    expect(parentRun.status).toBe('succeeded');
+    expect(parentRun.steps[0]!.output).toMatchObject({ status: 'succeeded' });
+  });
+
+  it('lets the parent go on with the content it was approved with when it is edited while the child runs', async () => {
+    const f = await boot();
+    const child = await createApprovedPlaybook(f, [{ id: 'hold', kind: 'script', program: 'hold.sh' }]);
+    const parent = await createApprovedPlaybook(f, [subCell(child.id)]);
+    const parentRunId = await startedRunId(f, parent.id);
+    await waitUntil('the child to run', () => runsOf(f, child.id).length === 1);
+
+    const edited = await f.api(`/api/playbooks/${parent.id}`, { method: 'PUT', body: JSON.stringify({ expectedRev: parent.contentRev, policy: { allowedHosts: ['example.test'] } }) });
+    release();
+    await waitUntil('the parent to end', () => statusOfRun(f, parentRunId) !== 'running');
+
+    expect(edited.status).toBe(200);
+    expect(await viewOfRun(f, parentRunId)).toMatchObject({ status: 'succeeded' });
+  });
+});
+
+describe('a tree of runs shares one budget, carried by its root', () => {
+  const ITEMS = [{ name: 'items', type: 'json', required: false }];
+  const fanOutTo = (playbookId: string, extra: Record<string, unknown> = {}) => [
+    { id: 'start', kind: 'script', program: 'noop.sh', next: [{ to: 'sub', forEach: 'inputs.items' }] },
+    subCell(playbookId, { inputs: { items: '{{inputs.items}}' }, ...extra }),
+  ];
+  const allSteps = (f: GovernanceFixture) => (f.db.prepare('SELECT COUNT(*) AS n FROM playbook_run_steps').get() as { n: number }).n;
+
+  it('refuses the child that would pass the children a root may start, with a code of the journal', async () => {
+    const f = await boot({ maxChildRunsPerRoot: 3 });
+    const leaf = await createApprovedPlaybook(f, [{ id: 'leaf', kind: 'script', program: 'noop.sh' }], { inputs: ITEMS });
+    const root = await createApprovedPlaybook(f, fanOutTo(leaf.id), { inputs: ITEMS });
+
+    const run = await runToTheEnd(f, root.id, { items: [1, 2, 3, 4, 5] });
+
+    expect(run).toMatchObject({ status: 'failed', errorCode: 'for_each_iteration_failed' });
+    expect(runsOf(f, leaf.id)).toHaveLength(3);
+    expect(run.steps.at(-1)).toMatchObject({ status: 'failed', errorCode: 'sub_playbook_limit_exceeded' });
+  });
+
+  it('caps a fan-out of three generations at the children a root may start', async () => {
+    const f = await boot({ maxChildRunsPerRoot: 5 });
+    const leaf = await createApprovedPlaybook(f, [{ id: 'leaf', kind: 'script', program: 'noop.sh' }], { inputs: ITEMS });
+    const middle = await createApprovedPlaybook(f, fanOutTo(leaf.id), { inputs: ITEMS });
+    const root = await createApprovedPlaybook(f, fanOutTo(middle.id), { inputs: ITEMS });
+
+    const run = await runToTheEnd(f, root.id, { items: [1, 2, 3] });
+
+    expect(run.status).toBe('failed');
+    expect((f.db.prepare('SELECT COUNT(*) AS n FROM playbook_runs').get() as { n: number }).n).toBe(1 + 5);
+  });
+
+  it('counts the steps of every run of the tree among the step executions of its root', async () => {
+    const f = await boot({ maxStepExecutions: 6 });
+    const three = [{ id: 'one', kind: 'script', program: 'noop.sh' }, { id: 'two', kind: 'script', program: 'noop.sh' }, { id: 'three', kind: 'script', program: 'noop.sh' }];
+    const leaf = await createApprovedPlaybook(f, three, { inputs: ITEMS });
+    const root = await createApprovedPlaybook(f, fanOutTo(leaf.id), { inputs: ITEMS });
+
+    const run = await runToTheEnd(f, root.id, { items: [1, 2, 3] });
+
+    expect(run.status).toBe('failed');
+    expect(allSteps(f)).toBeLessThanOrEqual(6);
+    expect(f.db.prepare("SELECT COUNT(*) AS n FROM playbook_run_steps WHERE error_code = 'step_limit_exceeded'").get()).toEqual({ n: 0 });
+  });
 });
