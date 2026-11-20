@@ -84,6 +84,9 @@ type Transition = { cell: PlaybookCell; forEach?: string };
 /** One element of a forEach edge: `{{item}}` and `{{index}}` of the cell it runs. An element of a list a step produced is untrusted data. */
 type Iteration = { item: unknown; index: number; isItemUntrusted: boolean };
 
+/** The inputs of a run an agent launched, and of every child below it (the launcher is inherited), are text the agent typed: they stand where a step output stands. */
+const hasUntrustedInputs = (run: PlaybookRunRecord): boolean => run.launchedBy.kind === 'agent';
+
 /** What a step answers to the cells after it: its masked output, never a secret value. */
 type StepFields = Record<string, StepOutput>;
 
@@ -178,10 +181,11 @@ const typeAccepts: Record<PlaybookInputDeclaration['type'], (value: unknown) => 
 function resolveRunInputs(declared: readonly PlaybookInputDeclaration[], given: Record<string, unknown>): Record<string, unknown> {
   const declaredNames = new Set(declared.map((input) => input.name));
   const undeclared = Object.keys(given).filter((name) => !declaredNames.has(name));
-  if (undeclared.length > 0) throw invalidInput(`the playbook declares no input named ${undeclared.join(', ')}.`);
+  if (undeclared.length > 0) throw invalidInput(`${undeclared.length} of the inputs given are not declared by the playbook.`);
 
   const entries = declared.flatMap((input): [string, unknown][] => {
-    const value = given[input.name] ?? input.default;
+    const givenValue = Object.hasOwn(given, input.name) ? given[input.name] : undefined;
+    const value = givenValue ?? input.default;
     if (value === undefined) {
       if (input.required) throw invalidInput(`the input ${input.name} is required.`);
       return [];
@@ -260,11 +264,12 @@ export class PlaybookRunner {
 
   /**
    * Validates the run, journals it as running, and starts executing it in the background: the answer is the run as journaled, not its result.
+   * With `projectId`, a playbook of another project is refused with playbook_not_found, before the secrets are read and again right before the journal.
    * Nothing is written when the run is refused. The stop of the daemon and the approval of the playbook are checked again once the secrets are read, and an edit during that wait refuses the run.
    * Throws playbook_not_found, playbook_not_runnable, playbook_unapproved, playbook_conflict (the playbook was edited while the run started), script_changed, invalid_body,
    * secret_not_connected_on_this_device (this device holds no value for a secret the playbook uses), playbook_run_busy or playbook_review_backlog (the runs awaiting a review reach their cap).
    */
-  async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher }): Promise<PlaybookRunRecord> {
+  async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher; projectId?: string }): Promise<PlaybookRunRecord> {
     const context = await this.beginRun({ ...input, lineage: [], inheritedSecrets: [], tree: { stepsExecuted: 0, childrenStarted: 0 } });
     const execution = this.execute(context).then(() => undefined).finally(() => this.inFlight.delete(execution));
     this.inFlight.add(execution);
@@ -284,6 +289,7 @@ export class PlaybookRunner {
     const playbook = this.deps.playbooks.getById(input.playbookId);
     const isCalled = input.lineage.length > 0;
     this.assertBelongsToProject(playbook, input.projectId);
+    this.assertMayBeStartedBy(input.launchedBy, playbook);
     if (isCalled) this.assertMayBeCalledFrom(playbook, input.lineage);
     assertCellsCanRun(playbook);
     const pinnedScripts = this.deps.approvals.assertStillApproved(playbook);
@@ -318,6 +324,12 @@ export class PlaybookRunner {
   private assertBelongsToProject(playbook: PlaybookRecord, projectId: string | undefined): void {
     const isOfAnotherProject = projectId !== undefined && playbook.projectId !== projectId;
     if (isOfAnotherProject) throw new OpenFleetError('playbook_not_found', 'no such playbook in this project.');
+  }
+
+  /** A playbook a human locked against agents starts under no run an agent launched, whatever its level: the launcher is inherited by the children. A change of the lock revokes the approval, which the checks after the wait catch. */
+  private assertMayBeStartedBy(launchedBy: PlaybookRunLauncher, playbook: PlaybookRecord): void {
+    const isLockedAgainstThisLauncher = launchedBy.kind === 'agent' && playbook.agentLocked;
+    if (isLockedAgainstThisLauncher) throw new OpenFleetError('playbook_locked', 'this playbook is locked against agents: a human starts it.');
   }
 
   private assertMayBeCalledFrom(playbook: PlaybookRecord, lineage: readonly string[]): void {
@@ -507,7 +519,7 @@ export class PlaybookRunner {
     }
     state.iterations += items.length;
 
-    const isItemUntrusted = source.startsWith('steps.');
+    const isItemUntrusted = source.startsWith('steps.') || (source.startsWith('inputs.') && hasUntrustedInputs(context.run));
     for (const [index, item] of items.entries()) {
       const outcome = await this.executeCellWithItsRetries({ cell, context, steps, state, iteration: { item, index, isItemUntrusted } });
       if (outcome === undefined) continue;
@@ -852,7 +864,7 @@ export class PlaybookRunner {
 
   private templateWorldOf(context: RunContext, steps: StepFields, iteration?: Iteration): { scope: ResolutionScope; untrusted: UntrustedSources } {
     return {
-      untrusted: { stepIds: new Set(context.playbook.flow.cells.map((other) => other.id)), isItemUntrusted: iteration?.isItemUntrusted ?? true },
+      untrusted: { stepIds: new Set(context.playbook.flow.cells.map((other) => other.id)), isItemUntrusted: iteration?.isItemUntrusted ?? true, areInputsUntrusted: hasUntrustedInputs(context.run) },
       scope: { inputs: context.inputs, steps, item: iteration?.item, index: iteration?.index, secretValueOf: (name) => context.secretValues.get(name) },
     };
   }

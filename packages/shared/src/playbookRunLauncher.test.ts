@@ -4,9 +4,16 @@ import { PLAYBOOK_RUN_LAUNCHER_KINDS, PlaybookRunLauncherSchema } from './playbo
 const accepts = (launcher: unknown) => PlaybookRunLauncherSchema.safeParse(launcher).success;
 
 describe('who launched a playbook run', () => {
-  it('names exactly three kinds, and not the agent kind reserved for a later ticket', () => {
-    expect([...PLAYBOOK_RUN_LAUNCHER_KINDS].sort()).toEqual(['admin_api', 'trigger', 'unknown']);
-    expect(accepts({ kind: 'agent', ref: 'session-1' })).toBe(false);
+  it('names exactly four kinds', () => {
+    expect([...PLAYBOOK_RUN_LAUNCHER_KINDS].sort()).toEqual(['admin_api', 'agent', 'trigger', 'unknown']);
+  });
+
+  it('accepts an agent that names its session', () => {
+    expect(accepts({ kind: 'agent', ref: 'session-1' })).toBe(true);
+  });
+
+  it.each([null, '', undefined])('refuses an agent whose reference is %j', (ref) => {
+    expect(accepts({ kind: 'agent', ref })).toBe(false);
   });
 
   it('accepts the admin API without a reference', () => {

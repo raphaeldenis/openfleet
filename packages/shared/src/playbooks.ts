@@ -41,12 +41,13 @@ export const PLAYBOOK_RUN_STATUSES = ['running', 'waiting_manual', 'succeeded', 
 export type PlaybookRunStatus = (typeof PLAYBOOK_RUN_STATUSES)[number];
 export const PLAYBOOK_RUN_ACTOR_KINDS = ['admin'] as const;
 export type PlaybookRunActorKind = (typeof PLAYBOOK_RUN_ACTOR_KINDS)[number];
-export const PLAYBOOK_RUN_LAUNCHER_KINDS = ['admin_api', 'trigger', 'unknown'] as const;
+export const PLAYBOOK_RUN_LAUNCHER_KINDS = ['admin_api', 'trigger', 'agent', 'unknown'] as const;
 export type PlaybookRunLauncherKind = (typeof PLAYBOOK_RUN_LAUNCHER_KINDS)[number];
 /** Who started a run, written once when the run is created: a trace for the reader, never a permission. */
 export const PlaybookRunLauncherSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('admin_api'), ref: z.null() }),
   z.strictObject({ kind: z.literal('trigger'), ref: z.string().min(1) }),
+  z.strictObject({ kind: z.literal('agent'), ref: z.string().min(1) }),
   z.strictObject({ kind: z.literal('unknown'), ref: z.null() }),
 ]);
 export type PlaybookRunLauncher = z.infer<typeof PlaybookRunLauncherSchema>;

@@ -67,6 +67,9 @@ import type { FireLedger } from '../triggers/fireLedger.js';
 import type { TriggerService } from '../triggers/triggerService.js';
 import { registerPlaybookTools } from './playbookTools.js';
 import type { PlaybookService } from '../playbooks/playbookService.js';
+import type { PlaybookRunner } from '../playbooks/playbookRunner.js';
+import type { PlaybookRunRepository } from '../playbooks/playbookRunRepository.js';
+import { registerPlaybookRunTools } from './playbookRunTools.js';
 import { registerWorktreeTools } from './worktreeTools.js';
 import { WorktreeService } from '../worktrees/worktreeService.js';
 
@@ -92,7 +95,7 @@ function answeringThrowsInGrammar(server: McpServer, caller: Session): McpServer
   });
 }
 
-export function createMcpHandler(deps: { triggers?: TriggerService; triggerFires?: FireLedger; playbooks?: PlaybookService; integrations?: IntegrationService; integrationViews?: IntegrationViewService; secrets?: SecretService; activity?: ActivityRecorder; askUserGate?: AskUserGate; criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService; github?: GhPullRequestReader; projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
+export function createMcpHandler(deps: { triggers?: TriggerService; triggerFires?: FireLedger; playbooks?: PlaybookService; playbookRunning?: { runner: PlaybookRunner; runs: PlaybookRunRepository }; integrations?: IntegrationService; integrationViews?: IntegrationViewService; secrets?: SecretService; activity?: ActivityRecorder; askUserGate?: AskUserGate; criteria?: CriteriaApproval; escalations?: EscalationService; arbiters?: ArbiterRunner; scheduledEvents?: ScheduledEventService; ciWatch?: CiWatchService; github?: GhPullRequestReader; projectProfile?: ProjectProfileBootstrap; reviewFindings?: ReviewFindingsRepository; ticketPattern?: string;managerBase?: ManagerBase; baseNotReadEnforcement?: BaseNotReadEnforcement; noteNotReadEnforcement?: NoteNotReadEnforcement; denialJournal?: DenialJournal; managerDenials?: ManagerDenials;knowledgeSearch: KnowledgeToolSearchPort; governanceQueue: GovernanceQueueService; sessions: SessionService; approvals: ApprovalService; managers: ManagerService; pulseScheduler: PulseScheduler; modelTable: ModelTable; stores: DataStoreService; storeRepo: DataStoreRepository; notes: NoteService; noteRepo: NoteRepository; docs: DocsFolderService; projects: ProjectRepository; workingStates: WorkingStateService; worktreesRoot: string; homeDirectory?: string }) {
   return async (req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> => {
     const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
     const caller = deps.sessions.byMcpToken(token);
@@ -114,6 +117,7 @@ export function createMcpHandler(deps: { triggers?: TriggerService; triggerFires
     if (deps.secrets) registerSecretTools(toolServer, { secrets: deps.secrets });
     if (deps.triggers && deps.triggerFires) registerTriggerTools(toolServer, { triggers: deps.triggers, sessions: deps.sessions, fires: deps.triggerFires, caller });
     if (deps.playbooks) registerPlaybookTools(toolServer, { playbooks: deps.playbooks, caller });
+    if (deps.playbooks && deps.playbookRunning) registerPlaybookRunTools(toolServer, { playbooks: deps.playbooks, ...deps.playbookRunning, caller });
     if (deps.integrations) registerIntegrationTools(toolServer, { integrations: deps.integrations, caller });
     if (deps.integrations && deps.integrationViews) registerIntegrationViewTools(toolServer, { integrations: deps.integrations, views: deps.integrationViews, caller });
     registerManagerLinkTools(toolServer, { managers: deps.managers, caller });

@@ -19,6 +19,8 @@ export type UntrustedSources = {
   stepIds: ReadonlySet<string>;
   /** True when the loop behind `{{item}}` iterates such data. */
   isItemUntrusted: boolean;
+  /** True when whoever launched the run is not trusted with the values of its inputs (an agent): `inputs.*` then counts as untrusted data. */
+  areInputsUntrusted?: boolean;
 };
 
 export type TemplateViolation = { code: 'secret_not_allowed_here' | 'untrusted_reference' | 'non_canonical_url'; token: string; slot: TemplateSlot };
@@ -81,6 +83,7 @@ const hasCanonicalUrlAuthority = (urlText: string): boolean => CANONICAL_URL_STA
 
 const referencesUntrustedData =(token: TemplateToken, untrusted: UntrustedSources): boolean => {
   if (token.kind === 'steps') return untrusted.stepIds.has(token.stepId);
+  if (token.kind === 'inputs') return untrusted.areInputsUntrusted === true;
   return token.kind === 'item' && untrusted.isItemUntrusted;
 };
 

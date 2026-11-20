@@ -78,6 +78,7 @@ describe('the tool catalog', () => {
       'report_arbiter_opinion', // closes the arbiter session once its opinion is recorded
       'report_ship_verdict', // runs git in the worktree and messages the manager on a no-go
       'report_step_finding', // runs git in the worktree
+      'run_playbook', // starts the approved scripts and http calls of a playbook
       'send_session_message',
       'submit_plan_questions', // launches an arbiter session
     ]);
@@ -100,8 +101,9 @@ describe('the tool catalog', () => {
 
     expect(authoringEntries.sort()).toEqual([
       ['add_playbook_cell', 'additive'], ['create_playbook', 'additive'], ['delete_playbook', 'destructive'], ['delete_playbook_cell', 'destructive'],
-      ['get_playbook', 'read_only'], ['get_playbook_schema', 'read_only'], ['get_playbook_version', 'read_only'], ['list_playbook_cells', 'read_only'], ['list_playbook_versions', 'read_only'],
-      ['list_playbooks', 'read_only'], ['reorder_playbook_cells', 'additive'], ['restore_playbook_version', 'additive'], ['set_playbook_inputs', 'additive'], ['update_playbook_cell', 'additive'],
+      ['get_playbook', 'read_only'], ['get_playbook_run', 'read_only'], ['get_playbook_schema', 'read_only'], ['get_playbook_version', 'read_only'], ['list_playbook_cells', 'read_only'],
+      ['list_playbook_runs', 'read_only'], ['list_playbook_versions', 'read_only'], ['list_playbooks', 'read_only'], ['reorder_playbook_cells', 'additive'], ['restore_playbook_version', 'additive'],
+      ['run_playbook', 'execution_external'], ['set_playbook_inputs', 'additive'], ['update_playbook_cell', 'additive'],
     ]);
   });
 

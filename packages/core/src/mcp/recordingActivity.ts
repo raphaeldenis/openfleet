@@ -6,6 +6,17 @@ import { isMutatingTool } from './toolCatalog.js';
 
 const ERROR_TEXT_CODE = /^error ([a-z_]+):/;
 
+/** Arguments whose values never reach the log, whatever their key: the values of the inputs of a run are typed by the caller and may hold anything, even under a key other tools share. */
+const ARGUMENTS_WITHHELD_FROM_THE_LOG: Readonly<Record<string, readonly string[]>> = { run_playbook: ['inputs'] };
+const WITHHELD_MARK = '[withheld]';
+
+const withoutWithheldArguments = (toolName: string, args: unknown): unknown => {
+  const withheldNames = ARGUMENTS_WITHHELD_FROM_THE_LOG[toolName];
+  const hasNothingToWithhold = withheldNames === undefined || typeof args !== 'object' || args === null;
+  if (hasNothingToWithhold) return args;
+  return Object.fromEntries(Object.entries(args).map(([name, value]) => [name, withheldNames.includes(name) ? WITHHELD_MARK : value]));
+};
+
 type ToolHandler = (...args: unknown[]) => unknown;
 type ToolResult = { isError?: boolean; content?: { type: string; text?: string }[] };
 
@@ -28,7 +39,7 @@ export function recordingActivity(server: McpServer, { caller, recorder, manager
       const record = (outcome: 'ok' | 'denied' | 'error', extra: { resultText?: string; detail?: string }) => recorder.record({
         actorKind: 'agent', actorLabel: caller.name, sessionId: caller.id, managerId, source: 'mcp', action: name, outcome,
         durationMs: Math.round(performance.now() - startedAt),
-        ...(takesArguments ? { args: handlerArguments[0] } : {}),
+        ...(takesArguments ? { args: withoutWithheldArguments(name, handlerArguments[0]) } : {}),
         ...extra,
       });
       try {

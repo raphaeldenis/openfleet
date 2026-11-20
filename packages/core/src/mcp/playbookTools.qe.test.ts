@@ -583,11 +583,11 @@ describe('delete_playbook', () => {
 });
 
 describe('the tools a session sees', () => {
-  it('offers the eleven authoring tools and neither a raw content tool, a distill tool nor a run tool', async () => {
+  it('offers the eleven authoring tools and neither a raw content tool, a distill tool, a cancel tool nor a tool that starts one cell (the three run tools are in playbookRunTools.daemon.test.ts)', async () => {
     const names = (await lead.listTools()).tools.map((tool) => tool.name);
 
     expect(PLAYBOOK_TOOLS.filter((name) => !names.includes(name))).toEqual([]);
-    expect(names.filter((name) => /update_playbook_content|distill|run_playbook|open_playbook|playbook_run/.test(name))).toEqual([]);
+    expect(names.filter((name) => /update_playbook_content|distill|open_playbook|cancel_playbook_run|run_playbook_cell/.test(name))).toEqual([]);
   });
 
   it('shows a reviewer none of them', async () => {

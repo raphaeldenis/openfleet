@@ -95,6 +95,9 @@ const isBoundedRunInputs = (inputs: Record<string, unknown>): boolean => {
   return isWithinBounds(inputs, 1) && JSON.stringify(inputs).length <= MAX_RUN_INPUT_JSON_CHARS;
 };
 
+/** The inputs a RUN or an agent passes to a playbook run: plain JSON within the bounds above. */
+export const BoundedRunInputsSchema = z.record(z.string(), z.unknown()).refine(isBoundedRunInputs, 'the inputs are too large, too deep or hold something other than plain JSON');
+
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
 /** The text with every control, format and line or paragraph separator character written as its code (`\u001b`); line breaks and tabs stay. For anything that shows stored text to a reader. */
@@ -159,7 +162,7 @@ const RUN_MEMBERS = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('notify'), title: nonBlankText(MAX_NAME_CHARS), message: nonBlankText() }),
   z.strictObject({ kind: z.literal('prompt_session'), sessionId: text(), prompt: nonBlankText() }),
   z.strictObject({ kind: z.literal('close_session'), sessionId: text() }),
-  z.strictObject({ kind: z.literal('run_playbook'), playbookId: text(), inputs: z.record(z.string(), z.unknown()).refine(isBoundedRunInputs, 'the inputs are too large, too deep or hold something other than plain JSON').optional() }),
+  z.strictObject({ kind: z.literal('run_playbook'), playbookId: text(), inputs: BoundedRunInputsSchema.optional() }),
 ]);
 
 const withManagerAliasesResolved = (run: unknown): unknown => {
