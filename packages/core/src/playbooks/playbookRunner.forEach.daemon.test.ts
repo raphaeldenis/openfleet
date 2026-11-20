@@ -250,12 +250,12 @@ describe('a cycle of forEach edges over empty lists', () => {
     const f = await boot({ maxEmptyTransitions: 1_000_000_000 });
     const playbook = await createApprovedPlaybook(f, emptyCycle);
     const { id } = await jsonOf<RunView>(await startRun(f, playbook.id, { items: [] }));
-    await waitUntil('the first step to be journaled', () => (f.db.prepare('SELECT COUNT(*) AS n FROM playbook_run_steps WHERE run_id = ?').get(id) as { n: number }).n === 1);
+    await waitUntil('the first step to succeed, so the cycle of empty edges turns', () => (f.db.prepare("SELECT COUNT(*) AS n FROM playbook_run_steps WHERE run_id = ? AND status = 'succeeded'").get(id) as { n: number }).n === 1);
 
     await f.daemon.playbookRunner.stop();
     const run = await viewOfRun(f, id);
 
     expect(run).toMatchObject({ status: 'needs_review', errorCode: 'interrupted' });
-    expect(stepIdsOf(run)).toEqual(['a']);
+    expect(run.steps.map((step) => [step.stepId, step.status])).toEqual([['a', 'succeeded']]);
   }, 25_000);
 });
