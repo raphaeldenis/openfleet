@@ -253,11 +253,12 @@ export class PlaybookRunner {
 
   /**
    * Validates the run, journals it as running, and starts executing it in the background: the answer is the run as journaled, not its result.
+   * With `projectId`, a playbook of another project is refused with playbook_not_found, before the secrets are read and again right before the journal.
    * Nothing is written when the run is refused. The stop of the daemon and the approval of the playbook are checked again once the secrets are read, and an edit during that wait refuses the run.
    * Throws playbook_not_found, playbook_not_runnable, playbook_unapproved, playbook_conflict (the playbook was edited while the run started), script_changed, invalid_body,
    * secret_not_connected_on_this_device (this device holds no value for a secret the playbook uses), playbook_run_busy or playbook_review_backlog (the runs awaiting a review reach their cap).
    */
-  async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher }): Promise<PlaybookRunRecord> {
+  async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher; projectId?: string }): Promise<PlaybookRunRecord> {
     const context = await this.beginRun({ ...input, lineage: [], inheritedSecrets: [], tree: { stepsExecuted: 0, childrenStarted: 0 } });
     const execution = this.execute(context).then(() => undefined).finally(() => this.inFlight.delete(execution));
     this.inFlight.add(execution);

@@ -141,6 +141,16 @@ export class PlaybookRunRepository {
     return rows.map(toRun);
   }
 
+  /** A page of the runs of a project, newest first, optionally of one playbook of that project. */
+  listPageOfProject(input: { projectId: string; playbookId?: string; limit: number; offset: number }): PlaybookRunRecord[] {
+    const filterOnPlaybook = input.playbookId === undefined ? '' : 'AND playbook_runs.playbook_id = ?';
+    const columns = RUN_COLUMNS.split(', ').map((column) => `playbook_runs.${column}`).join(', ');
+    const parameters = [input.projectId, ...(input.playbookId === undefined ? [] : [input.playbookId]), input.limit, input.offset];
+    const rows = this.db.prepare(`SELECT ${columns} FROM playbook_runs JOIN playbooks ON playbooks.id = playbook_runs.playbook_id
+      WHERE playbooks.project_id = ? ${filterOnPlaybook} ORDER BY playbook_runs.started_at DESC, playbook_runs.rowid DESC LIMIT ? OFFSET ?`).all(...parameters) as unknown as RunRow[];
+    return rows.map(toRun);
+  }
+
   countRunning(): number {
     return (this.db.prepare("SELECT COUNT(*) AS n FROM playbook_runs WHERE status = 'running'").get() as { n: number }).n;
   }

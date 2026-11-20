@@ -8,8 +8,8 @@
 |---|---|---|
 | Read the approval digest | `GET /api/playbooks/:id/approval` | no tool |
 | Approve | `POST /api/playbooks/:id/approve` `{ digest }` | no tool |
-| Run | `POST /api/playbooks/:id/run` `{ inputs }` | no tool until PBK-P4 |
-| Read a run | `GET /api/playbook-runs/:id`, `GET /api/playbook-runs?playbookId=` | no tool until PBK-P4 |
+| Run | `POST /api/playbooks/:id/run` `{ inputs }` | `run_playbook` (approved playbook of the project of the session; see "The run tools") |
+| Read a run | `GET /api/playbook-runs/:id`, `GET /api/playbook-runs?playbookId=` | `get_playbook_run`, `list_playbook_runs` (runs of the project of the session) |
 | Answer a manual step | `POST /api/playbook-runs/:id/steps/:seq/resume` `{ decision }` with the header `x-human-proof` (single-use nonce of the desktop app) | never: no tool answers a manual step |
 
 The admin token is not a proof of a human gesture, by design: whoever holds it, an agent that can read `admin.token` included, can read the digest, approve and run a playbook it wrote itself, and the daemon cannot tell it from a human (there is no desktop nonce on these routes). The approval separates the admin from the MCP token and nothing more: it stops an agent that has only its MCP token, as `agent_locked` does. Treat the admin token as the authority to run the scripts under the script roots; the desktop app is where a human is expected to read the digest before confirming it.
@@ -125,6 +125,16 @@ A `subPlaybook` cell runs another playbook as a run of its own and waits for it 
 
 A `tool` cell is refused with `playbook_not_runnable` before anything is written. A run has no session, no role and no actor to give the tool, and the handlers of the MCP tools need a session; a cell that calls a tool comes with the actor and the role of a run (PBK-P3B-TOOL).
 
+## The run tools
+
+Three MCP tools let an agent start and read runs. A manager and a worker have them; the reviewer and the arbiter do not (they are in neither set). Every tool works on the project of the calling session: a playbook or a run of another project answers `playbook_not_found` / `playbook_run_not_found`, the answer of one that does not exist.
+
+- **`run_playbook`** `{ playbook, inputs? }` (category `execution_external`). `playbook` is an id or an exact name of a playbook of the project. It starts the run through the same runner as the admin route and the triggers, with the launcher `agent` and the id of the calling session. Refused with `playbook_unapproved` (never approved, or edited since), `playbook_locked` (a human locked the playbook against agents), `playbook_not_runnable`, `playbook_run_busy` (the playbook already runs, or 4 runs are in progress), `playbook_waiting_backlog`, `playbook_review_backlog`, `playbook_conflict` (the playbook was edited and approved again while its secrets were read), and `invalid_body` for inputs the playbook does not declare, that lack a required one or that have the wrong type. The inputs are plain JSON within the bounds of the RUN of a trigger (at most 32 keys, 8 Ki characters, 6 levels). The approval, the project, the revision and the capacity are checked in the turn of the event loop that journals the run, after the secrets are read. The answer is `{ run: { id, playbook_id, status, started_at } }`; the run goes on in the background.
+- **`get_playbook_run`** `{ run_id }`. The run with its journaled steps: `status`, `error_code`, and for each step `seq`, `step_id`, `status`, `error_code`, the instants. What a step produced is under `untrusted.output`, masked by the runner, capped at 2000 characters (`output_truncated: true` when cut) and shown for a settled step only; the steps are cut to fit 15 KB (`steps_truncated`). A run `waiting_manual` carries `awaiting: "human"` and shows neither the question nor an output. The inputs of the run and the launcher are not shown.
+- **`list_playbook_runs`** `{ playbook?, limit?, offset? }`. The runs of one playbook or of the whole project, newest first, without steps: 20 by default, 1 to 50, answer cut to fit 15 KB (`truncated`).
+
+There is no tool that approves a playbook, cancels a run, starts one cell, or answers a manual step: the answer needs the proof of a human (`playbook.resume_manual`), which an agent cannot give. Cancelling and starting one cell come with PBK-P4B2. The call is recorded in the activity log like any tool that acts; the log holds the names of the arguments, never the values of the inputs, and no secret is read or shown.
+
 ## Who launched a run
 
 Every run carries `launchedBy: { kind, ref }`, written once when the run is created and never changed (a database guard refuses any later update of the two columns, migration 074):
@@ -133,13 +143,14 @@ Every run carries `launchedBy: { kind, ref }`, written once when the run is crea
 | --- | --- | --- |
 | `admin_api` | `null` | the run starts through `POST /api/playbooks/:id/run` |
 | `trigger` | the id of the trigger | a trigger fires its RUN `run_playbook` |
+| `agent` | the id of the session that called `run_playbook` | an agent starts the run through the MCP tool |
 | `unknown` | `null` | the run has no known launcher: it was created before migration 074, or its two columns were set back to NULL (a rollback of 074 followed by a new upgrade), or the database was replaced directly; no row is rewritten |
 
 A run that a `subPlaybook` cell starts inherits the launcher of its parent, kind and ref as they are (the same actor kind too): a child of a run started through the admin API is `admin_api`, a child of a run fired by a trigger is `trigger` with the id of that trigger, at any depth. The launcher names who started the root of the tree, not the parent run.
 
-`launchedBy` is part of the REST representation of a run (`POST /api/playbooks/:id/run`, `GET /api/playbook-runs/:id`, `GET /api/playbook-runs?playbookId=`). No MCP tool shows it and none changes. The value `agent` is not accepted: it is reserved for PBK-P4B.
+`launchedBy` is part of the REST representation of a run (`POST /api/playbooks/:id/run`, `GET /api/playbook-runs/:id`, `GET /api/playbook-runs?playbookId=`). No MCP tool shows it and none changes it. The kind `agent` is written by `run_playbook` only (migration 076 widens the pair CHECK; a rollback of 076 reads an agent run as `unknown`).
 
-Direct database maintenance (migration 075): a CHECK on the pair refuses a row whose launcher the application could not read (`trigger` without a ref, a ref on `admin_api` or `unknown`, a ref without a kind, any other kind). Two limits remain. An INSERT that omits both columns stores NULL and reads as `unknown`, like a pre-074 run. The guard fires on UPDATE only: `INSERT OR REPLACE`, or a DELETE followed by an INSERT, replaces the row and so replaces its attribution. No production path does either.
+Direct database maintenance (migrations 075 and 076): a CHECK on the pair refuses a row whose launcher the application could not read (`trigger` or `agent` without a ref, a ref on `admin_api` or `unknown`, a ref without a kind, any other kind). Two limits remain. An INSERT that omits both columns stores NULL and reads as `unknown`, like a pre-074 run. The guard fires on UPDATE only: `INSERT OR REPLACE`, or a DELETE followed by an INSERT, replaces the row and so replaces its attribution. No production path does either.
 
 Rollback: applying the down of 074 drops the two columns, so a run kept through a rollback loses its attribution and reads `unknown` after the upgrade is applied again, even if its launcher was known before. Replacing the database file does the same for the runs it does not carry. The sentence "never changed" holds for the daemon and for any UPDATE, not for a rollback or a direct replacement of a row.
 
