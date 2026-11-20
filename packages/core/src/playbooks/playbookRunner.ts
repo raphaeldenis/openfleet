@@ -1,7 +1,7 @@
 import { dirname } from 'node:path';
 import {
   DEFAULT_STEP_TIMEOUT_SECONDS, DEFAULT_WAIT_FOR_POLL_MS, DEFAULT_WAIT_FOR_SECONDS, MAX_FOR_EACH_ITEMS, MAX_MANUAL_WAIT_SECONDS, MAX_PROMPT_CHARS, MAX_SUB_PLAYBOOK_DEPTH, MAX_STEP_OUTPUT_BYTES, MIN_WAIT_FOR_POLL_MS, OpenFleetError,
-  type ManualDecision, type PlaybookCell, type PlaybookEdge, type PlaybookInputDeclaration, type PlaybookRunActorKind,
+  type ManualDecision, type PlaybookCell, type PlaybookEdge, type PlaybookInputDeclaration, type PlaybookRunActorKind, type PlaybookRunLauncher,
 } from '@openfleet/shared';
 import { log } from '../logger.js';
 import { maskedSecrets } from '../redact.js';
@@ -257,7 +257,7 @@ export class PlaybookRunner {
    * Throws playbook_not_found, playbook_not_runnable, playbook_unapproved, playbook_conflict (the playbook was edited while the run started), script_changed, invalid_body,
    * secret_not_connected_on_this_device (this device holds no value for a secret the playbook uses), playbook_run_busy or playbook_review_backlog (the runs awaiting a review reach their cap).
    */
-  async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind }): Promise<PlaybookRunRecord> {
+  async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher }): Promise<PlaybookRunRecord> {
     const context = await this.beginRun({ ...input, lineage: [], inheritedSecrets: [], tree: { stepsExecuted: 0, childrenStarted: 0 } });
     const execution = this.execute(context).then(() => undefined).finally(() => this.inFlight.delete(execution));
     this.inFlight.add(execution);
@@ -271,7 +271,7 @@ export class PlaybookRunner {
    * A called run (`parentStep` names the step of the run that calls it) is journaled in one transaction with the link written in that step, and only while the parent run still runs and its step is still running:
    * a parent whose playbook was deleted while the secrets of the child were read starts no child. It masks the secrets of every run above it (`inheritedSecrets`) from its first journal write, and takes its place in the budget of the tree.
    */
-  private async beginRun(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; lineage: readonly string[]; inheritedSecrets: readonly SecretToMask[]; tree: TreeBudget; projectId?: string; parentStep?: { runId: string; seq: number } }): Promise<RunContext> {
+  private async beginRun(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher; lineage: readonly string[]; inheritedSecrets: readonly SecretToMask[]; tree: TreeBudget; projectId?: string; parentStep?: { runId: string; seq: number } }): Promise<RunContext> {
     this.assertNotStopping();
     this.expireOverdueManualWaits();
     const playbook = this.deps.playbooks.getById(input.playbookId);
@@ -290,7 +290,7 @@ export class PlaybookRunner {
     this.assertRoomForAnotherRun(playbook);
     const run: PlaybookRunRecord = {
       id: this.deps.newId(), playbookId: playbook.id, playbookRev: playbook.contentRev, flowSha256: canonicalDigestOf(playbook.flow),
-      status: 'running', inputs: maskedLeaves(inputs, masker) as Record<string, unknown>, actorKind: input.actorKind, errorCode: null, startedAt: this.deps.clock(), endedAt: null,
+      status: 'running', inputs: maskedLeaves(inputs, masker) as Record<string, unknown>, actorKind: input.actorKind, launchedBy: input.launchedBy, errorCode: null, startedAt: this.deps.clock(), endedAt: null,
     };
     this.journalTheRun(run, input.parentStep);
     if (input.parentStep !== undefined) input.tree.childrenStarted += 1;
@@ -595,7 +595,7 @@ export class PlaybookRunner {
 
     const childInputs = this.inputsOfChild(cell, context, steps, iteration);
     const childContext = await this.beginRun({
-      playbookId: cell.playbookId, inputs: childInputs, actorKind: context.run.actorKind, lineage: context.lineage, projectId: context.playbook.projectId,
+      playbookId: cell.playbookId, inputs: childInputs, actorKind: context.run.actorKind, launchedBy: context.run.launchedBy, lineage: context.lineage, projectId: context.playbook.projectId,
       inheritedSecrets: context.secretsToMask, tree: context.tree, parentStep: { runId: context.run.id, seq },
     });
     const { outcome: childOutcome, lastOutput } = await this.execute(childContext);

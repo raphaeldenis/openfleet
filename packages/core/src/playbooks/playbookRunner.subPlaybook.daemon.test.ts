@@ -126,6 +126,24 @@ describe('a subPlaybook cell runs another playbook of the project', () => {
     expect(String(parentRun.steps[0]!.output!['output'])).toContain('ada');
   });
 
+  it('gives the child the launcher of its parent: the admin API, then a trigger with its id', async () => {
+    const f = await boot();
+    const child = await createApprovedPlaybook(f, [{ id: 'leaf', kind: 'script', program: 'noop.sh' }]);
+    const parent = await createApprovedPlaybook(f, [subCell(child.id)]);
+    const startedByATrigger = await f.daemon.playbookRunner.start({ playbookId: parent.id, inputs: {}, actorKind: 'admin', launchedBy: { kind: 'trigger', ref: 'trigger-42' } });
+    await waitUntil('the run of the trigger to end', () => statusOfRun(f, startedByATrigger.id) !== 'running');
+
+    await runToTheEnd(f, parent.id);
+
+    const launchers = runsOf(f, child.id).map((run) => run.launchedBy);
+    const launchersOfTheParents = runsOf(f, parent.id).map((run) => run.launchedBy);
+    expect(launchers).toHaveLength(2);
+    expect(launchers).toContainEqual({ kind: 'trigger', ref: 'trigger-42' });
+    expect(launchers).toContainEqual({ kind: 'admin_api', ref: null });
+    expect(launchersOfTheParents).toHaveLength(2);
+    expect(launchersOfTheParents).toEqual(expect.arrayContaining(launchers));
+  });
+
   it('writes the link to the child before the child starts', async () => {
     const f = await boot();
     const child = await createApprovedPlaybook(f, [{ id: 'hold', kind: 'script', program: 'hold.sh' }]);

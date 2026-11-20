@@ -108,3 +108,42 @@ describe('which profiles are due for polling', () => {
     expect(dueIds()).toEqual([]);
   });
 });
+
+describe('the search of kept issues by a piece of text', () => {
+  const NULL_CHARACTER = String.fromCharCode(0);
+  const keptIssue = (key: string, summary: string) => ({ key, url: `https://acme.atlassian.net/browse/${key}`, untrusted: { summary } });
+  const keepIssues = (...issues: ReturnType<typeof keptIssue>[]) => {
+    addProfile('jira-profile');
+    repository.replaceItems('jira-profile', issues, { fetchedAt: NOW, queryIdentity: 'identity' });
+  };
+  const searchSummaries = (value: string) => () => repository.pageOfItems('jira-profile', { filters: [{ field: 'summary', match: 'contains', value }], limit: 20, offset: 0 });
+  const keysFound = (value: string) => searchSummaries(value)().items.map((item) => item.key);
+
+  it('refuses a text that carries a null character instead of matching every issue of the profile', () => {
+    keepIssues(keptIssue('CCM-1', 'Login page broken'), keptIssue('CCM-2', 'Export to CSV'));
+
+    const searchWithNullCharacter = searchSummaries(`zzz${NULL_CHARACTER}unrelated`);
+
+    expect(searchWithNullCharacter).toThrow(expect.objectContaining({ code: 'invalid_body' }));
+  });
+
+  it('never quotes the refused text in its refusal', () => {
+    keepIssues(keptIssue('CCM-1', 'Login page broken'));
+
+    const searchWithNullCharacter = searchSummaries(`quoted-text${NULL_CHARACTER}`);
+
+    expect(searchWithNullCharacter).toThrow(expect.not.objectContaining({ message: expect.stringContaining('quoted-text') }));
+  });
+
+  it('finds a text by its ASCII letters whatever their case', () => {
+    keepIssues(keptIssue('CCM-1', 'Login page broken'));
+
+    expect(keysFound('LOGIN')).toEqual(['CCM-1']);
+  });
+
+  it('takes the wildcards literally', () => {
+    keepIssues(keptIssue('CCM-1', 'Reach 100% coverage'), keptIssue('CCM-2', 'Reach 1000 coverage'));
+
+    expect(keysFound('100%')).toEqual(['CCM-1']);
+  });
+});

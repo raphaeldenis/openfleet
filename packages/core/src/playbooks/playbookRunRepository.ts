@@ -1,4 +1,4 @@
-import type { PlaybookRunActorKind, PlaybookRunStatus } from '@openfleet/shared';
+import { PlaybookRunLauncherSchema, type PlaybookRunActorKind, type PlaybookRunLauncher, type PlaybookRunStatus } from '@openfleet/shared';
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
 
@@ -17,6 +17,8 @@ export interface PlaybookRunRecord {
   /** The inputs of the run with every secret value already masked. */
   inputs: Record<string, unknown>;
   actorKind: PlaybookRunActorKind;
+  /** Who started the run, fixed at its creation; a run created before the column existed reads as unknown. */
+  launchedBy: PlaybookRunLauncher;
   errorCode: string | null;
   startedAt: string;
   endedAt: string | null;
@@ -35,15 +37,19 @@ export interface PlaybookRunStepRecord {
 
 interface RunRow {
   id: string; playbook_id: string; playbook_rev: number; flow_sha256: string; status: PlaybookRunStatus; inputs_json: string;
-  actor_kind: PlaybookRunActorKind; error_code: string | null; started_at: string; ended_at: string | null;
+  actor_kind: PlaybookRunActorKind; launched_by_kind: string | null; launched_by_ref: string | null; error_code: string | null; started_at: string; ended_at: string | null;
 }
 interface StepRow { seq: number; step_id: string; status: PlaybookRunStatus; output_json_masked: string | null; error_code: string | null; started_at: string; ended_at: string | null }
 
-const RUN_COLUMNS = 'id, playbook_id, playbook_rev, flow_sha256, status, inputs_json, actor_kind, error_code, started_at, ended_at';
+const RUN_COLUMNS = 'id, playbook_id, playbook_rev, flow_sha256, status, inputs_json, actor_kind, launched_by_kind, launched_by_ref, error_code, started_at, ended_at';
+
+const UNKNOWN_LAUNCHER: PlaybookRunLauncher = { kind: 'unknown', ref: null };
+const launcherOf = (row: RunRow): PlaybookRunLauncher =>
+  row.launched_by_kind === null ? UNKNOWN_LAUNCHER : PlaybookRunLauncherSchema.parse({ kind: row.launched_by_kind, ref: row.launched_by_ref });
 
 const toRun = (row: RunRow): PlaybookRunRecord => ({
   id: row.id, playbookId: row.playbook_id, playbookRev: row.playbook_rev, flowSha256: row.flow_sha256, status: row.status, inputs: JSON.parse(row.inputs_json),
-  actorKind: row.actor_kind, errorCode: row.error_code, startedAt: row.started_at, endedAt: row.ended_at,
+  actorKind: row.actor_kind, launchedBy: launcherOf(row), errorCode: row.error_code, startedAt: row.started_at, endedAt: row.ended_at,
 });
 const toStep = (row: StepRow): PlaybookRunStepRecord => ({
   seq: row.seq, stepId: row.step_id, status: row.status, output: row.output_json_masked === null ? null : JSON.parse(row.output_json_masked),
@@ -54,9 +60,10 @@ const toStep = (row: StepRow): PlaybookRunStepRecord => ({
 export class PlaybookRunRepository {
   constructor(private readonly db: DatabaseSync) {}
 
-  insertRun(run: Pick<PlaybookRunRecord, 'id' | 'playbookId' | 'playbookRev' | 'flowSha256' | 'inputs' | 'actorKind' | 'startedAt'>): void {
-    this.db.prepare("INSERT INTO playbook_runs (id, playbook_id, playbook_rev, flow_sha256, status, inputs_json, actor_kind, started_at) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)")
-      .run(run.id, run.playbookId, run.playbookRev, run.flowSha256, JSON.stringify(run.inputs), run.actorKind, run.startedAt);
+  insertRun(run: Pick<PlaybookRunRecord, 'id' | 'playbookId' | 'playbookRev' | 'flowSha256' | 'inputs' | 'actorKind' | 'launchedBy' | 'startedAt'>): void {
+    const launchedBy = PlaybookRunLauncherSchema.parse(run.launchedBy);
+    this.db.prepare("INSERT INTO playbook_runs (id, playbook_id, playbook_rev, flow_sha256, status, inputs_json, actor_kind, launched_by_kind, launched_by_ref, started_at) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)")
+      .run(run.id, run.playbookId, run.playbookRev, run.flowSha256, JSON.stringify(run.inputs), run.actorKind, launchedBy.kind, launchedBy.ref, run.startedAt);
   }
 
   insertStep(step: { runId: string; seq: number; stepId: string; startedAt: string }): void {
