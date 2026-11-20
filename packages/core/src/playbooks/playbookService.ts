@@ -111,11 +111,21 @@ export class PlaybookService {
     const isOnAnOldRevision = expectedRev !== playbook.contentRev;
     if (isOnAnOldRevision) throw conflict(playbook.contentRev);
     inTransaction(this.deps.db, 'playbook_delete', () => {
+      this.assertNoLiveRun(id);
       const wasDeleted = this.deps.repository.delete({ id, expectedRev });
       if (!wasDeleted) throw conflict(this.getById(id).contentRev);
       this.disarmTriggersRunning(id);
       this.declareReferencedSecrets(id, []);
     });
+  }
+
+  /**
+   * A playbook with a live run (running, or waiting for a human) is not deleted: the deletion would cascade over the journal of a run that still has effects to make, and release its place among the runs at once
+   * while its work goes on. The run, the run that calls it and the runs it calls each hold their own playbook.
+   */
+  private assertNoLiveRun(playbookId: string): void {
+    const liveRun = this.deps.db.prepare("SELECT 1 AS live FROM playbook_runs WHERE playbook_id = ? AND status IN ('running', 'waiting_manual') LIMIT 1").get(playbookId);
+    if (liveRun !== undefined) throw new OpenFleetError('playbook_run_busy', 'a run of this playbook is in progress: it cannot be deleted until the run ends.', { hint: 'Wait for the run to end, then delete the playbook.' });
   }
 
   /** The names this playbook references, and the names still declared for it that no cell references any more (they hold a stored value). */

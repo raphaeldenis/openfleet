@@ -2,6 +2,9 @@ import { PlaybookRunLauncherSchema, type PlaybookRunActorKind, type PlaybookRunL
 import type { DatabaseSync } from 'node:sqlite';
 import { inTransaction } from '../db/transaction.js';
 
+/** How many of the most recent steps `parentOf` looks at: the lookup stays cheap however many steps the journal holds. */
+export const PARENT_LOOKUP_SCAN_LIMIT = 10_000;
+
 /** The states a step or a run ends in: neither running nor waiting for a human. */
 export type SettledStatus = Exclude<PlaybookRunStatus, 'running' | 'waiting_manual'>;
 
@@ -73,6 +76,44 @@ export class PlaybookRunRepository {
       .run(step.status, step.output === undefined ? null : JSON.stringify(step.output), step.errorCode ?? null, step.endedAt, step.runId, step.seq);
   }
 
+  /** Rewrites the output of a step that is still running (a subPlaybook step names its child before the child starts); a settled step is left as it is. */
+  writeRunningStepOutput(step: { runId: string; seq: number; output: unknown }): void {
+    this.db.prepare("UPDATE playbook_run_steps SET output_json_masked = ? WHERE run_id = ? AND seq = ? AND status = 'running'").run(JSON.stringify(step.output), step.runId, step.seq);
+  }
+
+  /**
+   * Journals a run called by another one and the link in the step of its parent (`{ childRunId, status: 'running' }`) in one transaction.
+   * Nothing is written, and `parent_gone` answers, when the parent run is not running any more or its step is not running: a parent whose playbook was deleted leaves no child behind.
+   */
+  insertRunLinkedToStep(input: { run: Parameters<PlaybookRunRepository['insertRun']>[0]; parentStep: { runId: string; seq: number } }): 'inserted' | 'parent_gone' {
+    return inTransaction(this.db, 'playbook_runs_insert_linked', () => {
+      const parentRun = this.db.prepare("SELECT 1 AS running FROM playbook_runs WHERE id = ? AND status = 'running'").get(input.parentStep.runId);
+      if (parentRun === undefined) return 'parent_gone';
+      const link = this.db.prepare("UPDATE playbook_run_steps SET output_json_masked = ? WHERE run_id = ? AND seq = ? AND status = 'running'")
+        .run(JSON.stringify({ childRunId: input.run.id, status: 'running' }), input.parentStep.runId, input.parentStep.seq);
+      if (Number(link.changes) !== 1) return 'parent_gone';
+      this.insertRun(input.run);
+      return 'inserted';
+    });
+  }
+
+  /**
+   * The step of the parent run whose output names `childRunId` (`{ childRunId }`, written by the runner), only when that child run exists and both runs belong to the same project.
+   * Only the PARENT_LOOKUP_SCAN_LIMIT most recent steps are read.
+   */
+  parentOf(childRunId: string): { runId: string; seq: number } | undefined {
+    const row = this.db.prepare(`SELECT link.run_id, link.seq
+      FROM (SELECT run_id, seq, output_json_masked FROM playbook_run_steps ORDER BY rowid DESC LIMIT ?) AS link
+      JOIN playbook_runs AS parent_run ON parent_run.id = link.run_id
+      JOIN playbooks AS parent_playbook ON parent_playbook.id = parent_run.playbook_id
+      JOIN playbook_runs AS child_run ON child_run.id = ?
+      JOIN playbooks AS child_playbook ON child_playbook.id = child_run.playbook_id
+      WHERE parent_playbook.project_id = child_playbook.project_id
+        AND CASE WHEN json_valid(link.output_json_masked) THEN json_extract(link.output_json_masked, '$.childRunId') END = ?
+      LIMIT 1`).get(PARENT_LOOKUP_SCAN_LIMIT, childRunId, childRunId) as { run_id: string; seq: number } | undefined;
+    return row && { runId: row.run_id, seq: row.seq };
+  }
+
   settleRun(run: { id: string; status: SettledStatus; errorCode?: string; endedAt: string }): void {
     this.db.prepare("UPDATE playbook_runs SET status = ?, error_code = ?, ended_at = ? WHERE id = ? AND status = 'running'").run(run.status, run.errorCode ?? null, run.endedAt, run.id);
   }
@@ -80,6 +121,13 @@ export class PlaybookRunRepository {
   get(id: string): PlaybookRunRecord | undefined {
     const row = this.db.prepare(`SELECT ${RUN_COLUMNS} FROM playbook_runs WHERE id = ?`).get(id) as RunRow | undefined;
     return row && toRun(row);
+  }
+
+  /** The stored output of one step (null when it holds none, undefined when the step does not exist). */
+  stepOutputOf(runId: string, seq: number): unknown {
+    const row = this.db.prepare('SELECT output_json_masked FROM playbook_run_steps WHERE run_id = ? AND seq = ?').get(runId, seq) as { output_json_masked: string | null } | undefined;
+    if (row === undefined) return undefined;
+    return row.output_json_masked === null ? null : JSON.parse(row.output_json_masked);
   }
 
   stepsOf(runId: string): PlaybookRunStepRecord[] {
