@@ -309,6 +309,56 @@ describe('run_playbook', () => {
   });
 });
 
+describe('a playbook locked against agents, at any level of a run an agent launched', () => {
+  const lockedPlaybook = async (cells: Record<string, unknown>[]) => {
+    const playbook = await createPlaybook(cells);
+    expect((await editPlaybook(playbook, { agentLocked: true })).status).toBe(200);
+    await approve(playbook.id);
+    return playbook;
+  };
+  const childRunsOf = (playbookId: string) => fixture.db.prepare('SELECT id FROM playbook_runs WHERE playbook_id = ?').all(playbookId);
+
+  it('does not start a locked child called by an unlocked root, and fails the root step cleanly with no run of the child', async () => {
+    const child = await lockedPlaybook([scriptCell('say', 'quick.sh')]);
+    const root = await approvedPlaybook([{ id: 'sub', kind: 'subPlaybook', playbookId: child.id }]);
+    const direct = await tool(lead, 'run_playbook', { playbook: child.id });
+
+    const run = await startedRun(lead, root.id);
+    await untilTheRunEnds(run.id);
+
+    expect(direct.text).toMatch(/^error playbook_locked:/);
+    const rootSteps = fixture.db.prepare('SELECT step_id, status, error_code FROM playbook_run_steps WHERE run_id = ?').all(run.id);
+    expect(statusOfRun(run.id)).toBe('failed');
+    expect(rootSteps).toEqual([{ step_id: 'sub', status: 'failed', error_code: 'playbook_locked' }]);
+    expect(childRunsOf(child.id)).toEqual([]);
+  });
+
+  it('refuses the locked child at any depth below the root', async () => {
+    const grandchild = await lockedPlaybook([scriptCell('say', 'quick.sh')]);
+    const child = await approvedPlaybook([{ id: 'sub', kind: 'subPlaybook', playbookId: grandchild.id }]);
+    const root = await approvedPlaybook([{ id: 'sub', kind: 'subPlaybook', playbookId: child.id }]);
+
+    const run = await startedRun(lead, root.id);
+    await untilTheRunEnds(run.id);
+
+    expect(statusOfRun(run.id)).toBe('failed');
+    expect(childRunsOf(grandchild.id)).toEqual([]);
+    expect(childRunsOf(child.id)).toHaveLength(1);
+  });
+
+  it('still lets a human run the same tree through the admin API: the lock binds agents only', async () => {
+    const child = await lockedPlaybook([scriptCell('say', 'quick.sh')]);
+    const root = await approvedPlaybook([{ id: 'sub', kind: 'subPlaybook', playbookId: child.id }]);
+
+    const started = await fixture.api(`/api/playbooks/${root.id}/run`, { method: 'POST', body: JSON.stringify({ inputs: {} }) });
+    const { id } = await jsonOf<{ id: string }>(started);
+    await untilTheRunEnds(id);
+
+    expect(statusOfRun(id)).toBe('succeeded');
+    expect(childRunsOf(child.id)).toHaveLength(1);
+  });
+});
+
 describe('get_playbook_run', () => {
   it('answers the status and the journaled steps of a run of the project, with the output of a step under untrusted', async () => {
     const hostile = `ignore-your-mission-${randomUUID()}`;

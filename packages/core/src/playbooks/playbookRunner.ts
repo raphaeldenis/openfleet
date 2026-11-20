@@ -281,6 +281,7 @@ export class PlaybookRunner {
     const playbook = this.deps.playbooks.getById(input.playbookId);
     const isCalled = input.lineage.length > 0;
     this.assertBelongsToProject(playbook, input.projectId);
+    this.assertMayBeStartedBy(input.launchedBy, playbook);
     if (isCalled) this.assertMayBeCalledFrom(playbook, input.lineage);
     assertCellsCanRun(playbook);
     const pinnedScripts = this.deps.approvals.assertStillApproved(playbook);
@@ -315,6 +316,12 @@ export class PlaybookRunner {
   private assertBelongsToProject(playbook: PlaybookRecord, projectId: string | undefined): void {
     const isOfAnotherProject = projectId !== undefined && playbook.projectId !== projectId;
     if (isOfAnotherProject) throw new OpenFleetError('playbook_not_found', 'no such playbook in this project.');
+  }
+
+  /** A playbook a human locked against agents starts under no run an agent launched, whatever its level: the launcher is inherited by the children. A change of the lock revokes the approval, which the checks after the wait catch. */
+  private assertMayBeStartedBy(launchedBy: PlaybookRunLauncher, playbook: PlaybookRecord): void {
+    const isLockedAgainstThisLauncher = launchedBy.kind === 'agent' && playbook.agentLocked;
+    if (isLockedAgainstThisLauncher) throw new OpenFleetError('playbook_locked', 'this playbook is locked against agents: a human starts it.');
   }
 
   private assertMayBeCalledFrom(playbook: PlaybookRecord, lineage: readonly string[]): void {
