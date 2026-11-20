@@ -52,7 +52,7 @@ const runPrintingSecret = async ({ secretValue, printed, stream }: { secretValue
     playbooks: { getById: () => playbook } as never,
     approvals: { assertStillApproved: () => ({}), locatePinned: () => ({ path, sha256: 'unused' }) } as never,
     runs, manual: new PlaybookManualRequestRepository(db), manualResumeProof: refusingManualResumeProof, stores: {} as never, secrets: { resolve: async () => secretValue }, clock: () => new Date().toISOString(), newId: () => 'run-1',
-    limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: 50, maxParkedRunsPerProject: 50, maxWaitEvaluations: 1000 }, observer: { runStarted: () => {}, runEnded },
+    limits: { maxStepExecutions: 10, maxConcurrentRuns: 4, maxRunsNeedingReview: 50, maxParkedRunsPerProject: 50, maxWaitEvaluations: 1000, maxForEachIterations: 1000, maxEmptyTransitions: 1000, maxChildRunsPerRoot: 100 }, observer: { runStarted: () => {}, runEnded },
   });
 
   await runner.start({ playbookId: 'pb1', inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null } });

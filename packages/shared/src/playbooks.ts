@@ -51,6 +51,15 @@ export const PlaybookRunLauncherSchema = z.discriminatedUnion('kind', [
 ]);
 export type PlaybookRunLauncher = z.infer<typeof PlaybookRunLauncherSchema>;
 export const MAX_STEP_EXECUTIONS_PER_RUN = 1000;
+/** The elements a forEach edge iterates, and the iterations of all the forEach edges of one run. */
+export const MAX_FOR_EACH_ITEMS = 100;
+/** How many levels of subPlaybook cells one run may nest: the root run is level 0, so the eleventh child is refused. */
+export const MAX_SUB_PLAYBOOK_DEPTH = 10;
+export const MAX_FOR_EACH_ITERATIONS_PER_RUN = 1000;
+/** The edges a run follows over an empty forEach list, which run no step and so escape the step cap. */
+export const MAX_EMPTY_TRANSITIONS_PER_RUN = 1000;
+/** The children a root run starts over its whole tree of runs, however deep and however many generations. */
+export const MAX_CHILD_RUNS_PER_ROOT = 100;
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 600;
 export const MAX_STEP_OUTPUT_BYTES = 256 * 1024;
 export const MAX_CONCURRENT_RUNS = 4;

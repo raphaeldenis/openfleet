@@ -42,7 +42,7 @@ afterEach(async () => {
   fixture = undefined;
 });
 
-const boot = async (limits: { maxConcurrentRuns?: number; maxRunsNeedingReview?: number; maxParkedRunsPerProject?: number } = {}) => {
+const boot = async (limits: { maxConcurrentRuns?: number; maxRunsNeedingReview?: number; maxParkedRunsPerProject?: number; maxForEachIterations?: number; maxChildRunsPerRoot?: number; maxStepExecutions?: number } = {}) => {
   now = START_OF_TEST_TIME;
   parent = createFakeTauriParent();
   secretStore = createInMemorySecretStore();
@@ -534,5 +534,100 @@ describe('a boot', () => {
 
     await eventually(f, runId, 'succeeded');
     expect(table.rows()).toHaveLength(1);
+  });
+});
+
+describe('the forEach iterations of a run are counted across an answer to a manual step', () => {
+  const quickWait = (id: string, extra: Record<string, unknown> = {}) => ({ id, kind: 'waitFor', predicate: [{ lhs: 'wait.elapsedMs', op: 'gte', rhs: 0 }], ...extra });
+
+  it('refuses a second batch that the iterations already journaled before the answer leave no room for', async () => {
+    const f = await boot({ maxForEachIterations: 3 });
+    const playbook = await createApprovedPlaybook(f, [
+      quickWait('start', { next: [{ to: 'one', forEach: 'inputs.items' }] }),
+      quickWait('one', { next: [{ to: 'ask' }] }),
+      manualCell('ask', { next: [{ to: 'two', forEach: 'inputs.items' }] }),
+      quickWait('two'),
+    ], { inputs: [{ name: 'items', type: 'json', required: false }] });
+    const runId = await runUntilParked(f, playbook.id, { items: [1, 2] });
+
+    expect((await answerWithProof(f, runId, 4)).status).toBe(200);
+
+    const run = await eventually(f, runId, 'failed');
+    expect(run).toMatchObject({ errorCode: 'for_each_limit_exceeded' });
+    expect(run.steps.filter((step) => step.stepId === 'two')).toHaveLength(0);
+  });
+});
+
+describe('the budget of the tree of a run holds across an answer to a manual step', () => {
+  const quickWait = (id: string, extra: Record<string, unknown> = {}) => ({ id, kind: 'waitFor', predicate: [{ lhs: 'wait.elapsedMs', op: 'gte', rhs: 0 }], ...extra });
+  const ITEMS_INPUT = [{ name: 'items', type: 'json', required: false }];
+  const MANUAL_STEP_SEQ = 5;
+
+  /** A root that calls the same leaf for each of 3 items, asks a human, then calls it again for each of the 3 items: its journal holds start, one, one, one, ask (5 steps) before the answer. */
+  const rootCallingALeafOnBothSidesOfAQuestion = async (f: GovernanceFixture) => {
+    const leaf = await createApprovedPlaybook(f, [quickWait('leaf')]);
+    const root = await createApprovedPlaybook(f, [
+      quickWait('start', { next: [{ to: 'one', forEach: 'inputs.items' }] }),
+      { id: 'one', kind: 'subPlaybook', playbookId: leaf.id, next: [{ to: 'ask' }] },
+      manualCell('ask', { next: [{ to: 'two', forEach: 'inputs.items' }] }),
+      { id: 'two', kind: 'subPlaybook', playbookId: leaf.id },
+    ], { inputs: ITEMS_INPUT });
+    return { leaf, root };
+  };
+  const runsOf = (f: GovernanceFixture, playbookId: string) => (f.db.prepare('SELECT COUNT(*) AS n FROM playbook_runs WHERE playbook_id = ?').get(playbookId) as { n: number }).n;
+  const stepsOfAllRuns = (f: GovernanceFixture) => (f.db.prepare('SELECT COUNT(*) AS n FROM playbook_run_steps').get() as { n: number }).n;
+
+  it('counts the children started before the answer among the children a root may start', async () => {
+    const f = await boot({ maxChildRunsPerRoot: 4 });
+    const { leaf, root } = await rootCallingALeafOnBothSidesOfAQuestion(f);
+    const runId = await runUntilParked(f, root.id, { items: [1, 2, 3] });
+
+    expect((await answerWithProof(f, runId, MANUAL_STEP_SEQ)).status).toBe(200);
+
+    const run = await eventually(f, runId, 'failed');
+    expect(runsOf(f, leaf.id)).toBe(4);
+    expect(run.steps.at(-1)).toMatchObject({ stepId: 'two', status: 'failed', errorCode: 'sub_playbook_limit_exceeded' });
+  });
+
+  it('counts the steps of the children run before the answer among the step executions of the tree', async () => {
+    const f = await boot({ maxStepExecutions: 9 });
+    const { root } = await rootCallingALeafOnBothSidesOfAQuestion(f);
+    const runId = await runUntilParked(f, root.id, { items: [1, 2, 3] });
+
+    expect((await answerWithProof(f, runId, MANUAL_STEP_SEQ)).status).toBe(200);
+
+    await eventually(f, runId, 'failed');
+    expect(stepsOfAllRuns(f)).toBeLessThanOrEqual(9);
+  });
+
+  it('keeps the count of a root that waited across a boot, whatever the runs of its children became', async () => {
+    const f = await boot({ maxChildRunsPerRoot: 4 });
+    const { leaf, root } = await rootCallingALeafOnBothSidesOfAQuestion(f);
+    const runId = await runUntilParked(f, root.id, { items: [1, 2, 3] });
+    f.db.prepare('DELETE FROM playbook_runs WHERE playbook_id = ?').run(leaf.id);
+    f.daemon.playbookRunner.recover();
+
+    expect((await answerWithProof(f, runId, MANUAL_STEP_SEQ)).status).toBe(200);
+
+    const run = await eventually(f, runId, 'failed');
+    expect(runsOf(f, leaf.id)).toBe(1);
+    expect(run.steps.at(-1)).toMatchObject({ stepId: 'two', errorCode: 'sub_playbook_limit_exceeded' });
+  });
+});
+
+describe('a playbook with a run that waits for a human cannot be deleted', () => {
+  it('refuses the deletion with playbook_run_busy while the run waits, and allows it once the run is rejected', async () => {
+    const f = await boot();
+    const playbook = await createApprovedPlaybook(f, [manualCell('gate')]);
+    const runId = await runUntilParked(f, playbook.id);
+    const deletion = () => f.api(`/api/playbooks/${playbook.id}?expectedRev=${playbook.contentRev}`, { method: 'DELETE' });
+
+    const whileWaiting = await deletion();
+    expect((await answerWithProof(f, runId, 1, 'reject')).status).toBe(200);
+    const afterTheEnd = await deletion();
+
+    expect(whileWaiting.status).toBe(409);
+    expect(await whileWaiting.json()).toMatchObject({ error: 'playbook_run_busy' });
+    expect(afterTheEnd.status).toBe(200);
   });
 });

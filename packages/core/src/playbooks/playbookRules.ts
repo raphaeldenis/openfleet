@@ -36,6 +36,7 @@ const SLOT_BY_FIELD: Readonly<Record<string, Readonly<Record<string, TemplateSlo
   http: { url: 'http_url', headers: 'http_headers', auth: 'http_auth', body: 'http_body' },
   readFromStore: { storeID: 'store_identifier', columns: 'store_identifier', whereColumnID: 'store_identifier', sortColumnID: 'store_identifier' },
   writeToStore: { storeID: 'store_identifier', naturalKeyColumnID: 'store_identifier' },
+  subPlaybook: { inputs: 'child_input' },
 };
 
 /** A key of `rowMappings` is the id of a column: it names where the write goes. */

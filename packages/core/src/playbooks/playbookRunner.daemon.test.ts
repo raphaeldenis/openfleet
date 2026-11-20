@@ -248,7 +248,7 @@ describe('what a human approves is exactly what runs', () => {
   it('refuses to run a cell kind this runner does not execute, and writes no run', async () => {
     const f = await boot();
     writeScript('hello.sh', 'printf hello');
-    const playbook = await createPlaybook(f, [scriptCell('say', 'hello.sh'), { id: 'ask', kind: 'subPlaybook', playbookId: 'another-playbook' }]);
+    const playbook = await createPlaybook(f, [scriptCell('say', 'hello.sh'), { id: 'ask', kind: 'tool', tool: 'another-tool' }]);
     await approve(f, playbook.id);
 
     const refused = await startRun(f, playbook.id);
