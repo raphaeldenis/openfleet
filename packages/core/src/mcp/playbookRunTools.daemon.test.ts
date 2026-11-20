@@ -309,6 +309,22 @@ describe('run_playbook', () => {
   });
 });
 
+describe('the activity log of run_playbook holds no value of the inputs', () => {
+  it('keeps a number under a key other tools share (expected_rev) out of the log', async () => {
+    const [name, value] = ['expected_rev', 424242] as const;
+    const playbook = await approvedPlaybook([scriptCell('say', 'quick.sh')], { inputs: [{ name, type: 'number', required: false }] });
+
+    const run = await startedRun(lead, playbook.id, { [name]: value });
+    await untilTheRunEnds(run.id);
+
+    const rows = fixture.db.prepare("SELECT * FROM activity_log WHERE action = 'run_playbook'").all() as Record<string, unknown>[];
+    const everyColumnAsText = rows.map((row) => Object.values(row).join(' ')).join('\n');
+    expect(rows).toHaveLength(1);
+    expect(everyColumnAsText).not.toContain(`"${name}":${value}`);
+    expect(everyColumnAsText).not.toContain('424242');
+  });
+});
+
 describe('a playbook locked against agents, at any level of a run an agent launched', () => {
   const lockedPlaybook = async (cells: Record<string, unknown>[]) => {
     const playbook = await createPlaybook(cells);
