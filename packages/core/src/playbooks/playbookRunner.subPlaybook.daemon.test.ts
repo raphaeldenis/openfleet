@@ -185,6 +185,18 @@ describe('a subPlaybook cell runs another playbook of the project', () => {
     expect(runsOf(f, child.id)).toHaveLength(0);
   });
 
+  it('answers the last attempt that succeeded when the child ends on a retry whose condition never held', async () => {
+    const f = await boot();
+    const neverTrue = [{ lhs: 'steps.say.output', op: 'eq', rhs: 'never' }];
+    const child = await createApprovedPlaybook(f, [{ id: 'say', kind: 'script', program: 'say.sh', args: ['first'], retry: { maxAttempts: 2, backoffMs: 0, until: neverTrue } }]);
+    const parent = await createApprovedPlaybook(f, [subCell(child.id)]);
+
+    const run = await runToTheEnd(f, parent.id);
+
+    expect(run.steps[0]!.output).toMatchObject({ status: 'failed', errorCode: 'retry_exhausted' });
+    expect(String(run.steps[0]!.output!['output'])).toContain('first');
+  });
+
   it('fails the parent with sub_playbook_failed when the child fails, and keeps the code of the child in the output', async () => {
     const f = await boot();
     writeScript('fail.sh', 'exit 3');
@@ -416,7 +428,7 @@ describe('a daemon that stops while a child runs', () => {
 describe('a parent that disappears or changes while its child starts or runs', () => {
   const deleteOf = (f: GovernanceFixture, playbook: { id: string; contentRev: number }) => f.api(`/api/playbooks/${playbook.id}?expectedRev=${playbook.contentRev}`, { method: 'DELETE' });
 
-  it('starts no child when the parent playbook is deleted while the secrets of the child are read', async () => {
+  it('refuses to delete the parent playbook while its run waits for the secrets of the child', async () => {
     const f = await boot();
     const child = await createApprovedPlaybook(f, [secretHolderCell]);
     await withASecret(f, child.id, dummySecret());
@@ -425,30 +437,44 @@ describe('a parent that disappears or changes while its child starts or runs', (
     await startedRunId(f, parent.id);
     await held.reached(1);
 
-    const deleted = await deleteOf(f, parent);
+    const refused = await deleteOf(f, parent);
     held.release();
     await settle(30);
-    await f.daemon.playbookRunner.stop();
 
-    expect(deleted.status).toBe(200);
-    expect(runsOf(f, child.id)).toHaveLength(0);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: 'playbook_run_busy' });
+    expect((await f.api(`/api/playbooks/${parent.id}`)).status).toBe(200);
+    expect(runsOf(f, child.id)).toHaveLength(1);
   });
 
-  it('hands the result of the child to the parent when the playbook of the child is deleted while it runs', async () => {
+  it('refuses to delete the playbook of a child while the child runs, and the parent gets its result', async () => {
     const f = await boot();
     const child = await createApprovedPlaybook(f, [{ id: 'hold', kind: 'script', program: 'hold.sh' }]);
     const parent = await createApprovedPlaybook(f, [subCell(child.id)]);
     const parentRunId = await startedRunId(f, parent.id);
     await waitUntil('the child to run', () => runsOf(f, child.id).length === 1);
 
-    const deleted = await deleteOf(f, child);
+    const refused = await deleteOf(f, child);
+    const refusedForTheParent = await deleteOf(f, parent);
     release();
     await waitUntil('the parent to end', () => statusOfRun(f, parentRunId) !== 'running');
 
-    expect(deleted.status).toBe(200);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: 'playbook_run_busy' });
+    expect(refusedForTheParent.status).toBe(409);
     const parentRun = await viewOfRun(f, parentRunId);
     expect(parentRun.status).toBe('succeeded');
     expect(parentRun.steps[0]!.output).toMatchObject({ status: 'succeeded' });
+  });
+
+  it('deletes a playbook once its runs have ended', async () => {
+    const f = await boot();
+    const leaf = await createApprovedPlaybook(f, [{ id: 'leaf', kind: 'script', program: 'noop.sh' }]);
+    await runToTheEnd(f, leaf.id);
+
+    const deleted = await deleteOf(f, leaf);
+
+    expect(deleted.status).toBe(200);
   });
 
   it('lets the parent go on with the content it was approved with when it is edited while the child runs', async () => {
