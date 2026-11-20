@@ -433,10 +433,8 @@ export class PlaybookRunner {
       const { verdict, output } = judged;
       runs.settleStep({ runId: context.run.id, seq, status: verdict.status, output, errorCode: verdict.errorCode, endedAt: clock() });
 
-      if (judged.isSatisfied) {
-        state.lastOutput = output;
-        return undefined;
-      }
+      if (verdict.status === 'succeeded') state.lastOutput = output;
+      if (judged.isSatisfied) return undefined;
       const canTryAgain = (verdict.status === 'failed' || verdict.status === 'succeeded') && !isLastAttempt;
       if (!canTryAgain) return verdict;
 
@@ -545,6 +543,7 @@ export class PlaybookRunner {
     const requestedAt = clock();
     const waitSeconds = Math.min(cell.timeoutSeconds ?? MAX_MANUAL_WAIT_SECONDS, MAX_MANUAL_WAIT_SECONDS);
     const expiresAt = new Date(Date.parse(requestedAt) + waitSeconds * 1000).toISOString();
+    this.deps.runs.writeRunningStepOutput({ runId: context.run.id, seq, output: { treeBudget: { ...context.tree } } });
     manual.park({ runId: context.run.id, seq, promptMasked, requestedAt, expiresAt });
     return { parked: true };
   }
@@ -699,6 +698,7 @@ export class PlaybookRunner {
     const needsAPlace = decision === 'approved';
     if (needsAPlace && runs.countRunning() >= limits.maxConcurrentRuns) throw busy(`${limits.maxConcurrentRuns} runs are already in progress.`);
 
+    const treeBudgetWhenParked = this.treeBudgetParkedWith(runs.stepOutputOf(runId, seq));
     const wasRecorded = manual.answer({ runId, seq, decision, answeredAt: clock() });
     if (!wasRecorded) throw this.refusalOfAnAnswerNotRecorded({ runId, seq });
 
@@ -707,8 +707,18 @@ export class PlaybookRunner {
       this.deps.observer?.runEnded({ runId, playbookId: playbook.id, status: 'failed' });
       return runs.get(runId)!;
     }
-    this.continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, seq });
+    this.continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, seq, tree: treeBudgetWhenParked ?? { stepsExecuted: seq, childrenStarted: 0 } });
     return runs.get(runId)!;
+  }
+
+  /**
+   * The budget of the tree of runs the root consumed when it parked, as the parked step journaled it: the steps of every run of the tree and the children started, among those that
+   * retention or a deletion removed since. A run parked before the budget was journaled has none, and resumes from its own steps.
+   */
+  private treeBudgetParkedWith(parkedStepOutput: unknown): TreeBudget | undefined {
+    const journaled = (parkedStepOutput as { treeBudget?: Partial<TreeBudget> } | null | undefined)?.treeBudget;
+    const isWellFormed = Number.isSafeInteger(journaled?.stepsExecuted) && Number.isSafeInteger(journaled?.childrenStarted);
+    return isWellFormed ? { stepsExecuted: journaled!.stepsExecuted!, childrenStarted: journaled!.childrenStarted! } : undefined;
   }
 
   /** Why the repository did not record an answer: the wait ended at this instant (the run is ended as such), or another answer was recorded first. */
@@ -747,7 +757,7 @@ export class PlaybookRunner {
   }
 
   /** Rebuilds the context of a run from its journal and walks on from the cell after the manual step: the masked outputs of the steps are read back, the secrets are the ones resolved again. */
-  private continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, seq }: { run: PlaybookRunRecord; playbook: PlaybookRecord; pinnedScripts: Record<string, string>; secretValues: Map<string, string>; seq: number }): void {
+  private continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, seq, tree }: { run: PlaybookRunRecord; playbook: PlaybookRecord; pinnedScripts: Record<string, string>; secretValues: Map<string, string>; seq: number; tree: TreeBudget }): void {
     const journaledSteps = this.deps.runs.stepsOf(run.id);
     const steps: StepFields = Object.fromEntries(journaledSteps.filter((step) => step.status === 'succeeded').map((step) => [step.stepId, step.output as StepOutput]));
     const manualStepId = journaledSteps.find((step) => step.seq === seq)!.stepId;
@@ -756,7 +766,6 @@ export class PlaybookRunner {
     const from = this.transitionAfter(manualCell, cells, { inputs: run.inputs, steps });
 
     const secretsToMask = secretsToMaskOf(secretValues);
-    const tree: TreeBudget = { stepsExecuted: seq, childrenStarted: 0 };
     const context: RunContext = { run, playbook, pinnedScripts, inputs: run.inputs, secretValues, masker: this.maskerOf(secretsToMask), lineage: [playbook.id], secretsToMask, tree };
     const execution = this.execute(context, { from, executed: seq, steps }).then(() => undefined).finally(() => this.inFlight.delete(execution));
     this.inFlight.add(execution);

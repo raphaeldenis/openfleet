@@ -116,6 +116,13 @@ export class PlaybookRunRepository {
     return row && toRun(row);
   }
 
+  /** The stored output of one step (null when it holds none, undefined when the step does not exist). */
+  stepOutputOf(runId: string, seq: number): unknown {
+    const row = this.db.prepare('SELECT output_json_masked FROM playbook_run_steps WHERE run_id = ? AND seq = ?').get(runId, seq) as { output_json_masked: string | null } | undefined;
+    if (row === undefined) return undefined;
+    return row.output_json_masked === null ? null : JSON.parse(row.output_json_masked);
+  }
+
   stepsOf(runId: string): PlaybookRunStepRecord[] {
     const rows = this.db.prepare('SELECT seq, step_id, status, output_json_masked, error_code, started_at, ended_at FROM playbook_run_steps WHERE run_id = ? ORDER BY seq').all(runId) as unknown as StepRow[];
     return rows.map(toStep);
