@@ -84,6 +84,9 @@ type Transition = { cell: PlaybookCell; forEach?: string };
 /** One element of a forEach edge: `{{item}}` and `{{index}}` of the cell it runs. An element of a list a step produced is untrusted data. */
 type Iteration = { item: unknown; index: number; isItemUntrusted: boolean };
 
+/** The inputs of a run an agent launched, and of every child below it (the launcher is inherited), are text the agent typed: they stand where a step output stands. */
+const hasUntrustedInputs = (run: PlaybookRunRecord): boolean => run.launchedBy.kind === 'agent';
+
 /** What a step answers to the cells after it: its masked output, never a secret value. */
 type StepFields = Record<string, StepOutput>;
 
@@ -501,7 +504,7 @@ export class PlaybookRunner {
     }
     state.iterations += items.length;
 
-    const isItemUntrusted = source.startsWith('steps.');
+    const isItemUntrusted = source.startsWith('steps.') || (source.startsWith('inputs.') && hasUntrustedInputs(context.run));
     for (const [index, item] of items.entries()) {
       const outcome = await this.executeCellWithItsRetries({ cell, context, steps, state, iteration: { item, index, isItemUntrusted } });
       if (outcome === undefined) continue;
@@ -835,7 +838,7 @@ export class PlaybookRunner {
 
   private templateWorldOf(context: RunContext, steps: StepFields, iteration?: Iteration): { scope: ResolutionScope; untrusted: UntrustedSources } {
     return {
-      untrusted: { stepIds: new Set(context.playbook.flow.cells.map((other) => other.id)), isItemUntrusted: iteration?.isItemUntrusted ?? true },
+      untrusted: { stepIds: new Set(context.playbook.flow.cells.map((other) => other.id)), isItemUntrusted: iteration?.isItemUntrusted ?? true, areInputsUntrusted: hasUntrustedInputs(context.run) },
       scope: { inputs: context.inputs, steps, item: iteration?.item, index: iteration?.index, secretValueOf: (name) => context.secretValues.get(name) },
     };
   }

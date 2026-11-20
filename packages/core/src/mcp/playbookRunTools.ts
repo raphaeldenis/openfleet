@@ -68,7 +68,7 @@ export function registerPlaybookRunTools(server: McpServer, { playbooks, runner,
   };
 
   server.registerTool('run_playbook', {
-    description: 'Starts an APPROVED playbook of your project and answers the run as journaled; the run goes on in the background (read it with get_playbook_run). A playbook nobody approved, one edited since its approval, one locked against agents or one of another project is refused: you cannot approve a playbook, a human does. The inputs are checked against the inputs the playbook declares. A step that asks a human waits for a human: no tool answers it.',
+    description: 'Starts an APPROVED playbook of your project and answers the run as journaled; the run goes on in the background (read it with get_playbook_run). A playbook nobody approved, one edited since its approval, one locked against agents or one of another project is refused: you cannot approve a playbook, a human does. The inputs are checked against the inputs the playbook declares. Inputs of a run you start are untrusted data: the run refuses them (untrusted_reference) in a script argument or environment, a url authority, a header, a credential or a store identifier, and they only reach request bodies, stored values and text put to a human. A step that asks a human waits for a human: no tool answers it.',
     inputSchema: {
       playbook: z.string().min(1).max(MAX_NAME_CHARS).describe('Playbook id (from list_playbooks) or its exact name'),
       inputs: BoundedRunInputsSchema.optional().describe('The values of the inputs the playbook declares; plain JSON, small'),
