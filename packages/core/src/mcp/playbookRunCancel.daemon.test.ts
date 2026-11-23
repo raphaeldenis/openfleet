@@ -1,9 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { Session } from '@openfleet/shared';
 import { afterEach, describe, expect, it } from 'vitest';
+import { registerPlaybookRunTools } from './playbookRunTools.js';
 import { OTHER_PROJECT_ID, OWN_PROJECT_ID, startGovernanceFixture, type GovernanceFixture } from '../governance/governanceQueue.testkit.js';
-import { createManualTimers, until, type ManualTimers } from '../integrations/manualTimers.testkit.js';
+import { createManualTimers, deferred, until, type ManualTimers } from '../integrations/manualTimers.testkit.js';
+import type { HttpStepNetwork } from '../playbooks/httpStepRequest.js';
+import { createInMemorySecretStore, type InMemorySecretStore } from '../secrets/inMemorySecretStore.js';
+import { SecretRefRepository } from '../secrets/secretRefRepository.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 
 /*
@@ -26,20 +32,26 @@ let lead: Client;
 let scriptRoot = '';
 let markers = '';
 let now: number;
+let secretStore: InMemorySecretStore;
+
+let releaseHeldSecretReads: (() => void) | undefined;
 
 afterEach(async () => {
+  releaseHeldSecretReads?.();
+  releaseHeldSecretReads = undefined;
   if (markers !== '') writeFileSync(join(markers, 'go'), '');
   await fixture?.close();
   fixture = undefined;
   directories.removeAll();
 });
 
-const boot = async (limits: { maxConcurrentRuns?: number } = {}) => {
+const boot = async (limits: { maxConcurrentRuns?: number; httpNetwork?: HttpStepNetwork } = {}) => {
   now = START_OF_TEST_TIME;
   timers = createManualTimers();
+  secretStore = createInMemorySecretStore();
   scriptRoot = directories.make('cancel-scripts-');
   markers = directories.make('cancel-markers-');
-  fixture = await startGovernanceFixture({ playbooks: { scriptRoots: [scriptRoot], clock: () => new Date(now).toISOString(), startTimer: timers.startTimer, ...limits } });
+  fixture = await startGovernanceFixture({ playbooks: { scriptRoots: [scriptRoot], clock: () => new Date(now).toISOString(), startTimer: timers.startTimer, ...limits }, secrets: { store: secretStore } });
   lead = await fixture.connect(fixture.lead.id);
   return fixture;
 };
@@ -56,15 +68,15 @@ const tool = async (client: Client, name: string, args: Record<string, unknown> 
 };
 const jsonOf = async <T>(response: Response) => await response.json() as T;
 const waitForCell = (id = 'wait', extra: Record<string, unknown> = {}) => ({ id, kind: 'waitFor', predicate: [{ lhs: 'wait.elapsedMs', op: 'lt', rhs: 0 }], pollMs: 1000, ...extra });
-const approvedPlaybook = async (cells: Record<string, unknown>[], projectId = OWN_PROJECT_ID) => {
+const approvedPlaybook = async (cells: Record<string, unknown>[], projectId = OWN_PROJECT_ID, extra: Record<string, unknown> = {}) => {
   const f = fixture!;
-  const playbook = await jsonOf<{ id: string }>(await f.api('/api/playbooks', { method: 'POST', body: JSON.stringify({ projectId, name: `P-${randomUUID()}`, cells }) }));
+  const playbook = await jsonOf<{ id: string; contentRev: number }>(await f.api('/api/playbooks', { method: 'POST', body: JSON.stringify({ projectId, name: `P-${randomUUID()}`, cells, ...extra }) }));
   const { digest } = await jsonOf<{ digest: string }>(await f.api(`/api/playbooks/${playbook.id}/approval`));
   expect((await f.api(`/api/playbooks/${playbook.id}/approve`, { method: 'POST', body: JSON.stringify({ digest }) })).status).toBe(200);
   return playbook;
 };
-const startedRunId = async (playbook: string) => {
-  const started = await tool(lead, 'run_playbook', { playbook });
+const startedRunId = async (playbook: string, inputs: Record<string, unknown> = {}) => {
+  const started = await tool(lead, 'run_playbook', { playbook, inputs });
   expect(started.isError, started.text).toBe(false);
   return started.json!.run.id as string;
 };
@@ -190,6 +202,41 @@ describe('cancelling a run of a playbook', () => {
     expect(runRow(runId)).toEqual(before);
   });
 
+  it('does not publish cancel_playbook_run to a worker session', async () => {
+    await boot();
+    const worker = await fixture!.connect(fixture!.worker.id);
+
+    const workerTools = (await worker.listTools()).tools.map((published) => published.name);
+    const managerTools = (await lead.listTools()).tools.map((published) => published.name);
+
+    expect(managerTools).toContain('cancel_playbook_run');
+    expect(workerTools).not.toContain('cancel_playbook_run');
+  });
+
+  it('refuses the invocation of cancel_playbook_run by a worker session even when the tool is registered, and leaves the run running', async () => {
+    await boot();
+    const sleeping = await approvedPlaybook([waitForCell()]);
+    const runId = await startedRunId(sleeping.id);
+    await until(() => timers.armedCount() === 1);
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
+    const registeringServer = { registerTool: (name: string, _config: unknown, handler: (args: Record<string, unknown>) => Promise<unknown>) => handlers.set(name, handler) } as unknown as McpServer;
+    const workerSession = { ...fixture!.worker, projectId: OWN_PROJECT_ID } as Session;
+    const cancelRunCalls: string[] = [];
+    const untouchedDependencies = {
+      playbooks: { getById: () => { throw new Error('the playbooks must not be read'); }, getInProject: () => { throw new Error('the playbooks must not be read'); } },
+      runner: { start: async () => { throw new Error('unexpected'); }, startCell: async () => { throw new Error('unexpected'); }, cancelRun: async (id: string) => { cancelRunCalls.push(id); throw new Error('the run must not be cancelled'); } },
+      runs: { get: () => { throw new Error('the runs must not be read'); }, stepsOf: () => [], listPageOfProject: () => [] },
+      managers: { get: () => undefined },
+    };
+    registerPlaybookRunTools(registeringServer, { ...untouchedDependencies, caller: workerSession } as unknown as Parameters<typeof registerPlaybookRunTools>[1]);
+
+    const refusal = handlers.get('cancel_playbook_run')!({ run_id: runId });
+
+    await expect(refusal).rejects.toMatchObject({ code: 'not_a_manager' });
+    expect(cancelRunCalls).toEqual([]);
+    expect(runRow(runId).status).toBe('running');
+  });
+
   it('answers a run of another project like a run that does not exist, and leaves it running', async () => {
     await boot();
     const foreign = await approvedPlaybook([waitForCell()], OTHER_PROJECT_ID);
@@ -204,5 +251,173 @@ describe('cancelling a run of a playbook', () => {
     expect(ofAnotherProject.text).toContain('playbook_run_not_found');
     expect(ofAnotherProject.text.replace(foreignRunId, '')).toBe(unknown.text.replace(/[0-9a-f-]{36}/, ''));
     expect(runRow(foreignRunId).status).toBe('running');
+  });
+});
+
+const sleepMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const GUARD_AGAINST_A_HANG_MS = 1_500;
+/** True when the promise settles before the guard: a cancel that waits for a slow read of secrets does not. */
+const settlesBeforeTheGuard = (pending: Promise<unknown>): Promise<boolean> => Promise.race([pending.then(() => true, () => true), sleepMs(GUARD_AGAINST_A_HANG_MS).then(() => false)]);
+const runCount = () => (fixture!.db.prepare('SELECT COUNT(*) AS n FROM playbook_runs').get() as { n: number }).n;
+
+describe('cancelling a run whose child is still reading its secrets', () => {
+  const SECRET_NAME = 'API_KEY';
+  const secretHolderCell = { id: 'holder', kind: 'http', method: 'GET', url: 'https://example.invalid/', headers: { 'X-Key': `{{secret:${SECRET_NAME}}}` } };
+
+  /** Holds every read of a secret until released: a child that needs a secret stops there, and the test acts in that window. */
+  const holdSecretReads = () => {
+    const gate = deferred<void>();
+    let reads = 0;
+    const read = secretStore.read.bind(secretStore);
+    secretStore.read = async (scope, name) => {
+      reads += 1;
+      await gate.promise;
+      return read(scope, name);
+    };
+    releaseHeldSecretReads = () => gate.resolve();
+    return { release: () => gate.resolve(), reached: () => until(() => reads >= 1) };
+  };
+  const parentWaitingForTheSecretsOfItsChild = async () => {
+    await boot({ maxConcurrentRuns: 2 });
+    const child = await approvedPlaybook([secretHolderCell]);
+    new SecretRefRepository(fixture!.db).declare({ kind: 'playbook', id: child.id }, SECRET_NAME);
+    await secretStore.set({ kind: 'playbook', id: child.id }, SECRET_NAME, `dummy-canary-built-at-runtime-${randomUUID()}`);
+    const parent = await approvedPlaybook([{ id: 'sub', kind: 'subPlaybook', playbookId: child.id }]);
+    const held = holdSecretReads();
+    const parentRunId = await startedRunId(parent.id);
+    await held.reached();
+    return { child, held, parentRunId };
+  };
+
+  it('answers at once, without waiting for the read, and journals no child once the read returns', async () => {
+    const { held, parentRunId } = await parentWaitingForTheSecretsOfItsChild();
+
+    const cancelling = tool(lead, 'cancel_playbook_run', { run_id: parentRunId });
+
+    expect(await settlesBeforeTheGuard(cancelling)).toBe(true);
+    held.release();
+    await sleepMs(50);
+    expect(runCount()).toBe(1);
+    expect(runRow(parentRunId)).toMatchObject(CANCELLED);
+    expect(stepRows(parentRunId)).toEqual([{ step_id: 'sub', status: 'failed', error_code: 'run_cancelled' }]);
+    expect(runsStillRunning()).toBe(0);
+  });
+
+  it('ends the parent step with the verdict of the cancellation, not with the error that the preparation of the child met', async () => {
+    const { child, held, parentRunId } = await parentWaitingForTheSecretsOfItsChild();
+    const editedWhileTheSecretsAreRead = await fixture!.api(`/api/playbooks/${child.id}`, { method: 'PUT', body: JSON.stringify({ expectedRev: child.contentRev, policy: { allowedHosts: ['example.test'] } }) });
+    expect(editedWhileTheSecretsAreRead.status).toBe(200);
+
+    const cancelling = tool(lead, 'cancel_playbook_run', { run_id: parentRunId });
+
+    expect(await settlesBeforeTheGuard(cancelling)).toBe(true);
+    held.release();
+    await sleepMs(50);
+    expect(runRow(parentRunId)).toMatchObject(CANCELLED);
+    expect(stepRows(parentRunId)).toEqual([{ step_id: 'sub', status: 'failed', error_code: 'run_cancelled' }]);
+    expect(runCount()).toBe(1);
+  });
+});
+
+describe('the answer of a cancellation does not depend on the retention of runs', () => {
+  it('answers the cancelled run even when the retention of the playbook purged it as soon as it ended', async () => {
+    await boot();
+    writeScript('gate.sh', `touch ${join(markers, 'started')}; while [ ! -e ${join(markers, 'go')} ]; do sleep 0.05; done`);
+    const playbook = await approvedPlaybook([{ id: 'gate', kind: 'script', program: 'gate.sh', args: [], env: {} }], OWN_PROJECT_ID, { policy: { maxRunsToKeep: 1 } });
+    writeFileSync(join(markers, 'go'), '');
+    now = START_OF_TEST_TIME + 3_600_000;
+    const newerRunId = await startedRunId(playbook.id);
+    await until(() => runRow(newerRunId).status === 'succeeded');
+    rmSync(join(markers, 'go'));
+    rmSync(join(markers, 'started'));
+    now = START_OF_TEST_TIME;
+    const olderRunId = await startedRunId(playbook.id);
+    await until(() => existsSync(join(markers, 'started')));
+
+    const cancelled = await tool(lead, 'cancel_playbook_run', { run_id: olderRunId });
+
+    expect(cancelled.isError, cancelled.text).toBe(false);
+    expect(cancelled.json!.run).toMatchObject({ id: olderRunId, status: 'failed', error_code: 'run_cancelled' });
+    expect(fixture!.db.prepare('SELECT 1 FROM playbook_runs WHERE id = ?').get(olderRunId)).toBeUndefined();
+  });
+});
+
+describe('what a cancellation does when two things happen at once', () => {
+  it('answers both of two cancels sent during the same stop with the same ended run', async () => {
+    await boot();
+    const sleeping = await approvedPlaybook([waitForCell()]);
+    const runId = await startedRunId(sleeping.id);
+    await until(() => timers.armedCount() === 1);
+    const { playbookRunner } = fixture!.daemon;
+
+    const [first, second] = await Promise.all([playbookRunner.cancelRun(runId), playbookRunner.cancelRun(runId)]);
+
+    expect(first).toMatchObject({ id: runId, status: 'failed', errorCode: 'run_cancelled' });
+    expect(second).toEqual(first);
+    expect(runsStillRunning()).toBe(0);
+  });
+
+  it('lets the end of the wait win over a cancellation when the deadline of the question is already reached', async () => {
+    await boot();
+    const asking = await approvedPlaybook([{ id: 'ask', kind: 'manual', prompt: 'Ship it?', timeoutSeconds: 60 }]);
+    const runId = await startedRunId(asking.id);
+    await until(() => runRow(runId).status === 'waiting_manual');
+    now += 61_000;
+
+    const cancelled = await tool(lead, 'cancel_playbook_run', { run_id: runId });
+
+    expect(cancelled.isError).toBe(true);
+    expect(cancelled.text).toContain('playbook_conflict');
+    expect(runRow(runId)).toMatchObject({ status: 'failed', error_code: 'manual_wait_expired' });
+    expect(fixture!.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ?').get(runId)).toEqual({ status: 'expired' });
+  });
+});
+
+describe('the cancellation reaches every kind of step and every attempt', () => {
+  it('stops an http request whose name is still being resolved and ends its step with run_cancelled', async () => {
+    const lookups: string[] = [];
+    const stalledNetwork = { resolveAddresses: (hostname: string) => { lookups.push(hostname); return new Promise<never>(() => {}); }, isForbiddenAddress: () => false } as unknown as HttpStepNetwork;
+    await boot({ httpNetwork: stalledNetwork });
+    const calling = await approvedPlaybook([{ id: 'call', kind: 'http', method: 'GET', url: 'http://slow-dns.test:9/' }], OWN_PROJECT_ID, { policy: { allowedHosts: ['slow-dns.test'] } });
+    const runId = await startedRunId(calling.id);
+    await until(() => lookups.length === 1);
+
+    const cancelled = await tool(lead, 'cancel_playbook_run', { run_id: runId });
+
+    expect(cancelled.isError, cancelled.text).toBe(false);
+    expect(runRow(runId)).toMatchObject(CANCELLED);
+    expect(stepRows(runId)).toEqual([{ step_id: 'call', status: 'failed', error_code: 'run_cancelled' }]);
+  });
+
+  it('stops a forEach in its first iteration: the run ends with run_cancelled, not with for_each_iteration_failed, and no other element starts', async () => {
+    await boot();
+    writeScript('noop.sh', 'true');
+    writeScript('hold.sh', `touch ${join(markers, 'started')}; while [ ! -e ${join(markers, 'go')} ]; do sleep 0.05; done`);
+    const iterating = await approvedPlaybook([
+      { id: 'seed', kind: 'script', program: 'noop.sh', args: [], env: {}, next: [{ to: 'each', forEach: 'inputs.names' }] },
+      { id: 'each', kind: 'script', program: 'hold.sh', args: [], env: {} },
+    ], OWN_PROJECT_ID, { inputs: [{ name: 'names', type: 'json', required: true }] });
+    const runId = await startedRunId(iterating.id, { names: ['a', 'b', 'c'] });
+    await until(() => existsSync(join(markers, 'started')));
+
+    const cancelled = await tool(lead, 'cancel_playbook_run', { run_id: runId });
+
+    expect(cancelled.isError, cancelled.text).toBe(false);
+    expect(runRow(runId)).toMatchObject(CANCELLED);
+    expect(stepRows(runId)).toEqual([{ step_id: 'seed', status: 'succeeded', error_code: null }, { step_id: 'each', status: 'failed', error_code: 'run_cancelled' }]);
+  });
+
+  it('starts no further attempt of a retrying cell once its attempt in flight was cancelled', async () => {
+    await boot();
+    writeScript('hold.sh', `touch ${join(markers, 'started')}; while [ ! -e ${join(markers, 'go')} ]; do sleep 0.05; done`);
+    const retrying = await approvedPlaybook([{ id: 'hold', kind: 'script', program: 'hold.sh', args: [], env: {}, retry: { maxAttempts: 3, backoffMs: 0, until: [{ lhs: 'steps.hold.exitCode', op: 'eq', rhs: 0 }] } }]);
+    const runId = await startedRunId(retrying.id);
+    await until(() => existsSync(join(markers, 'started')));
+
+    const cancelled = await tool(lead, 'cancel_playbook_run', { run_id: runId });
+
+    expect(cancelled.isError, cancelled.text).toBe(false);
+    expect(runRow(runId)).toMatchObject(CANCELLED);
+    expect(stepRows(runId)).toEqual([{ step_id: 'hold', status: 'failed', error_code: 'run_cancelled' }]);
   });
 });

@@ -13,7 +13,8 @@ import { createTempDirTracker } from '../tempDirTracker.js';
  *  3. no step output             `REFERENCES_A_STEP` in the solo check  -> 'refuses a cell that reads the output of another step ...'
  *  4. unknown cell               `playbook_cell_not_found`              -> 'refuses a cell the playbook does not hold'
  *  5. untrusted inputs           `launchedBy` agent                     -> 'treats the inputs as untrusted data ...'
- *  6. the checks of a start      beginRun                               -> 'is refused like run_playbook ...'
+ *  6. the checks of a start      beginRun                               -> 'is refused like run_playbook ...' (one test per guard: approval, lock, capacity)
+ *  7. no widened approval        `isGuardedByAnIncomingEdge`            -> 'refuses a cell that an incoming edge guards ...', '... an incoming forEach edge iterates ...'
  */
 type Client = Awaited<ReturnType<GovernanceFixture['connect']>>;
 
@@ -102,6 +103,43 @@ describe('run_playbook_cell runs one cell of an approved playbook', () => {
     expect(runRows()).toEqual([]);
   });
 
+  it('refuses a cell whose retry predicate reads the output of another step', async () => {
+    await boot();
+    const retry = { maxAttempts: 2, backoffMs: 0, until: [{ lhs: 'steps.first.exitCode', op: 'eq', rhs: 0 }] };
+    const playbook = await approvedPlaybook([markCell('first'), markCell('second', { retry })]);
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'second' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_not_runnable');
+    expect(runRows()).toEqual([]);
+  });
+
+  it('runs a cell whose retry predicate reads the output of its own attempt', async () => {
+    await boot();
+    const retry = { maxAttempts: 2, backoffMs: 0, until: [{ lhs: 'steps.second.exitCode', op: 'eq', rhs: 0 }] };
+    const playbook = await approvedPlaybook([markCell('first'), markCell('second', { retry })]);
+
+    const started = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'second' });
+
+    expect(started.isError, started.text).toBe(false);
+    const runId = started.json!.run.id as string;
+    await until(() => runRows().find((run) => run.id === runId)?.status === 'succeeded');
+    expect(stepRows(runId)).toEqual([{ step_id: 'second', status: 'succeeded', error_code: null }]);
+  });
+
+  it('runs a cell whose text only contains the letters "steps." and reads no step', async () => {
+    await boot();
+    const playbook = await approvedPlaybook([markCell('first'), markCell('second', { args: ['steps.txt'] })]);
+
+    const started = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'second' });
+
+    expect(started.isError, started.text).toBe(false);
+    const runId = started.json!.run.id as string;
+    await until(() => runRows().find((run) => run.id === runId)?.status === 'succeeded');
+    expect(existsSync(join(markers, 'steps.txt'))).toBe(true);
+  });
+
   it('refuses a cell the playbook does not hold', async () => {
     await boot();
     const playbook = await approvedPlaybook([markCell('first')]);
@@ -141,21 +179,80 @@ describe('run_playbook_cell runs one cell of an approved playbook', () => {
     expect(activity).not.toContain(String(hostileNumber));
   });
 
-  it('is refused like run_playbook: unapproved, locked against agents, another playbook already running', async () => {
-    await boot({ maxConcurrentRuns: 1 });
+  it('is refused like run_playbook when the playbook is not approved', async () => {
+    await boot();
     const unapproved = await createPlaybook([markCell('first')]);
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: unapproved.id, step_id: 'first' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_unapproved');
+    expect(runRows()).toEqual([]);
+  });
+
+  it('is refused like run_playbook when the playbook is locked against agents', async () => {
+    await boot();
     const locked = await approvedPlaybook([markCell('first')]);
     fixture!.db.prepare('UPDATE playbooks SET agent_locked = 1 WHERE id = ?').run(locked.id);
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: locked.id, step_id: 'first' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_locked');
+    expect(runRows()).toEqual([]);
+  });
+
+  it('is refused like run_playbook when the capacity of runs at once is reached', async () => {
+    await boot({ maxConcurrentRuns: 1 });
     const holding = await approvedPlaybook([{ id: 'hold', kind: 'script', program: 'hold.sh', args: [], env: {} }]);
     const other = await approvedPlaybook([markCell('first')]);
     expect((await tool(lead, 'run_playbook', { playbook: holding.id })).isError).toBe(false);
 
-    const refusals = await Promise.all([unapproved.id, locked.id, other.id].map((id) => tool(lead, 'run_playbook_cell', { playbook: id, step_id: 'first' })));
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: other.id, step_id: 'first' });
 
-    expect(refusals.map((refusal) => refusal.isError)).toEqual([true, true, true]);
-    expect(refusals[0]!.text).toContain('playbook_unapproved');
-    expect(refusals[1]!.text).toContain('playbook_locked');
-    expect(refusals[2]!.text).toContain('playbook_run_busy');
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_run_busy');
     writeFileSync(join(markers, 'go'), '');
+  });
+
+  it('refuses a cell that an incoming edge guards with a condition: running it alone would skip the condition the approval covered', async () => {
+    await boot();
+    const playbook = await approvedPlaybook([
+      markCell('first', { next: [{ to: 'guarded', when: [{ lhs: 'inputs.go', op: 'eq', rhs: 'yes' }] }] }),
+      markCell('guarded'),
+    ], { inputs: [{ name: 'go', type: 'string', required: false }] });
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'guarded' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_not_runnable');
+    expect(runRows()).toEqual([]);
+    expect(existsSync(join(markers, 'guarded'))).toBe(false);
+  });
+
+  it('refuses a cell that an incoming forEach edge iterates: running it alone would skip the iteration the approval covered', async () => {
+    await boot();
+    const playbook = await approvedPlaybook([
+      markCell('first', { next: [{ to: 'each', forEach: 'inputs.names' }] }),
+      markCell('each', { args: ['{{item}}'] }),
+    ], { inputs: [{ name: 'names', type: 'json', required: false }] });
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'each' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_not_runnable');
+    expect(runRows()).toEqual([]);
+  });
+
+  it('keeps running a cell that only plain edges lead to', async () => {
+    await boot();
+    const playbook = await approvedPlaybook([markCell('first', { next: [{ to: 'plain' }] }), markCell('plain')]);
+
+    const started = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'plain' });
+
+    expect(started.isError, started.text).toBe(false);
+    const runId = started.json!.run.id as string;
+    await until(() => runRows().find((run) => run.id === runId)?.status === 'succeeded');
+    expect(existsSync(join(markers, 'plain'))).toBe(true);
   });
 });

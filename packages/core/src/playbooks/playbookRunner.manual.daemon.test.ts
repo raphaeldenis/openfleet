@@ -849,3 +849,47 @@ describe('a refused deletion of a playbook settles no wait of another project', 
     expect(statusOfRun(f, foreignRunId)).toBe('waiting_manual');
   });
 });
+
+describe('an answer whose resume cannot be prepared leaves no run behind', () => {
+  it('puts the run in review, closes the question and frees the place when the journal of an earlier step is unreadable', async () => {
+    const f = await boot({ maxConcurrentRuns: 1 });
+    const playbook = await createApprovedPlaybook(f, [manualCell('first'), manualCell('second')]);
+    const other = await createApprovedPlaybook(f, [manualCell('gate')]);
+    const runId = await runUntilParked(f, playbook.id);
+    expect((await answerWithProof(f, runId, 1)).status).toBe(200);
+    await until(() => (f.db.prepare('SELECT COUNT(*) AS n FROM playbook_manual_requests WHERE run_id = ?').get(runId) as { n: number }).n === 2);
+    await until(() => statusOfRun(f, runId) === 'waiting_manual');
+    f.db.prepare("UPDATE playbook_run_steps SET output_json_masked = '{not json' WHERE run_id = ? AND seq = 1").run(runId);
+
+    const response = await answerWithProof(f, runId, 2);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'playbook_conflict' });
+    expect(statusOfRun(f, runId)).toBe('needs_review');
+    expect(f.db.prepare('SELECT error_code FROM playbook_runs WHERE id = ?').get(runId)).toEqual({ error_code: 'resume_preparation_failed' });
+    expect(f.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ? AND seq = 2').get(runId)).toEqual({ status: 'cancelled' });
+    expect((await startRun(f, other.id)).status).toBe(202);
+  });
+});
+
+describe('the approval of the playbook is checked again when the wait ends while it is checked', () => {
+  it('answers manual_wait_expired and ends the run as failed, instead of announcing a review that the journal does not hold', async () => {
+    const f = await boot();
+    const playbook = await createApprovedPlaybook(f, [manualCell('gate', { timeoutSeconds: 60 }), manualCell('after')]);
+    const runId = await runUntilParked(f, playbook.id);
+    const edited = await f.api(`/api/playbooks/${playbook.id}`, { method: 'PUT', body: JSON.stringify({ expectedRev: playbook.contentRev, policy: { allowedHosts: ['example.test'] } }) });
+    expect(edited.status).toBe(200);
+    const approvals = (f.daemon.playbookRunner as unknown as { deps: { approvals: { assertStillApproved: (playbook: unknown) => unknown } } }).deps.approvals;
+    const verifyTheApproval = approvals.assertStillApproved.bind(approvals);
+    approvals.assertStillApproved = (checked) => {
+      now = START_OF_TEST_TIME + 61 * SECOND;
+      return verifyTheApproval(checked);
+    };
+
+    const response = await answerWithProof(f, runId);
+
+    expect(await response.json()).toMatchObject({ error: 'manual_wait_expired' });
+    expect(f.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ?').get(runId)).toEqual({ status: 'expired' });
+    expect(f.db.prepare('SELECT status, error_code FROM playbook_runs WHERE id = ?').get(runId)).toEqual({ status: 'failed', error_code: 'manual_wait_expired' });
+  });
+});

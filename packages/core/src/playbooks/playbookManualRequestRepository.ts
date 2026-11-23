@@ -88,11 +88,11 @@ export class PlaybookManualRequestRepository {
 
   /**
    * Abandons the pending question of a waiting run on a cancellation: the question is cancelled, the step and the run end failed with `errorCode`, since nothing was done on their behalf.
-   * Returns false, changing nothing, when no question of the run is pending (it was answered, expired or abandoned first).
+   * Returns false, changing nothing, when no question of the run is pending (it was answered, expired or abandoned first), or when its wait is over at `at` (the wait ends at `expiresAt` itself): the end of the wait wins over a cancellation.
    */
   abandonPendingQuestion(input: { runId: string; errorCode: string; at: string }): boolean {
     return inTransaction(this.db, 'playbook_manual_abandon', () => {
-      const pending = this.db.prepare("SELECT seq FROM playbook_manual_requests WHERE run_id = ? AND status = 'pending'").get(input.runId) as { seq: number } | undefined;
+      const pending = this.db.prepare("SELECT seq FROM playbook_manual_requests WHERE run_id = ? AND status = 'pending' AND expires_at > ?").get(input.runId, input.at) as { seq: number } | undefined;
       if (pending === undefined) return false;
       this.db.prepare("UPDATE playbook_manual_requests SET status = 'cancelled', settled_at = ? WHERE run_id = ? AND seq = ? AND status = 'pending'").run(input.at, input.runId, pending.seq);
       this.db.prepare("UPDATE playbook_run_steps SET status = 'failed', error_code = ?, ended_at = ? WHERE run_id = ? AND seq = ? AND status = 'waiting_manual'").run(input.errorCode, input.at, input.runId, pending.seq);

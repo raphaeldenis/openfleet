@@ -93,3 +93,27 @@ describe('the closing of a question that must not go on', () => {
     expect(runs.get('r1')).toMatchObject({ status: 'needs_review', errorCode: 'parked_tree_budget_invalid' });
   });
 });
+
+describe('the abandon of a question on a cancellation', () => {
+  const abandonAt = (at: string) => manual.abandonPendingQuestion({ runId: 'r1', errorCode: 'run_cancelled', at });
+
+  it('abandons a question still open a millisecond before the end, and ends its run as failed', () => {
+    parkARun();
+
+    const justBeforeTheEnd = abandonAt('2026-11-12T10:59:59.999Z');
+
+    expect(justBeforeTheEnd).toBe(true);
+    expect(manual.get('r1', 1)?.status).toBe('cancelled');
+    expect(runs.get('r1')).toMatchObject({ status: 'failed', errorCode: 'run_cancelled' });
+  });
+
+  it('leaves a question whose wait is over at that instant pending: the end of the wait wins over the cancellation', () => {
+    parkARun();
+
+    const atTheEnd = abandonAt('2026-11-12T11:00:00.000Z');
+
+    expect(atTheEnd).toBe(false);
+    expect(manual.get('r1', 1)?.status).toBe('pending');
+    expect(runs.get('r1')).toMatchObject({ status: 'waiting_manual', errorCode: null });
+  });
+});

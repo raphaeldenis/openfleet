@@ -109,12 +109,12 @@ export const TOOL_CATALOG: Readonly<Record<string, ToolCatalogEntry>> = {
   delete_playbook: { domain: 'playbooks', category: 'destructive' },
   delete_playbook_cell: { domain: 'playbooks', category: 'destructive' },
   get_playbook: { domain: 'playbooks', category: 'read_only' },
-  cancel_playbook_run: { domain: 'playbooks', category: 'destructive' }, // stops a run and its children, like close_session
+  cancel_playbook_run: { domain: 'playbooks', category: 'destructive' }, // managers only: stops a run and the whole tree of runs it belongs to, like close_session
   get_playbook_run: { domain: 'playbooks', category: 'read_only' },
   get_playbook_schema: { domain: 'playbooks', category: 'read_only' },
   list_playbook_runs: { domain: 'playbooks', category: 'read_only' },
-  run_playbook: { domain: 'playbooks', category: 'execution_external' }, // starts the approved scripts and http calls of a playbook
-  run_playbook_cell: { domain: 'playbooks', category: 'execution_external' }, // starts one approved script or http call of a playbook
+  run_playbook: { domain: 'playbooks', category: 'execution_external' }, // starts the approved cells of a playbook: scripts, http calls, store reads and writes, child playbooks
+  run_playbook_cell: { domain: 'playbooks', category: 'execution_external' }, // starts one approved cell of a playbook (every attempt of its retry, and its child run for a subPlaybook cell)
   list_playbook_cells: { domain: 'playbooks', category: 'read_only' },
   get_playbook_version: { domain: 'playbooks', category: 'read_only' },
   list_playbook_secret_statuses: { domain: 'playbooks', category: 'read_only' },

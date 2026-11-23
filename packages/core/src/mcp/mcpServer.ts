@@ -69,7 +69,7 @@ import { registerPlaybookTools } from './playbookTools.js';
 import type { PlaybookService } from '../playbooks/playbookService.js';
 import type { PlaybookRunner } from '../playbooks/playbookRunner.js';
 import type { PlaybookRunRepository } from '../playbooks/playbookRunRepository.js';
-import { registerPlaybookRunTools } from './playbookRunTools.js';
+import { MANAGER_ONLY_PLAYBOOK_RUN_TOOL_NAMES, isManagerSession, registerPlaybookRunTools } from './playbookRunTools.js';
 import { registerWorktreeTools } from './worktreeTools.js';
 import { WorktreeService } from '../worktrees/worktreeService.js';
 
@@ -82,6 +82,15 @@ function registeringOnly(server: McpServer, allowedToolNames: ReadonlySet<string
     allowedToolNames.has(name) ? (server.registerTool as (...args: unknown[]) => unknown).call(server, name, ...rest) : undefined;
   return new Proxy(server, {
     get: (target, property) => (property === 'registerTool' ? registerAllowedTool : Reflect.get(target, property, target)),
+  });
+}
+
+/** A view of the server that skips the registration of the tools named: they are not published to the caller. */
+function registeringWithout(server: McpServer, withheldToolNames: ReadonlySet<string>): McpServer {
+  const registerUnlessWithheld = (name: string, ...rest: unknown[]) =>
+    withheldToolNames.has(name) ? undefined : (server.registerTool as (...args: unknown[]) => unknown).call(server, name, ...rest);
+  return new Proxy(server, {
+    get: (target, property) => (property === 'registerTool' ? registerUnlessWithheld : Reflect.get(target, property, target)),
   });
 }
 
@@ -117,7 +126,10 @@ export function createMcpHandler(deps: { triggers?: TriggerService; triggerFires
     if (deps.secrets) registerSecretTools(toolServer, { secrets: deps.secrets });
     if (deps.triggers && deps.triggerFires) registerTriggerTools(toolServer, { triggers: deps.triggers, sessions: deps.sessions, fires: deps.triggerFires, caller });
     if (deps.playbooks) registerPlaybookTools(toolServer, { playbooks: deps.playbooks, caller });
-    if (deps.playbooks && deps.playbookRunning) registerPlaybookRunTools(toolServer, { playbooks: deps.playbooks, ...deps.playbookRunning, caller });
+    if (deps.playbooks && deps.playbookRunning) {
+      const playbookRunToolServer = isManagerSession(caller, deps.managers) ? toolServer : registeringWithout(toolServer, MANAGER_ONLY_PLAYBOOK_RUN_TOOL_NAMES);
+      registerPlaybookRunTools(playbookRunToolServer, { playbooks: deps.playbooks, ...deps.playbookRunning, managers: deps.managers, caller });
+    }
     if (deps.integrations) registerIntegrationTools(toolServer, { integrations: deps.integrations, caller });
     if (deps.integrations && deps.integrationViews) registerIntegrationViewTools(toolServer, { integrations: deps.integrations, views: deps.integrationViews, caller });
     registerManagerLinkTools(toolServer, { managers: deps.managers, caller });

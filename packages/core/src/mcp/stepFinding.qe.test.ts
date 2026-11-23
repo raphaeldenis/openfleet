@@ -10,6 +10,7 @@ import { startDaemon, type Daemon } from '../daemon.js';
 import { makeRepo } from '../git/testRepo.js';
 import { defaultCommandPolicySettings } from '../policy/commandPolicySettings.js';
 import { ProjectRepository } from '../projects/projectRepository.js';
+import { MANAGER_ONLY_PLAYBOOK_RUN_TOOL_NAMES } from './playbookRunTools.js';
 import { childEnvironmentForGit } from '../process/childEnvironment.js';
 import { createTempDirTracker } from '../tempDirTracker.js';
 
@@ -395,7 +396,8 @@ describe('QE — who may write a step finding', () => {
     const qeTools = (await qe.client.listTools()).tools.map((tool) => tool.name).sort();
     const leadTools = (await leadClient.listTools()).tools.map((tool) => tool.name).sort();
 
-    expect(qeTools).toEqual(leadTools);
+    const leadToolsOpenToAnySession = leadTools.filter((name) => !MANAGER_ONLY_PLAYBOOK_RUN_TOOL_NAMES.has(name));
+    expect(qeTools).toEqual(leadToolsOpenToAnySession);
     expect(qeTools).toContain('report_step_finding');
   });
 });

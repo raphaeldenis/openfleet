@@ -1,4 +1,5 @@
-import { BoundedRunInputsSchema, MAX_NAME_CHARS, OpenFleetError, type Session } from '@openfleet/shared';
+import { BoundedRunInputsSchema, MANAGER_ROLE, MAX_NAME_CHARS, OpenFleetError, type Session } from '@openfleet/shared';
+import type { ManagerService } from '../managers/managerService.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { PlaybookRunRecord, PlaybookRunRepository, PlaybookRunStepRecord } from '../playbooks/playbookRunRepository.js';
@@ -45,15 +46,22 @@ export interface PlaybookRunToolDeps {
   playbooks: Pick<PlaybookService, 'getById' | 'getInProject'>;
   runner: Pick<PlaybookRunner, 'start' | 'startCell' | 'cancelRun'>;
   runs: Pick<PlaybookRunRepository, 'get' | 'stepsOf' | 'listPageOfProject'>;
+  managers: Pick<ManagerService, 'get'>;
   caller: Session;
 }
 
+/** The tools of the runs that only a manager is offered, and that refuse any other caller when invoked. */
+export const MANAGER_ONLY_PLAYBOOK_RUN_TOOL_NAMES: ReadonlySet<string> = new Set(['cancel_playbook_run']);
+
+/** A manager is a session with the manager role that the managers registry knows. */
+export const isManagerSession = (caller: Session, managers: Pick<ManagerService, 'get'>): boolean => caller.role === MANAGER_ROLE && managers.get(caller.id) !== undefined;
+
 /**
- * The agent side of the runs of playbooks: start an approved playbook of the project of the caller, read a run of that project, list its runs.
- * No tool approves, cancels or answers a manual step: a question put to a human is answered by a human, through the desktop app.
+ * The agent side of the runs of playbooks: start an approved playbook of the project of the caller, read a run of that project, list its runs, and, for a manager only, cancel a run.
+ * No tool approves or answers a manual step: a question put to a human is answered by a human, through the desktop app.
  * Every start goes through the runner, which checks the approval, the project, the capacity and the revision again once the secrets are read.
  */
-export function registerPlaybookRunTools(server: McpServer, { playbooks, runner, runs, caller }: PlaybookRunToolDeps): void {
+export function registerPlaybookRunTools(server: McpServer, { playbooks, runner, runs, managers, caller }: PlaybookRunToolDeps): void {
   const projectIdOfCaller = (): string => {
     if (caller.projectId === undefined) throw new OpenFleetError('project_not_found', 'your session belongs to no project.');
     return caller.projectId;
@@ -95,9 +103,10 @@ export function registerPlaybookRunTools(server: McpServer, { playbooks, runner,
   });
 
   server.registerTool('cancel_playbook_run', {
-    description: 'Cancels a run of your project that runs or waits for a human, and every run it calls: they end "failed" with the code run_cancelled, and their place among the runs at once is free. A run that has already ended is refused (playbook_conflict). This is not an answer to a manual step: no tool answers a question put to a human.',
+    description: 'Managers only. Cancels a run of your project that runs or waits for a human, and every run it calls: they end "failed" with the code run_cancelled (the error_code field of the run, not an error of the protocol), and their place among the runs at once is free. A run that has already ended is refused (playbook_conflict). Two cancels at once both succeed and answer the same ended run. A run whose wait for a human is already over answers the end of that wait. This is not an answer to a manual step: no tool answers a question put to a human.',
     inputSchema: { run_id: z.string().min(1).max(MAX_ID_CHARS).describe('The run id (id in run_playbook or list_playbook_runs)') },
   }, async ({ run_id }) => {
+    if (!isManagerSession(caller, managers)) throw new OpenFleetError('not_a_manager', 'cancelling a run is for managers.', { hint: 'ask your manager to cancel the run.' });
     const run = runOfProject(run_id);
     const cancelled = await runner.cancelRun(run.id);
     return ok({ run: runSummaryToolView(cancelled) });
