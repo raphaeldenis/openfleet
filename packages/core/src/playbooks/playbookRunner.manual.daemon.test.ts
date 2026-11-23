@@ -723,4 +723,129 @@ describe('a secret that cannot be masked at the answer refuses the answer withou
     await eventually(f, runId, 'succeeded');
     expect(table.rows()).toHaveLength(1);
   });
+
+  describe('the refusals of the answer keep their order when the secret turns out too short after a slow read', () => {
+    const answeringWithASecretThatBecomesUnmaskable = async (manualExtra: Record<string, unknown> = {}) => {
+      const f = await boot();
+      const { playbook } = await playbookWithASecret(f, `dummy-canary-built-at-runtime-${randomUUID()}`, manualExtra);
+      const runId = await runUntilParked(f, playbook.id, { who: 'v2' });
+      const held = holdSecretReads();
+      const answering = answerWithProof(f, runId);
+      await held.reached(1);
+      await secretStore.set({ kind: 'playbook', id: playbook.id }, SECRET_NAME, UNMASKABLE_VALUE);
+      return { f, playbook, runId, held, answering };
+    };
+
+    it('answers manual_wait_expired, and ends the run, when the wait ended while the secret was read', async () => {
+      const { f, runId, held, answering } = await answeringWithASecretThatBecomesUnmaskable({ timeoutSeconds: 60 });
+
+      now = START_OF_TEST_TIME + 61 * SECOND;
+      held.release();
+      const response = await answering;
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: 'manual_wait_expired' });
+      expect(await viewOfRun(f, runId)).toMatchObject({ status: 'failed', errorCode: 'manual_wait_expired' });
+    });
+
+    it('answers playbook_unapproved, and puts the run in review, when the playbook was edited while the secret was read', async () => {
+      const { f, playbook, runId, held, answering } = await answeringWithASecretThatBecomesUnmaskable();
+
+      await f.api(`/api/playbooks/${playbook.id}`, { method: 'PUT', body: JSON.stringify({ expectedRev: playbook.contentRev, policy: { allowedHosts: ['example.test'] } }) });
+      held.release();
+      const response = await answering;
+
+      expect(await response.json()).toMatchObject({ error: 'playbook_unapproved' });
+      expect(await viewOfRun(f, runId)).toMatchObject({ status: 'needs_review', errorCode: 'playbook_changed_while_waiting' });
+    });
+
+    it('answers manual_already_answered when another decision closed the question while the secret was read', async () => {
+      const { f, runId, held, answering } = await answeringWithASecretThatBecomesUnmaskable();
+
+      expect((await answerWithProof(f, runId, 1, 'reject')).status).toBe(200);
+      held.release();
+      const response = await answering;
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: 'manual_already_answered' });
+    });
+  });
+});
+
+describe('the tree budget read back from an unreadable or unexpected journal', () => {
+  const PARKED_STEP_SEQ = 1;
+  const parkedWithRawOutput = async (rawOutput: string | null) => {
+    const f = await boot();
+    const table = await makeTable(f);
+    const playbook = await createApprovedPlaybook(f, [manualCell('gate'), writeCell('after', table.storeId, table.noteId, 'shipped')]);
+    const runId = await runUntilParked(f, playbook.id);
+    f.db.prepare('UPDATE playbook_run_steps SET output_json_masked = ? WHERE run_id = ? AND seq = ?').run(rawOutput, runId, PARKED_STEP_SEQ);
+    return { f, runId, table };
+  };
+
+  it('rejects the question even when the journal of the parked step cannot be read', async () => {
+    const { f, runId } = await parkedWithRawOutput('{not json');
+
+    const response = await answerWithProof(f, runId, PARKED_STEP_SEQ, 'reject');
+
+    expect(response.status).toBe(200);
+    expect(await viewOfRun(f, runId)).toMatchObject({ status: 'failed', errorCode: 'manual_rejected' });
+  });
+
+  it('puts the run in review, and closes the question, when an approval finds a journal that cannot be read', async () => {
+    const { f, runId, table } = await parkedWithRawOutput('{not json');
+
+    const response = await answerWithProof(f, runId);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'manual_already_answered' });
+    expect(f.db.prepare('SELECT status, error_code FROM playbook_runs WHERE id = ?').get(runId)).toEqual({ status: 'needs_review', error_code: 'parked_tree_budget_invalid' });
+    expect(f.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ?').get(runId)).toEqual({ status: 'cancelled' });
+    expect(table.rows()).toHaveLength(0);
+  });
+
+  it.each([['an array', '[]'], ['a text', '"budget"'], ['a number', '7'], ['a boolean', 'true']])('puts the run in review when the journal of the parked step is %s', async (_what, rawOutput) => {
+    const { f, runId, table } = await parkedWithRawOutput(rawOutput);
+
+    const response = await answerWithProof(f, runId);
+
+    expect(response.ok).toBe(false);
+    expect(await viewOfRun(f, runId)).toMatchObject({ status: 'needs_review', errorCode: 'parked_tree_budget_invalid' });
+    expect(table.rows()).toHaveLength(0);
+  });
+
+  it('still resumes a run parked before the budget was journaled: no output at all', async () => {
+    const { f, runId } = await parkedWithRawOutput(null);
+
+    expect((await answerWithProof(f, runId)).status).toBe(200);
+  });
+});
+
+describe('a refused deletion of a playbook settles no wait of another project', () => {
+  const parkedInAnotherProjectAndOverdue = async () => {
+    const f = await boot();
+    const foreign = await createApprovedPlaybook(f, [manualCell('gate', { timeoutSeconds: 60 })], { projectId: OTHER_PROJECT_ID });
+    const foreignRunId = await runUntilParked(f, foreign.id);
+    const own = await createApprovedPlaybook(f, [manualCell('gate')]);
+    now = START_OF_TEST_TIME + 61 * SECOND;
+    return { f, foreignRunId, own };
+  };
+
+  it('leaves the overdue wait of another project as it is when the revision of the deletion is stale', async () => {
+    const { f, foreignRunId, own } = await parkedInAnotherProjectAndOverdue();
+
+    const refused = await f.api(`/api/playbooks/${own.id}?expectedRev=${own.contentRev + 5}`, { method: 'DELETE' });
+
+    expect(refused.status).toBe(409);
+    expect(statusOfRun(f, foreignRunId)).toBe('waiting_manual');
+  });
+
+  it('leaves the overdue wait of another project as it is when the deletion succeeds', async () => {
+    const { f, foreignRunId, own } = await parkedInAnotherProjectAndOverdue();
+
+    const deleted = await f.api(`/api/playbooks/${own.id}?expectedRev=${own.contentRev}`, { method: 'DELETE' });
+
+    expect(deleted.status).toBe(200);
+    expect(statusOfRun(f, foreignRunId)).toBe('waiting_manual');
+  });
 });

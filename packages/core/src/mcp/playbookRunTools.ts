@@ -43,7 +43,7 @@ const runSummaryToolView = (run: PlaybookRunRecord) => ({
 
 export interface PlaybookRunToolDeps {
   playbooks: Pick<PlaybookService, 'getById' | 'getInProject'>;
-  runner: Pick<PlaybookRunner, 'start'>;
+  runner: Pick<PlaybookRunner, 'start' | 'startCell' | 'cancelRun'>;
   runs: Pick<PlaybookRunRepository, 'get' | 'stepsOf' | 'listPageOfProject'>;
   caller: Session;
 }
@@ -78,6 +78,29 @@ export function registerPlaybookRunTools(server: McpServer, { playbooks, runner,
     if (playbook.agentLocked) throw new OpenFleetError('playbook_locked', 'this playbook is locked against agents: a human starts it.');
     const run = await runner.start({ playbookId: playbook.id, projectId: playbook.projectId, inputs: inputs ?? {}, actorKind: 'admin', launchedBy: { kind: 'agent', ref: caller.id } });
     return ok({ run: { id: run.id, playbook_id: run.playbookId, status: run.status, started_at: run.startedAt } });
+  });
+
+  server.registerTool('run_playbook_cell', {
+    description: 'Runs ONE cell of an APPROVED playbook of your project as a run of its own: the cells before and after it never start. The same checks as run_playbook apply (approval, lock against agents, project, capacity, inputs untrusted: see run_playbook). A playbook that holds a manual cell is refused, because the cell could stand behind a question to a human that this run would skip (playbook_not_runnable); so is a cell that reads the output of another step (steps.*), since no step ran. An unknown step_id is playbook_cell_not_found.',
+    inputSchema: {
+      playbook: z.string().min(1).max(MAX_NAME_CHARS).describe('Playbook id (from list_playbooks) or its exact name'),
+      step_id: z.string().min(1).max(MAX_ID_CHARS).describe('The id of the cell to run (from list_playbook_cells)'),
+      inputs: BoundedRunInputsSchema.optional().describe('The values of the inputs the playbook declares; plain JSON, small'),
+    },
+  }, async ({ playbook: reference, step_id, inputs }) => {
+    const playbook = playbooks.getInProject(projectIdOfCaller(), reference);
+    if (playbook.agentLocked) throw new OpenFleetError('playbook_locked', 'this playbook is locked against agents: a human starts it.');
+    const run = await runner.startCell({ playbookId: playbook.id, cellId: step_id, projectId: playbook.projectId, inputs: inputs ?? {}, actorKind: 'admin', launchedBy: { kind: 'agent', ref: caller.id } });
+    return ok({ run: { id: run.id, playbook_id: run.playbookId, status: run.status, started_at: run.startedAt } });
+  });
+
+  server.registerTool('cancel_playbook_run', {
+    description: 'Cancels a run of your project that runs or waits for a human, and every run it calls: they end "failed" with the code run_cancelled, and their place among the runs at once is free. A run that has already ended is refused (playbook_conflict). This is not an answer to a manual step: no tool answers a question put to a human.',
+    inputSchema: { run_id: z.string().min(1).max(MAX_ID_CHARS).describe('The run id (id in run_playbook or list_playbook_runs)') },
+  }, async ({ run_id }) => {
+    const run = runOfProject(run_id);
+    const cancelled = await runner.cancelRun(run.id);
+    return ok({ run: runSummaryToolView(cancelled) });
   });
 
   server.registerTool('get_playbook_run', {

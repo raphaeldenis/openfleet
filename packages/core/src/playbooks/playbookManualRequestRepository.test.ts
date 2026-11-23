@@ -60,4 +60,36 @@ describe('the question of a manual step takes one answer', () => {
     expect(manual.expireOverdue('2026-11-12T10:59:59.999Z')).toEqual([]);
     expect(manual.expireOverdue('2026-11-12T11:00:00.000Z')).toEqual([{ runId: 'r1', playbookId: 'pb1' }]);
   });
+
+  it('ends only the waits of the project named, and leaves the overdue waits of the others pending', () => {
+    parkARun();
+
+    expect(manual.expireOverdue('2026-11-12T11:00:00.000Z', { projectId: 'p-other' })).toEqual([]);
+    expect(manual.get('r1', 1)?.status).toBe('pending');
+    expect(manual.expireOverdue('2026-11-12T11:00:00.000Z', { projectId: 'p1' })).toEqual([{ runId: 'r1', playbookId: 'pb1' }]);
+  });
+});
+
+describe('the closing of a question that must not go on', () => {
+  const closeAt = (at: string) => manual.cancel({ runId: 'r1', seq: 1, errorCode: 'parked_tree_budget_invalid', at });
+
+  it('does not close a question whose wait ends at that instant or before: the end of the wait wins and nothing changes', () => {
+    parkARun();
+
+    const atTheEnd = closeAt('2026-11-12T11:00:00.000Z');
+
+    expect(atTheEnd).toBe(false);
+    expect(manual.get('r1', 1)?.status).toBe('pending');
+    expect(runs.get('r1')).toMatchObject({ status: 'waiting_manual', errorCode: null });
+  });
+
+  it('closes a question still open a millisecond before the end, and puts its run in review', () => {
+    parkARun();
+
+    const justBeforeTheEnd = closeAt('2026-11-12T10:59:59.999Z');
+
+    expect(justBeforeTheEnd).toBe(true);
+    expect(manual.get('r1', 1)?.status).toBe('cancelled');
+    expect(runs.get('r1')).toMatchObject({ status: 'needs_review', errorCode: 'parked_tree_budget_invalid' });
+  });
 });

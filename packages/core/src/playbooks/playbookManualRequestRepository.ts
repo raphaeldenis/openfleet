@@ -72,21 +72,44 @@ export class PlaybookManualRequestRepository {
     });
   }
 
-  /** Closes the question of a run that must not go on, and puts its step and run in review with `errorCode`: a person examines why the human answer could not be applied. */
-  cancel(input: { runId: string; seq: number; errorCode: string; at: string }): void {
-    inTransaction(this.db, 'playbook_manual_cancel', () => {
-      const closed = this.db.prepare("UPDATE playbook_manual_requests SET status = 'cancelled', settled_at = ? WHERE run_id = ? AND seq = ? AND status = 'pending'").run(input.at, input.runId, input.seq);
-      if (Number(closed.changes) !== 1) return;
+  /**
+   * Closes the question of a run that must not go on, and puts its step and run in review with `errorCode`: a person examines why the human answer could not be applied.
+   * Returns false, changing nothing, when the question is not pending or its wait is over at `at` (the wait ends at `expiresAt` itself): the end of the wait wins over a cancellation.
+   */
+  cancel(input: { runId: string; seq: number; errorCode: string; at: string }): boolean {
+    return inTransaction(this.db, 'playbook_manual_cancel', () => {
+      const closed = this.db.prepare("UPDATE playbook_manual_requests SET status = 'cancelled', settled_at = ? WHERE run_id = ? AND seq = ? AND status = 'pending' AND expires_at > ?").run(input.at, input.runId, input.seq, input.at);
+      if (Number(closed.changes) !== 1) return false;
       this.db.prepare("UPDATE playbook_run_steps SET status = 'needs_review', error_code = ?, ended_at = ? WHERE run_id = ? AND seq = ? AND status = 'waiting_manual'").run(input.errorCode, input.at, input.runId, input.seq);
       this.db.prepare("UPDATE playbook_runs SET status = 'needs_review', error_code = ?, ended_at = ? WHERE id = ? AND status = 'waiting_manual'").run(input.errorCode, input.at, input.runId);
+      return true;
     });
   }
 
-  /** Ends every wait whose time is over: the question expires and the step and run fail, since nothing was done on their behalf. Returns the runs it ended. */
-  expireOverdue(now: string): { runId: string; playbookId: string }[] {
+  /**
+   * Abandons the pending question of a waiting run on a cancellation: the question is cancelled, the step and the run end failed with `errorCode`, since nothing was done on their behalf.
+   * Returns false, changing nothing, when no question of the run is pending (it was answered, expired or abandoned first).
+   */
+  abandonPendingQuestion(input: { runId: string; errorCode: string; at: string }): boolean {
+    return inTransaction(this.db, 'playbook_manual_abandon', () => {
+      const pending = this.db.prepare("SELECT seq FROM playbook_manual_requests WHERE run_id = ? AND status = 'pending'").get(input.runId) as { seq: number } | undefined;
+      if (pending === undefined) return false;
+      this.db.prepare("UPDATE playbook_manual_requests SET status = 'cancelled', settled_at = ? WHERE run_id = ? AND seq = ? AND status = 'pending'").run(input.at, input.runId, pending.seq);
+      this.db.prepare("UPDATE playbook_run_steps SET status = 'failed', error_code = ?, ended_at = ? WHERE run_id = ? AND seq = ? AND status = 'waiting_manual'").run(input.errorCode, input.at, input.runId, pending.seq);
+      this.db.prepare("UPDATE playbook_runs SET status = 'failed', error_code = ?, ended_at = ? WHERE id = ? AND status = 'waiting_manual'").run(input.errorCode, input.at, input.runId);
+      return true;
+    });
+  }
+
+  /**
+   * Ends every wait whose time is over: the question expires and the step and run fail, since nothing was done on their behalf. Returns the runs it ended.
+   * With `projectId`, only the waits of the playbooks of that project end.
+   */
+  expireOverdue(now: string, { projectId }: { projectId?: string } = {}): { runId: string; playbookId: string }[] {
     return inTransaction(this.db, 'playbook_manual_expire', () => {
+      const isBoundToAProject = projectId !== undefined;
       const overdue = this.db.prepare(`SELECT m.run_id AS run_id, m.seq AS seq, r.playbook_id AS playbook_id FROM playbook_manual_requests m JOIN playbook_runs r ON r.id = m.run_id
-        WHERE m.status = 'pending' AND m.expires_at <= ?`).all(now) as { run_id: string; seq: number; playbook_id: string }[];
+        JOIN playbooks p ON p.id = r.playbook_id WHERE m.status = 'pending' AND m.expires_at <= ?${isBoundToAProject ? ' AND p.project_id = ?' : ''}`).all(now, ...(isBoundToAProject ? [projectId] : [])) as { run_id: string; seq: number; playbook_id: string }[];
       for (const { run_id: runId, seq } of overdue) {
         this.db.prepare("UPDATE playbook_manual_requests SET status = 'expired', settled_at = ? WHERE run_id = ? AND seq = ? AND status = 'pending'").run(now, runId, seq);
         this.db.prepare("UPDATE playbook_run_steps SET status = 'failed', error_code = ?, ended_at = ? WHERE run_id = ? AND seq = ? AND status = 'waiting_manual'").run(MANUAL_WAIT_EXPIRED, now, runId, seq);
