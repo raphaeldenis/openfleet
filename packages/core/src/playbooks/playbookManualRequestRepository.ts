@@ -18,6 +18,9 @@ interface RequestRow { run_id: string; seq: number; prompt_masked: string; statu
 export const MANUAL_REJECTED = 'manual_rejected';
 export const MANUAL_WAIT_EXPIRED = 'manual_wait_expired';
 
+/** The output of a manual step once a human answered: what the journal keeps and what the cells after it read as `steps.<cell>`. */
+export const manualAnswerOutput = (decision: 'approved' | 'rejected'): { decision: 'approved' | 'rejected' } => ({ decision });
+
 const toRecord = (row: RequestRow): ManualRequestRecord => ({
   runId: row.run_id, seq: row.seq, promptMasked: row.prompt_masked, status: row.status, decision: row.decision, requestedAt: row.requested_at, expiresAt: row.expires_at,
 });
@@ -60,7 +63,7 @@ export class PlaybookManualRequestRepository {
         .run(input.decision, input.answeredAt, input.runId, input.seq, input.answeredAt);
       const wasPending = Number(claimed.changes) === 1;
       if (!wasPending) return false;
-      const output = JSON.stringify({ decision: input.decision });
+      const output = JSON.stringify(manualAnswerOutput(input.decision));
       if (input.decision === 'approved') {
         this.db.prepare("UPDATE playbook_run_steps SET status = 'succeeded', output_json_masked = ?, ended_at = ? WHERE run_id = ? AND seq = ? AND status = 'waiting_manual'").run(output, input.answeredAt, input.runId, input.seq);
         this.db.prepare("UPDATE playbook_runs SET status = 'running' WHERE id = ? AND status = 'waiting_manual'").run(input.runId);

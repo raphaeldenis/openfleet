@@ -17,7 +17,7 @@ import { sendHttpStep, type HttpStepNetwork } from './httpStepRequest.js';
 import { resolveHttpRequest } from './httpStepTemplates.js';
 import type { ManualResumeProof } from './manualResumeProof.js';
 import type { PlaybookApprovals } from './playbookApprovals.js';
-import type { PlaybookManualRequestRepository } from './playbookManualRequestRepository.js';
+import { manualAnswerOutput, type PlaybookManualRequestRepository } from './playbookManualRequestRepository.js';
 import type { PlaybookRecord } from './playbookRepository.js';
 import { secretNamesReferencedBy, wireErrorOf } from './playbookRules.js';
 import type { PlaybookRunRecord, PlaybookRunRepository, SettledStatus } from './playbookRunRepository.js';
@@ -114,6 +114,8 @@ interface LiveTree {
   /** Ends when the cancellation or the stop of the daemon fires. */
   signal: AbortSignal;
   runIds: Set<string>;
+  /** What stopped the tree first: the cause is frozen, a later cancel or stop of the daemon never changes the verdict. */
+  firstStopCause?: 'cancel' | 'shutdown';
   /** Each run of the tree as it was when it settled, before the retention of finished runs could purge it. */
   settledRuns: Map<string, PlaybookRunRecord>;
   execution?: Promise<void>;
@@ -301,6 +303,7 @@ export class PlaybookRunner {
 
   /** Kills the scripts in flight, journals their steps as needs_review, and refuses any new run. */
   async stop(): Promise<void> {
+    for (const liveTree of this.liveTrees.values()) liveTree.firstStopCause ??= 'shutdown';
     this.shutdown.abort();
     await Promise.allSettled([...this.inFlight]);
   }
@@ -388,6 +391,9 @@ export class PlaybookRunner {
     const liveTree = this.liveTrees.get(runId);
     const isRunningHere = run.status === 'running' && liveTree !== undefined;
     if (!isRunningHere) throw runAlreadyEnded();
+    const hasShutdownWon = liveTree.firstStopCause === 'shutdown';
+    if (hasShutdownWon) throw new OpenFleetError('playbook_conflict', 'the daemon is stopping: the run is stopped by it, not cancelled.', { hint: 'Open the run to see its outcome.' });
+    liveTree.firstStopCause ??= 'cancel';
     liveTree.cancel.abort();
     await liveTree.execution;
     return liveTree.settledRuns.get(runId) ?? runs.get(runId)!;
@@ -395,7 +401,7 @@ export class PlaybookRunner {
 
   /** The verdict of a run that was stopped: the cancellation of its tree, or the stop of the daemon, which leaves the effects of the step to a review. */
   private interruptionOf(context: RunContext): Verdict {
-    const isCancelled = context.liveTree.cancel.signal.aborted && !this.shutdown.signal.aborted;
+    const isCancelled = context.liveTree.firstStopCause === 'cancel';
     return isCancelled ? { status: 'failed', errorCode: RUN_CANCELLED } : { status: 'needs_review', errorCode: INTERRUPTED };
   }
 
@@ -545,7 +551,7 @@ export class PlaybookRunner {
    * and finished without reading the signal again. A cancellation admitted after the settlement finds the run ended and is refused, so a run whose steps and settlement came first keeps its verdict.
    */
   private verdictAtTerminalSettle(context: RunContext, walkVerdict: Verdict): Verdict {
-    const isCancelledBeforeTheSettle = context.liveTree.cancel.signal.aborted && !this.shutdown.signal.aborted;
+    const isCancelledBeforeTheSettle = context.liveTree.firstStopCause === 'cancel';
     return isCancelledBeforeTheSettle ?{ status: 'failed', errorCode: RUN_CANCELLED } : walkVerdict;
   }
 
@@ -912,7 +918,7 @@ export class PlaybookRunner {
   }
 
   /**
-   * Rebuilds, from the journal, the point a run resumes from, BEFORE the answer flips the run to running. A journal that cannot be read or does not hold the parked step closes the question and puts the run in review
+   * Rebuilds, from the journal, the point a run resumes from, BEFORE the answer flips the run to running. The outputs of the steps hold the exact output the approval writes for the parked step, so the edge is chosen on the context the walk has after the answer. A journal that cannot be read or does not hold the parked step closes the question and puts the run in review
    * with the journal-only code `resume_preparation_failed`, so no running run is left without a walk, holding a place among the runs at once, which no cancellation could reach.
    */
   private prepareResumeOrCloseTheQuestion({ run, playbook, seq }: { run: PlaybookRunRecord; playbook: PlaybookRecord; seq: number }): ResumePoint {
@@ -925,6 +931,7 @@ export class PlaybookRunner {
       const parkedCell = cells.find((cell) => cell.id === parkedStep.stepId);
       const isParkedOnAManualCell = parkedCell !== undefined && isManualCell(parkedCell);
       if (!isParkedOnAManualCell) throw new Error('the parked step does not name a manual cell of the flow');
+      steps[parkedStep.stepId] = manualAnswerOutput('approved');
       const from = this.transitionAfter(parkedCell, cells, { inputs: run.inputs, steps });
       return { from, executed: seq, steps };
     } catch {

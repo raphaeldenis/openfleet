@@ -139,6 +139,56 @@ describe('a manual cell parks the run until a human answers', () => {
     expect(table.rows().map((row) => row.data[table.noteId])).toEqual(['shipped']);
   });
 
+  it('chooses the edge on the decision of the approval being answered: the branch on `approved` runs, the fallback does not', async () => {
+    const f = await boot();
+    const table = await makeTable(f);
+    const playbook = await createApprovedPlaybook(f, [
+      manualCell('gate', { next: [{ to: 'ship', when: [{ lhs: 'steps.gate.decision', op: 'eq', rhs: 'approved' }] }, { to: 'fallback' }] }),
+      { ...writeCell('ship', table.storeId, table.noteId, 'shipped'), next: [] },
+      writeCell('fallback', table.storeId, table.noteId, 'fallback'),
+    ]);
+    const runId = await runUntilParked(f, playbook.id);
+
+    const response = await answerWithProof(f, runId);
+
+    expect(response.status).toBe(200);
+    const run = await eventually(f, runId, 'succeeded');
+    expect(run.steps.map((step) => [step.stepId, step.status])).toEqual([['gate', 'succeeded'], ['ship', 'succeeded']]);
+    expect(table.rows().map((row) => row.data[table.noteId])).toEqual(['shipped']);
+  });
+
+  it('lets the cell after the approval read the decision of the approval being answered', async () => {
+    const f = await boot();
+    const table = await makeTable(f);
+    const playbook = await createApprovedPlaybook(f, [manualCell('gate'), writeCell('after', table.storeId, table.noteId, 'decision={{steps.gate.decision}}')]);
+    const runId = await runUntilParked(f, playbook.id);
+
+    await answerWithProof(f, runId);
+
+    const run = await eventually(f, runId, 'succeeded');
+    expect(run.steps.map((step) => [step.stepId, step.status])).toEqual([['gate', 'succeeded'], ['after', 'succeeded']]);
+    expect(table.rows().map((row) => row.data[table.noteId])).toEqual(['decision=approved']);
+  });
+
+  it('ends the run failed when the human rejects a gate that has a branch on `approved`, and runs neither branch', async () => {
+    const f = await boot();
+    const table = await makeTable(f);
+    const playbook = await createApprovedPlaybook(f, [
+      manualCell('gate', { next: [{ to: 'ship', when: [{ lhs: 'steps.gate.decision', op: 'eq', rhs: 'approved' }] }, { to: 'fallback' }] }),
+      { ...writeCell('ship', table.storeId, table.noteId, 'shipped'), next: [] },
+      writeCell('fallback', table.storeId, table.noteId, 'fallback'),
+    ]);
+    const runId = await runUntilParked(f, playbook.id);
+
+    const response = await answerWithProof(f, runId, 1, 'reject');
+
+    expect(response.status).toBe(200);
+    const run = await viewOfRun(f, runId);
+    expect(run.status).toBe('failed');
+    expect(run.steps.map((step) => [step.stepId, step.status])).toEqual([['gate', 'failed']]);
+    expect(table.rows()).toHaveLength(0);
+  });
+
   it('ends the run failed when the human rejects, and goes no further', async () => {
     const f = await boot();
     const table = await makeTable(f);

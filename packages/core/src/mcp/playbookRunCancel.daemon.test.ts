@@ -394,6 +394,104 @@ describe('what a cancellation does when two things happen at once', () => {
     }
   });
 
+  it('keeps the verdict of the cancellation when the daemon stops while the script is still terminating', async () => {
+    await boot();
+    writeScript('hold.sh', `touch ${join(markers, 'started')}; while [ ! -e ${join(markers, 'go')} ]; do sleep 0.05; done`);
+    const holding = await approvedPlaybook([{ id: 'hold', kind: 'script', program: 'hold.sh', args: [], env: {} }]);
+    const runId = await startedRunId(holding.id);
+    await until(() => existsSync(join(markers, 'started')));
+    const { playbookRunner } = fixture!.daemon;
+
+    const cancelling = playbookRunner.cancelRun(runId);
+    const stopping = playbookRunner.stop();
+    const cancelledRun = await cancelling;
+    await stopping;
+
+    expect(cancelledRun).toMatchObject({ id: runId, status: 'failed', errorCode: 'run_cancelled' });
+    expect(runRow(runId)).toMatchObject(CANCELLED);
+    expect(stepRows(runId)).toEqual([{ step_id: 'hold', status: 'failed', error_code: 'run_cancelled' }]);
+  });
+
+  it('refuses a cancel sent after the daemon began to stop, and keeps the verdict of the stop', async () => {
+    await boot();
+    writeScript('hold.sh', `touch ${join(markers, 'started')}; while [ ! -e ${join(markers, 'go')} ]; do sleep 0.05; done`);
+    const holding = await approvedPlaybook([{ id: 'hold', kind: 'script', program: 'hold.sh', args: [], env: {} }]);
+    const runId = await startedRunId(holding.id);
+    await until(() => existsSync(join(markers, 'started')));
+    const { playbookRunner } = fixture!.daemon;
+
+    const stopping = playbookRunner.stop();
+    const refusal = await playbookRunner.cancelRun(runId).then(() => undefined, (error: unknown) => error);
+    await stopping;
+
+    expect(refusal).toMatchObject({ code: 'playbook_conflict' });
+    expect(runRow(runId)).toMatchObject({ status: 'needs_review', error_code: 'interrupted' });
+    expect(stepRows(runId)).toEqual([{ step_id: 'hold', status: 'needs_review', error_code: 'interrupted' }]);
+  });
+
+  describe('at the last transition of a walk, an empty forEach that yields to the event loop', () => {
+    const startAWalkWhoseLastTransitionIsEmpty = async (onYield: (runId: string) => void) => {
+      writeScript('noop.sh', 'true');
+      const iterating = await approvedPlaybook([
+        { id: 'seed', kind: 'script', program: 'noop.sh', args: [], env: {}, next: [{ to: 'each', forEach: 'inputs.names' }] },
+        { id: 'each', kind: 'script', program: 'noop.sh', args: [], env: {} },
+      ], OWN_PROJECT_ID, { inputs: [{ name: 'names', type: 'json', required: true }] });
+      const runner = fixture!.daemon.playbookRunner as unknown as { deps: { runs: { settleStep: (input: { runId: string }) => void } } };
+      let seedRunId: string | undefined;
+      let hasYielded = false;
+      const settleStep = runner.deps.runs.settleStep.bind(runner.deps.runs);
+      runner.deps.runs.settleStep = (input) => { settleStep(input); seedRunId = input.runId; };
+      const yieldToTheEventLoop = globalThis.setImmediate;
+      vi.spyOn(globalThis, 'setImmediate').mockImplementation(((callback: () => void) => {
+        const isTheYieldOfTheEmptyTransition = seedRunId !== undefined && !hasYielded;
+        if (isTheYieldOfTheEmptyTransition) { hasYielded = true; onYield(seedRunId!); }
+        return yieldToTheEventLoop(callback);
+      }) as never);
+      return startedRunId(iterating.id, { names: [] });
+    };
+
+    it('ends failed with run_cancelled when the daemon stops right after the cancel was admitted', async () => {
+      await boot();
+      const { playbookRunner } = fixture!.daemon;
+      let cancelling: Promise<unknown> | undefined;
+      let stopping: Promise<void> | undefined;
+      try {
+        const runId = await startAWalkWhoseLastTransitionIsEmpty((id) => { cancelling = playbookRunner.cancelRun(id); stopping = playbookRunner.stop(); });
+        await until(() => cancelling !== undefined);
+
+        const cancelledRun = await cancelling;
+        await stopping;
+
+        expect(cancelledRun).toMatchObject({ id: runId, status: 'failed', errorCode: 'run_cancelled' });
+        expect(runRow(runId)).toMatchObject(CANCELLED);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+
+    it('refuses the cancel sent after the daemon began to stop, and does not end the run as cancelled', async () => {
+      await boot();
+      const { playbookRunner } = fixture!.daemon;
+      let stopping: Promise<void> | undefined;
+      let refusal: Promise<unknown> | undefined;
+      try {
+        const runId = await startAWalkWhoseLastTransitionIsEmpty((id) => {
+          stopping = playbookRunner.stop();
+          refusal = playbookRunner.cancelRun(id).then(() => undefined, (error: unknown) => error);
+        });
+        await until(() => refusal !== undefined);
+
+        const error = await refusal;
+        await stopping;
+
+        expect(error).toMatchObject({ code: 'playbook_conflict' });
+        expect(runRow(runId).error_code).not.toBe('run_cancelled');
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+  });
+
   it('lets the end of the wait win over a cancellation when the deadline of the question is already reached', async () => {
     await boot();
     const asking = await approvedPlaybook([{ id: 'ask', kind: 'manual', prompt: 'Ship it?', timeoutSeconds: 60 }]);
