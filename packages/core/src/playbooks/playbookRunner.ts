@@ -258,6 +258,7 @@ const maskedLeaves = (value: unknown, masker: SecretMasker): unknown => {
 };
 
 const hasManualCell = (playbook: PlaybookRecord): boolean => playbook.flow.cells.some(isManualCell);
+const hasIncomingEdge = (playbook: PlaybookRecord, cell: PlaybookCell): boolean => playbook.flow.cells.some((other) => (other.next ?? []).some((edge) => edge.to === cell.id));
 
 const conditionsOf = (edgeConditions: NonNullable<PlaybookEdge['when']>): Condition[] =>
   edgeConditions.map((condition) => ({ path: condition.lhs, operator: condition.op, value: condition.rhs, caseInsensitive: condition.caseInsensitive, join: condition.join }));
@@ -318,9 +319,9 @@ export class PlaybookRunner {
   }
 
   /**
-   * Starts a run that executes one cell of the playbook and nothing else: the cells before it and the edges after it never run. It goes through every check of `start`.
-   * A playbook that holds a manual cell is refused (the cell could stand behind a question to a human that the run would skip), and so is a cell that an incoming edge guards with a condition or an iteration (the approval covered the graph),
-   * and a cell that reads the output of another step in its fields or its retry predicate (no step ran; the predicate may read the output of the cell's own attempt).
+   * Starts a run that executes the entry cell of the playbook and nothing else: the edges after it never run. It goes through every check of `start`. It is not a general single-cell runner.
+   * A playbook that holds a manual cell is refused (the cell could stand behind a question to a human that the run would skip), and so is any cell but the entry cell, the one a full run starts with and that no edge leads to
+   * (any other cell may stand behind a condition, a fallback branch or an iteration that the approval covered), and a cell that reads the output of another step in its fields or its retry predicate, or the whole `steps` dictionary (no step ran; the predicate may read the output of the cell's own attempt).
    * Throws what `start` throws, and playbook_cell_not_found.
    */
   async startCell(input: { playbookId: string; cellId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher; projectId?: string }): Promise<PlaybookRunRecord> {
@@ -331,15 +332,15 @@ export class PlaybookRunner {
   }
 
   /**
-   * A cell runs alone only when nothing the approval covered stands in front of it: no manual cell in the playbook, no incoming edge that carries a condition or an iteration,
-   * and no read of the output of another step, in its fields or in its retry predicate (a retry predicate may read the output of the cell's own attempt).
+   * A cell runs alone only when nothing the approval covered stands in front of it: no manual cell in the playbook, the cell is the entry cell (the first of the flow, with no incoming edge),
+   * and no read of the output of another step or of the whole `steps` dictionary, in its fields or in its retry predicate (a retry predicate may read the output of the cell's own attempt).
    */
   private assertCellCanRunAlone(playbook: PlaybookRecord, cellId: string): void {
     const cell = playbook.flow.cells.find((candidate) => candidate.id === cellId);
     if (cell === undefined) throw new OpenFleetError('playbook_cell_not_found', 'cell not found on this playbook');
     if (hasManualCell(playbook)) throw notRunnable('a playbook that asks a human cannot run one cell: the cell could stand behind a question that the run would skip.');
-    const isGuardedByAnIncomingEdge = playbook.flow.cells.some((other) => (other.next ?? []).some((edge) => edge.to === cell.id && (edge.when !== undefined || edge.forEach !== undefined)));
-    if (isGuardedByAnIncomingEdge) throw notRunnable(`the cell ${cell.id} is reached through an edge that carries a condition or an iteration, and a run of one cell would skip it: run the playbook.`);
+    const isTheEntryCell = playbook.flow.cells[0] === cell && !hasIncomingEdge(playbook, cell);
+    if (!isTheEntryCell) throw notRunnable(`the cell ${cell.id} is not the entry cell of the playbook: only the cell a full run starts with runs alone, since any other cell may stand behind a condition or an iteration the approval covered. Run the playbook.`);
     const stepsReadOutsideItsOwnAttempt = [...stepIdsReadByTheCell(cell), ...stepIdsReadByTheRetryPredicate(cell).filter((stepId) => stepId !== cell.id)];
     const readsAnotherStep = stepsReadOutsideItsOwnAttempt.length > 0;
     if (readsAnotherStep) throw notRunnable(`the cell ${cell.id} reads the output of another step, and a run of one cell has none: run the playbook.`);
@@ -350,7 +351,10 @@ export class PlaybookRunner {
     const { liveTree } = context;
     const execution = this.execute(context, resumeFrom).then(() => undefined).finally(() => {
       this.inFlight.delete(execution);
-      for (const runId of liveTree.runIds) this.liveTrees.delete(runId);
+      for (const runId of liveTree.runIds) {
+        const isStillThisTree = this.liveTrees.get(runId) === liveTree;
+        if (isStillThisTree) this.liveTrees.delete(runId);
+      }
     });
     liveTree.execution = execution;
     this.inFlight.add(execution);
@@ -367,7 +371,7 @@ export class PlaybookRunner {
    * The run, its steps and its children end `failed` with the code `run_cancelled` (an `error_code` of the journal, not an error of the protocol); the place of every run among the runs at once is free when this returns.
    * The answer is the run as it was when it settled, so the retention of finished runs, which may purge it at that instant, never fails a cancellation that succeeded.
    * A cancellation is not an answer to a manual step: it needs no proof of a human gesture, and it never continues a run.
-   * Two calls made while the tree stops both succeed with the same ended run; a call made after the run ended is refused. A wait for a human whose deadline is reached ends as expired first, and the cancel of it is refused.
+   * Two calls made while the tree stops both succeed with the same ended run; a call made after the run ended is refused. A wait for a human is settled at one instant, for this run only: a deadline reached at that instant ends the run as expired and the cancel of it is refused.
    * Throws playbook_run_not_found, or playbook_conflict (the run has already ended, or the human answered at the same time).
    */
   async cancelRun(runId: string): Promise<PlaybookRunRecord> {
@@ -375,12 +379,10 @@ export class PlaybookRunner {
     const run = runs.get(runId);
     if (run === undefined) throw runNotFound();
     if (run.status === 'waiting_manual') {
-      this.expireOverdueManualWaits();
-      const isStillWaiting = runs.get(runId)?.status === 'waiting_manual';
-      if (!isStillWaiting) throw runAlreadyEnded();
-      const wasAbandoned = manual.abandonPendingQuestion({ runId, errorCode: RUN_CANCELLED, at: clock() });
-      if (!wasAbandoned) throw runAlreadyEnded();
+      const settlement = manual.abandonPendingQuestion({ runId, errorCode: RUN_CANCELLED, at: clock() });
+      if (settlement === 'not_pending') throw runAlreadyEnded();
       this.deps.observer?.runEnded({ runId, playbookId: run.playbookId, status: 'failed' });
+      if (settlement === 'expired') throw runAlreadyEnded();
       return runs.get(runId)!;
     }
     const liveTree = this.liveTrees.get(runId);

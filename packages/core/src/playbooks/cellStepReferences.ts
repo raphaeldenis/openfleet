@@ -2,8 +2,8 @@ import type { PlaybookCell } from '@openfleet/shared';
 import { KernelError } from './kernel/kernelError.js';
 import { stepIdsReferencedByTemplate } from './kernel/tokenResolver.js';
 
-/** The path of a condition that reads the output of a step: `steps.<id>.<field>`. */
-const STEP_PATH = /^steps\.([A-Za-z0-9_-]+)\./;
+/** Stands for a read of the whole `steps` dictionary: no step id can spell it, so it is never a step the cell may own. */
+export const EVERY_STEP = '*';
 
 const stepIdsOfTemplate = (text: string): string[] => {
   try {
@@ -14,9 +14,12 @@ const stepIdsOfTemplate = (text: string): string[] => {
   }
 };
 
+/** The path is read by segments: `steps` reads every step, `steps.<id>` and `steps.<id>.<field>` read the step `<id>`. */
 const stepIdsOfConditionPath = (path: string): string[] => {
-  const referenced = STEP_PATH.exec(path)?.[1];
-  return referenced === undefined ? [] : [referenced];
+  const [root, stepId] = path.split('.');
+  const readsTheSteps = root === 'steps';
+  if (!readsTheSteps) return [];
+  return [stepId ?? EVERY_STEP];
 };
 
 /** The ids of the steps read by the text and the conditions found in a value: `{{steps.<id>.<field>}}` tokens in any text, `steps.<id>.<field>` on the `lhs` of a condition. A plain text that merely contains "steps." reads nothing. */

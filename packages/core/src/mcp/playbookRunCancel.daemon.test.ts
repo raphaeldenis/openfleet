@@ -32,6 +32,8 @@ let lead: Client;
 let scriptRoot = '';
 let markers = '';
 let now: number;
+/** The instants the next reads of the clock return, one each, before it goes back to `now`. */
+let scriptedClockReads: number[] = [];
 let secretStore: InMemorySecretStore;
 
 let releaseHeldSecretReads: (() => void) | undefined;
@@ -47,11 +49,12 @@ afterEach(async () => {
 
 const boot = async (limits: { maxConcurrentRuns?: number; httpNetwork?: HttpStepNetwork } = {}) => {
   now = START_OF_TEST_TIME;
+  scriptedClockReads = [];
   timers = createManualTimers();
   secretStore = createInMemorySecretStore();
   scriptRoot = directories.make('cancel-scripts-');
   markers = directories.make('cancel-markers-');
-  fixture = await startGovernanceFixture({ playbooks: { scriptRoots: [scriptRoot], clock: () => new Date(now).toISOString(), startTimer: timers.startTimer, ...limits }, secrets: { store: secretStore } });
+  fixture = await startGovernanceFixture({ playbooks: { scriptRoots: [scriptRoot], clock: () => new Date(scriptedClockReads.shift() ?? now).toISOString(), startTimer: timers.startTimer, ...limits }, secrets: { store: secretStore } });
   lead = await fixture.connect(fixture.lead.id);
   return fixture;
 };
@@ -370,6 +373,61 @@ describe('what a cancellation does when two things happen at once', () => {
     expect(cancelled.text).toContain('playbook_conflict');
     expect(runRow(runId)).toMatchObject({ status: 'failed', error_code: 'manual_wait_expired' });
     expect(fixture!.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ?').get(runId)).toEqual({ status: 'expired' });
+  });
+});
+
+describe('the end of a wait for a human, and the cancellation of a run that waits', () => {
+  it('settles a wait whose deadline falls between two reads of the clock: the run ends instead of staying waiting_manual', async () => {
+    await boot();
+    const asking = await approvedPlaybook([{ id: 'ask', kind: 'manual', prompt: 'Ship it?', timeoutSeconds: 60 }]);
+    const runId = await startedRunId(asking.id);
+    await until(() => runRow(runId).status === 'waiting_manual');
+    const justBeforeTheDeadline = START_OF_TEST_TIME + 59_999;
+    const atTheDeadline = START_OF_TEST_TIME + 60_000;
+    scriptedClockReads = [justBeforeTheDeadline, atTheDeadline];
+
+    await tool(lead, 'cancel_playbook_run', { run_id: runId });
+
+    expect(runRow(runId).status).toBe('failed');
+    expect(runRow(runId).ended_at).not.toBeNull();
+  });
+
+  it('leaves the overdue waits of other projects alone when it cancels a wait', async () => {
+    await boot();
+    const shortWait = await approvedPlaybook([{ id: 'ask', kind: 'manual', prompt: 'Ship it?', timeoutSeconds: 60 }], OTHER_PROJECT_ID);
+    const foreignRun = await fixture!.daemon.playbookRunner.start({ playbookId: shortWait.id, projectId: OTHER_PROJECT_ID, inputs: {}, actorKind: 'admin', launchedBy: { kind: 'admin_api', ref: null } });
+    await until(() => runRow(foreignRun.id).status === 'waiting_manual');
+    const longWait = await approvedPlaybook([{ id: 'ask', kind: 'manual', prompt: 'Ship it?', timeoutSeconds: 3600 }]);
+    const ownRunId = await startedRunId(longWait.id);
+    await until(() => runRow(ownRunId).status === 'waiting_manual');
+    now += 61_000;
+
+    const cancelled = await tool(lead, 'cancel_playbook_run', { run_id: ownRunId });
+
+    expect(cancelled.isError, cancelled.text).toBe(false);
+    expect(runRow(ownRunId)).toMatchObject(CANCELLED);
+    expect(runRow(foreignRun.id).status).toBe('waiting_manual');
+    expect(fixture!.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ?').get(foreignRun.id)).toEqual({ status: 'pending' });
+  });
+});
+
+describe('a run resumed while the tree that parked it is still cleaning up', () => {
+  it('stays cancellable: the cleanup of the old tree does not remove the tree of the resumed run', async () => {
+    await boot();
+    const playbook = await approvedPlaybook([{ id: 'ask', kind: 'manual', prompt: 'Ship it?' }, waitForCell('sleep')]);
+    const runner = fixture!.daemon.playbookRunner as unknown as { deps: { manual: { park: (input: { runId: string; seq: number }) => void } }; commitAnswer: (input: { runId: string; seq: number; decision: 'approved'; secretValues: Map<string, string> }) => unknown; cancelRun: (runId: string) => Promise<unknown> };
+    const realPark = runner.deps.manual.park.bind(runner.deps.manual);
+    runner.deps.manual.park = (input) => {
+      realPark(input);
+      runner.commitAnswer({ runId: input.runId, seq: input.seq, decision: 'approved', secretValues: new Map() });
+    };
+    const runId = await startedRunId(playbook.id);
+    await until(() => timers.armedCount() === 1);
+
+    await runner.cancelRun(runId);
+
+    expect(runRow(runId)).toMatchObject(CANCELLED);
+    expect(runsStillRunning()).toBe(0);
   });
 });
 

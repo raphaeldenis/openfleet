@@ -14,7 +14,7 @@ import { createTempDirTracker } from '../tempDirTracker.js';
  *  4. unknown cell               `playbook_cell_not_found`              -> 'refuses a cell the playbook does not hold'
  *  5. untrusted inputs           `launchedBy` agent                     -> 'treats the inputs as untrusted data ...'
  *  6. the checks of a start      beginRun                               -> 'is refused like run_playbook ...' (one test per guard: approval, lock, capacity)
- *  7. no widened approval        `isGuardedByAnIncomingEdge`            -> 'refuses a cell that an incoming edge guards ...', '... an incoming forEach edge iterates ...'
+ *  7. entry cell only            `isTheEntryCell`                       -> 'refuses a cell that is not the entry cell ...', 'refuses a target behind an upstream condition ...', '... the fallback target ...', '... a forEach branch which may be empty'
  */
 type Client = Awaited<ReturnType<GovernanceFixture['connect']>>;
 
@@ -65,20 +65,81 @@ const runRows = () => fixture!.db.prepare('SELECT id, status, error_code, launch
 const stepRows = (runId: string) => fixture!.db.prepare('SELECT step_id, status, error_code FROM playbook_run_steps WHERE run_id = ? ORDER BY seq').all(runId) as { step_id: string; status: string; error_code: string | null }[];
 
 describe('run_playbook_cell runs one cell of an approved playbook', () => {
-  it('runs the named cell alone: one journaled step, the cells before and after it never start', async () => {
+  it('runs the entry cell alone: one journaled step, the cells after it never start', async () => {
     await boot();
     const playbook = await approvedPlaybook([markCell('first'), markCell('second'), markCell('third')]);
 
-    const started = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'second' });
+    const started = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'first' });
 
     expect(started.isError, started.text).toBe(false);
     const runId = started.json!.run.id as string;
     await until(() => runRows().find((run) => run.id === runId)?.status === 'succeeded');
-    expect(stepRows(runId)).toEqual([{ step_id: 'second', status: 'succeeded', error_code: null }]);
-    expect(existsSync(join(markers, 'second'))).toBe(true);
-    expect([existsSync(join(markers, 'first')), existsSync(join(markers, 'third'))]).toEqual([false, false]);
+    expect(stepRows(runId)).toEqual([{ step_id: 'first', status: 'succeeded', error_code: null }]);
+    expect(existsSync(join(markers, 'first'))).toBe(true);
+    expect([existsSync(join(markers, 'second')), existsSync(join(markers, 'third'))]).toEqual([false, false]);
     expect(runRows().find((run) => run.id === runId)?.launched_by_kind).toBe('agent');
   });
+
+  it('refuses a cell that is not the entry cell, whatever the edges that lead to it: the solo run is not a general single-cell runner', async () => {
+    await boot();
+    const playbook = await approvedPlaybook([markCell('first'), markCell('second')]);
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'second' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_not_runnable');
+    expect(runRows()).toEqual([]);
+    expect(existsSync(join(markers, 'second'))).toBe(false);
+  });
+
+  it('refuses a target behind an upstream condition, reached only through a cell with a plain edge', async () => {
+    await boot();
+    const playbook = await approvedPlaybook([
+      markCell('first', { next: [{ to: 'conditional', when: [{ lhs: 'inputs.go', op: 'eq', rhs: 'yes' }] }] }),
+      markCell('conditional', { next: [{ to: 'indirect' }] }),
+      markCell('indirect'),
+    ], { inputs: [{ name: 'go', type: 'string', required: false }] });
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'indirect' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_not_runnable');
+    expect(runRows()).toEqual([]);
+    expect(existsSync(join(markers, 'indirect'))).toBe(false);
+  });
+
+  it('refuses the fallback target of a condition: its own incoming edge is plain, but it is taken only when the first edge does not match', async () => {
+    await boot();
+    const playbook = await approvedPlaybook([
+      markCell('first', { next: [{ to: 'primary', when: [{ lhs: 'inputs.go', op: 'eq', rhs: 'yes' }] }, { to: 'fallback' }] }),
+      markCell('primary'),
+      markCell('fallback'),
+    ], { inputs: [{ name: 'go', type: 'string', required: false }] });
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'fallback' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_not_runnable');
+    expect(runRows()).toEqual([]);
+    expect(existsSync(join(markers, 'fallback'))).toBe(false);
+  });
+
+  it('refuses a target that follows a forEach branch which may be empty', async () => {
+    await boot();
+    const playbook = await approvedPlaybook([
+      markCell('first', { next: [{ to: 'each', forEach: 'inputs.names' }] }),
+      markCell('each', { args: ['{{item}}'], next: [{ to: 'after' }] }),
+      markCell('after'),
+    ], { inputs: [{ name: 'names', type: 'json', required: false }] });
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'after' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_not_runnable');
+    expect(runRows()).toEqual([]);
+    expect(existsSync(join(markers, 'after'))).toBe(false);
+  });
+
 
   it('refuses a playbook that holds a manual cell: no cell of it runs alone, so no human gate is skipped', async () => {
     await boot();
@@ -94,9 +155,23 @@ describe('run_playbook_cell runs one cell of an approved playbook', () => {
 
   it('refuses a cell that reads the output of another step: the output is not there, and nothing is written', async () => {
     await boot();
-    const playbook = await approvedPlaybook([markCell('first'), { id: 'second', kind: 'waitFor', predicate: [{ lhs: 'steps.first.exitCode', op: 'eq', rhs: 0 }] }]);
+    const playbook = await approvedPlaybook([{ id: 'first', kind: 'waitFor', predicate: [{ lhs: 'steps.ghost.exitCode', op: 'eq', rhs: 0 }] }]);
 
-    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'second' });
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'first' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_not_runnable');
+    expect(runRows()).toEqual([]);
+  });
+
+  it.each([
+    ['the whole steps dictionary', 'steps'],
+    ['the whole output of another step, with no field', 'steps.ghost'],
+  ])('refuses a waitFor condition that reads %s', async (_name, lhs) => {
+    await boot();
+    const playbook = await approvedPlaybook([{ id: 'first', kind: 'waitFor', predicate: [{ lhs, op: 'eq', rhs: 'x' }] }]);
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'first' });
 
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain('playbook_not_runnable');
@@ -105,10 +180,25 @@ describe('run_playbook_cell runs one cell of an approved playbook', () => {
 
   it('refuses a cell whose retry predicate reads the output of another step', async () => {
     await boot();
-    const retry = { maxAttempts: 2, backoffMs: 0, until: [{ lhs: 'steps.first.exitCode', op: 'eq', rhs: 0 }] };
-    const playbook = await approvedPlaybook([markCell('first'), markCell('second', { retry })]);
+    const retry = { maxAttempts: 2, backoffMs: 0, until: [{ lhs: 'steps.ghost.exitCode', op: 'eq', rhs: 0 }] };
+    const playbook = await approvedPlaybook([markCell('first', { retry })]);
 
-    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'second' });
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'first' });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_not_runnable');
+    expect(runRows()).toEqual([]);
+  });
+
+  it.each([
+    ['the whole steps dictionary', 'steps'],
+    ['the whole output of another step, with no field', 'steps.ghost'],
+  ])('refuses a cell whose retry predicate reads %s: only the output of its own attempt is exempt', async (_name, lhs) => {
+    await boot();
+    const retry = { maxAttempts: 2, backoffMs: 0, until: [{ lhs, op: 'eq', rhs: 'x' }] };
+    const playbook = await approvedPlaybook([markCell('first', { retry })]);
+
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'first' });
 
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain('playbook_not_runnable');
@@ -117,22 +207,22 @@ describe('run_playbook_cell runs one cell of an approved playbook', () => {
 
   it('runs a cell whose retry predicate reads the output of its own attempt', async () => {
     await boot();
-    const retry = { maxAttempts: 2, backoffMs: 0, until: [{ lhs: 'steps.second.exitCode', op: 'eq', rhs: 0 }] };
-    const playbook = await approvedPlaybook([markCell('first'), markCell('second', { retry })]);
+    const retry = { maxAttempts: 2, backoffMs: 0, until: [{ lhs: 'steps.first.exitCode', op: 'eq', rhs: 0 }] };
+    const playbook = await approvedPlaybook([markCell('first', { retry }), markCell('second')]);
 
-    const started = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'second' });
+    const started = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'first' });
 
     expect(started.isError, started.text).toBe(false);
     const runId = started.json!.run.id as string;
     await until(() => runRows().find((run) => run.id === runId)?.status === 'succeeded');
-    expect(stepRows(runId)).toEqual([{ step_id: 'second', status: 'succeeded', error_code: null }]);
+    expect(stepRows(runId)).toEqual([{ step_id: 'first', status: 'succeeded', error_code: null }]);
   });
 
   it('runs a cell whose text only contains the letters "steps." and reads no step', async () => {
     await boot();
-    const playbook = await approvedPlaybook([markCell('first'), markCell('second', { args: ['steps.txt'] })]);
+    const playbook = await approvedPlaybook([markCell('first', { args: ['steps.txt'] }), markCell('second')]);
 
-    const started = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'second' });
+    const started = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'first' });
 
     expect(started.isError, started.text).toBe(false);
     const runId = started.json!.run.id as string;
@@ -244,15 +334,15 @@ describe('run_playbook_cell runs one cell of an approved playbook', () => {
     expect(runRows()).toEqual([]);
   });
 
-  it('keeps running a cell that only plain edges lead to', async () => {
+  it('refuses a cell that only a plain edge leads to: only the entry cell runs alone', async () => {
     await boot();
     const playbook = await approvedPlaybook([markCell('first', { next: [{ to: 'plain' }] }), markCell('plain')]);
 
-    const started = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'plain' });
+    const refused = await tool(lead, 'run_playbook_cell', { playbook: playbook.id, step_id: 'plain' });
 
-    expect(started.isError, started.text).toBe(false);
-    const runId = started.json!.run.id as string;
-    await until(() => runRows().find((run) => run.id === runId)?.status === 'succeeded');
-    expect(existsSync(join(markers, 'plain'))).toBe(true);
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('playbook_not_runnable');
+    expect(runRows()).toEqual([]);
+    expect(existsSync(join(markers, 'plain'))).toBe(false);
   });
 });

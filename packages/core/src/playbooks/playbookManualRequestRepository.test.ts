@@ -102,18 +102,22 @@ describe('the abandon of a question on a cancellation', () => {
 
     const justBeforeTheEnd = abandonAt('2026-11-12T10:59:59.999Z');
 
-    expect(justBeforeTheEnd).toBe(true);
+    expect(justBeforeTheEnd).toBe('abandoned');
     expect(manual.get('r1', 1)?.status).toBe('cancelled');
     expect(runs.get('r1')).toMatchObject({ status: 'failed', errorCode: 'run_cancelled' });
   });
 
-  it('leaves a question whose wait is over at that instant pending: the end of the wait wins over the cancellation', () => {
+  it('expires the question of the run when its wait is over at that instant, in the same decision: the end of the wait wins over the cancellation', () => {
     parkARun();
 
     const atTheEnd = abandonAt('2026-11-12T11:00:00.000Z');
 
-    expect(atTheEnd).toBe(false);
-    expect(manual.get('r1', 1)?.status).toBe('pending');
-    expect(runs.get('r1')).toMatchObject({ status: 'waiting_manual', errorCode: null });
+    expect(atTheEnd).toBe('expired');
+    expect(manual.get('r1', 1)?.status).toBe('expired');
+    expect(runs.get('r1')).toMatchObject({ status: 'failed', errorCode: 'manual_wait_expired' });
+  });
+
+  it('answers not_pending, changing nothing, when no question of the run is pending', () => {
+    expect(abandonAt('2026-11-12T10:00:00.000Z')).toBe('not_pending');
   });
 });
