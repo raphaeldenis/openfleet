@@ -157,6 +157,28 @@ describe('a manual cell parks the run until a human answers', () => {
     expect(table.rows().map((row) => row.data[table.noteId])).toEqual(['shipped']);
   });
 
+  describe.each(['__proto__', 'constructor', 'toString'])('a manual cell named %s', (gateId) => {
+    const branchOnApprovalOf = (gate: string) => ({ lhs: `steps.${gate}.decision`, op: 'eq', rhs: 'approved' });
+
+    it('takes the `approved` edge on its first approval, and its next cell reads the decision', async () => {
+      const f = await boot();
+      const table = await makeTable(f);
+      const playbook = await createApprovedPlaybook(f, [
+        manualCell(gateId, { next: [{ to: 'ship', when: [branchOnApprovalOf(gateId)] }, { to: 'fallback' }] }),
+        { ...writeCell('ship', table.storeId, table.noteId, `shipped {{steps.${gateId}.decision}}`), next: [] },
+        writeCell('fallback', table.storeId, table.noteId, 'fallback'),
+      ]);
+      const runId = await runUntilParked(f, playbook.id);
+
+      const response = await answerWithProof(f, runId);
+
+      expect(response.status).toBe(200);
+      const run = await eventually(f, runId, 'succeeded');
+      expect(run.steps.map((step) => [step.stepId, step.status])).toEqual([[gateId, 'succeeded'], ['ship', 'succeeded']]);
+      expect(table.rows().map((row) => row.data[table.noteId])).toEqual(['shipped approved']);
+    });
+  });
+
   it('lets the cell after the approval read the decision of the approval being answered', async () => {
     const f = await boot();
     const table = await makeTable(f);

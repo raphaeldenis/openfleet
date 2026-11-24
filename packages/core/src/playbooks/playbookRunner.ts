@@ -91,6 +91,11 @@ const hasUntrustedInputs = (run: PlaybookRunRecord): boolean => run.launchedBy.k
 /** What a step answers to the cells after it: its masked output, never a secret value. */
 type StepFields = Record<string, StepOutput>;
 
+/** Sets the output of a cell as an own property of the steps, also for the id `__proto__`, which a plain assignment would turn into a change of prototype. */
+const publishStepOutput = (steps: StepFields, cellId: string, output: StepOutput): void => {
+  Object.defineProperty(steps, cellId, { value: output, enumerable: true, writable: true, configurable: true });
+};
+
 interface RunContext {
   run: PlaybookRunRecord;
   playbook: PlaybookRecord;
@@ -631,7 +636,7 @@ export class PlaybookRunner {
     const { verdict, output } = result;
     if (verdict.status !== 'succeeded') return { verdict, output, isSatisfied: false };
 
-    steps[cell.id] = output as StepOutput;
+    publishStepOutput(steps, cell.id, output as StepOutput);
     let isUntilMet: boolean;
     try {
       isUntilMet = evaluateConditions(conditionsOf(cell.retry?.until ?? []), { inputs: context.inputs, steps, attempt: { number: attempt } });
@@ -931,7 +936,7 @@ export class PlaybookRunner {
       const parkedCell = cells.find((cell) => cell.id === parkedStep.stepId);
       const isParkedOnAManualCell = parkedCell !== undefined && isManualCell(parkedCell);
       if (!isParkedOnAManualCell) throw new Error('the parked step does not name a manual cell of the flow');
-      steps[parkedStep.stepId] = manualAnswerOutput('approved');
+      publishStepOutput(steps, parkedStep.stepId, manualAnswerOutput('approved'));
       const from = this.transitionAfter(parkedCell, cells, { inputs: run.inputs, steps });
       return { from, executed: seq, steps };
     } catch {
