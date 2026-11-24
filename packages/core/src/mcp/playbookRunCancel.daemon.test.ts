@@ -3,7 +3,7 @@ import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Session } from '@openfleet/shared';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerPlaybookRunTools } from './playbookRunTools.js';
 import { OTHER_PROJECT_ID, OWN_PROJECT_ID, startGovernanceFixture, type GovernanceFixture } from '../governance/governanceQueue.testkit.js';
 import { createManualTimers, deferred, until, type ManualTimers } from '../integrations/manualTimers.testkit.js';
@@ -360,6 +360,40 @@ describe('what a cancellation does when two things happen at once', () => {
     expect(runsStillRunning()).toBe(0);
   });
 
+  it('ends failed with run_cancelled a run whose last transition is an empty forEach when a cancel is admitted while the walk yields: the cancel is never answered with a succeeded run', async () => {
+    await boot();
+    writeScript('noop.sh', 'true');
+    const iterating = await approvedPlaybook([
+      { id: 'seed', kind: 'script', program: 'noop.sh', args: [], env: {}, next: [{ to: 'each', forEach: 'inputs.names' }] },
+      { id: 'each', kind: 'script', program: 'noop.sh', args: [], env: {} },
+    ], OWN_PROJECT_ID, { inputs: [{ name: 'names', type: 'json', required: true }] });
+    const runner = fixture!.daemon.playbookRunner as unknown as { deps: { runs: { settleStep: (input: { runId: string }) => void } }; cancelRun: (runId: string) => Promise<unknown> };
+    let cancelling: Promise<unknown> | undefined;
+    let seedRunId: string | undefined;
+    const settleStep = runner.deps.runs.settleStep.bind(runner.deps.runs);
+    runner.deps.runs.settleStep = (input) => { settleStep(input); seedRunId = input.runId; };
+    const yieldToTheEventLoop = globalThis.setImmediate;
+    const hasSeedSettled = () => seedRunId !== undefined;
+    vi.spyOn(globalThis, 'setImmediate').mockImplementation(((callback: () => void) => {
+      const isTheYieldOfTheEmptyTransition = hasSeedSettled() && cancelling === undefined;
+      if (isTheYieldOfTheEmptyTransition) cancelling = runner.cancelRun(seedRunId!);
+      return yieldToTheEventLoop(callback);
+    }) as never);
+
+    try {
+      const runId = await startedRunId(iterating.id, { names: [] });
+      await until(() => cancelling !== undefined);
+
+      const cancelledRun = await cancelling;
+
+      expect(cancelledRun).toMatchObject({ id: runId, status: 'failed', errorCode: 'run_cancelled' });
+      expect(runRow(runId)).toMatchObject(CANCELLED);
+      expect(stepRows(runId)).toEqual([{ step_id: 'seed', status: 'succeeded', error_code: null }]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('lets the end of the wait win over a cancellation when the deadline of the question is already reached', async () => {
     await boot();
     const asking = await approvedPlaybook([{ id: 'ask', kind: 'manual', prompt: 'Ship it?', timeoutSeconds: 60 }]);
@@ -386,10 +420,13 @@ describe('the end of a wait for a human, and the cancellation of a run that wait
     const atTheDeadline = START_OF_TEST_TIME + 60_000;
     scriptedClockReads = [justBeforeTheDeadline, atTheDeadline];
 
-    await tool(lead, 'cancel_playbook_run', { run_id: runId });
+    const cancelled = await tool(lead, 'cancel_playbook_run', { run_id: runId });
 
-    expect(runRow(runId).status).toBe('failed');
-    expect(runRow(runId).ended_at).not.toBeNull();
+    expect(cancelled.isError, cancelled.text).toBe(false);
+    expect(cancelled.json!.run).toMatchObject({ id: runId, status: 'failed', error_code: 'run_cancelled' });
+    expect(runRow(runId)).toEqual({ ...CANCELLED, ended_at: new Date(justBeforeTheDeadline).toISOString() });
+    expect(fixture!.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ?').get(runId)).toEqual({ status: 'cancelled' });
+    expect(scriptedClockReads).toEqual([atTheDeadline]);
   });
 
   it('leaves the overdue waits of other projects alone when it cancels a wait', async () => {

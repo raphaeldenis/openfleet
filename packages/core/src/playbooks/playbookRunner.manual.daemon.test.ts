@@ -870,6 +870,67 @@ describe('an answer whose resume cannot be prepared leaves no run behind', () =>
     expect(f.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ? AND seq = 2').get(runId)).toEqual({ status: 'cancelled' });
     expect((await startRun(f, other.id)).status).toBe(202);
   });
+
+  describe('when the journal of the parked step does not point at the manual cell of the flow', () => {
+    const parkedWithTheJournalEdited = async (edit: (f: GovernanceFixture, runId: string) => void) => {
+      const f = await boot();
+      const table = await makeTable(f);
+      const playbook = await createApprovedPlaybook(f, [manualCell('gate'), writeCell('after', table.storeId, table.noteId, 'shipped')]);
+      const runId = await runUntilParked(f, playbook.id);
+      edit(f, runId);
+      return { f, runId, table };
+    };
+    const expectTheRunInReviewWithTheQuestionClosed = async ({ f, runId, table }: Awaited<ReturnType<typeof parkedWithTheJournalEdited>>) => {
+      const response = await answerWithProof(f, runId, 1);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: 'playbook_conflict' });
+      expect(f.db.prepare('SELECT status, error_code FROM playbook_runs WHERE id = ?').get(runId)).toEqual({ status: 'needs_review', error_code: 'resume_preparation_failed' });
+      expect(f.db.prepare('SELECT status FROM playbook_manual_requests WHERE run_id = ? AND seq = 1').get(runId)).toEqual({ status: 'cancelled' });
+      expect(table.rows()).toHaveLength(0);
+    };
+
+    it('puts the run in review when the journal no longer holds the parked step', async () => {
+      const parked = await parkedWithTheJournalEdited((f, runId) => {
+        f.db.exec('PRAGMA foreign_keys = OFF');
+        f.db.prepare('UPDATE playbook_run_steps SET seq = 99 WHERE run_id = ? AND seq = 1').run(runId);
+        f.db.exec('PRAGMA foreign_keys = ON');
+      });
+
+      await expectTheRunInReviewWithTheQuestionClosed(parked);
+    });
+
+    it('puts the run in review when the parked step names a cell the flow does not hold', async () => {
+      const parked = await parkedWithTheJournalEdited((f, runId) => {
+        f.db.prepare("UPDATE playbook_run_steps SET step_id = 'ghost' WHERE run_id = ? AND seq = 1").run(runId);
+      });
+
+      await expectTheRunInReviewWithTheQuestionClosed(parked);
+    });
+
+    it('puts the run in review when the parked step names a cell that is not a manual cell', async () => {
+      const parked = await parkedWithTheJournalEdited((f, runId) => {
+        f.db.prepare("UPDATE playbook_run_steps SET step_id = 'after' WHERE run_id = ? AND seq = 1").run(runId);
+      });
+
+      await expectTheRunInReviewWithTheQuestionClosed(parked);
+    });
+  });
+});
+
+describe('the answer of a rejection does not depend on the retention of runs', () => {
+  it('answers the rejected run even when the retention of the playbook purged it as soon as it ended', async () => {
+    const f = await boot();
+    const playbook = await createApprovedPlaybook(f, [manualCell('gate')], { policy: { maxRunsToKeep: 1 } });
+    const olderRunId = await runUntilParked(f, playbook.id);
+    f.db.prepare("INSERT INTO playbook_runs (id, playbook_id, playbook_rev, flow_sha256, status, inputs_json, actor_kind, started_at, ended_at) VALUES ('newer', ?, 1, 'sha', 'succeeded', '{}', 'admin', '2999-01-01T00:00:00.000Z', '2999-01-01T00:00:01.000Z')").run(playbook.id);
+
+    const response = await answerWithProof(f, olderRunId, 1, 'reject');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: olderRunId, status: 'failed', errorCode: 'manual_rejected' });
+    expect(f.db.prepare('SELECT 1 FROM playbook_runs WHERE id = ?').get(olderRunId)).toBeUndefined();
+  });
 });
 
 describe('the approval of the playbook is checked again when the wait ends while it is checked', () => {

@@ -532,11 +532,21 @@ export class PlaybookRunner {
       outcome = verdictOfFailure(error, context.masker);
     }
     if (outcome.status === 'waiting_manual') return { outcome, lastOutput: state.lastOutput };
-    runs.settleRun({ id: run.id, status: outcome.status, errorCode: outcome.errorCode, endedAt: clock() });
+    const verdict = this.verdictAtTerminalSettle(context, outcome);
+    runs.settleRun({ id: run.id, status: verdict.status, errorCode: verdict.errorCode, endedAt: clock() });
     context.liveTree.settledRuns.set(run.id, runs.get(run.id)!);
     runs.pruneFinishedBeyond(playbook.id, playbook.policy.maxRunsToKeep);
-    observer?.runEnded({ runId: run.id, playbookId: playbook.id, status: outcome.status });
-    return { outcome, lastOutput: state.lastOutput };
+    observer?.runEnded({ runId: run.id, playbookId: playbook.id, status: verdict.status });
+    return { outcome: verdict, lastOutput: state.lastOutput };
+  }
+
+  /**
+   * The verdict the run is settled with. A cancellation admitted before this instant wins over the verdict the walk reached, a success included: the walk may have yielded after its last step (an empty forEach)
+   * and finished without reading the signal again. A cancellation admitted after the settlement finds the run ended and is refused, so a run whose steps and settlement came first keeps its verdict.
+   */
+  private verdictAtTerminalSettle(context: RunContext, walkVerdict: Verdict): Verdict {
+    const isCancelledBeforeTheSettle = context.liveTree.cancel.signal.aborted && !this.shutdown.signal.aborted;
+    return isCancelledBeforeTheSettle ?{ status: 'failed', errorCode: RUN_CANCELLED } : walkVerdict;
   }
 
   /**
@@ -892,9 +902,10 @@ export class PlaybookRunner {
     if (!wasRecorded) throw this.refusalOfAnAnswerNotRecorded({ runId, seq });
 
     if (resumePoint === undefined) {
+      const rejectedRun = runs.get(runId)!;
       runs.pruneFinishedBeyond(playbook.id, playbook.policy.maxRunsToKeep);
       this.deps.observer?.runEnded({ runId, playbookId: playbook.id, status: 'failed' });
-      return runs.get(runId)!;
+      return rejectedRun;
     }
     this.continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, secretsToMask, masker, resumePoint, tree: treeBudgetWhenParked ?? { stepsExecuted: seq, childrenStarted: 0 } });
     return runs.get(runId)!;
@@ -908,10 +919,13 @@ export class PlaybookRunner {
     try {
       const journaledSteps = this.deps.runs.stepsOf(run.id);
       const steps: StepFields = Object.fromEntries(journaledSteps.filter((step) => step.status === 'succeeded').map((step) => [step.stepId, step.output as StepOutput]));
-      const manualStepId = journaledSteps.find((step) => step.seq === seq)!.stepId;
+      const parkedStep = journaledSteps.find((step) => step.seq === seq);
+      if (parkedStep === undefined) throw new Error('the journal does not hold the parked step');
       const cells = playbook.flow.cells;
-      const manualCell = cells.find((cell) => cell.id === manualStepId)!;
-      const from = this.transitionAfter(manualCell, cells, { inputs: run.inputs, steps });
+      const parkedCell = cells.find((cell) => cell.id === parkedStep.stepId);
+      const isParkedOnAManualCell = parkedCell !== undefined && isManualCell(parkedCell);
+      if (!isParkedOnAManualCell) throw new Error('the parked step does not name a manual cell of the flow');
+      const from = this.transitionAfter(parkedCell, cells, { inputs: run.inputs, steps });
       return { from, executed: seq, steps };
     } catch {
       log('warn', 'a manual answer could not resume its run: the journal of the run could not be read', { runId: run.id });

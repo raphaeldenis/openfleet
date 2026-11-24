@@ -31,6 +31,7 @@ trigger_integration_records_source_failed the integration records source failed 
 playbook_runs_interrupted playbook runs left running by a stopped daemon were marked needs_review
 playbook_step_failed_unexpectedly a playbook step failed unexpectedly
 playbook_store_step_failed a playbook store step failed
+playbook_manual_resume_not_prepared a manual answer could not resume its run: the journal of the run could not be read
 trigger_fires_prune_failed the trigger fires could not be pruned
 integration_poll_pass_failed an integration polling pass failed; the next pass retries
 integration_poll_credential_unreadable the credential of an integration could not be read for polling
