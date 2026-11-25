@@ -42,6 +42,7 @@ describe('the tool catalog', () => {
     expect(toolsOfCategory('destructive')).toEqual([
       'add_data_store_column', // natural_key: true replaces the natural key of the store with no history
       'cancel_argus_event',
+      'cancel_playbook_run', // stops a run and its children, like close_session
       'clear_playbook_secret', // removes the value of a secret from this device
       'close_session',
       'delete_data_store_column',
@@ -79,6 +80,7 @@ describe('the tool catalog', () => {
       'report_ship_verdict', // runs git in the worktree and messages the manager on a no-go
       'report_step_finding', // runs git in the worktree
       'run_playbook', // starts the approved scripts and http calls of a playbook
+      'run_playbook_cell', // starts one approved script or http call of a playbook
       'send_session_message',
       'submit_plan_questions', // launches an arbiter session
     ]);
@@ -100,10 +102,10 @@ describe('the tool catalog', () => {
       .map(([name, entry]) => [name, entry.category]);
 
     expect(authoringEntries.sort()).toEqual([
-      ['add_playbook_cell', 'additive'], ['create_playbook', 'additive'], ['delete_playbook', 'destructive'], ['delete_playbook_cell', 'destructive'],
+      ['add_playbook_cell', 'additive'], ['cancel_playbook_run', 'destructive'], ['create_playbook', 'additive'], ['delete_playbook', 'destructive'], ['delete_playbook_cell', 'destructive'],
       ['get_playbook', 'read_only'], ['get_playbook_run', 'read_only'], ['get_playbook_schema', 'read_only'], ['get_playbook_version', 'read_only'], ['list_playbook_cells', 'read_only'],
       ['list_playbook_runs', 'read_only'], ['list_playbook_versions', 'read_only'], ['list_playbooks', 'read_only'], ['reorder_playbook_cells', 'additive'], ['restore_playbook_version', 'additive'],
-      ['run_playbook', 'execution_external'], ['set_playbook_inputs', 'additive'], ['update_playbook_cell', 'additive'],
+      ['run_playbook', 'execution_external'], ['run_playbook_cell', 'execution_external'], ['set_playbook_inputs', 'additive'], ['update_playbook_cell', 'additive'],
     ]);
   });
 

@@ -520,7 +520,7 @@ export async function startDaemon(config: Config, options: DaemonOptions = {}): 
   const playbookRepository = new PlaybookRepository(db);
   const playbooks = new PlaybookService({
     db, repository: playbookRepository, versions: new PlaybookVersionRepository(db), secretRefs: new SecretRefRepository(db), triggers: triggerRepository, onTriggersDisarmed: announcePlaybookChangedTriggers,
-    projectExists: (projectId) => projects.get(projectId) !== undefined, endOverdueManualWaits: () => playbookRunner.expireOverdueManualWaits(), clock: () => new Date().toISOString(), newId,
+    projectExists: (projectId) => projects.get(projectId) !== undefined, endOverdueManualWaits: (scope) => playbookRunner.expireOverdueManualWaits(scope), clock: () => new Date().toISOString(), newId,
   });
   const playbookRuns = new PlaybookRunRepository(db);
   const scriptLocator = new ScriptLocator(options.playbooks?.scriptRoots ?? playbookSettings.scriptRoots);

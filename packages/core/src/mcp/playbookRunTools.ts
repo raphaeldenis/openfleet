@@ -1,4 +1,5 @@
-import { BoundedRunInputsSchema, MAX_NAME_CHARS, OpenFleetError, type Session } from '@openfleet/shared';
+import { BoundedRunInputsSchema, MANAGER_ROLE, MAX_NAME_CHARS, OpenFleetError, type Session } from '@openfleet/shared';
+import type { ManagerService } from '../managers/managerService.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { PlaybookRunRecord, PlaybookRunRepository, PlaybookRunStepRecord } from '../playbooks/playbookRunRepository.js';
@@ -43,17 +44,24 @@ const runSummaryToolView = (run: PlaybookRunRecord) => ({
 
 export interface PlaybookRunToolDeps {
   playbooks: Pick<PlaybookService, 'getById' | 'getInProject'>;
-  runner: Pick<PlaybookRunner, 'start'>;
+  runner: Pick<PlaybookRunner, 'start' | 'startCell' | 'cancelRun'>;
   runs: Pick<PlaybookRunRepository, 'get' | 'stepsOf' | 'listPageOfProject'>;
+  managers: Pick<ManagerService, 'get'>;
   caller: Session;
 }
 
+/** The tools of the runs that only a manager is offered, and that refuse any other caller when invoked. */
+export const MANAGER_ONLY_PLAYBOOK_RUN_TOOL_NAMES: ReadonlySet<string> = new Set(['cancel_playbook_run']);
+
+/** A manager is a session with the manager role that the managers registry knows. */
+export const isManagerSession = (caller: Session, managers: Pick<ManagerService, 'get'>): boolean => caller.role === MANAGER_ROLE && managers.get(caller.id) !== undefined;
+
 /**
- * The agent side of the runs of playbooks: start an approved playbook of the project of the caller, read a run of that project, list its runs.
- * No tool approves, cancels or answers a manual step: a question put to a human is answered by a human, through the desktop app.
+ * The agent side of the runs of playbooks: start an approved playbook of the project of the caller, read a run of that project, list its runs, and, for a manager only, cancel a run.
+ * No tool approves or answers a manual step: a question put to a human is answered by a human, through the desktop app.
  * Every start goes through the runner, which checks the approval, the project, the capacity and the revision again once the secrets are read.
  */
-export function registerPlaybookRunTools(server: McpServer, { playbooks, runner, runs, caller }: PlaybookRunToolDeps): void {
+export function registerPlaybookRunTools(server: McpServer, { playbooks, runner, runs, managers, caller }: PlaybookRunToolDeps): void {
   const projectIdOfCaller = (): string => {
     if (caller.projectId === undefined) throw new OpenFleetError('project_not_found', 'your session belongs to no project.');
     return caller.projectId;
@@ -78,6 +86,30 @@ export function registerPlaybookRunTools(server: McpServer, { playbooks, runner,
     if (playbook.agentLocked) throw new OpenFleetError('playbook_locked', 'this playbook is locked against agents: a human starts it.');
     const run = await runner.start({ playbookId: playbook.id, projectId: playbook.projectId, inputs: inputs ?? {}, actorKind: 'admin', launchedBy: { kind: 'agent', ref: caller.id } });
     return ok({ run: { id: run.id, playbook_id: run.playbookId, status: run.status, started_at: run.startedAt } });
+  });
+
+  server.registerTool('run_playbook_cell', {
+    description: 'Runs the ENTRY cell of an APPROVED playbook of your project as a run of its own: the cell a full run starts with, which no edge leads to; the cells after it never start. This is not a general single-cell runner: any other step_id is refused (playbook_not_runnable), because it may stand behind a condition, a fallback branch or an iteration that the approval covered. The same checks as run_playbook apply (approval, lock against agents, project, capacity, inputs untrusted: see run_playbook). A playbook that holds a manual cell is refused, because the cell could stand behind a question to a human that this run would skip (playbook_not_runnable); so is a cell that reads the output of another step or the whole steps dictionary (steps, steps.<id>, steps.<id>.<field>), since no step ran. An unknown step_id is playbook_cell_not_found.',
+    inputSchema: {
+      playbook: z.string().min(1).max(MAX_NAME_CHARS).describe('Playbook id (from list_playbooks) or its exact name'),
+      step_id: z.string().min(1).max(MAX_ID_CHARS).describe('The id of the cell to run (from list_playbook_cells)'),
+      inputs: BoundedRunInputsSchema.optional().describe('The values of the inputs the playbook declares; plain JSON, small'),
+    },
+  }, async ({ playbook: reference, step_id, inputs }) => {
+    const playbook = playbooks.getInProject(projectIdOfCaller(), reference);
+    if (playbook.agentLocked) throw new OpenFleetError('playbook_locked', 'this playbook is locked against agents: a human starts it.');
+    const run = await runner.startCell({ playbookId: playbook.id, cellId: step_id, projectId: playbook.projectId, inputs: inputs ?? {}, actorKind: 'admin', launchedBy: { kind: 'agent', ref: caller.id } });
+    return ok({ run: { id: run.id, playbook_id: run.playbookId, status: run.status, started_at: run.startedAt } });
+  });
+
+  server.registerTool('cancel_playbook_run', {
+    description: 'Managers only. Cancels a run of your project that runs or waits for a human, and every run it calls: they end "failed" with the code run_cancelled (the error_code field of the run, not an error of the protocol), and their place among the runs at once is free. A run that has already ended is refused (playbook_conflict). Two cancels sent while the same running tree is still stopping both succeed and answer the same ended run; a cancel sent once the run has ended is refused (playbook_conflict). A run whose wait for a human is over at the instant of the cancel answers the end of that wait (playbook_conflict), and only that run is touched. This is not an answer to a manual step: no tool answers a question put to a human.',
+    inputSchema: { run_id: z.string().min(1).max(MAX_ID_CHARS).describe('The run id (id in run_playbook or list_playbook_runs)') },
+  }, async ({ run_id }) => {
+    if (!isManagerSession(caller, managers)) throw new OpenFleetError('not_a_manager', 'cancelling a run is for managers.', { hint: 'ask your manager to cancel the run.' });
+    const run = runOfProject(run_id);
+    const cancelled = await runner.cancelRun(run.id);
+    return ok({ run: runSummaryToolView(cancelled) });
   });
 
   server.registerTool('get_playbook_run', {

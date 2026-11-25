@@ -6,6 +6,7 @@ import {
 import { log } from '../logger.js';
 import { maskedSecrets } from '../redact.js';
 import type { SecretService } from '../secrets/secretService.js';
+import { stepIdsReadByTheCell, stepIdsReadByTheRetryPredicate } from './cellStepReferences.js';
 import { canonicalDigestOf } from './kernel/canonicalDigest.js';
 import { evaluateConditions, type Condition } from './kernel/conditionEvaluator.js';
 import { valueAtDottedPath } from './kernel/dottedPath.js';
@@ -16,7 +17,7 @@ import { sendHttpStep, type HttpStepNetwork } from './httpStepRequest.js';
 import { resolveHttpRequest } from './httpStepTemplates.js';
 import type { ManualResumeProof } from './manualResumeProof.js';
 import type { PlaybookApprovals } from './playbookApprovals.js';
-import type { PlaybookManualRequestRepository } from './playbookManualRequestRepository.js';
+import { manualAnswerOutput, type PlaybookManualRequestRepository } from './playbookManualRequestRepository.js';
 import type { PlaybookRecord } from './playbookRepository.js';
 import { secretNamesReferencedBy, wireErrorOf } from './playbookRules.js';
 import type { PlaybookRunRecord, PlaybookRunRepository, SettledStatus } from './playbookRunRepository.js';
@@ -90,6 +91,11 @@ const hasUntrustedInputs = (run: PlaybookRunRecord): boolean => run.launchedBy.k
 /** What a step answers to the cells after it: its masked output, never a secret value. */
 type StepFields = Record<string, StepOutput>;
 
+/** Sets the output of a cell as an own property of the steps, also for the id `__proto__`, which a plain assignment would turn into a change of prototype. */
+const publishStepOutput = (steps: StepFields, cellId: string, output: StepOutput): void => {
+  Object.defineProperty(steps, cellId, { value: output, enumerable: true, writable: true, configurable: true });
+};
+
 interface RunContext {
   run: PlaybookRunRecord;
   playbook: PlaybookRecord;
@@ -102,12 +108,32 @@ interface RunContext {
   /** The secrets this run masks: its own, and those of every run above it, which a child never reads but never writes in the clear either. */
   secretsToMask: readonly SecretToMask[];
   tree: TreeBudget;
+  liveTree: LiveTree;
+  /** The one cell this run executes, when it was started to run a single cell: no edge is followed after it. */
+  soloCellId?: string;
+}
+
+/** What the runs of one tree share while they run: the signal that cancels all of them, the ids of the runs, and the execution of the root. */
+interface LiveTree {
+  cancel: AbortController;
+  /** Ends when the cancellation or the stop of the daemon fires. */
+  signal: AbortSignal;
+  runIds: Set<string>;
+  /** What stopped the tree first: the cause is frozen, a later cancel or stop of the daemon never changes the verdict. */
+  firstStopCause?: 'cancel' | 'shutdown';
+  /** Each run of the tree as it was when it settled, before the retention of finished runs could purge it. */
+  settledRuns: Map<string, PlaybookRunRecord>;
+  execution?: Promise<void>;
 }
 
 const INTERRUPTED = 'interrupted';
+/** Journal only, never on the wire: a run, its tree and its steps ended by a cancellation. */
+const RUN_CANCELLED = 'run_cancelled';
 const PLAYBOOK_CHANGED_WHILE_WAITING = 'playbook_changed_while_waiting';
 /** Journal only, never on the wire: the tree budget written when the run parked is out of its bounds. */
 const PARKED_TREE_BUDGET_INVALID = 'parked_tree_budget_invalid';
+/** Journal only, never on the wire: the journal of a run answered by a human could not be read back to resume it. */
+const RESUME_PREPARATION_FAILED = 'resume_preparation_failed';
 
 /** What the journal of a parked step holds about the tree budget: nothing (parked before it was journaled), a budget inside its bounds, or an inconsistent value. */
 type ParkedTreeBudget = { kind: 'absent' } | { kind: 'invalid' } | { kind: 'valid'; tree: TreeBudget };
@@ -138,6 +164,8 @@ const manualAlreadyAnswered = () => new OpenFleetError('manual_already_answered'
 const manualWaitExpired = () => new OpenFleetError('manual_wait_expired', 'the wait for this answer is over and the run has ended.', { hint: 'Start the playbook again.' });
 const humanProofRequired = () => new OpenFleetError('human_proof_required', 'answering a manual step needs the proof of a human gesture in the desktop app.', { hint: 'Answer it from the run screen.' });
 const runNotFound = () => new OpenFleetError('playbook_run_not_found', 'run or step not found');
+const runAlreadyEnded = () => new OpenFleetError('playbook_conflict', 'this run has already ended: there is nothing to cancel.', { hint: 'Open the run to see its outcome.' });
+const resumeNotPrepared = () => new OpenFleetError('playbook_conflict', 'the journal of this run could not be read: the run is in review and was not resumed.', { hint: 'Open the run to examine it, then start the playbook again.' });
 const playbookMovedWhileWaiting = () => new OpenFleetError('playbook_conflict', 'the playbook is no longer the one this run was started from.', { hint: 'Review the playbook, then start a new run.' });
 const notRunnable =(reason: string) => new OpenFleetError('playbook_not_runnable', reason);
 const invalidInput = (reason: string) => new OpenFleetError('invalid_body', reason);
@@ -210,6 +238,25 @@ const itemsOf = (source: unknown): unknown[] | undefined => {
 
 const secretsToMaskOf = (secretValues: ReadonlyMap<string, string>): SecretToMask[] => [...secretValues].map(([name, value]) => ({ name, value }));
 
+const STOPPED = Symbol('stopped');
+
+/** The result of `pending`, or STOPPED as soon as `signal` aborts; a rejection of `pending` after the stop is handled here and dropped. */
+const untilStopped = <T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T | typeof STOPPED> => {
+  if (signal === undefined) return pending;
+  if (signal.aborted) {
+    pending.catch(() => undefined);
+    return Promise.resolve(STOPPED);
+  }
+  return new Promise((resolve, reject) => {
+    const onStop = () => resolve(STOPPED);
+    signal.addEventListener('abort', onStop, { once: true });
+    pending.then(
+      (value) => { signal.removeEventListener('abort', onStop); resolve(value); },
+      (error: unknown) => { signal.removeEventListener('abort', onStop); reject(error); },
+    );
+  });
+};
+
 const maskedLeaves = (value: unknown, masker: SecretMasker): unknown => {
   if (typeof value === 'string') return masker.mask(value);
   if (Array.isArray(value)) return value.map((member) => maskedLeaves(member, masker));
@@ -218,6 +265,7 @@ const maskedLeaves = (value: unknown, masker: SecretMasker): unknown => {
 };
 
 const hasManualCell = (playbook: PlaybookRecord): boolean => playbook.flow.cells.some(isManualCell);
+const hasIncomingEdge = (playbook: PlaybookRecord, cell: PlaybookCell): boolean => playbook.flow.cells.some((other) => (other.next ?? []).some((edge) => edge.to === cell.id));
 
 const conditionsOf = (edgeConditions: NonNullable<PlaybookEdge['when']>): Condition[] =>
   edgeConditions.map((condition) => ({ path: condition.lhs, operator: condition.op, value: condition.rhs, caseInsensitive: condition.caseInsensitive, join: condition.join }));
@@ -239,6 +287,8 @@ const verdictOfFailure = (error: unknown, masker: SecretMasker): Verdict => {
 export class PlaybookRunner {
   private readonly inFlight = new Set<Promise<void>>();
   private readonly shutdown = new AbortController();
+  /** The tree of every run that runs in this process, by the id of each of its runs. */
+  private readonly liveTrees = new Map<string, LiveTree>();
 
   constructor(private readonly deps: PlaybookRunnerDeps) {}
 
@@ -250,14 +300,15 @@ export class PlaybookRunner {
     return interruptedRuns;
   }
 
-  /** Ends the runs whose wait for a human is over, on the injected clock. Called at boot, at each start and at each answer, so no timer has to outlive a run. */
-  expireOverdueManualWaits(): void {
-    const expiredRuns = this.deps.manual.expireOverdue(this.deps.clock());
+  /** Ends the runs whose wait for a human is over, on the injected clock; with `projectId`, only those of that project. Called at boot, at each start and at each answer, so no timer has to outlive a run. */
+  expireOverdueManualWaits(scope: { projectId?: string } = {}): void {
+    const expiredRuns = this.deps.manual.expireOverdue(this.deps.clock(), scope);
     for (const { runId, playbookId } of expiredRuns) this.deps.observer?.runEnded({ runId, playbookId, status: 'failed' });
   }
 
   /** Kills the scripts in flight, journals their steps as needs_review, and refuses any new run. */
   async stop(): Promise<void> {
+    for (const liveTree of this.liveTrees.values()) liveTree.firstStopCause ??= 'shutdown';
     this.shutdown.abort();
     await Promise.allSettled([...this.inFlight]);
   }
@@ -271,9 +322,92 @@ export class PlaybookRunner {
    */
   async start(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher; projectId?: string }): Promise<PlaybookRunRecord> {
     const context = await this.beginRun({ ...input, lineage: [], inheritedSecrets: [], tree: { stepsExecuted: 0, childrenStarted: 0 } });
-    const execution = this.execute(context).then(() => undefined).finally(() => this.inFlight.delete(execution));
-    this.inFlight.add(execution);
+    this.executeInBackground(context);
     return context.run;
+  }
+
+  /**
+   * Starts a run that executes the entry cell of the playbook and nothing else: the edges after it never run. It goes through every check of `start`. It is not a general single-cell runner.
+   * A playbook that holds a manual cell is refused (the cell could stand behind a question to a human that the run would skip), and so is any cell but the entry cell, the one a full run starts with and that no edge leads to
+   * (any other cell may stand behind a condition, a fallback branch or an iteration that the approval covered), and a cell that reads the output of another step in its fields or its retry predicate, or the whole `steps` dictionary (no step ran; the predicate may read the output of the cell's own attempt).
+   * Throws what `start` throws, and playbook_cell_not_found.
+   */
+  async startCell(input: { playbookId: string; cellId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher; projectId?: string }): Promise<PlaybookRunRecord> {
+    const { cellId, ...start } = input;
+    const context = await this.beginRun({ ...start, soloCellId: cellId, lineage: [], inheritedSecrets: [], tree: { stepsExecuted: 0, childrenStarted: 0 } });
+    this.executeInBackground(context);
+    return context.run;
+  }
+
+  /**
+   * A cell runs alone only when nothing the approval covered stands in front of it: no manual cell in the playbook, the cell is the entry cell (the first of the flow, with no incoming edge),
+   * and no read of the output of another step or of the whole `steps` dictionary, in its fields or in its retry predicate (a retry predicate may read the output of the cell's own attempt).
+   */
+  private assertCellCanRunAlone(playbook: PlaybookRecord, cellId: string): void {
+    const cell = playbook.flow.cells.find((candidate) => candidate.id === cellId);
+    if (cell === undefined) throw new OpenFleetError('playbook_cell_not_found', 'cell not found on this playbook');
+    if (hasManualCell(playbook)) throw notRunnable('a playbook that asks a human cannot run one cell: the cell could stand behind a question that the run would skip.');
+    const isTheEntryCell = playbook.flow.cells[0] === cell && !hasIncomingEdge(playbook, cell);
+    if (!isTheEntryCell) throw notRunnable(`the cell ${cell.id} is not the entry cell of the playbook: only the cell a full run starts with runs alone, since any other cell may stand behind a condition or an iteration the approval covered. Run the playbook.`);
+    const stepsReadOutsideItsOwnAttempt = [...stepIdsReadByTheCell(cell), ...stepIdsReadByTheRetryPredicate(cell).filter((stepId) => stepId !== cell.id)];
+    const readsAnotherStep = stepsReadOutsideItsOwnAttempt.length > 0;
+    if (readsAnotherStep) throw notRunnable(`the cell ${cell.id} reads the output of another step, and a run of one cell has none: run the playbook.`);
+  }
+
+  /** Walks the run in the background, tracked until it ends; its tree stays cancellable while it runs. */
+  private executeInBackground(context: RunContext, resumeFrom?: ResumePoint): void {
+    const { liveTree } = context;
+    const execution = this.execute(context, resumeFrom).then(() => undefined).finally(() => {
+      this.inFlight.delete(execution);
+      for (const runId of liveTree.runIds) {
+        const isStillThisTree = this.liveTrees.get(runId) === liveTree;
+        if (isStillThisTree) this.liveTrees.delete(runId);
+      }
+    });
+    liveTree.execution = execution;
+    this.inFlight.add(execution);
+  }
+
+  /** A fresh tree for a root run: cancelled by `cancelRun` or by the stop of the daemon. */
+  private newLiveTree(): LiveTree {
+    const cancel = new AbortController();
+    return { cancel, signal: AbortSignal.any([cancel.signal, this.shutdown.signal]), runIds: new Set(), settledRuns: new Map() };
+  }
+
+  /**
+   * Cancels a run and every run of its tree, whichever of them is named: a run asleep (a retry backoff, a waitFor), a script or a request in flight, a child that runs or that still reads its secrets, a question put to a human.
+   * The run, its steps and its children end `failed` with the code `run_cancelled` (an `error_code` of the journal, not an error of the protocol); the place of every run among the runs at once is free when this returns.
+   * The answer is the run as it was when it settled, so the retention of finished runs, which may purge it at that instant, never fails a cancellation that succeeded.
+   * A cancellation is not an answer to a manual step: it needs no proof of a human gesture, and it never continues a run.
+   * Two calls made while the tree stops both succeed with the same ended run; a call made after the run ended is refused. A wait for a human is settled at one instant, for this run only: a deadline reached at that instant ends the run as expired and the cancel of it is refused.
+   * Throws playbook_run_not_found, or playbook_conflict (the run has already ended, or the human answered at the same time).
+   */
+  async cancelRun(runId: string): Promise<PlaybookRunRecord> {
+    const { runs, manual, clock } = this.deps;
+    const run = runs.get(runId);
+    if (run === undefined) throw runNotFound();
+    if (run.status === 'waiting_manual') {
+      const settlement = manual.abandonPendingQuestion({ runId, errorCode: RUN_CANCELLED, at: clock() });
+      if (settlement === 'not_pending') throw runAlreadyEnded();
+      this.deps.observer?.runEnded({ runId, playbookId: run.playbookId, status: 'failed' });
+      if (settlement === 'expired') throw runAlreadyEnded();
+      return runs.get(runId)!;
+    }
+    const liveTree = this.liveTrees.get(runId);
+    const isRunningHere = run.status === 'running' && liveTree !== undefined;
+    if (!isRunningHere) throw runAlreadyEnded();
+    const hasShutdownWon = liveTree.firstStopCause === 'shutdown';
+    if (hasShutdownWon) throw new OpenFleetError('playbook_conflict', 'the daemon is stopping: the run is stopped by it, not cancelled.', { hint: 'Open the run to see its outcome.' });
+    liveTree.firstStopCause ??= 'cancel';
+    liveTree.cancel.abort();
+    await liveTree.execution;
+    return liveTree.settledRuns.get(runId) ?? runs.get(runId)!;
+  }
+
+  /** The verdict of a run that was stopped: the cancellation of its tree, or the stop of the daemon, which leaves the effects of the step to a review. */
+  private interruptionOf(context: RunContext): Verdict {
+    const isCancelled = context.liveTree.firstStopCause === 'cancel';
+    return isCancelled ? { status: 'failed', errorCode: RUN_CANCELLED } : { status: 'needs_review', errorCode: INTERRUPTED };
   }
 
   /**
@@ -283,7 +417,7 @@ export class PlaybookRunner {
    * A called run (`parentStep` names the step of the run that calls it) is journaled in one transaction with the link written in that step, and only while the parent run still runs and its step is still running:
    * a parent whose playbook was deleted while the secrets of the child were read starts no child. It masks the secrets of every run above it (`inheritedSecrets`) from its first journal write, and takes its place in the budget of the tree.
    */
-  private async beginRun(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher; lineage: readonly string[]; inheritedSecrets: readonly SecretToMask[]; tree: TreeBudget; projectId?: string; parentStep?: { runId: string; seq: number } }): Promise<RunContext> {
+  private async beginRun(input: { playbookId: string; inputs: Record<string, unknown>; actorKind: PlaybookRunActorKind; launchedBy: PlaybookRunLauncher; lineage: readonly string[]; inheritedSecrets: readonly SecretToMask[]; tree: TreeBudget; liveTree?: LiveTree; soloCellId?: string; projectId?: string; parentStep?: { runId: string; seq: number } }): Promise<RunContext> {
     this.assertNotStopping();
     this.expireOverdueManualWaits();
     const playbook = this.deps.playbooks.getById(input.playbookId);
@@ -292,23 +426,28 @@ export class PlaybookRunner {
     this.assertMayBeStartedBy(input.launchedBy, playbook);
     if (isCalled) this.assertMayBeCalledFrom(playbook, input.lineage);
     assertCellsCanRun(playbook);
+    if (input.soloCellId !== undefined) this.assertCellCanRunAlone(playbook, input.soloCellId);
     const pinnedScripts = this.deps.approvals.assertStillApproved(playbook);
     const inputs = resolveRunInputs(playbook.inputs, input.inputs);
-    const secretValues = await this.resolveSecretsOf(playbook);
+    const secretValues = await this.resolveSecretsOf(playbook, input.liveTree?.signal);
     this.assertStillStartableAfterTheWait(playbook);
     this.assertBelongsToProject(this.deps.playbooks.getById(playbook.id), input.projectId);
     const secretsToMask = [...input.inheritedSecrets, ...secretsToMaskOf(secretValues)];
     const masker = this.maskerOf(secretsToMask);
 
     this.assertRoomForAnotherRun(playbook);
+    this.assertTreeIsNotStopped(input.liveTree);
     const run: PlaybookRunRecord = {
       id: this.deps.newId(), playbookId: playbook.id, playbookRev: playbook.contentRev, flowSha256: canonicalDigestOf(playbook.flow),
       status: 'running', inputs: maskedLeaves(inputs, masker) as Record<string, unknown>, actorKind: input.actorKind, launchedBy: input.launchedBy, errorCode: null, startedAt: this.deps.clock(), endedAt: null,
     };
     this.journalTheRun(run, input.parentStep);
     if (input.parentStep !== undefined) input.tree.childrenStarted += 1;
+    const liveTree = input.liveTree ?? this.newLiveTree();
+    liveTree.runIds.add(run.id);
+    this.liveTrees.set(run.id, liveTree);
     this.deps.observer?.runStarted({ runId: run.id, playbookId: run.playbookId });
-    return { run, playbook, pinnedScripts, inputs, secretValues, masker, lineage: [...input.lineage, playbook.id], secretsToMask, tree: input.tree };
+    return { run, playbook, pinnedScripts, inputs, secretValues, masker, lineage: [...input.lineage, playbook.id], secretsToMask, tree: input.tree, liveTree, ...(input.soloCellId !== undefined && { soloCellId: input.soloCellId }) };
   }
 
   /** Writes the run; a called run is written together with the link in the step of its parent, which must still be running. */
@@ -340,6 +479,12 @@ export class PlaybookRunner {
     if (hasManualCell(playbook)) throw notRunnable('a playbook that waits for a human cannot be called by another one: the run that calls it would wait with no one to answer.');
   }
 
+  /** A run called by another one is journaled only while the tree of its parent is neither cancelled nor stopped: nothing is written, and no start is announced, once the signal fired. */
+  private assertTreeIsNotStopped(liveTree: LiveTree | undefined): void {
+    const isTreeStopped = liveTree?.signal.aborted === true;
+    if (isTreeStopped) throw new OpenFleetError('playbook_conflict', 'the run that calls this playbook was cancelled or stopped before this run started.');
+  }
+
   private assertNotStopping(): void {
     const isStopping = this.shutdown.signal.aborted;
     if (isStopping) throw busy('the daemon is stopping.');
@@ -364,9 +509,16 @@ export class PlaybookRunner {
     if (isWaitingBacklogFull) throw waitingBacklogFull(limits.maxParkedRunsPerProject);
   }
 
-  private async resolveSecretsOf(playbook: PlaybookRecord): Promise<Map<string, string>> {
+  /**
+   * Reads the secrets the playbook references. With `stopSignal`, a stop ends the wait for a read at once: the values read so far are returned (the caller checks the signal) and the read that is still in flight is left to end on its own, its value dropped.
+   */
+  private async resolveSecretsOf(playbook: PlaybookRecord, stopSignal?: AbortSignal): Promise<Map<string, string>> {
     const values = new Map<string, string>();
-    for (const name of secretNamesReferencedBy(playbook)) values.set(name, await this.deps.secrets.resolve({ kind: SECRET_SCOPE_KIND, id: playbook.id }, name));
+    for (const name of secretNamesReferencedBy(playbook)) {
+      const value = await untilStopped(this.deps.secrets.resolve({ kind: SECRET_SCOPE_KIND, id: playbook.id }, name), stopSignal);
+      if (value === STOPPED) return values;
+      values.set(name, value);
+    }
     return values;
   }
 
@@ -391,10 +543,21 @@ export class PlaybookRunner {
       outcome = verdictOfFailure(error, context.masker);
     }
     if (outcome.status === 'waiting_manual') return { outcome, lastOutput: state.lastOutput };
-    runs.settleRun({ id: run.id, status: outcome.status, errorCode: outcome.errorCode, endedAt: clock() });
+    const verdict = this.verdictAtTerminalSettle(context, outcome);
+    runs.settleRun({ id: run.id, status: verdict.status, errorCode: verdict.errorCode, endedAt: clock() });
+    context.liveTree.settledRuns.set(run.id, runs.get(run.id)!);
     runs.pruneFinishedBeyond(playbook.id, playbook.policy.maxRunsToKeep);
-    observer?.runEnded({ runId: run.id, playbookId: playbook.id, status: outcome.status });
-    return { outcome, lastOutput: state.lastOutput };
+    observer?.runEnded({ runId: run.id, playbookId: playbook.id, status: verdict.status });
+    return { outcome: verdict, lastOutput: state.lastOutput };
+  }
+
+  /**
+   * The verdict the run is settled with. A cancellation admitted before this instant wins over the verdict the walk reached, a success included: the walk may have yielded after its last step (an empty forEach)
+   * and finished without reading the signal again. A cancellation admitted after the settlement finds the run ended and is refused, so a run whose steps and settlement came first keeps its verdict.
+   */
+  private verdictAtTerminalSettle(context: RunContext, walkVerdict: Verdict): Verdict {
+    const isCancelledBeforeTheSettle = context.liveTree.firstStopCause === 'cancel';
+    return isCancelledBeforeTheSettle ?{ status: 'failed', errorCode: RUN_CANCELLED } : walkVerdict;
   }
 
   /**
@@ -413,11 +576,13 @@ export class PlaybookRunner {
   private async walk(context: RunContext, state: WalkState, resumeFrom?: ResumePoint): Promise<Verdict | typeof PARKED> {
     const cells = context.playbook.flow.cells;
     const steps: StepFields = resumeFrom?.steps ?? {};
-    const first: Transition | undefined = resumeFrom === undefined ? { cell: cells[0]! } : resumeFrom.from;
+    const entry = context.soloCellId === undefined ? cells[0]! : cells.find((cell) => cell.id === context.soloCellId)!;
+    const first: Transition | undefined = resumeFrom === undefined ? { cell: entry } : resumeFrom.from;
+    const followsNoEdge = context.soloCellId !== undefined;
 
-    for (let transition = first; transition !== undefined; transition = this.transitionAfter(transition.cell, cells, { inputs: context.inputs, steps })) {
-      const isStopping = this.shutdown.signal.aborted;
-      if (isStopping) return { status: 'needs_review', errorCode: INTERRUPTED };
+    for (let transition = first; transition !== undefined; transition = followsNoEdge ? undefined : this.transitionAfter(transition.cell, cells, { inputs: context.inputs, steps })) {
+      const isStopping = context.liveTree.signal.aborted;
+      if (isStopping) return this.interruptionOf(context);
       const outcome = transition.forEach === undefined
         ? await this.executeCellWithItsRetries({ cell: transition.cell, context, steps, state })
         : await this.executeForEach({ cell: transition.cell, source: transition.forEach, context, steps, state });
@@ -435,8 +600,8 @@ export class PlaybookRunner {
     const { runs, clock, limits } = this.deps;
     const maxAttempts = cell.retry?.maxAttempts ?? 1;
     for (let attempt = 1; ; attempt += 1) {
-      const isStopping = this.shutdown.signal.aborted;
-      if (isStopping) return { status: 'needs_review', errorCode: INTERRUPTED };
+      const isStopping = context.liveTree.signal.aborted;
+      if (isStopping) return this.interruptionOf(context);
       const hasReachedTheCap = context.tree.stepsExecuted >= limits.maxStepExecutions;
       if (hasReachedTheCap) return { status: 'failed', errorCode: STEP_LIMIT_EXCEEDED };
 
@@ -458,8 +623,8 @@ export class PlaybookRunner {
       if (!canTryAgain) return verdict;
 
       const backoffMs = cell.retry?.backoffMs ?? 0;
-      const wakeUp = backoffMs > 0 ? await this.sleep(backoffMs) : 'elapsed';
-      if (wakeUp === 'daemon_stopping') return { status: 'needs_review', errorCode: INTERRUPTED };
+      const wakeUp = backoffMs > 0 ? await this.sleep(backoffMs, context.liveTree.signal) : 'elapsed';
+      if (wakeUp === 'interrupted') return this.interruptionOf(context);
     }
   }
 
@@ -471,7 +636,7 @@ export class PlaybookRunner {
     const { verdict, output } = result;
     if (verdict.status !== 'succeeded') return { verdict, output, isSatisfied: false };
 
-    steps[cell.id] = output as StepOutput;
+    publishStepOutput(steps, cell.id, output as StepOutput);
     let isUntilMet: boolean;
     try {
       isUntilMet = evaluateConditions(conditionsOf(cell.retry?.until ?? []), { inputs: context.inputs, steps, attempt: { number: attempt } });
@@ -523,8 +688,10 @@ export class PlaybookRunner {
     for (const [index, item] of items.entries()) {
       const outcome = await this.executeCellWithItsRetries({ cell, context, steps, state, iteration: { item, index, isItemUntrusted } });
       if (outcome === undefined) continue;
-      const isAFailedIteration = outcome !== PARKED && outcome.status === 'failed' && outcome.errorCode !== STEP_LIMIT_EXCEEDED;
-      return isAFailedIteration ? { status: 'failed', errorCode: FOR_EACH_ITERATION_FAILED } : outcome;
+      if (outcome.status === 'waiting_manual') return outcome;
+      const isEndImposedFromOutside = outcome.errorCode === STEP_LIMIT_EXCEEDED || outcome.errorCode === RUN_CANCELLED;
+      const mustBeReportedAsAFailedIteration = outcome.status === 'failed' && !isEndImposedFromOutside;
+      return mustBeReportedAsAFailedIteration ? { status: 'failed', errorCode: FOR_EACH_ITERATION_FAILED } : outcome;
     }
     return undefined;
   }
@@ -593,8 +760,8 @@ export class PlaybookRunner {
       const isLastEvaluation = evaluation === limits.maxWaitEvaluations;
       if (hasReachedTheCeiling || isLastEvaluation) return { verdict: { status: 'failed', errorCode: 'wait_for_timeout' } };
 
-      const wakeUp = await this.sleep(Math.min(pollMs, ceilingMs - elapsedMs));
-      if (wakeUp === 'daemon_stopping') return { verdict: { status: 'needs_review', errorCode: INTERRUPTED } };
+      const wakeUp = await this.sleep(Math.min(pollMs, ceilingMs - elapsedMs), context.liveTree.signal);
+      if (wakeUp === 'interrupted') return { verdict: this.interruptionOf(context) };
     }
     return { verdict: { status: 'failed', errorCode: 'wait_for_timeout' } };
   }
@@ -613,10 +780,8 @@ export class PlaybookRunner {
     if (hasReachedTheChildrenOfTheTree) return { verdict: { status: 'failed', errorCode: SUB_PLAYBOOK_LIMIT_EXCEEDED } };
 
     const childInputs = this.inputsOfChild(cell, context, steps, iteration);
-    const childContext = await this.beginRun({
-      playbookId: cell.playbookId, inputs: childInputs, actorKind: context.run.actorKind, launchedBy: context.run.launchedBy, lineage: context.lineage, projectId: context.playbook.projectId,
-      inheritedSecrets: context.secretsToMask, tree: context.tree, parentStep: { runId: context.run.id, seq },
-    });
+    const childContext = await this.prepareChildRun({ cell, context, childInputs, seq });
+    if ('verdict' in childContext) return childContext;
     const { outcome: childOutcome, lastOutput } = await this.execute(childContext);
 
     const childStatus = childOutcome.status;
@@ -626,8 +791,24 @@ export class PlaybookRunner {
       ...(lastOutput === undefined ? {} : { output: this.untrustedTextOf(lastOutput, context.masker) }),
     };
     if (childStatus === 'succeeded') return { verdict: { status: 'succeeded' }, output };
+    const wasCancelledWithTheTree = childErrorCode === RUN_CANCELLED;
+    if (wasCancelledWithTheTree) return { verdict: this.interruptionOf(context), output };
     if (childStatus === 'needs_review') return { verdict: { status: 'needs_review', errorCode: INTERRUPTED }, output };
     return { verdict: { status: 'failed', errorCode: SUB_PLAYBOOK_FAILED }, output };
+  }
+
+  /** Journals the child run, or answers the verdict of the parent step when the tree was stopped while the child prepared: the verdict of the stop wins over the error of the preparation. */
+  private async prepareChildRun({ cell, context, childInputs, seq }: { cell: SubPlaybookCell; context: RunContext; childInputs: Record<string, unknown>; seq: number }): Promise<RunContext | { verdict: Verdict }> {
+    try {
+      return await this.beginRun({
+        playbookId: cell.playbookId, inputs: childInputs, actorKind: context.run.actorKind, launchedBy: context.run.launchedBy, lineage: context.lineage, projectId: context.playbook.projectId,
+        inheritedSecrets: context.secretsToMask, tree: context.tree, liveTree: context.liveTree, parentStep: { runId: context.run.id, seq },
+      });
+    } catch (error) {
+      const wasStoppedWhilePreparing = context.liveTree.signal.aborted;
+      if (wasStoppedWhilePreparing) return { verdict: this.interruptionOf(context) };
+      throw error;
+    }
   }
 
   /** The inputs of a subPlaybook cell: every text resolved in this run (no untrusted data, no secret) and masked with the secrets of this run; a number and a boolean go through as they are. */
@@ -650,10 +831,9 @@ export class PlaybookRunner {
     return withoutControlCharacters(masker.mask(text)).slice(0, MAX_STEP_OUTPUT_BYTES);
   }
 
-  /** Sleeps on the injected timer; the stop of the daemon cancels the timer and ends the sleep at once. */
-  private sleep(delayMs: number): Promise<'elapsed' | 'daemon_stopping'> {
-    const { signal } = this.shutdown;
-    if (signal.aborted) return Promise.resolve('daemon_stopping');
+  /** Sleeps on the injected timer; the stop of the daemon and the cancellation of the run cancel the timer and end the sleep at once. */
+  private sleep(delayMs: number, signal: AbortSignal): Promise<'elapsed' | 'interrupted'> {
+    if (signal.aborted) return Promise.resolve('interrupted');
     return new Promise((resolve) => {
       const cancelTimer = (this.deps.startTimer ?? startRealTimer)(() => {
         signal.removeEventListener('abort', onStop);
@@ -661,7 +841,7 @@ export class PlaybookRunner {
       }, delayMs);
       const onStop = () => {
         cancelTimer();
-        resolve('daemon_stopping');
+        resolve('interrupted');
       };
       signal.addEventListener('abort', onStop, { once: true });
     });
@@ -694,10 +874,7 @@ export class PlaybookRunner {
     this.assertStillTheApprovedRun({ run, playbook: playbookBeforeTheSecrets, seq: input.seq });
     const isApproval = input.decision === 'approve';
     const secretValues = isApproval ? await this.resolveSecretsOf(playbookBeforeTheSecrets) : new Map<string, string>();
-
-    const secretsToMask = secretsToMaskOf(secretValues);
-    const masker = this.maskerOf(secretsToMask);
-    return this.commitAnswer({ runId: input.runId, seq: input.seq, decision: isApproval ? 'approved' : 'rejected', secretValues, secretsToMask, masker });
+    return this.commitAnswer({ runId: input.runId, seq: input.seq, decision: isApproval ? 'approved' : 'rejected', secretValues });
   }
 
   /**
@@ -705,7 +882,7 @@ export class PlaybookRunner {
    * The playbook is read again and must still be the approved content the run started from; the wait must still be open at this instant; a place among the runs at once must still be free.
    * The place is taken by the move of the run to running in the same transaction as the answer, so no other start or answer can take it in between. A refusal here leaves the question pending, except an end of wait.
    */
-  private commitAnswer({ runId, seq, decision, secretValues, secretsToMask, masker }: { runId: string; seq: number; decision: 'approved' | 'rejected'; secretValues: Map<string, string>; secretsToMask: SecretToMask[]; masker: SecretMasker }): PlaybookRunRecord {
+  private commitAnswer({ runId, seq, decision, secretValues }: { runId: string; seq: number; decision: 'approved' | 'rejected'; secretValues: Map<string, string> }): PlaybookRunRecord {
     const { runs, manual, limits, clock } = this.deps;
     this.assertNotStopping();
     this.expireOverdueManualWaits();
@@ -719,34 +896,76 @@ export class PlaybookRunner {
     const needsAPlace = decision === 'approved';
     if (needsAPlace && runs.countRunning() >= limits.maxConcurrentRuns) throw busy(`${limits.maxConcurrentRuns} runs are already in progress.`);
 
-    const parkedBudget = this.treeBudgetParkedWith(runs.stepOutputOf(runId, seq));
-    const isJournalInconsistent = needsAPlace && parkedBudget.kind === 'invalid';
+    const parkedBudget: ParkedTreeBudget = needsAPlace ? this.treeBudgetParkedWith(() => runs.stepOutputOf(runId, seq)) : { kind: 'absent' };
+    const isJournalInconsistent = parkedBudget.kind === 'invalid';
     if (isJournalInconsistent) {
-      this.deps.manual.cancel({ runId, seq, errorCode: PARKED_TREE_BUDGET_INVALID, at: clock() });
+      const wasClosed = this.deps.manual.cancel({ runId, seq, errorCode: PARKED_TREE_BUDGET_INVALID, at: clock() });
+      if (!wasClosed) throw this.refusalOfAnAnswerNotRecorded({ runId, seq });
       this.deps.observer?.runEnded({ runId, playbookId: playbook.id, status: 'needs_review' });
       throw manualAlreadyAnswered();
     }
     const treeBudgetWhenParked = parkedBudget.kind === 'valid' ? parkedBudget.tree : undefined;
+
+    const secretsToMask = secretsToMaskOf(secretValues);
+    const masker = this.maskerOf(secretsToMask);
+    const resumePoint = needsAPlace ? this.prepareResumeOrCloseTheQuestion({ run, playbook, seq }) : undefined;
     const wasRecorded = manual.answer({ runId, seq, decision, answeredAt: clock() });
     if (!wasRecorded) throw this.refusalOfAnAnswerNotRecorded({ runId, seq });
 
-    if (decision === 'rejected') {
+    if (resumePoint === undefined) {
+      const rejectedRun = runs.get(runId)!;
       runs.pruneFinishedBeyond(playbook.id, playbook.policy.maxRunsToKeep);
       this.deps.observer?.runEnded({ runId, playbookId: playbook.id, status: 'failed' });
-      return runs.get(runId)!;
+      return rejectedRun;
     }
-    this.continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, secretsToMask, masker, seq, tree:treeBudgetWhenParked ?? { stepsExecuted: seq, childrenStarted: 0 } });
+    this.continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, secretsToMask, masker, resumePoint, tree: treeBudgetWhenParked ?? { stepsExecuted: seq, childrenStarted: 0 } });
     return runs.get(runId)!;
+  }
+
+  /**
+   * Rebuilds, from the journal, the point a run resumes from, BEFORE the answer flips the run to running. The outputs of the steps hold the exact output the approval writes for the parked step, so the edge is chosen on the context the walk has after the answer. A journal that cannot be read or does not hold the parked step closes the question and puts the run in review
+   * with the journal-only code `resume_preparation_failed`, so no running run is left without a walk, holding a place among the runs at once, which no cancellation could reach.
+   */
+  private prepareResumeOrCloseTheQuestion({ run, playbook, seq }: { run: PlaybookRunRecord; playbook: PlaybookRecord; seq: number }): ResumePoint {
+    try {
+      const journaledSteps = this.deps.runs.stepsOf(run.id);
+      const steps: StepFields = Object.fromEntries(journaledSteps.filter((step) => step.status === 'succeeded').map((step) => [step.stepId, step.output as StepOutput]));
+      const parkedStep = journaledSteps.find((step) => step.seq === seq);
+      if (parkedStep === undefined) throw new Error('the journal does not hold the parked step');
+      const cells = playbook.flow.cells;
+      const parkedCell = cells.find((cell) => cell.id === parkedStep.stepId);
+      const isParkedOnAManualCell = parkedCell !== undefined && isManualCell(parkedCell);
+      if (!isParkedOnAManualCell) throw new Error('the parked step does not name a manual cell of the flow');
+      publishStepOutput(steps, parkedStep.stepId, manualAnswerOutput('approved'));
+      const from = this.transitionAfter(parkedCell, cells, { inputs: run.inputs, steps });
+      return { from, executed: seq, steps };
+    } catch {
+      log('warn', 'a manual answer could not resume its run: the journal of the run could not be read', { runId: run.id });
+      const wasClosed = this.deps.manual.cancel({ runId: run.id, seq, errorCode: RESUME_PREPARATION_FAILED, at: this.deps.clock() });
+      if (!wasClosed) throw this.refusalOfAnAnswerNotRecorded({ runId: run.id, seq });
+      this.deps.observer?.runEnded({ runId: run.id, playbookId: playbook.id, status: 'needs_review' });
+      throw resumeNotPrepared();
+    }
   }
 
   /**
    * The budget of the tree of runs the root consumed when it parked, as the parked step journaled it: the steps of every run of the tree and the children started, among those that
    * retention or a deletion removed since. A run parked before the budget was journaled has none, and resumes from its own steps.
    */
-  private treeBudgetParkedWith(parkedStepOutput: unknown): ParkedTreeBudget {
-    const journaled = (parkedStepOutput as { treeBudget?: unknown } | null | undefined)?.treeBudget;
-    const isAbsent = journaled === undefined;
-    if (isAbsent) return { kind: 'absent' };
+  private treeBudgetParkedWith(readParkedStepOutput: () => unknown): ParkedTreeBudget {
+    let parkedStepOutput: unknown;
+    try {
+      parkedStepOutput = readParkedStepOutput();
+    } catch {
+      return { kind: 'invalid' };
+    }
+    const hasNoOutput = parkedStepOutput === null || parkedStepOutput === undefined;
+    if (hasNoOutput) return { kind: 'absent' };
+    const isAnObject = typeof parkedStepOutput === 'object' && !Array.isArray(parkedStepOutput);
+    if (!isAnObject) return { kind: 'invalid' };
+    const hasNoBudget = !Object.hasOwn(parkedStepOutput as object, 'treeBudget');
+    if (hasNoBudget) return { kind: 'absent' };
+    const journaled = (parkedStepOutput as { treeBudget?: unknown }).treeBudget;
     const { stepsExecuted, childrenStarted } = (journaled ?? {}) as Partial<TreeBudget>;
     const isWithinTheBounds = isCountWithin(stepsExecuted, MAX_STEP_EXECUTIONS_PER_RUN) && isCountWithin(childrenStarted, MAX_CHILD_RUNS_PER_ROOT);
     return isWithinTheBounds ? { kind: 'valid', tree: { stepsExecuted, childrenStarted } } : { kind: 'invalid' };
@@ -771,7 +990,8 @@ export class PlaybookRunner {
    */
   private assertStillTheApprovedRun({ run, playbook, seq }: { run: PlaybookRunRecord; playbook: PlaybookRecord; seq: number }): Record<string, string> {
     const cancelThenThrow = (error: OpenFleetError): never => {
-      this.deps.manual.cancel({ runId: run.id, seq, errorCode: PLAYBOOK_CHANGED_WHILE_WAITING, at: this.deps.clock() });
+      const wasClosed = this.deps.manual.cancel({ runId: run.id, seq, errorCode: PLAYBOOK_CHANGED_WHILE_WAITING, at: this.deps.clock() });
+      if (!wasClosed) throw this.refusalOfAnAnswerNotRecorded({ runId: run.id, seq });
       this.deps.observer?.runEnded({ runId: run.id, playbookId: run.playbookId, status: 'needs_review' });
       throw error;
     };
@@ -787,18 +1007,13 @@ export class PlaybookRunner {
     return pinnedScripts;
   }
 
-  /** Rebuilds the context of a run from its journal and walks on from the cell after the manual step: the masked outputs of the steps are read back, the secrets are the ones resolved again. */
-  private continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, secretsToMask, masker, seq, tree }: { run: PlaybookRunRecord; playbook: PlaybookRecord; pinnedScripts: Record<string, string>; secretValues: Map<string, string>; secretsToMask: SecretToMask[]; masker: SecretMasker; seq: number; tree: TreeBudget }): void {
-    const journaledSteps = this.deps.runs.stepsOf(run.id);
-    const steps: StepFields = Object.fromEntries(journaledSteps.filter((step) => step.status === 'succeeded').map((step) => [step.stepId, step.output as StepOutput]));
-    const manualStepId = journaledSteps.find((step) => step.seq === seq)!.stepId;
-    const cells = playbook.flow.cells;
-    const manualCell = cells.find((cell) => cell.id === manualStepId)!;
-    const from = this.transitionAfter(manualCell, cells, { inputs: run.inputs, steps });
-
-    const context: RunContext = { run, playbook, pinnedScripts, inputs: run.inputs, secretValues, masker, lineage: [playbook.id], secretsToMask, tree };
-    const execution = this.execute(context, { from, executed: seq, steps }).then(() => undefined).finally(() => this.inFlight.delete(execution));
-    this.inFlight.add(execution);
+  /** Walks on from the resume point, prepared before the answer: the context is the journal read back with the secrets resolved again. Nothing here reads the journal, so nothing here can fail after the run was set running. */
+  private continueAfterManualApproval({ run, playbook, pinnedScripts, secretValues, secretsToMask, masker, resumePoint, tree }: { run: PlaybookRunRecord; playbook: PlaybookRecord; pinnedScripts: Record<string, string>; secretValues: Map<string, string>; secretsToMask: SecretToMask[]; masker: SecretMasker; resumePoint: ResumePoint; tree: TreeBudget }): void {
+    const liveTree = this.newLiveTree();
+    liveTree.runIds.add(run.id);
+    this.liveTrees.set(run.id, liveTree);
+    const context: RunContext = { run, playbook, pinnedScripts, inputs: run.inputs, secretValues, masker, lineage: [playbook.id], secretsToMask, tree, liveTree };
+    this.executeInBackground(context, resumePoint);
   }
 
   private async runScriptCell(cell: ScriptCell, context: RunContext, steps: StepFields, iteration?: Iteration): Promise<{ verdict: Verdict; output?: unknown }> {
@@ -807,7 +1022,7 @@ export class PlaybookRunner {
     const script = approvals.locatePinned(cell.program, context.pinnedScripts);
 
     const outcome = await runScriptStep({
-      path: script.path, args, env, workingDirectory: dirname(script.path), signal: this.shutdown.signal,
+      path: script.path, args, env, workingDirectory: dirname(script.path), signal: context.liveTree.signal,
       timeoutMs: (cell.timeoutSeconds ?? DEFAULT_STEP_TIMEOUT_SECONDS) * 1000,
       maxRetainedChars: MAX_STEP_OUTPUT_BYTES + context.masker.longestSpellingLength,
     });
@@ -815,7 +1030,7 @@ export class PlaybookRunner {
     // The shape-based layer runs before the masker: it would read the marker `[secret:NAME]` as a secret-named key and hide the name.
     // The control characters go last: a secret that holds one must reach the masker as printed.
     const output = withoutControlCharacters(context.masker.mask(maskedSecrets(outcome.output)));
-    if (outcome.kind === 'aborted') return { verdict: { status: 'needs_review', errorCode: INTERRUPTED }, output: { output } };
+    if (outcome.kind === 'aborted') return { verdict: this.interruptionOf(context), output: { output } };
     if (outcome.kind === 'spawn_failed') return { verdict: { status: 'failed', errorCode: 'script_spawn_failed' } };
     if (outcome.kind === 'timeout') return { verdict: { status: 'failed', errorCode: 'script_timeout' }, output: { output } };
     const stepOutput: StepOutput = { exitCode: outcome.exitCode, output };
@@ -827,12 +1042,12 @@ export class PlaybookRunner {
     const { url, headers, body } = resolveHttpRequest(cell, scope, untrusted);
 
     const outcome = await sendHttpStep({
-      url, method: cell.method, headers, body, allowedHosts: context.playbook.policy.allowedHosts ?? [], signal: this.shutdown.signal,
+      url, method: cell.method, headers, body, allowedHosts: context.playbook.policy.allowedHosts ?? [], signal: context.liveTree.signal,
       timeoutMs: (cell.timeoutSeconds ?? DEFAULT_STEP_TIMEOUT_SECONDS) * 1000,
       maxRetainedChars: MAX_STEP_OUTPUT_BYTES + context.masker.longestSpellingLength,
     }, this.deps.httpNetwork);
 
-    if (outcome.kind === 'aborted') return { verdict: { status: 'needs_review', errorCode: INTERRUPTED } };
+    if (outcome.kind === 'aborted') return { verdict: this.interruptionOf(context) };
     if (outcome.kind !== 'response') return { verdict: { status: 'failed', errorCode: HTTP_REFUSAL_CODES[outcome.kind] } };
 
     // Same order as a script's output: the shape-based layer, then the masker, then the control characters.

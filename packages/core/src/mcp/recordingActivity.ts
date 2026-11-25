@@ -7,7 +7,7 @@ import { isMutatingTool } from './toolCatalog.js';
 const ERROR_TEXT_CODE = /^error ([a-z_]+):/;
 
 /** Arguments whose values never reach the log, whatever their key: the values of the inputs of a run are typed by the caller and may hold anything, even under a key other tools share. */
-const ARGUMENTS_WITHHELD_FROM_THE_LOG: Readonly<Record<string, readonly string[]>> = { run_playbook: ['inputs'] };
+const ARGUMENTS_WITHHELD_FROM_THE_LOG: Readonly<Record<string, readonly string[]>> = { run_playbook: ['inputs'], run_playbook_cell: ['inputs'] };
 const WITHHELD_MARK = '[withheld]';
 
 const withoutWithheldArguments = (toolName: string, args: unknown): unknown => {

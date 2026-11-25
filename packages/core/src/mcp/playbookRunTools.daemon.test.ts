@@ -13,8 +13,8 @@ import { ARBITER_TOOL_NAMES } from './arbiterTools.js';
 
 type Client = Awaited<ReturnType<GovernanceFixture['connect']>>;
 
-const RUN_TOOLS = ['run_playbook', 'get_playbook_run', 'list_playbook_runs'];
-const TOOLS_AN_AGENT_NEVER_HAS = ['cancel_playbook_run', 'run_playbook_cell', 'resume_playbook_step', 'resume_manual_step', 'approve_playbook'];
+const RUN_TOOLS = ['run_playbook', 'run_playbook_cell', 'cancel_playbook_run', 'get_playbook_run', 'list_playbook_runs'];
+const TOOLS_AN_AGENT_NEVER_HAS = ['resume_playbook_step', 'resume_manual_step', 'approve_playbook'];
 const DEFAULT_RUN_LIMIT = 20;
 const MAX_RUN_LIMIT = 50;
 const MAX_ANSWER_BYTES = 16_000;
@@ -574,14 +574,14 @@ describe('list_playbook_runs', () => {
 });
 
 describe('who has the tools', () => {
-  it('gives the three tools to a manager, and gives it none of the tools that are not part of this lot', async () => {
+  it('gives the five run tools to a manager, and gives it no tool that answers a manual step or approves a playbook', async () => {
     const names = (await lead.listTools()).tools.map((candidate) => candidate.name);
 
     expect(RUN_TOOLS.filter((name) => !names.includes(name))).toEqual([]);
     expect(names.filter((name) => TOOLS_AN_AGENT_NEVER_HAS.includes(name))).toEqual([]);
   });
 
-  it('keeps all three out of the tool set of a reviewer, and refuses its call', async () => {
+  it('keeps all five out of the tool set of a reviewer, and refuses its call', async () => {
     const playbook = await approvedPlaybook();
     const { client: reviewer } = await sessionInProject('Reviewer', OWN_PROJECT_ID, { role: 'reviewer' });
 
@@ -593,7 +593,7 @@ describe('who has the tools', () => {
     expect(runRows()).toEqual([]);
   });
 
-  it('keeps all three out of the tool set of an arbiter', () => {
+  it('keeps all five out of the tool set of an arbiter', () => {
     expect(RUN_TOOLS.filter((name) => [...ARBITER_TOOL_NAMES].includes(name))).toEqual([]);
   });
 });

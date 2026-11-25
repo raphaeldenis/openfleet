@@ -64,7 +64,11 @@ const tokenOf = (raw: string, start: number): TemplateToken => {
 
 const tokensOf = (template: string): TemplateToken[] => Array.from(template.matchAll(TOKEN_PATTERN), (match) => tokenOf(match[0], match.index));
 
-const URL_SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:\/\//i;
+/** The ids of the steps whose output the tokens of a text read. Throws unknown_token or invalid_secret_name for a malformed token. */
+export const stepIdsReferencedByTemplate = (template: string): string[] =>
+  tokensOf(template).flatMap((token) => (token.kind === 'steps' ? [token.stepId] : []));
+
+const URL_SCHEME_PREFIX =/^[a-z][a-z0-9+.-]*:\/\//i;
 const END_OF_AUTHORITY = /[/?#]/;
 
 /** The offset where the host part of a URL template ends: the userinfo, host and port, before the first `/`, `?` or `#`. */
